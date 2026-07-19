@@ -1,0 +1,57 @@
+name: Performance or benchmark report
+description: Share a reproducible measurement from Apple Silicon.
+title: "[Benchmark]: "
+labels:
+  - performance
+body:
+  - type: markdown
+    attributes:
+      value: Follow docs/COMMUNITY_BENCHMARKS.md and remove personal paths or unrelated process details.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Exact commit SHA used for the measurement.
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Mac hardware and memory
+      placeholder: M2 MacBook Air, 8 GB
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: macOS and Swift versions
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and runtime controls
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload
+      description: Include the sanitized prompt, prompt-token count, generated-token count, and cache state.
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: Include prefill, TTFT, decode throughput, memory, and repeated-run observations when available.
+    validations:
+      required: true
+  - type: textarea
+    id: parity
+    attributes:
+      label: Correctness and output
+      description: Include generated token IDs or text when comparing runtime variants.
+    validations:
+      required: true

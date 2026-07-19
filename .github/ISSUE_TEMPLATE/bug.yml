@@ -1,0 +1,60 @@
+name: Bug report
+description: Report reproducible incorrect behavior or a crash.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Do not include credentials, private paths, or model weights.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Commit SHA or release where the problem occurs.
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Mac hardware and memory
+      placeholder: M2 MacBook Air, 8 GB
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: macOS and Swift versions
+      placeholder: macOS 26.x, Swift 6.2
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest command, prompt, or interaction that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Include sanitized logs or diagnostics when useful.
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: Does this require the installed model?
+      options:
+        - "Yes"
+        - "No"
+        - Unsure
+    validations:
+      required: true
