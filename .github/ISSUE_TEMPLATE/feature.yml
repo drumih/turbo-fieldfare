@@ -1,0 +1,36 @@
+name: Feature proposal
+description: Propose a focused runtime, platform, or tooling improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete limitation or use case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful implementation and affected surfaces.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence or measurements
+      description: Include profiler data, benchmark results, or primary references when applicable.
+  - type: textarea
+    id: memory
+    attributes:
+      label: Bounded-memory behavior
+      description: Explain how the proposal remains valid on an 8 GB Mac without loading full shards or tensors.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

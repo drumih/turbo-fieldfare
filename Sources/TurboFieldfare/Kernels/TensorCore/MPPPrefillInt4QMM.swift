@@ -26,6 +26,10 @@ final class MPPPrefillInt4QMM {
         }
     }
 
+    var isAvailable: Bool {
+        pipeline != nil
+    }
+
     @discardableResult
     func encode(commandBuffer: MTLCommandBuffer,
                        weights: MTLBuffer, weightsOffset: Int = 0,
