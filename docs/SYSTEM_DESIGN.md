@@ -163,7 +163,7 @@ misses can run on the I/O executor in parallel, but no two reads may write the
 same slot concurrently.
 
 ```mermaid
-flowchart TB
+flowchart LR
     subgraph Disk["1. Model package on SSD"]
         direction TB
         MF["Manifest, layout,\nand tokenizer"]
@@ -198,7 +198,11 @@ flowchart TB
 
     MW -->|mmap| RB
     LF -->|pread on cache miss| EC
-    Memory -->|feeds each layer| GPU
+    RB --> AT
+    RB --> SE
+    EC --> RE
+    KV <--> AT
+    WS -. reused by kernels .-> AT
 
     classDef disk fill:#DBEAFE,stroke:#2563EB,color:#172554,stroke-width:1.5px;
     classDef memory fill:#DCFCE7,stroke:#16A34A,color:#052E16,stroke-width:1.5px;

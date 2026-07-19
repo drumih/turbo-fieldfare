@@ -4,6 +4,11 @@ import Testing
 @testable import TurboFieldfare
 import TurboFieldfareValidationSupport
 
+private let mppTensorOpsAvailable: Bool = {
+    guard let context = try? MetalContext() else { return false }
+    return MPPPrefillInt4QMM(context: context).isAvailable
+}()
+
 @Suite struct MPPPrefillInt4QMMTests {
     private struct Inputs {
         let packed: [UInt8]
@@ -182,7 +187,9 @@ import TurboFieldfareValidationSupport
         return path
     }
 
-    @Test func affineThreadgroupCandidateMatchesFP32AffineReference() throws {
+    @Test(.enabled(if: mppTensorOpsAvailable,
+                   "Requires runtime MPP TensorOps support"))
+    func affineThreadgroupCandidateMatchesFP32AffineReference() throws {
         let context = try MetalContext()
         let candidate = MPPPrefillInt4QMM(context: context)
         let baseline = try PrefillInt4QMM(context: context)
@@ -201,7 +208,9 @@ import TurboFieldfareValidationSupport
             compareCPUReference: true)
     }
 
-    @Test func selectedProductionAttentionShapesMatchCurrentPolicy() throws {
+    @Test(.enabled(if: mppTensorOpsAvailable,
+                   "Requires runtime MPP TensorOps support"))
+    func selectedProductionAttentionShapesMatchCurrentPolicy() throws {
         let context = try MetalContext()
         let candidate = MPPPrefillInt4QMM(context: context)
         let baseline = try PrefillInt4QMM(context: context)
@@ -224,7 +233,9 @@ import TurboFieldfareValidationSupport
         }
     }
 
-    @Test func fullProductionShapeIsByteStableAcross32Dispatches() throws {
+    @Test(.enabled(if: mppTensorOpsAvailable,
+                   "Requires runtime MPP TensorOps support"))
+    func fullProductionShapeIsByteStableAcross32Dispatches() throws {
         let m = 32
         let n = 2816
         let k = 8192
