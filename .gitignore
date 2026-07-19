@@ -1,0 +1,50 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcodeproj
+*.xcworkspace
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcscheme
+
+# macOS
+.DS_Store
+
+# Build artifacts
+*.o
+*.a
+*.dylib
+*.metallib
+
+# Model weights / large blobs
+*.safetensors
+*.gguf
+*.bin
+*.npz
+*.pdf
+weights/
+models/
+Model/
+!Tests/**/Model/
+# Repacked .gturbo directories (manifest.json/layout.json inside aren't caught by *.bin)
+*.gturbo/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs / scratch
+*.log
+benchmark-results/
+scratch/
+tmp/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

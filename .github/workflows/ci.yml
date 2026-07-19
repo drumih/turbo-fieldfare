@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release products
+        run: swift build -c release
+      - name: Run serial tests
+        run: Scripts/test.sh
+      - name: Check Markdown links
+        run: ruby Scripts/check_markdown_links.rb
