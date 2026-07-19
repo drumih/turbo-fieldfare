@@ -164,45 +164,39 @@ same slot concurrently.
 
 ```mermaid
 flowchart LR
-    subgraph Disk["1. Model package on SSD"]
-        direction TB
-        MF["Manifest, layout,\nand tokenizer"]
-        MW["Common weights\nmodel_weights.bin"]
-        LF["Routed experts\n30 layer files\n128 experts each"]
-        MF -->|validates at load| MW
-        MF -->|validates lazily| LF
+    subgraph Disk[".gturbo on SSD"]
+        MW["model_weights.bin\ncommon weights"]
+        LF["30 layer files\n128 routed experts each"]
+        MF["manifest + layout + tokenizer"]
     end
 
-    subgraph Memory["2. Unified memory"]
-        direction TB
-        RB["Mapped common buffers\nread-only, no heap copy"]
-        KV["FP16 KV cache\n25 bounded SWA rings\n5 linear full-context stores"]
-        EC["Expert cache\n16 LFU slots\nper opened layer"]
-        WS["Reusable activation\nand kernel scratch"]
+    subgraph Memory["Unified memory"]
+        RB["read-only mapped\ncommon buffers"]
+        EC["per-layer LFU slots\n16 expert blobs"]
+        KV["FP16 KV ring"]
+        WS["reusable scratch"]
     end
 
-    subgraph GPU["3. Per-layer Metal execution"]
-        direction TB
-        AT["Attention + router"]
-        SE["Shared expert\nresident branch"]
-        RE["Routed MoE\ncached or streamed top-8"]
-        T["Combine branches\n+ layer tail"]
-        HD["Tied 4-bit head\nafter layer 30"]
-
-        AT --> SE
-        AT --> RE
-        SE --> T
-        RE --> T
-        T --> HD
+    subgraph GPU["Metal execution"]
+        AT["attention + router"]
+        SE["shared expert"]
+        RE["routed MoE"]
+        HD["tied 4-bit head"]
     end
 
-    MW -->|mmap| RB
-    LF -->|pread on cache miss| EC
+    MF -->|validate| MW
+    MF -->|validate lazily| LF
+    MW -->|mmap, no heap copy| RB
+    LF -->|bounded pread on miss| EC
     RB --> AT
     RB --> SE
     EC --> RE
     KV <--> AT
-    WS -. reused by kernels .-> AT
+    WS <--> GPU
+    AT --> SE
+    AT --> RE
+    SE --> HD
+    RE --> HD
 
     classDef disk fill:#DBEAFE,stroke:#2563EB,color:#172554,stroke-width:1.5px;
     classDef memory fill:#DCFCE7,stroke:#16A34A,color:#052E16,stroke-width:1.5px;
@@ -210,7 +204,7 @@ flowchart LR
     classDef output fill:#F3E8FF,stroke:#9333EA,color:#3B0764,stroke-width:1.5px;
     class MF,MW,LF disk;
     class RB,KV,EC,WS memory;
-    class AT,SE,RE,T compute;
+    class AT,SE,RE compute;
     class HD output;
 
     style Disk fill:#EFF6FF,stroke:#93C5FD,color:#1E3A8A,stroke-width:2px
