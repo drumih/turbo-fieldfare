@@ -8,7 +8,7 @@ import Testing
         #expect(arguments.prompt == "hi")
         #expect(arguments.maxNew == 1_024)
         #expect(arguments.maxContext == 4096)
-        #expect(arguments.temperature == 0.1)
+        #expect(arguments.temperature == 1.0)
         #expect(arguments.topK == 64)
         #expect(arguments.topP == 0.95)
         #expect(arguments.repetitionPenalty == 1)

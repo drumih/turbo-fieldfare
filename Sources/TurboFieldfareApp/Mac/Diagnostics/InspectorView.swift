@@ -127,7 +127,7 @@ struct InspectorView: View {
                     }
                 }
             }
-            Text("Defaults: 1,024 tokens, temperature 0.10, Top-K 64, Top-P 0.95. Repetition penalty is off.")
+            Text("Defaults: 1,024 tokens, temperature 1.00, Top-K 64, Top-P 0.95. Repetition penalty is off.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

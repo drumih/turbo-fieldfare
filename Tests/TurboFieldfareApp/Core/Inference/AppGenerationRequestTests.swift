@@ -8,7 +8,7 @@ import Testing
     @Test func defaultRequestUsesDocumentedSamplingPolicy() {
         let request = AppGenerationRequest(modelDirectory: existingDirectory, prompt: "hello")
         #expect(request.maxNewTokens == 1_024)
-        #expect(request.temperature == 0.1)
+        #expect(request.temperature == 1.0)
         #expect(request.topK == 64)
         #expect(request.topP == 0.95)
         #expect(request.repetitionPenalty == 1)

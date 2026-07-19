@@ -7,7 +7,9 @@ struct OutputPaneView: View {
 
     var body: some View {
         Group {
-            if model.hasOutputTranscript {
+            if model.isRunning && !hasVisibleCompletion {
+                pendingGeneration
+            } else if model.hasOutputTranscript {
                 transcript
             } else {
                 placeholder
@@ -27,13 +29,7 @@ struct OutputPaneView: View {
     @ViewBuilder
     private var placeholder: some View {
         ScrollView {
-            Group {
-                if model.phase == .prefill {
-                    prefillPlaceholder
-                } else {
-                    emptyPlaceholder
-                }
-            }
+            emptyPlaceholder
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -42,27 +38,16 @@ struct OutputPaneView: View {
     }
 
     private var transcript: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            IncrementalTranscriptView(
-                prompt: model.outputPromptText,
-                output: model.outputText,
-                mailbox: model.generationTranscriptMailbox)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if model.phase == .prefill {
-                prefillStatus
-            }
-        }
+        IncrementalTranscriptView(
+            prompt: model.outputPromptText,
+            output: model.outputText,
+            mailbox: model.generationTranscriptMailbox)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 24)
         .padding(.vertical, 20)
     }
 
-    private var prefillPlaceholder: some View {
-        prefillStatus
-            .frame(maxWidth: .infinity, minHeight: 240)
-    }
-
-    private var prefillStatus: some View {
+    private var pendingGeneration: some View {
         VStack(spacing: 10) {
             Text("Processing prompt")
                 .font(.callout)
@@ -74,6 +59,12 @@ struct OutputPaneView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+    }
+
+    private var hasVisibleCompletion: Bool {
+        model.outputText.contains { !$0.isWhitespace }
     }
 
     private var emptyPlaceholder: some View {

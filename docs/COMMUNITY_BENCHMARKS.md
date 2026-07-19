@@ -9,7 +9,7 @@ comparable.
 
 This is an explicit reproducibility workload, not the interactive product
 default. The app and CLI normally allow up to 1,024 new tokens and sample with
-temperature `0.1`, Top-K `64`, and Top-P `0.95`; the commands below override
+temperature `1.0`, Top-K `64`, and Top-P `0.95`; the commands below override
 those values with a fixed 256-token greedy decode.
 
 The public package uses `TurboFieldfareCLI` for this measurement. Its timing

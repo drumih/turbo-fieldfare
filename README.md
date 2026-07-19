@@ -118,7 +118,7 @@ The package is arm64-only. Older macOS and Metal versions are not supported.
 > capital of France is` or `Q: Why is the sky blue?\nA:`.
 
 The interactive default generates up to 1,024 new tokens with temperature
-`0.1`, Top-K `64`, and Top-P `0.95`. The repetition penalty is off (`1.0`).
+`1.0`, Top-K `64`, and Top-P `0.95`. The repetition penalty is off (`1.0`).
 Temperature `0` selects deterministic greedy decoding. The model may still
 repeat, loop, or produce incorrect text, so review its continuation.
 

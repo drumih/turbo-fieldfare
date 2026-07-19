@@ -67,12 +67,16 @@ private struct PhaseLabel: View {
                 Text(label)
             case .pulse(let label):
                 PulsingDot()
-                Text(label).monospacedDigit()
+                Text(label)
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
             case .steady(let label):
                 Circle().fill(.indigo).frame(width: 7, height: 7)
-                Text(label)
+                Text(label).contentTransition(.opacity)
             case .quiet(let label):
-                Text(label).foregroundStyle(.secondary)
+                Text(label)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             }
         }
         .font(.caption.weight(.medium))

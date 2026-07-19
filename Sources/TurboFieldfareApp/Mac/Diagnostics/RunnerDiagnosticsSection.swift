@@ -15,7 +15,9 @@ struct RunnerDiagnosticsSection: View {
 
                 groupLabel("Performance")
                 DiagnosticRow("Prompt prefill", MetricFormat.seconds(diagnostics.prefillSeconds))
+                DiagnosticRow("First token wait", MetricFormat.seconds(diagnostics.timeToFirstTokenSeconds))
                 DiagnosticRow("Request TTFT", MetricFormat.seconds(diagnostics.requestStartTimeToFirstTokenSeconds))
+                DiagnosticRow("Decode duration", MetricFormat.seconds(diagnostics.decodeSeconds))
                 DiagnosticRow("Decode rate", "\(MetricFormat.rate(diagnostics.tokensPerSecond)) tok/s")
                 DiagnosticRow("Peak memory", MetricFormat.memory(diagnostics.peakMemoryBytes))
                 DiagnosticRow("I/O / token",

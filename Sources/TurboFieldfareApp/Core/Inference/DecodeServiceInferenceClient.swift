@@ -83,6 +83,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
 
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
+                    var hasYieldedVisibleText = false
                     while true {
                         let event = try DecodeFrameCodec.read(
                             DecodeServiceEvent.self, from: handles.output)
@@ -105,11 +106,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         if event.kind == .snapshot {
                             generationTranscriptMailbox.append(event.textDelta)
                             let now = Date()
-                            if now.timeIntervalSince(lastMetricYield) >= 0.5 {
+                            let beginsVisibleText = !hasYieldedVisibleText
+                                && event.textDelta.contains { !$0.isWhitespace }
+                            if beginsVisibleText
+                                || now.timeIntervalSince(lastMetricYield) >= 0.5 {
                                 lastMetricYield = now
+                                hasYieldedVisibleText = hasYieldedVisibleText || beginsVisibleText
                                 continuation.yield(.token(AppTokenEvent(
                                     index: max(0, event.tokenCount - 1),
-                                    textDelta: "",
+                                    textDelta: beginsVisibleText ? event.textDelta : "",
                                     elapsedDecodeSeconds: event.decodeSeconds)))
                             }
                             continue

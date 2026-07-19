@@ -79,7 +79,7 @@ import TurboFieldfare
             prompt: "hello")
 
         let config = RealInferenceSession.generationConfig(for: request)
-        #expect(config.temperature == 0.1)
+        #expect(config.temperature == 1.0)
         #expect(config.topK == 64)
         #expect(config.topP == 0.95)
         #expect(config.repetitionPenalty == 1)
