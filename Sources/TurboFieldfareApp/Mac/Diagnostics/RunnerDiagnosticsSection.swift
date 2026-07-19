@@ -28,9 +28,22 @@ struct RunnerDiagnosticsSection: View {
                     issueRows(diagnostics)
                 }
 
+                if let prefill = diagnostics.prefill {
+                    DisclosureGroup("Prefill details") {
+                        VStack(spacing: 8) {
+                            DiagnosticRow("Mode", "\(prefill.requestedMode.rawValue) -> \(prefill.executedMode.rawValue)")
+                            DiagnosticRow("KV storage", prefill.kvStorageMode?.rawValue ?? "unknown")
+                            DiagnosticRow("Completeness", prefill.chunkCompleteness.rawValue)
+                            if let reason = prefill.unsupportedReason, !reason.isEmpty {
+                                DiagnosticRow("Unsupported reason", reason, multiline: true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                }
                 if let runner = diagnostics.runner {
-                    DisclosureGroup("Advanced") {
-                        AdvancedRunnerDiagnosticsView(diagnostics: diagnostics, runner: runner)
+                    DisclosureGroup("Decode runner") {
+                        AdvancedRunnerDiagnosticsView(runner: runner)
                     }
                 }
             } else {
@@ -79,12 +92,10 @@ struct RunnerDiagnosticsSection: View {
 }
 
 private struct AdvancedRunnerDiagnosticsView: View {
-    let diagnostics: AppDiagnostics
     let runner: AppRunnerDiagnostics
 
     var body: some View {
         VStack(spacing: 8) {
-            DiagnosticRow("Decode duration", MetricFormat.seconds(diagnostics.decodeSeconds))
             DiagnosticRow("cb1 / token", MetricFormat.milliseconds(runner.cb1MillisecondsPerToken))
             DiagnosticRow("cb2 / token", MetricFormat.milliseconds(runner.cb2MillisecondsPerToken))
             DiagnosticRow("Head / token", MetricFormat.milliseconds(runner.headMillisecondsPerToken))
