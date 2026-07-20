@@ -1,13 +1,11 @@
-# Optimizing a 14.4 GB model for an 8 GB machine
+# Optimizing a 14.3 GB model for an 8 GB machine
 
-TurboFieldfare runs Gemma 4 26B-A4B with about 14.4 GB of packed text-only
-weight payload on an 8 GB Apple Silicon machine. The completed installation is
-about 14.5 GB after its manifest, expert layout, and tokenizer files. The model
-cannot remain resident in memory, so the runtime keeps roughly 1.58 GB of
-common weights resident and streams the roughly 11.6 GB routed-expert payload
-from NVMe. This constraint shaped the useful optimizations: reduce demand I/O,
-expose enough GPU parallelism, and never buy speed by loading the model into
-RAM.
+TurboFieldfare runs Gemma 4 26B-A4B with a text-only installation of about
+14.3 GB on an 8 GB Apple Silicon machine. The model cannot remain resident in
+memory, so the runtime keeps the 1.35 GB common model available to Metal and
+streams the 12.9 GB routed-expert pool from NVMe. This constraint shaped the
+useful optimizations: reduce demand I/O, expose enough GPU parallelism, and
+never buy speed by loading the model into RAM.
 
 This article covers the experiments that materially changed the runtime. The
 [experiment inventory](experiments/EXPERIMENT_INVENTORY.md) retains the complete record,
@@ -31,8 +29,10 @@ the number of row streams but starved the GPU. Progressive expert overlap
 added synchronization and regressed decode. Simple Darwin read hints were
 neutral; RDADVISE reversed at longer contexts; and `F_SPECULATIVE_READ`, read
 reordering, grouped `preadv`, and MTLIO won narrow probes but not broader
-runtime gates. Packed K4/V4 saved 82 MiB against the final FP16 ring but failed
-the quality gate. A monolithic fusion removed dispatches yet lost throughput.
+runtime gates. Packed K4/V4 failed the quality gate and used more memory at
+longer contexts than Gemma 4's exact FP16 layout. FP16 uses a fixed circular
+cache for 25 sliding-window layers and grows only for the five full-attention
+layers.
 
 The sections below pair these wins with the nearby failures that clarified
 them. Changes that claim identical math must preserve exact output; changes
@@ -133,12 +133,6 @@ attention by about 3.3x and full 4K attention by about 4.1x. Short-context
 decode stayed nearly flat, whereas long-context GPU time in that phase fell
 about 28% as attention's share of the step grew.
 
-A later MLX-style geometry reduced isolated full-attention time by roughly
-71–74%, yet complete decode improved only 1.30–1.59%. The measurements did not
-conflict. Only five of thirty layers use full attention, and attention occupied
-a small fraction of these token steps. The microbenchmark proved that the
-geometry worked; the full pass measured how often that faster work mattered.
-
 Chunked prefill replaced scalar prompt replay. Increasing the bounded chunk
 from 32 to 128 reduced a 1,017-token prefill from 92.89 to 52.35 seconds.
 Staged affine MPP then dequantized a small FP16 tile, ran the hardware matrix
@@ -190,13 +184,11 @@ also failed to beat bounded parallel `pread`, which remained the production
 path. [The expert I/O record](experiments/summaries/01-model-install-and-expert-io.md)
 keeps the individual controls and outcomes.
 
-Packed K4/V4 KV storage also looked stronger against an obsolete control. It
-used about 223 MiB at 4K versus roughly 880 MiB for the old linear FP16 cache.
-An exact FP16 ring then exploited the model's 25 sliding-window layers and
-required only about 305 MiB, reducing K4/V4's incremental saving to 82 MiB.
-The packed path subsequently lost 5.0781 top-1 percentage points and worsened
-mean negative log-likelihood. It remains an explicit experiment; exact FP16 is
-the default.
+At 4K, packed K4/V4 saved only about 82 MiB compared with exact FP16. That
+small advantage disappeared as context grew: the packed cache grew across all
+30 attention layers, while FP16 used a fixed circular cache for 25 of them.
+Packed K4/V4 became larger at roughly 6.4K and also produced worse results
+across the full quality evaluation. It was rejected and removed.
 
 Fusion produced three different outcomes. Targeted QKV, layer-tail, and
 row-based head fusions reached production after parity checks and whole-step

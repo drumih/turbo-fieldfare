@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct StatusHUDView: View {
@@ -23,6 +24,7 @@ struct StatusHUDView: View {
                 HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
             }
         }
+        .frame(height: 30)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background {
@@ -71,7 +73,7 @@ private struct PhaseLabel: View {
                     .monospacedDigit()
                     .contentTransition(.numericText())
             case .steady(let label):
-                Circle().fill(.indigo).frame(width: 7, height: 7)
+                Circle().fill(TurboFieldfareMacTheme.accentColor).frame(width: 7, height: 7)
                 Text(label).contentTransition(.opacity)
             case .quiet(let label):
                 Text(label)
@@ -105,7 +107,7 @@ private struct PhaseLabel: View {
 private struct PulsingDot: View {
     var body: some View {
         Circle()
-            .fill(.indigo)
+            .fill(TurboFieldfareMacTheme.accentColor)
             .frame(width: 7, height: 7)
             .phaseAnimator([0.4, 1.0]) { dot, opacity in
                 dot.opacity(opacity)

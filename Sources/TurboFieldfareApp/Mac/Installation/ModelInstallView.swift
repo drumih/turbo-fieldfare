@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct ModelInstallView: View {
@@ -23,7 +24,7 @@ struct ModelInstallView: View {
         VStack(spacing: 10) {
             Image(systemName: "externaldrive.badge.plus")
                 .font(.system(.largeTitle, design: .rounded))
-                .foregroundStyle(.indigo)
+                .foregroundStyle(TurboFieldfareMacTheme.accentColor)
                 .accessibilityHidden(true)
             Text("Model required")
                 .font(.title.bold())
@@ -133,7 +134,7 @@ struct ModelInstallView: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(!model.canCancelInstall)
             } else {
-                Button("Check Again", action: model.refreshInstallReadiness)
+                Button("Check Again", action: model.recheckModelAtCurrentLocation)
                 .buttonStyle(.bordered)
                 .disabled(model.isInstallingModel)
 

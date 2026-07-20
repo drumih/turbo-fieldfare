@@ -37,4 +37,11 @@ Report the commit, hardware and RAM, macOS, Swift version, exact command, exit c
 
 ## App controls
 
-The Mac app exposes generation controls plus cache slots, LFU/LRU, prefill, FP16 or K4/V4 KV, RDADVISE, and verification. Interactive generation defaults to 1,024 new tokens, temperature 1.0, Top-K 64, Top-P 0.95, and repetition penalty off at 1.0. Start with production defaults. The HUD reports rate, tokens, and decode-service memory; Last run adds TTFT and I/O. The app must be built with its sibling `TurboFieldfareDecodeService`; it never falls back to loading a second in-process model. See [README](README.md) and [Runtime controls](docs/RUNTIME_CONTROLS.md).
+The Mac app sends prompts through the pinned Gemma 4 IT chat format. It
+exposes context length, temperature, Top-K, Top-P, expert-cache slots, prefill,
+and RDADVISE. The defaults are temperature `0.2`, Top-K `64`, and Top-P `0.95`.
+Responses can use the context space left after formatting the prompt, and FP16
+is the runtime KV format. The HUD shows generation rate, token count, and
+decode-service memory; Last run also shows time to first token and I/O. Build
+the app with its sibling `TurboFieldfareDecodeService`; it never loads a second
+in-process model. See [README](README.md) and [Runtime controls](docs/RUNTIME_CONTROLS.md).

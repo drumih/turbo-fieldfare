@@ -79,16 +79,16 @@ struct PromptComposerView: View {
             Text("Prompting this model")
                 .font(.headline)
 
-            tipSection("It continues text",
-                       "This is a base completion model, not a chat assistant. Write the beginning of the output you want, such as “A concise explanation:” or a function signature.")
-            tipSection("If it repeats or runs on",
-                       "Keep Temperature at 1.0, retry, shorten Max response, or enable Repetition penalty.")
-            tipSection("If it drifts or invents facts",
-                       "Put required facts, constraints, and the desired structure directly in the prompt. Keep the requested continuation focused and verify factual output.")
-            tipSection("For code or exact formats",
-                       "Include the signature, schema, or a short example. Lower temperature can reduce variation, but it may increase repetition and does not guarantee correct code.")
-            tipSection("If it does not answer",
-                       "Turn the question into an answer prefix. For example, use “The reason this happens is” instead of “Why does this happen?”")
+            tipSection("Ask for a clear task",
+                       "Say what you want the model to create, explain, plan, or transform. Put the essential context in the same prompt.")
+            tipSection("Shape the answer",
+                       "Specify a useful length, sections, tone, or output format. Concrete constraints work better than a long list of vague preferences.")
+            tipSection("Anchor important facts",
+                       "Include facts the answer must preserve and say what should be checked. Generated factual claims can still be wrong or outdated.")
+            tipSection("For code and calculations",
+                       "Provide types, dimensions, interfaces, edge cases, or a small scaffold. Compile or run the result before relying on it.")
+            tipSection("Try a focused revision",
+                       "If the answer drifts, shorten the task and make the missing requirement explicit. The default temperature is 0.20 for steadier responses.")
         }
         .font(.callout)
         .frame(width: 390, alignment: .leading)

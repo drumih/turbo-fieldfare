@@ -51,7 +51,15 @@ let package = Package(
         .target(
             name: "TurboFieldfareAppCore",
             dependencies: ["TurboFieldfare", "TurboFieldfareRepackCore", "TurboFieldfareDecodeProtocol"],
-            path: "Sources/TurboFieldfareApp/Core"
+            path: "Sources/TurboFieldfareApp/Core",
+            resources: [
+                .copy("Resources/app-prompts.json"),
+            ]
+        ),
+        .target(
+            name: "TurboFieldfareMacPresentation",
+            dependencies: ["TurboFieldfareAppCore"],
+            path: "Sources/TurboFieldfareApp/MacPresentation"
         ),
         .target(
             name: "TurboFieldfareDecodeProtocol",
@@ -64,7 +72,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TurboFieldfareMac",
-            dependencies: ["TurboFieldfareAppCore"],
+            dependencies: ["TurboFieldfareAppCore", "TurboFieldfareMacPresentation"],
             path: "Sources/TurboFieldfareApp/Mac",
             resources: [
                 .copy("Resources/turbofieldfare-app-icon.png"),
@@ -89,6 +97,11 @@ let package = Package(
             name: "TurboFieldfareAppCoreTests",
             dependencies: ["TurboFieldfareAppCore", "TurboFieldfare", "TurboFieldfareRepackCore", "TurboFieldfareDecodeProtocol"],
             path: "Tests/TurboFieldfareApp/Core"
+        ),
+        .testTarget(
+            name: "TurboFieldfareMacPresentationTests",
+            dependencies: ["TurboFieldfareMacPresentation"],
+            path: "Tests/TurboFieldfareApp/MacPresentation"
         ),
     ]
 )

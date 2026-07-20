@@ -29,7 +29,9 @@ struct TurboFieldfareMacApp: App {
     @State private var model: AppModel
 
     init() {
-        _model = State(initialValue: AppModel(client: DecodeServiceInferenceClient()))
+        _model = State(initialValue: AppModel(
+            client: DecodeServiceInferenceClient(),
+            settingsPersistenceEnabled: true))
     }
 
     var body: some Scene {
@@ -51,8 +53,6 @@ struct TurboFieldfareMacApp: App {
             CommandMenu("Model") {
                 Button("Load Model", action: model.loadModel)
                     .disabled(!model.canLoadModel)
-                Button("Cancel Load", action: model.cancelLoad)
-                    .disabled(!model.canCancelLoad)
                 Button("Reload Model", action: model.reloadModel)
                     .disabled(!model.canReloadModel)
                 Button("Unload Model", action: model.unloadModel)

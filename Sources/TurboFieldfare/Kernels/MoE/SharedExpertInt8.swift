@@ -6,17 +6,17 @@ import Metal
 /// The Gemma 4 26B-A4B manifest stores `mlp.gate/up/down_proj.weight` at 8-bit
 /// MLX affine (group=64, BF16 scale + BF16 bias). Shapes:
 ///   gate: [F=2112, D=2816]   up:   [F=2112, D=2816]   down: [D=2816, F=2112]
-struct SharedExpertInt8Proj {
-    let weights: MTLBuffer
-    let scales:  MTLBuffer
-    let biases:  MTLBuffer
-    let weightsOffset: Int
-    let scalesOffset:  Int
-    let biasesOffset:  Int
-    let rows: UInt32
-    let cols: UInt32
+public struct SharedExpertProjection {
+    public let weights: MTLBuffer
+    public let scales:  MTLBuffer
+    public let biases:  MTLBuffer
+    public let weightsOffset: Int
+    public let scalesOffset:  Int
+    public let biasesOffset:  Int
+    public let rows: UInt32
+    public let cols: UInt32
 
-    init(weights: MTLBuffer, scales: MTLBuffer, biases: MTLBuffer,
+    public init(weights: MTLBuffer, scales: MTLBuffer, biases: MTLBuffer,
                 weightsOffset: Int = 0, scalesOffset: Int = 0, biasesOffset: Int = 0,
                 rows: UInt32, cols: UInt32) {
         self.weights       = weights
@@ -29,6 +29,8 @@ struct SharedExpertInt8Proj {
         self.cols          = cols
     }
 }
+
+public typealias SharedExpertInt8Proj = SharedExpertProjection
 
 enum SharedExpertInt8Error: Error, CustomStringConvertible {
     case dimensionMismatch(String)

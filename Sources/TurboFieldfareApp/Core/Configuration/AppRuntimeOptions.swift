@@ -57,7 +57,6 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var expertCachePolicy: AppExpertCachePolicy
     public var prefillEnabled: Bool
     public var prefillChunkTokens: Int
-    public var turboQuantKVEnabled: Bool
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
 
@@ -65,14 +64,12 @@ public struct AppRuntimeOptions: Equatable, Sendable {
                 expertCachePolicy: AppExpertCachePolicy = .lfu,
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
-                turboQuantKVEnabled: Bool = false,
                 rdadvisePolicy: AppRDAdvicePolicy = .off,
                 modelVerification: AppModelVerification = .fullSha256) {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
         self.prefillChunkTokens = prefillChunkTokens
-        self.turboQuantKVEnabled = turboQuantKVEnabled
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
     }
@@ -94,13 +91,18 @@ public struct AppRuntimeOptions: Equatable, Sendable {
 
     public var resultSummary: String {
         let prefill = prefillEnabled ? "prefill \(prefillChunkTokens)" : "prefill off"
-        let kv = turboQuantKVEnabled ? "K4/V4 KV" : "FP16 KV"
         let verification = modelVerification == .fullSha256 ? "full SHA-256" : "trusted receipt"
-        return "Cache \(expertCacheSlots) \(expertCachePolicy.label), \(prefill), \(kv), RDADVISE \(rdadvisePolicy.label.lowercased()), \(verification)"
+        return "Cache \(expertCacheSlots) \(expertCachePolicy.label), \(prefill), FP16 KV, RDADVISE \(rdadvisePolicy.label.lowercased()), \(verification)"
     }
 
     public static func slotsLabel(for slots: Int) -> String {
-        slots > 16 ? "\(slots) +RAM" : "\(slots)"
+        switch slots {
+        case 8: "8, -0.8 GB"
+        case 16: "16, Default"
+        case 24: "24, +0.8 GB"
+        case 32: "32, +1.61 GB"
+        default: "\(slots)"
+        }
     }
 
     public func resolvedRuntimeConfiguration(forceLogitsHead: Bool) throws -> RuntimeConfiguration {
@@ -111,7 +113,6 @@ public struct AppRuntimeOptions: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy.runtimeValue,
             prefillEnabled: prefillEnabled,
             prefillChunkTokens: prefillChunkTokens,
-            turboQuantKVEnabled: turboQuantKVEnabled,
             forceLogitsHead: forceLogitsHead)
     }
 }
@@ -119,7 +120,10 @@ public struct AppRuntimeOptions: Equatable, Sendable {
 public struct AppLoadedRuntimeKey: Equatable, Sendable {
     public var modelDirectory: URL
     public var maxContextTokens: Int
-    public var runtimeOptions: AppRuntimeOptions
+    public var expertCacheSlots: Int
+    public var expertCachePolicy: AppExpertCachePolicy
+    public var rdadvisePolicy: AppRDAdvicePolicy
+    public var modelVerification: AppModelVerification
     public var forceLogitsHead: Bool
 
     public init(modelDirectory: URL,
@@ -128,7 +132,10 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
                 forceLogitsHead: Bool = false) {
         self.modelDirectory = modelDirectory.standardizedFileURL
         self.maxContextTokens = maxContextTokens
-        self.runtimeOptions = options
+        self.expertCacheSlots = options.expertCacheSlots
+        self.expertCachePolicy = options.expertCachePolicy
+        self.rdadvisePolicy = options.rdadvisePolicy
+        self.modelVerification = options.modelVerification
         self.forceLogitsHead = forceLogitsHead
     }
 }

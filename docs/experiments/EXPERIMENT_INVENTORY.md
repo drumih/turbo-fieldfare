@@ -1,6 +1,6 @@
 # Experiment inventory
 
-This is the curated experiment and decision index behind [Optimizing a 14.4 GB
+This is the curated experiment and decision index behind [Optimizing a 14.3 GB
 model for an 8 GB machine](../OPTIMIZATION_JOURNEY.md). It records what shipped,
 what worked only under a named condition, what failed, what a stronger gate
 later reversed, and what the project never attempted.
@@ -8,8 +8,8 @@ later reversed, and what the project never attempted.
 Most readers should start with the article above. Use this inventory to find
 the variants, controls, measurements, and final disposition of a specific
 experiment. The entries are design archaeology, not an independent reproduction
-package: they are curated from a larger private research record, while raw logs,
-traces, internal plans, and project-state documents are intentionally excluded.
+package. Raw logs, traces, working plans, and project-state documents are not
+part of this curated record.
 
 The companion [implementation reference ledger](../IMPLEMENTATION_REFERENCES.md)
 records the external model implementations, papers, kernels, and systems that
@@ -92,7 +92,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [DEC-12](summaries/02-decode-moe-int4-and-router.md#dec-12) — Phase-1 paired rows | 207-212 versus 194-196 microseconds. | Rejected. |
 | [DEC-13](summaries/02-decode-moe-int4-and-router.md#dec-13) — Phase-1 `u16` loads | 5.961 to 5.973 tok/s. | Production; small win. |
 | [DEC-14](summaries/02-decode-moe-int4-and-router.md#dec-14) — Phase-2 d2/d2p/d4 | Mixed end to end; target only 5.70 ms/token. | Rejected; default unchanged. |
-| [DEC-15](summaries/02-decode-moe-int4-and-router.md#dec-15) — Group-sum reuse | Private 454.05 to 420.53 microseconds reversed to 309.98 versus 348.83 in the wrapper. | Rejected. |
+| [DEC-15](summaries/02-decode-moe-int4-and-router.md#dec-15) — Group-sum reuse | An early 454.05 to 420.53 microsecond result reversed to 309.98 versus 348.83 in the wrapper. | Rejected. |
 | [DEC-16](summaries/02-decode-moe-int4-and-router.md#dec-16) — Adaptive geometry | One synthetic state won; real rows mixed. | Rejected. |
 | [DEC-17](summaries/02-decode-moe-int4-and-router.md#dec-17) — Progressive execution | Corrected 1K/256 fell 4.799 to 4.648 tok/s. | Rejected. |
 | [DEC-18](summaries/02-decode-moe-int4-and-router.md#dec-18) — Hit-first split | 5.169 versus 4.518 tok/s with forced identical IDs. | Production. |
@@ -131,11 +131,11 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [KV-02](summaries/05-attention-and-kv-cache.md#kv-02) — GQA-aware SWA | Isolated SWA win. | Production. |
 | [KV-03](summaries/05-attention-and-kv-cache.md#kv-03) — Full-GQA A3 | +21.2% at 1024, -54.6% at 4096. | Rejected. |
 | [KV-04](summaries/05-attention-and-kv-cache.md#kv-04) — A4 local variants | Three 1024 wins became neutral/slower at 4096; TG widths lost. | Rejected. |
-| [KV-05](summaries/05-attention-and-kv-cache.md#kv-05) — MLX geometry v1 | 65-68% isolated win, then forced-prefix failure and removal. | Rejected; corrected v2 reopened the geometry family. |
-| [KV-06](summaries/05-attention-and-kv-cache.md#kv-06) — MLX geometry v2 | 71-74% isolated; quality passed; +1.30-1.59% end to end. | Production. |
-| [KV-07](summaries/05-attention-and-kv-cache.md#kv-07) — Packed K4/V4 attention | Split beat packed single-pass but stayed slower than FP16. | Conditional; experiment only. |
+| [KV-05](summaries/05-attention-and-kv-cache.md#kv-05) — MLX geometry v1 | 65-68% isolated win, then forced-prefix failure and removal. | Rejected; exact split remains production. |
+| [KV-06](summaries/05-attention-and-kv-cache.md#kv-06) — MLX geometry v2 | 71-74% isolated and +1.30-1.59% on the earlier path; the instruction-checkpoint quality gate failed. | Rejected for the instruction checkpoint; exact split is production. |
+| [KV-07](summaries/05-attention-and-kv-cache.md#kv-07) — Packed K4/V4 attention | Split beat packed single-pass but stayed slower than FP16. | Rejected and removed. |
 | [KV-08](summaries/05-attention-and-kv-cache.md#kv-08) — Alternative codecs | Faster writers, much slower attention. | Rejected. |
-| [KV-09](summaries/05-attention-and-kv-cache.md#kv-09) — K4/V4 quality | Mean delta-NLL +0.015197; top-1 -5.0781 points. | Rejected; production default remains FP16. |
+| [KV-09](summaries/05-attention-and-kv-cache.md#kv-09) — K4/V4 quality | Mean delta-NLL +0.015197; top-1 -5.0781 points. | Rejected and removed; FP16 remains production. |
 | [KV-10](summaries/05-attention-and-kv-cache.md#kv-10) — FP16 full-attention island | Small sample looked better; 256-row top-k gates failed. | Rejected. |
 | [KV-11](summaries/05-attention-and-kv-cache.md#kv-11) — Packed chunk 32 | 5.42-6.30% isolated win; holdout quality failed. | Rejected. |
 | [KV-12](summaries/05-attention-and-kv-cache.md#kv-12) — FP16 KV ring | About 575-591 MiB saved; speed neutral/mixed; parity retained. | Production. |
@@ -219,10 +219,9 @@ These boundaries are not failed performance work:
 
 ## How these summaries were prepared
 
-Each public ID has a private claim map that names the dated source records used
-to verify it. Later revalidation overrides stale intermediate conclusions. The
-public package deliberately carries summaries instead of raw captures so a
-reader can follow the evidence without receiving the private working archive.
+Later revalidation overrides stale intermediate conclusions. These summaries
+keep the evidence and final disposition readable without reproducing every raw
+capture.
 
 [Optimization journey](../OPTIMIZATION_JOURNEY.md) |
 [Benchmarks](../BENCHMARKS.md) |

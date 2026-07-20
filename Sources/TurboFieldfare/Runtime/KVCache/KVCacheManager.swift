@@ -3,13 +3,24 @@ import Darwin
 import Metal
 
 /// Which attention variant a layer runs. Gemma 4 interleaves 25 sliding-window
-/// layers with 5 full-attention layers. Sourced from
-/// `ArchConfig.fullAttentionLayerMask`.
-enum LayerKind: Sendable { case swa, full }
+/// layers with 5 full-attention layers (the latter carry the K=V shared-tensor
+/// quirk). Sourced from `ArchConfig.fullAttentionLayerMask`.
+public enum LayerKind: Sendable { case swa, full }
 
-enum KVCacheStorageMode: Sendable, Equatable {
-    case fp16
-    case turboQuant(TurboQuantKVMode)
+/// A read view the attention kernels bind. `offset` stays 0; ring-enabled SWA
+/// layers expose the physical start slot for diagnostics while kernels map
+/// logical positions with the supplied ring capacity.
+public struct KVView: @unchecked Sendable {
+    public let buffer: MTLBuffer
+    /// Byte offset of logical position 0. Always 0 under linear storage.
+    public let offset: Int
+    /// Bytes per token (numKVHeads * headDim * sizeof(FP16)).
+    public let stride: Int
+    /// Number of valid positions written so far (== `position`). Attention reads
+    /// `[0, validTokenCount]` (inclusive of the just-written token).
+    public let validTokenCount: Int
+    /// Ring start slot. 0 under linear storage; the hook for the wrap-aware path.
+    public let startSlot: Int
 }
 
 /// Per-layer FP16 K/V storage for the decode loop.
@@ -19,9 +30,14 @@ enum KVCacheStorageMode: Sendable, Equatable {
 /// `maxContext`; FP16 ring storage caps SWA layers to their physical capacity
 /// while full-attention layers remain linear.
 ///
-/// Full-attention layers share the raw `k_proj` output. K then runs scaled
-/// per-head normalization plus RoPE, while V runs no-scale normalization and
-/// skips RoPE. The cache buffers must therefore remain separate.
+/// Gemma 4 full-attention layers carry the `attention_k_eq_v` quirk: K and V
+/// share the `k_proj` weight, so a single 4-bit dequant + GEMV produces the
+/// raw projection. But after that the K-slot runs `k_norm` (per-head, with
+/// scale) + RoPE while the V-slot runs `v_norm` (per-head, no scale) and
+/// skips RoPE — they diverge before entering attention. So the cache buffers
+/// must be separate; aliasing them would smash the V values with K's normed,
+/// rotated bytes (gemma4-block.md §2.2). We always allocate K and V slots,
+/// independent of `attentionKEqV`.
 ///
 /// The K/V projection GEMV writes straight into the slot returned by
 /// `kSlot`/`vSlot` (no separate `kv_write` kernel); the runner then norms +
@@ -31,42 +47,33 @@ enum KVCacheStorageMode: Sendable, Equatable {
 /// 8 GB rule: storage is bounded by per-layer physical capacity, allocated
 /// once. `reset()` returns physical pages to the OS via `MADV_DONTNEED` so a
 /// finished generation does not keep its KV resident into the next turn.
-final class KVCacheManager {
-    let config: ArchConfig
-    let maxContext: Int
-    let storageMode: KVCacheStorageMode
-    let fp16RingEnabled: Bool
+public final class KVCacheManager {
+    public let config: ArchConfig
+    public let maxContext: Int
+    public let fp16RingEnabled: Bool
 
     private let kBuffers: [MTLBuffer]
     private let vBuffers: [MTLBuffer]
-    private let quantizedKBuffers: [MTLBuffer]
-    private let quantizedVBuffers: [MTLBuffer]
-    private let turboQuantLayouts: [TurboQuantKVLayerLayout]
     private let strides:  [Int]         // bytes per token, per layer
     private let kinds:    [LayerKind]
     private let capacityTokens: [Int]
 
-    private(set) var position: Int = 0
+    public private(set) var position: Int = 0
 
     private static let fp16Size = 2
 
-    init(device: MTLDevice,
+    public init(device: MTLDevice,
                 config: ArchConfig,
                 maxContext: Int,
-                storageMode: KVCacheStorageMode = .fp16,
                 fp16RingEnabled: Bool = false,
                 slidingWindow: Int? = nil,
                 maxPrefillChunkTokens: Int = 128,
                 fp16RingCapacityOverride: Int? = nil) throws {
         precondition(maxContext > 0, "maxContext must be positive")
         precondition(maxPrefillChunkTokens > 0, "maxPrefillChunkTokens must be positive")
-        if case .turboQuant(.disabled) = storageMode {
-            preconditionFailure("disabled TurboQuant mode cannot be used as a storage mode")
-        }
         self.config = config
         self.maxContext = maxContext
-        self.storageMode = storageMode
-        let ringEnabled = storageMode == .fp16 && fp16RingEnabled
+        let ringEnabled = fp16RingEnabled
         self.fp16RingEnabled = ringEnabled
 
         let swaStride  = config.numKVHeads     * config.headDim     * Self.fp16Size
@@ -77,17 +84,11 @@ final class KVCacheManager {
 
         var ks: [MTLBuffer] = []
         var vs: [MTLBuffer] = []
-        var qks: [MTLBuffer] = []
-        var qvs: [MTLBuffer] = []
-        var qls: [TurboQuantKVLayerLayout] = []
         var st: [Int] = []
         var kd: [LayerKind] = []
         var caps: [Int] = []
         ks.reserveCapacity(config.numLayers)
         vs.reserveCapacity(config.numLayers)
-        qks.reserveCapacity(config.numLayers)
-        qvs.reserveCapacity(config.numLayers)
-        qls.reserveCapacity(config.numLayers)
         st.reserveCapacity(config.numLayers)
         kd.reserveCapacity(config.numLayers)
         caps.reserveCapacity(config.numLayers)
@@ -96,42 +97,19 @@ final class KVCacheManager {
             let isFull = config.fullAttentionLayerMask[layer] != 0
             let stride = isFull ? fullStride : swaStride
             let capacity = ringEnabled && !isFull ? swaCapacity : maxContext
-            switch storageMode {
-            case .fp16:
-                let length = capacity * stride
+            let length = capacity * stride
 
-                guard let kBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
-                    throw ModelError.residentBufferWrapFailed
-                }
-                kBuf.label = "kv.K.layer\(layer)"
-                ks.append(kBuf)
-
-                guard let vBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
-                    throw ModelError.residentBufferWrapFailed
-                }
-                vBuf.label = "kv.V.layer\(layer)"
-                vs.append(vBuf)
-
-            case .turboQuant(let mode):
-                let layout = TurboQuantKVLayout.layer(mode: mode,
-                                                      config: config,
-                                                      layer: layer,
-                                                      capacity: maxContext)
-                guard let kBuf = device.makeBuffer(length: maxContext * layout.key.bytesPerToken,
-                                                   options: .storageModeShared) else {
-                    throw ModelError.residentBufferWrapFailed
-                }
-                kBuf.label = "kv.tq.K.layer\(layer)"
-                qks.append(kBuf)
-
-                guard let vBuf = device.makeBuffer(length: maxContext * layout.value.bytesPerToken,
-                                                   options: .storageModeShared) else {
-                    throw ModelError.residentBufferWrapFailed
-                }
-                vBuf.label = "kv.tq.V.layer\(layer)"
-                qvs.append(vBuf)
-                qls.append(layout)
+            guard let kBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw ModelError.residentBufferWrapFailed
             }
+            kBuf.label = "kv.K.layer\(layer)"
+            ks.append(kBuf)
+
+            guard let vBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw ModelError.residentBufferWrapFailed
+            }
+            vBuf.label = "kv.V.layer\(layer)"
+            vs.append(vBuf)
 
             st.append(stride)
             kd.append(isFull ? .full : .swa)
@@ -140,99 +118,91 @@ final class KVCacheManager {
 
         self.kBuffers = ks
         self.vBuffers = vs
-        self.quantizedKBuffers = qks
-        self.quantizedVBuffers = qvs
-        self.turboQuantLayouts = qls
         self.strides  = st
         self.kinds    = kd
         self.capacityTokens = caps
     }
 
+    public func layerKind(_ layer: Int) -> LayerKind { kinds[layer] }
+
+    /// Bytes per token for `layer` (K and V share the same stride).
+    public func stride(layer: Int) -> Int { strides[layer] }
+
     /// Physical token capacity for `layer`. Ring-enabled SWA layers can be
     /// smaller than `maxContext`; full layers and ring-off storage stay linear.
-    func capacity(layer: Int) -> Int { capacityTokens[layer] }
+    public func capacity(layer: Int) -> Int { capacityTokens[layer] }
 
-    func ringCapacity(layer: Int) -> Int {
-        guard storageMode == .fp16, fp16RingEnabled, kinds[layer] == .swa else { return 0 }
+    public func ringCapacity(layer: Int) -> Int {
+        guard fp16RingEnabled, kinds[layer] == .swa else { return 0 }
         return capacityTokens[layer]
     }
 
-    func turboQuantLayout(layer: Int) -> TurboQuantKVLayerLayout? {
-        guard case .turboQuant = storageMode else { return nil }
-        return turboQuantLayouts[layer]
+    /// Total bytes of the K buffer for `layer`.
+    public func bufferLength(layer: Int) -> Int {
+        return capacityTokens[layer] * strides[layer]
     }
 
     /// Write target for this layer's K projection at `position`.
-    func kSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
-        precondition(storageMode == .fp16, "FP16 K slots are unavailable for TurboQuant storage")
+    public func kSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
         validateRange(start: position, count: 1)
         return (kBuffers[layer], physicalSlot(layer: layer, position: position) * strides[layer])
     }
 
-    /// Write target for this layer's V projection at `position`. It is distinct
-    /// from `kSlot` because full layers normalize K and V differently and apply
-    /// RoPE only to K.
-    func vSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
-        precondition(storageMode == .fp16, "FP16 V slots are unavailable for TurboQuant storage")
+    /// Write target for this layer's V projection at `position`. Always
+    /// distinct from `kSlot` — full layers no longer alias K and V (Gemma 4
+    /// applies different per-head norms + RoPE to K vs V; gemma4-block.md §2.2).
+    public func vSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
         validateRange(start: position, count: 1)
         return (vBuffers[layer], physicalSlot(layer: layer, position: position) * strides[layer])
     }
 
-    func kRange(layer: Int, start: Int, count: Int) -> (buffer: MTLBuffer, offset: Int, stride: Int) {
-        precondition(storageMode == .fp16, "FP16 K ranges are unavailable for TurboQuant storage")
+    public func kRange(layer: Int, start: Int, count: Int) -> (buffer: MTLBuffer, offset: Int, stride: Int) {
         validateRange(start: start, count: count)
         validateContiguousPhysicalRange(layer: layer, start: start, count: count)
         return (kBuffers[layer], physicalSlot(layer: layer, position: start) * strides[layer], strides[layer])
     }
 
-    func vRange(layer: Int, start: Int, count: Int) -> (buffer: MTLBuffer, offset: Int, stride: Int) {
-        precondition(storageMode == .fp16, "FP16 V ranges are unavailable for TurboQuant storage")
+    public func vRange(layer: Int, start: Int, count: Int) -> (buffer: MTLBuffer, offset: Int, stride: Int) {
         validateRange(start: start, count: count)
         validateContiguousPhysicalRange(layer: layer, start: start, count: count)
         return (vBuffers[layer], physicalSlot(layer: layer, position: start) * strides[layer], strides[layer])
     }
 
-    func keyBuffer(layer: Int, validTokenCount: Int) -> MTLBuffer {
-        precondition(storageMode == .fp16, "FP16 K buffers are unavailable for TurboQuant storage")
+    public func keyView(layer: Int) -> KVView {
+        keyView(layer: layer, validTokenCount: position)
+    }
+
+    public func keyView(layer: Int, validTokenCount: Int) -> KVView {
         validateValidTokenCount(validTokenCount)
-        return kBuffers[layer]
+        return KVView(buffer: kBuffers[layer], offset: 0, stride: strides[layer],
+                      validTokenCount: validTokenCount, startSlot: ringStartSlot(layer: layer,
+                                                                                 validTokenCount: validTokenCount))
+    }
+
+    public func valueView(layer: Int) -> KVView {
+        valueView(layer: layer, validTokenCount: position)
+    }
+
+    func keyBuffer(layer: Int, validTokenCount: Int) -> MTLBuffer {
+        keyView(layer: layer, validTokenCount: validTokenCount).buffer
     }
 
     func valueBuffer(layer: Int, validTokenCount: Int) -> MTLBuffer {
-        precondition(storageMode == .fp16, "FP16 V buffers are unavailable for TurboQuant storage")
+        valueView(layer: layer, validTokenCount: validTokenCount).buffer
+    }
+
+    public func valueView(layer: Int, validTokenCount: Int) -> KVView {
         validateValidTokenCount(validTokenCount)
-        return vBuffers[layer]
-    }
-
-    func quantizedKeySlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
-        let layout = requireTurboQuantLayout(layer: layer)
-        validateRange(start: position, count: 1)
-        return (quantizedKBuffers[layer], position * layout.key.bytesPerToken)
-    }
-
-    func quantizedValueSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
-        let layout = requireTurboQuantLayout(layer: layer)
-        validateRange(start: position, count: 1)
-        return (quantizedVBuffers[layer], position * layout.value.bytesPerToken)
-    }
-
-    func quantizedKeyBuffer(layer: Int, validTokenCount: Int) -> MTLBuffer {
-        _ = requireTurboQuantLayout(layer: layer)
-        validateValidTokenCount(validTokenCount)
-        return quantizedKBuffers[layer]
-    }
-
-    func quantizedValueBuffer(layer: Int, validTokenCount: Int) -> MTLBuffer {
-        _ = requireTurboQuantLayout(layer: layer)
-        validateValidTokenCount(validTokenCount)
-        return quantizedVBuffers[layer]
+        return KVView(buffer: vBuffers[layer], offset: 0, stride: strides[layer],
+                      validTokenCount: validTokenCount, startSlot: ringStartSlot(layer: layer,
+                                                                                 validTokenCount: validTokenCount))
     }
 
     /// Advance the position cursor once the current token's K/V are written
     /// across all layers.
-    func advance() { advance(by: 1) }
+    public func advance() { advance(by: 1) }
 
-    func advance(by count: Int) {
+    public func advance(by count: Int) {
         precondition(count >= 0, "advance count must be non-negative")
         precondition(position + count <= maxContext, "advance would exceed maxContext")
         position += count
@@ -243,27 +213,14 @@ final class KVCacheManager {
     /// No buffer zeroing — the attention kernels read only `[0, validTokenCount]`,
     /// and `validTokenCount` is now 0. `MADV_DONTNEED` on the page-aligned span
     /// releases resident memory between turns; pages fault back in on next write.
-    func reset() {
+    public func reset() {
         position = 0
         let pageSize = Int(getpagesize())
         var advised = Set<ObjectIdentifier>()
         for layer in 0..<config.numLayers {
-            switch storageMode {
-            case .fp16:
-                advise(kBuffers[layer], pageSize: pageSize, seen: &advised)
-                advise(vBuffers[layer], pageSize: pageSize, seen: &advised)
-            case .turboQuant:
-                advise(quantizedKBuffers[layer], pageSize: pageSize, seen: &advised)
-                advise(quantizedVBuffers[layer], pageSize: pageSize, seen: &advised)
-            }
+            advise(kBuffers[layer], pageSize: pageSize, seen: &advised)
+            advise(vBuffers[layer], pageSize: pageSize, seen: &advised)
         }
-    }
-
-    private func requireTurboQuantLayout(layer: Int) -> TurboQuantKVLayerLayout {
-        guard case .turboQuant = storageMode else {
-            preconditionFailure("TurboQuant KV layout is unavailable for FP16 storage")
-        }
-        return turboQuantLayouts[layer]
     }
 
     private func validateRange(start: Int, count: Int) {
@@ -283,8 +240,15 @@ final class KVCacheManager {
         position % capacityTokens[layer]
     }
 
+    private func ringStartSlot(layer: Int, validTokenCount: Int) -> Int {
+        guard fp16RingEnabled, kinds[layer] == .swa else { return 0 }
+        let capacity = capacityTokens[layer]
+        guard validTokenCount > capacity else { return 0 }
+        return validTokenCount % capacity
+    }
+
     private func validateContiguousPhysicalRange(layer: Int, start: Int, count: Int) {
-        guard count > 0, storageMode == .fp16, fp16RingEnabled, kinds[layer] == .swa else { return }
+        guard count > 0, fp16RingEnabled, kinds[layer] == .swa else { return }
         let capacity = capacityTokens[layer]
         let physicalStart = start % capacity
         precondition(physicalStart + count <= capacity,

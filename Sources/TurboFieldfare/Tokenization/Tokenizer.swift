@@ -1,25 +1,38 @@
 import Foundation
 import Tokenizers
 
-enum GFTokenizerError: Error, CustomStringConvertible {
+public enum GFTokenizerError: Error, CustomStringConvertible {
     case missingSpecialToken(String)
+    case invalidChatTemplate(String)
 
     public var description: String {
         switch self {
         case .missingSpecialToken(let t): return "tokenizer missing required special token: \(t)"
+        case .invalidChatTemplate(let detail): return "invalid chat messages: \(detail)"
         }
     }
 }
 
-/// Gemma 4 tokenizer wrapper. It prefers the tokenizer included in a completed
-/// `.gturbo` directory and adapts token IDs to the Int32 runtime boundary.
+/// Gemma 4 tokenizer wrapper.
+///
+/// Prefers tokenizer sidecars in a completed `.gturbo/tokenizer/` directory,
+/// then falls back to the IT variant's Hugging Face Hub tokenizer cache. Exposes
+/// typed accessors for the IDs the generator actually needs (BOS / EOS / pad /
+/// end-of-turn) and adapts encode/decode to Int32 to match the buffer types
+/// kernels consume.
+///
+/// TurboFieldfare owns the minimal chat framing because the upstream
+/// `tokenizer_config.json` has no `chat_template`. Literal control-token text in
+/// user content is accepted as a trusted-input research-runtime limitation.
 public struct GFTokenizer: @unchecked Sendable {
     public static let modelID = "google/gemma-4-26B-A4B-it"
+    public static let chatTemplateIdentity = "gemma4-it-text-no-tools-v1"
 
     public let bosID: Int32
     public let eosID: Int32
     public let padID: Int32
     public let endOfTurnID: Int32
+    public let toolResponseID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
 
@@ -34,14 +47,16 @@ public struct GFTokenizer: @unchecked Sendable {
         try await GFTokenizerLoadCoordinator.shared.load(.local(folder.standardizedFileURL.path))
     }
 
-    public static func load(forModelDirectory modelDirectory: URL) async throws -> GFTokenizer {
-        if let folder = tokenizerFolder(forModelDirectory: modelDirectory) {
+    public static func load(forModelDirectory modelDirectory: URL,
+                            environment: [String: String] = ProcessInfo.processInfo.environment) async throws -> GFTokenizer {
+        if let folder = tokenizerFolder(forModelDirectory: modelDirectory, environment: environment) {
             return try await load(from: folder)
         }
         return try await load()
     }
 
     public static func tokenizerFolder(forModelDirectory modelDirectory: URL,
+                                       environment: [String: String] = ProcessInfo.processInfo.environment,
                                        fileManager: FileManager = .default) -> URL? {
         let sidecar = modelDirectory
             .standardizedFileURL
@@ -50,7 +65,11 @@ public struct GFTokenizer: @unchecked Sendable {
             return sidecar
         }
 
-        return nil
+        guard let override = environment["TURBO_FIELDFARE_TOKENIZER_DIR"], !override.isEmpty else {
+            return nil
+        }
+        let overrideURL = URL(fileURLWithPath: override).standardizedFileURL
+        return hasTokenizerJSON(in: overrideURL, fileManager: fileManager) ? overrideURL : nil
     }
 
     static func loadUncached(pretrained modelID: String = Self.modelID) async throws -> GFTokenizer {
@@ -82,12 +101,16 @@ public struct GFTokenizer: @unchecked Sendable {
         guard let eot = tokenizer.convertTokenToId("<turn|>") else {
             throw GFTokenizerError.missingSpecialToken("<turn|>")
         }
+        guard let toolResponse = tokenizer.convertTokenToId("<|tool_response>") else {
+            throw GFTokenizerError.missingSpecialToken("<|tool_response>")
+        }
 
         self.bosID = Int32(bos)
         self.eosID = Int32(eos)
         self.padID = Int32(pad)
         self.endOfTurnID = Int32(eot)
-        self.stopTokenIDs = [self.eosID, self.endOfTurnID]
+        self.toolResponseID = Int32(toolResponse)
+        self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
         self.vocabSize = 262_144
     }
 
@@ -107,6 +130,38 @@ public struct GFTokenizer: @unchecked Sendable {
         tokenizer.decode(tokens: ids.map(Int.init), skipSpecialTokens: skipSpecialTokens)
     }
 
+    // MARK: - Chat template
+
+    public enum Role: String, Sendable { case system, user, assistant }
+    public struct Message: Sendable {
+        public let role: Role
+        public let content: String
+        public init(role: Role, content: String) {
+            self.role = role
+            self.content = content
+        }
+    }
+
+    /// Text-only, no-tool rendering of the pinned IT checkpoint's bundled
+    /// `chat_template.jinja`, with thinking disabled. Keeping this narrow makes
+    /// unsupported tool/media behavior explicit instead of approximating it.
+    private static let turnOpen    = "<|turn>"
+    private static let turnClose   = "<turn|>"
+    private static let bosMark     = "<bos>"
+
+    public func applyChatTemplate(_ messages: [Message]) throws -> String {
+        var s = Self.bosMark
+        for (index, message) in messages.enumerated() {
+            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if message.role == .system && index != 0 {
+                throw GFTokenizerError.invalidChatTemplate("system message must be first")
+            }
+            let role = message.role == .assistant ? "model" : message.role.rawValue
+            s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
+        }
+        s += Self.turnOpen + "model\n<|channel>thought\n<channel|>"
+        return s
+    }
 }
 
 private enum GFTokenizerLoadSource: Hashable {

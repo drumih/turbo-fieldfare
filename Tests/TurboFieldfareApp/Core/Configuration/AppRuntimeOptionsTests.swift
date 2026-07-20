@@ -10,7 +10,6 @@ import TurboFieldfare
         #expect(options.expertCachePolicy == .lfu)
         #expect(options.prefillEnabled)
         #expect(options.prefillChunkTokens == 128)
-        #expect(!options.turboQuantKVEnabled)
         #expect(options.rdadvisePolicy == .off)
         #expect(options.modelVerification == .fullSha256)
 
@@ -38,19 +37,17 @@ import TurboFieldfare
         }
     }
 
-    @Test func experimentalAndTrustChoicesAreExplicit() throws {
+    @Test func runtimeAndTrustChoicesAreExplicit() throws {
         let options = AppRuntimeOptions(
             expertCacheSlots: 32,
             expertCachePolicy: .lru,
             prefillEnabled: false,
             prefillChunkTokens: 64,
-            turboQuantKVEnabled: true,
             rdadvisePolicy: .adaptive,
             modelVerification: .trustedInstall)
         let runtime = try options.resolvedRuntimeConfiguration(forceLogitsHead: true)
         #expect(runtime.modelExpertCachePolicy == .lru)
         #expect(runtime.prefillConfig == .off)
-        #expect(runtime.turboQuantKVEnabled)
         #expect(runtime.rdadvisePolicy == .adaptive)
         #expect(runtime.headPath == .logits)
         #expect(options.modelVerification.runtimeValue == .sizeCheckTrustedReceipt)
@@ -65,7 +62,7 @@ import TurboFieldfare
         }
     }
 
-    @Test func loadedRuntimeKeyTracksEveryRuntimeChoice() {
+    @Test func loadedRuntimeKeyTracksOnlyLoadTimeChoices() {
         let directory = URL(fileURLWithPath: "/tmp/model.gturbo")
         let base = AppRuntimeOptions()
         let baseline = AppLoadedRuntimeKey(
@@ -75,9 +72,6 @@ import TurboFieldfare
         var value = base
         value.expertCacheSlots = 24; variants.append(value)
         value = base; value.expertCachePolicy = .lru; variants.append(value)
-        value = base; value.prefillEnabled = false; variants.append(value)
-        value = base; value.prefillChunkTokens = 64; variants.append(value)
-        value = base; value.turboQuantKVEnabled = true; variants.append(value)
         value = base; value.rdadvisePolicy = .bounded; variants.append(value)
         value = base; value.modelVerification = .trustedInstall; variants.append(value)
 
@@ -92,5 +86,16 @@ import TurboFieldfare
             maxContextTokens: 4096,
             options: base,
             forceLogitsHead: true) != baseline)
+
+        value = base; value.prefillEnabled = false
+        #expect(AppLoadedRuntimeKey(
+            modelDirectory: directory,
+            maxContextTokens: 4096,
+            options: value) == baseline)
+        value = base; value.prefillChunkTokens = 64
+        #expect(AppLoadedRuntimeKey(
+            modelDirectory: directory,
+            maxContextTokens: 4096,
+            options: value) == baseline)
     }
 }

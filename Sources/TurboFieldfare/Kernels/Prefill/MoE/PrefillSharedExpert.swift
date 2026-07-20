@@ -2,10 +2,10 @@ import Foundation
 import Metal
 
 final class PrefillSharedExpert {
-    private let shared: SharedExpertInt8
+    private let shared: SharedExpertRuntime
 
-    init(context: MetalContext) throws {
-        self.shared = try SharedExpertInt8(context: context)
+    init(context: MetalContext, weightBits: Int = 8) throws {
+        self.shared = try SharedExpertRuntime(context: context, weightBits: weightBits)
     }
 
     func encodeBlock(commandBuffer cb: MTLCommandBuffer,
@@ -16,6 +16,10 @@ final class PrefillSharedExpert {
                             gate: SharedExpertInt8Proj,
                             up: SharedExpertInt8Proj,
                             down: SharedExpertInt8Proj,
+                            scratchGate: MTLBuffer,
+                            scratchGateOffset: Int = 0,
+                            scratchUp: MTLBuffer,
+                            scratchUpOffset: Int = 0,
                             scratchAct: MTLBuffer,
                             scratchActOffset: Int = 0,
                             queryCount: Int,
@@ -45,6 +49,10 @@ final class PrefillSharedExpert {
                               down: down,
                               y: y,
                               yOffset: yOffset + row * yStrideElements * halfBytes,
+                              scratchGate: scratchGate,
+                              scratchGateOffset: scratchGateOffset,
+                              scratchUp: scratchUp,
+                              scratchUpOffset: scratchUpOffset,
                               scratchAct: scratchAct,
                               scratchActOffset: scratchActOffset)
         }

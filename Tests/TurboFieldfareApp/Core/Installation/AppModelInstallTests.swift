@@ -36,19 +36,61 @@ import TurboFieldfareRepackCore
   }
 
   @MainActor
+  @Test func checkAgainDetectsModelInstalledAfterLaunch() throws {
+    let directory = try makeCompleteModelInstall("external-install")
+    let stagedDirectory = directory.deletingLastPathComponent()
+      .appendingPathComponent("staged-\(UUID().uuidString).gturbo")
+    try FileManager.default.moveItem(at: directory, to: stagedDirectory)
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient())
+
+    #expect(model.requiresModelInstallation)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try FileManager.default.moveItem(at: stagedDirectory, to: directory)
+
+    model.refreshInstallReadiness()
+
+    #expect(model.isModelInstalled)
+    #expect(!model.requiresModelInstallation)
+    #expect(model.canLoadModel)
+  }
+
+  @MainActor
+  @Test func checkAgainUsesCurrentModelLocation() throws {
+    let initialDirectory = temporaryInstallPath("initial-location")
+    let currentDirectory = try makeCompleteModelInstall("current-location")
+    defer { try? FileManager.default.removeItem(at: currentDirectory) }
+    let model = AppModel(
+      modelDirectory: initialDirectory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient())
+
+    model.modelPathText = currentDirectory.path
+    model.recheckModelAtCurrentLocation()
+
+    #expect(model.modelPathText == currentDirectory.standardizedFileURL.path)
+    #expect(model.isModelInstalled)
+    #expect(model.canLoadModel)
+  }
+
+  @MainActor
   @Test func defaultInstallDescriptorMatchesPinnedAudit() {
     let descriptor = AppModelInstallDescriptor.default
-    #expect(descriptor.displayName == "gemma-4-26B-A4B-TurboQuant-MLX-4bit")
-    #expect(descriptor.repoID == "majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit")
-    #expect(descriptor.revision == "cc499c86a958ea7f05cffaa91c7e7243240dabbe")
-    #expect(descriptor.approximateDownloadBytes == 14_952_958_284)
-    #expect(descriptor.installedBytes == 14_527_372_034)
-    #expect(descriptor.requiredFreeBytes == 15_668_222_722)
+    #expect(descriptor.displayName == "Gemma 4 26B-A4B IT 4-bit")
+    #expect(descriptor.repoID == "mlx-community/gemma-4-26b-a4b-it-4bit")
+    #expect(descriptor.revision == "0d77464eeb233a2da68ebf9d7dc4edaac7db956d")
+    #expect(descriptor.sourceIndexSHA256 == "bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13")
+    #expect(descriptor.approximateDownloadBytes == 14_620_479_420)
+    #expect(descriptor.installedBytes == 14_291_921_884)
+    #expect(descriptor.requiredFreeBytes == 15_432_772_572)
   }
 
   @MainActor
   @Test func insufficientSpaceDisablesInstallAndExposesShortfall() {
     let requirement = AppModelInstallRequirement(
+      probePath: "/volume",
       requiredBytes: 100,
       availableBytes: 40)
     let installer = MockModelInstallerClient(requirement: requirement)
@@ -147,6 +189,7 @@ import TurboFieldfareRepackCore
     }
 
     let expected = AppModelInstallRequirement(
+      probePath: "/volume",
       requiredBytes: 120,
       availableBytes: 45)
     #expect(model.installReadiness == .insufficientSpace(expected))

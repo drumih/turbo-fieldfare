@@ -8,6 +8,16 @@ public enum AppPresentationSeverity: Equatable, Sendable {
     case error
 }
 
+public enum AppModelAction: Equatable, Sendable {
+    case install
+    case cancelInstall
+    case load
+    case retryLoad
+    case cancelLoad
+    case reload
+    case unload
+}
+
 public struct AppPresentationSnapshot: Equatable, Sendable {
     public var requiresInstallation: Bool
     public var installState: AppModelInstallState
@@ -51,15 +61,21 @@ public struct AppPresentationState: Equatable, Sendable {
     public var detail: String?
     public var severity: AppPresentationSeverity
     public var showsActivity: Bool
+    public var primaryAction: AppModelAction?
+    public var secondaryAction: AppModelAction?
 
     public init(label: String,
                 detail: String? = nil,
                 severity: AppPresentationSeverity = .neutral,
-                showsActivity: Bool = false) {
+                showsActivity: Bool = false,
+                primaryAction: AppModelAction? = nil,
+                secondaryAction: AppModelAction? = nil) {
         self.label = label
         self.detail = detail
         self.severity = severity
         self.showsActivity = showsActivity
+        self.primaryAction = primaryAction
+        self.secondaryAction = secondaryAction
     }
 
     public static func resolve(_ snapshot: AppPresentationSnapshot) -> Self {
@@ -69,16 +85,18 @@ public struct AppPresentationState: Equatable, Sendable {
                             severity: .active, showsActivity: true)
             }
             return Self(label: installLabel(snapshot.installState),
-                        severity: .active, showsActivity: true)
+                        severity: .active, showsActivity: true,
+                        primaryAction: snapshot.installState.canCancel ? .cancelInstall : nil)
         }
 
         if snapshot.requiresInstallation {
             if case .failed(let message) = snapshot.installState {
                 return Self(label: "Installation failed", detail: message,
-                            severity: .error)
+                            severity: .error, primaryAction: .install)
             }
             if case .cancelled = snapshot.installState {
-                return Self(label: "Installation cancelled", severity: .warning)
+                return Self(label: "Installation cancelled", severity: .warning,
+                            primaryAction: .install)
             }
             if case .failed(let message) = snapshot.installReadiness {
                 return Self(label: "Storage check failed", detail: message,
@@ -94,21 +112,22 @@ public struct AppPresentationState: Equatable, Sendable {
                             severity: .active, showsActivity: true)
             }
             if case .ready = snapshot.installReadiness {
-                return Self(label: "Model required")
+                return Self(label: "Model required", primaryAction: .install)
             }
             return Self(label: "Model required")
         }
 
         switch snapshot.loadState {
         case .loading(let phase):
-            return Self(label: phase.label, severity: .active, showsActivity: true)
+            return Self(label: phase.label, severity: .active, showsActivity: true,
+                        primaryAction: .cancelLoad)
         case .cancelling:
             return Self(label: "Cancelling load", severity: .active, showsActivity: true)
         case .unloading:
             return Self(label: "Unloading model", severity: .active, showsActivity: true)
         case .failed(let error):
             return Self(label: "Model load failed", detail: error.userMessage,
-                        severity: .error)
+                        severity: .error, primaryAction: .retryLoad)
         case .notLoaded, .ready:
             break
         }
@@ -132,17 +151,19 @@ public struct AppPresentationState: Equatable, Sendable {
         }
 
         if snapshot.hasStaleRuntime {
-            return Self(label: "Reload required", severity: .warning)
+            return Self(label: "Reload required", severity: .warning,
+                        primaryAction: .reload, secondaryAction: .unload)
         }
 
         if case .ready = snapshot.loadState {
             if let reason = snapshot.lastStopReason {
-                return Self(label: "Done · \(reason.rawValue)", severity: .success)
+                return Self(label: "Done · \(reason.rawValue)", severity: .success,
+                            secondaryAction: .unload)
             }
-            return Self(label: "Ready", severity: .success)
+            return Self(label: "Ready", severity: .success, secondaryAction: .unload)
         }
 
-        return Self(label: "Installed · Not loaded")
+        return Self(label: "Installed · Not loaded", primaryAction: .load)
     }
 
     private static func installLabel(_ state: AppModelInstallState) -> String {

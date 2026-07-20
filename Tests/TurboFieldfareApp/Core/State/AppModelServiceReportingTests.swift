@@ -13,10 +13,13 @@ import Testing
         client.generationTranscriptMailbox.append("lossless output")
 
         #expect(model.currentProcessMemoryBytes == 2_100_000_000)
-        #expect(model.outputPlainText == "lossless output")
+        #expect(model.outputResponsePlainText == "lossless output")
+        #expect(model.outputConversationPlainText == "Answer:\nlossless output")
 
         model.clearOutput()
         #expect(client.generationTranscriptMailbox.completeText.isEmpty)
+        #expect(model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText.isEmpty)
     }
 
     @MainActor
@@ -33,7 +36,8 @@ import Testing
 
         #expect(client.generationTranscriptMailbox.completeText.isEmpty)
         #expect(model.outputPromptText == "new prompt")
-        #expect(model.outputPlainText == "new prompt")
+        #expect(model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText == "You:\nnew prompt")
     }
 }
 

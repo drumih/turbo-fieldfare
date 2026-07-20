@@ -8,9 +8,9 @@ struct PromptExamplesView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Continue an example")
+                    Text("Try an example")
                         .font(.headline)
-                    Text("Gemma continues the text you select.")
+                    Text("Choose a prompt, edit it, or write your own.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -46,7 +46,7 @@ struct PromptExamplesView: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
-                    Text(preset.prefix)
+                    Text(preset.prompt)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
@@ -64,8 +64,8 @@ struct PromptExamplesView: View {
                     .stroke(.separator.opacity(0.35), lineWidth: 0.5)
             }
             .accessibilityLabel(preset.title)
-            .accessibilityValue(preset.prefix)
-            .accessibilityHint("Copies this beginning into the prompt editor")
+            .accessibilityValue(preset.prompt)
+            .accessibilityHint("Copies this prompt into the prompt editor")
         }
     }
 
@@ -81,13 +81,13 @@ struct PromptExamplesView: View {
                 } label: {
                     VStack(alignment: .leading) {
                         Text(preset.title)
-                        Text(preset.prefix)
+                        Text(preset.prompt)
                     }
                 }
             }
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .accessibilityHint("Shows additional text beginnings")
+        .accessibilityHint("Shows additional prompts")
     }
 }

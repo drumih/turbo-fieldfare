@@ -5,17 +5,16 @@
 [Optimization journey](../../OPTIMIZATION_JOURNEY.md) |
 [Next: Prefill](06-prefill.md)
 
-The current runtime uses split-KV attention, MLX-derived full-attention
-geometry, and an exact FP16 KV ring. Packed K4/V4 remains an explicit
-experiment because its quality loss outweighed its roughly 82 MiB saving
-relative to the final FP16 ring.
+The current runtime uses exact split-K/V attention and an FP16 KV cache. Packed
+K4/V4 saved only about 82 MiB at 4K, grew across all 30 attention layers, and
+failed the quality gate. It was rejected and removed.
 
 | Current result | Disposition |
 | --- | --- |
 | Split-KV plus GQA-aware SWA | Production |
-| MLX full-attention geometry v2 | Production after reversed rejection |
+| Exact split full attention | Production |
 | FP16 KV ring | Production |
-| Packed K4/V4 and alternate codecs | Experimental or rejected |
+| Packed K4/V4 and alternate codecs | Rejected and removed |
 
 ## Decode attention geometry
 
@@ -92,12 +91,9 @@ relative to the final FP16 ring.
 - **Evidence:** Isolated time improved 65-68%; early end-to-end rows
   improved 2.8-3.7%. A forced-prefix exact-output gate then failed and the
   candidate was removed.
-- **What changed the conclusion:** A corrected v2 later
-  passed a distributional quality gate and exposed shared control nondeterminism,
-  so the project reopened the geometry family rather than treating v1's stop as
-  final.
-- **Final disposition:** V1 remained removed; v2 reversed the geometry-family
-  rejection.
+- **What changed the conclusion:** A corrected v2 reopened the geometry family,
+  but the instruction checkpoint's full quality gate later rejected it too.
+- **Final disposition:** Rejected; exact split remains production.
 - **Lesson:** Select the quality oracle from the candidate's mathematical
   contract without retroactively declaring an old candidate safe. See
   [METH-01](09-validation-and-measurement-lessons.md#meth-01).
@@ -110,11 +106,14 @@ relative to the final FP16 ring.
 - **Variants tested:** Exact reference repair,
   isolated geometry, a 9,216-row quality corpus, and balanced M2 end-to-end
   rows.
-- **Evidence:** Isolated speed improved 71-74%; the quality gate passed;
-  balanced decode improved 1.30-1.59%.
-- **What changed the conclusion:** The
-  distributional gate replaced the invalid exact-output rejection.
-- **Final disposition:** Production; reversed rejection.
+- **Evidence:** Isolated speed improved 71-74%, and an earlier decode path
+  improved 1.30-1.59%. On the instruction checkpoint's 9,216-row evaluation,
+  exact split-K/V matched the FP16 reference while MLX-v2 exceeded the accepted
+  mean delta-NLL threshold.
+- **What changed the conclusion:** Revalidation against the shipping instruction
+  checkpoint replaced the earlier promotion result.
+- **Final disposition:** Rejected for the instruction checkpoint; exact split is
+  production.
 - **Lesson:** Revalidate a strong speed signal when the rejection instrument
   was wrong. See [METH-01](09-validation-and-measurement-lessons.md#meth-01).
 
@@ -133,7 +132,7 @@ relative to the final FP16 ring.
   helped; K staging and full-GQA regressed.
 - **What changed the conclusion:**
   Optimization could not erase packed access and dequantization cost.
-- **Final disposition:** Explicit experiment, not production.
+- **Final disposition:** Rejected and removed.
 - **Lesson:** Improve a
   candidate against the production control, not only against its first version.
 
@@ -163,7 +162,7 @@ relative to the final FP16 ring.
   failed. Against the final FP16 ring, packed storage saves only about 82 MiB.
 - **What changed the conclusion:** The full corpus and ring-relative memory
   comparison replaced earlier short and obsolete-linear comparisons.
-- **Final disposition:** Rejected as production; experiment remains available.
+- **Final disposition:** Rejected and removed.
 - **Lesson:** Approximation must clear quality against the best exact memory
   layout.
 

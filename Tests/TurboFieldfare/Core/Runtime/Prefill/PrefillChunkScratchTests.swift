@@ -21,7 +21,7 @@ import Metal
         #expect(layout.routePartialElements == 32 * 8 * 2816)
         #expect(layout.routeIDElements == 32 * 8)
         #expect(layout.routeWeightElements == 32 * 8)
-        #expect(layout.sharedExpertActScratchElements == 2112)
+        #expect(layout.sharedExpertScratchElements == 2112)
         #expect(layout.routedPairMicrobatchRows == 32)
         #expect(layout.routedGateUpActElements == 3 * 32 * 704)
         #expect(layout.routedDownOutputElements == 32 * 2816)

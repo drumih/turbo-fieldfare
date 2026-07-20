@@ -16,15 +16,13 @@ public final class AppModel {
     public var outputText: String = ""
     public var runState: RunState = .idle
     public var runtimeOptions = AppRuntimeOptions()
-    public var maxNewTokens: Int = 1_024
+    public var maxNewTokensOverride: Int?
     public var maxContextTokens: Int = 4096
-    public var temperature: Double = 1.0
+    public var temperature: Double = 0.2
     public var topKEnabled: Bool = true
     public var topK: Int = 64
     public var topPEnabled: Bool = true
     public var topP: Double = 0.95
-    public var repetitionPenaltyEnabled: Bool = false
-    public var repetitionPenalty: Double = 1.1
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -54,17 +52,32 @@ public final class AppModel {
     private var activeRunRuntimeKey: AppLoadedRuntimeKey?
     private var hasHandledTerminalEvent = false
     private let memorySampler: AppMemorySampler
+    private let settingsPersistenceEnabled: Bool
 
     public init(modelDirectory: URL? = nil,
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
-                memorySampler: AppMemorySampler = AppMemorySampler()) {
+                memorySampler: AppMemorySampler = AppMemorySampler(),
+                settingsPersistenceEnabled: Bool = false) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
+        let settings = settingsPersistenceEnabled
+            ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
+            : MacAppSettings()
         self.modelPathText = directory.path
+        self.runtimeOptions = AppRuntimeOptions(
+            expertCacheSlots: settings.expertCacheSlots,
+            prefillEnabled: settings.prefillEnabled)
+        self.maxContextTokens = settings.contextTokens
+        self.temperature = settings.temperature
+        self.topKEnabled = settings.topKEnabled
+        self.topK = settings.topK
+        self.topPEnabled = settings.topPEnabled
+        self.topP = settings.topP
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
         self.memorySampler = memorySampler
+        self.settingsPersistenceEnabled = settingsPersistenceEnabled
         refreshInstallReadiness()
     }
 
@@ -131,6 +144,23 @@ public final class AppModel {
         return min(max(Double(done) / Double(total), 0), 1)
     }
 
+    public var installPhaseLabel: String {
+        switch installState {
+        case .idle: return "Model required"
+        case .checking: return "Checking installation"
+        case .downloadingMetadata: return "Downloading metadata"
+        case .planning: return "Planning installation"
+        case .reservingOutput: return "Reserving storage"
+        case .copyingPayload: return "Downloading model"
+        case .hashingOutput(let file): return "Verifying \(file)"
+        case .finalizing: return "Finalizing installation"
+        case .cancelling: return "Cancelling"
+        case .cancelled: return "Installation cancelled"
+        case .installed: return "Model installed"
+        case .failed: return "Installation failed"
+        }
+    }
+
     public var canRun: Bool {
         !isRunning && isModelAvailable && !loadState.isLoading
             && !hasStaleLoadedRuntime
@@ -143,17 +173,21 @@ public final class AppModel {
         !outputPromptText.isEmpty || !outputText.isEmpty
     }
 
-    public var outputPlainText: String {
-        let completion = generationTranscriptMailbox?.completeText ?? outputText
-        switch (outputPromptText.isEmpty, completion.isEmpty) {
+    public var outputResponsePlainText: String {
+        generationTranscriptMailbox?.completeText ?? outputText
+    }
+
+    public var outputConversationPlainText: String {
+        let response = outputResponsePlainText
+        switch (outputPromptText.isEmpty, response.isEmpty) {
         case (true, true):
             return ""
         case (false, true):
-            return outputPromptText
+            return "You:\n\(outputPromptText)"
         case (true, false):
-            return completion
+            return "Answer:\n\(response)"
         case (false, false):
-            return outputPromptText + completion
+            return "You:\n\(outputPromptText)\n\nAnswer:\n\(response)"
         }
     }
 
@@ -197,7 +231,7 @@ public final class AppModel {
     }
 
     private var currentForceLogitsHead: Bool {
-        temperature != 0 || (repetitionPenaltyEnabled && repetitionPenalty != 1)
+        temperature != 0
     }
 
     public func setModelURL(_ url: URL) {
@@ -206,6 +240,8 @@ public final class AppModel {
         guard path != modelPathText else { return }
 
         modelPathText = path
+        applyPersistedSettings(
+            forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
         loadGeneration &+= 1
         loadTask?.cancel()
         loadTask = nil
@@ -238,6 +274,17 @@ public final class AppModel {
     public func loadModel() {
         guard canLoadModel else { return }
         beginLoad()
+    }
+
+    public func perform(_ action: AppModelAction) {
+        switch action {
+        case .install: installModel()
+        case .cancelInstall: cancelInstall()
+        case .load, .retryLoad: loadModel()
+        case .cancelLoad: cancelLoad()
+        case .reload: reloadModel()
+        case .unload: unloadModel()
+        }
     }
 
     public func reloadModel() {
@@ -277,8 +324,12 @@ public final class AppModel {
                     }
                 }
             } catch is CancellationError {
+            } catch let appError as AppInferenceError {
+                await self?.applyLoadState(.failed(appError), generation: generation)
             } catch {
-                // The attempt-local state relay already surfaced the failure.
+                await self?.applyLoadState(
+                    .failed(.modelLoadFailed("\(error)")),
+                    generation: generation)
             }
             await self?.clearLoadTask(generation: generation)
         }
@@ -353,11 +404,26 @@ public final class AppModel {
     }
 
     public func refreshInstallReadiness() {
+        refreshInstallReadiness(
+            at: URL(fileURLWithPath: modelPathText, isDirectory: true).standardizedFileURL)
+    }
+
+    public func recheckModelAtCurrentLocation() {
+        let directory = URL(fileURLWithPath: modelPathText, isDirectory: true)
+            .standardizedFileURL
+        modelPathText = directory.path
+        refreshInstallReadiness(at: directory)
+    }
+
+    private func refreshInstallReadiness(at outputDirectory: URL) {
+        installationStatus = AppModelInstallationProbe.status(
+            at: outputDirectory,
+            descriptor: installer.descriptor)
         guard !isModelInstalled else { return }
         installReadiness = .checking
         do {
             let requirement = try installer.checkInstallRequirement(
-                outputDirectory: URL(fileURLWithPath: modelPathText))
+                outputDirectory: outputDirectory)
             installReadiness = requirement.canInstall
                 ? .ready(requirement)
                 : .insufficientSpace(requirement)
@@ -385,7 +451,9 @@ public final class AppModel {
             installState = .finalizing
         case .installed(let directory):
             let directory = directory.standardizedFileURL
-            installationStatus = AppModelInstallationProbe.status(at: directory)
+            installationStatus = AppModelInstallationProbe.status(
+                at: directory,
+                descriptor: installer.descriptor)
             guard installationStatus == .complete else {
                 finishInstallFailure(
                     RepackError.configurationInvalid(detail: "completed install did not pass metadata validation"),
@@ -417,13 +485,46 @@ public final class AppModel {
         refreshInstallReadiness()
     }
 
+    private func applyPersistedSettings(forModelDirectory modelDirectory: URL) {
+        guard settingsPersistenceEnabled else { return }
+        let settings = MacAppSettingsFileStore.loadOrCreate(
+            forModelDirectory: modelDirectory)
+        runtimeOptions = AppRuntimeOptions(
+            expertCacheSlots: settings.expertCacheSlots,
+            prefillEnabled: settings.prefillEnabled)
+        maxContextTokens = settings.contextTokens
+        temperature = settings.temperature
+        topKEnabled = settings.topKEnabled
+        topK = settings.topK
+        topPEnabled = settings.topPEnabled
+        topP = settings.topP
+    }
+
+    private func persistSettings() {
+        guard settingsPersistenceEnabled else { return }
+        let settings = MacAppSettings(
+            contextTokens: maxContextTokens,
+            expertCacheSlots: runtimeOptions.expertCacheSlots,
+            temperature: temperature,
+            topKEnabled: topKEnabled,
+            topK: topK,
+            topPEnabled: topPEnabled,
+            topP: topP,
+            prefillEnabled: runtimeOptions.prefillEnabled)
+        let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
+        try? MacAppSettingsFileStore.save(
+            settings,
+            forModelDirectory: modelDirectory)
+    }
+
     private func finishInstallFailure(_ error: Error, generation: UInt64) {
         guard generation == installGeneration else { return }
         installTask = nil
         installState = .failed("\(error)")
         if let repackError = error as? RepackError,
-           case .diskSpaceInsufficient(_, let required, let available) = repackError {
-            let requirement = AppModelInstallRequirement(requiredBytes: required,
+           case .diskSpaceInsufficient(let path, let required, let available) = repackError {
+            let requirement = AppModelInstallRequirement(probePath: path,
+                                                          requiredBytes: required,
                                                           availableBytes: available)
             installReadiness = .insufficientSpace(requirement)
         } else {
@@ -448,11 +549,12 @@ public final class AppModel {
             loadedRuntimeKey = nil
         case .loading, .cancelling, .unloading:
             break
-        case .ready:
+        case .ready(_, let seconds):
             loadedRuntimeKey = pendingExplicitLoadRuntimeKey
                 ?? activeRunRuntimeKey
                 ?? currentRuntimeKey
             pendingExplicitLoadRuntimeKey = nil
+            _ = seconds
         case .failed(let loadError):
             pendingExplicitLoadRuntimeKey = nil
             error = loadError
@@ -481,6 +583,7 @@ public final class AppModel {
             self.error = appError
             return
         }
+        persistSettings()
 
         generationTranscriptMailbox?.reset()
         outputPromptText = request.prompt
@@ -526,12 +629,12 @@ public final class AppModel {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             prompt: promptText,
-            maxNewTokens: maxNewTokens,
+            maxNewTokens: maxNewTokensOverride ?? maxContextTokens,
             maxContextTokens: maxContextTokens,
             temperature: Float(temperature),
             topK: topKEnabled ? topK : nil,
             topP: topKEnabled && topPEnabled ? Float(topP) : nil,
-            repetitionPenalty: repetitionPenaltyEnabled ? Float(repetitionPenalty) : 1.0,
+            repetitionPenalty: 1.0,
             runtimeOptions: runtimeOptions)
         try request.validate(requireModelDirectory: true)
         return request

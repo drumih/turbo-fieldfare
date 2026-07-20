@@ -118,7 +118,6 @@ enum PrefillChunkPlanner {
 
 public enum PrefillKVStorageMode: String, Sendable, Equatable {
     case fp16
-    case packedOnly = "packed-only"
 }
 
 public enum PrefillExecutedMode: String, Sendable, Equatable {

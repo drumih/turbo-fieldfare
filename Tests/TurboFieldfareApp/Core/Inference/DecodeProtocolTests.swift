@@ -9,7 +9,6 @@ import TurboFieldfareDecodeProtocol
             expertCachePolicy: "lru",
             prefillEnabled: false,
             prefillChunkTokens: 64,
-            turboQuantKVEnabled: true,
             rdadvisePolicy: "adaptive",
             modelVerification: "trusted-install")
         let request = DecodeLoadRequest(
