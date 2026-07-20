@@ -92,7 +92,7 @@ struct InspectorView: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            Text("Memory changes are compared with 4K context and 16 expert slots. Changes apply after reloading the model.")
+            Text("More slots can improve decode speed by keeping more experts in memory, but they also use more RAM. Changes are compared with 4K context and 16 slots and apply after reloading the model.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -109,6 +109,9 @@ struct InspectorView: View {
                         .frame(width: 36, alignment: .trailing)
                 }
             }
+            Text("0 uses deterministic greedy decoding. Higher values make sampling more varied.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Top-K", isOn: $model.topKEnabled)
                 .toggleStyle(.switch)
             if model.topKEnabled {
@@ -139,18 +142,15 @@ struct InspectorView: View {
     private var runtimeSection: some View {
         Section("Runtime") {
             Toggle("Prefill", isOn: $model.runtimeOptions.prefillEnabled)
-            Text("This is an experimental feature and may reduce output quality.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            LabeledContent("RDADVISE") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("RDADVISE")
                 Picker("RDADVISE", selection: $model.runtimeOptions.rdadvisePolicy) {
                     ForEach(AppRDAdvicePolicy.allCases) { policy in
                         Text(policy.label).tag(policy)
                     }
                 }
-                .pickerStyle(.menu)
+                .pickerStyle(.segmented)
                 .labelsHidden()
-                .fixedSize()
             }
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")
                 .font(.caption)
