@@ -56,7 +56,7 @@ import Testing
         #expect(!model.canLoadModel)
         #expect(model.canUnloadModel)
 
-        model.runtimeOptions.turboQuantKVEnabled.toggle()
+        model.runtimeOptions.rdadvisePolicy = .bounded
         #expect(model.canReloadModel)
         #expect(model.canUnloadModel)
         #expect(!model.canRun)
@@ -155,7 +155,7 @@ import Testing
 
     @MainActor
     @Test func applyLoadStateUpdatesPresentation() throws {
-        let directory = try makeCompleteModelInstall("presentation")
+        let directory = try makeCompleteModelInstall("load-presentation")
         defer { try? FileManager.default.removeItem(at: directory) }
         let model = AppModel(modelDirectory: directory)
         model.applyLoadState(.loading(.verifyingWeights))

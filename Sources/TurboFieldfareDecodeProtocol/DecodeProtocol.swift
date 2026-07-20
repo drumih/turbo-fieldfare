@@ -5,7 +5,6 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public var expertCachePolicy: String
     public var prefillEnabled: Bool
     public var prefillChunkTokens: Int
-    public var turboQuantKVEnabled: Bool
     public var rdadvisePolicy: String
     public var modelVerification: String
 
@@ -13,14 +12,12 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
                 expertCachePolicy: String = "lfu",
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
-                turboQuantKVEnabled: Bool = false,
                 rdadvisePolicy: String = "off",
                 modelVerification: String = "full-sha256") {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
         self.prefillChunkTokens = prefillChunkTokens
-        self.turboQuantKVEnabled = turboQuantKVEnabled
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
     }

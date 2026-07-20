@@ -3,21 +3,19 @@ import Foundation
 import Metal
 @testable import TurboFieldfare
 
-/// Tests `KVCacheManager` shape, growth, separate K/V storage, FP16 SWA ring,
-/// packed storage, and reset semantics against the Gemma 4 config.
+/// Tests `KVCacheManager` FP16 shape, growth, separate K/V storage, ring,
+/// and reset semantics against the Gemma 4 config.
 @Suite struct KVCacheManagerTests {
 
     private let config = ArchConfig.gemma4_26B_A4B
 
     private func makeManager(maxContext: Int,
-                             storageMode: KVCacheStorageMode = .fp16,
                              fp16RingEnabled: Bool = false,
                              fp16RingCapacityOverride: Int? = nil) throws -> (MetalContext, KVCacheManager) {
         let ctx = try MetalContext()
         let kv = try KVCacheManager(device: ctx.device,
                                     config: config,
                                     maxContext: maxContext,
-                                    storageMode: storageMode,
                                     fp16RingEnabled: fp16RingEnabled,
                                     slidingWindow: config.slidingWindow,
                                     maxPrefillChunkTokens: 128,
@@ -25,11 +23,6 @@ import Metal
         return (ctx, kv)
     }
 
-    @Test func defaultStorageMode_isFP16() throws {
-        let (_, kv) = try makeManager(maxContext: 16)
-        #expect(kv.storageMode == .fp16)
-        #expect(kv.turboQuantLayout(layer: 0) == nil)
-    }
 
     @Test func strideAndBufferSizes_matchConfig() throws {
         let (_, kv) = try makeManager(maxContext: 128)
@@ -167,46 +160,4 @@ import Metal
         #expect(kv.position == 1)
     }
 
-    @Test func turboQuantStorage_usesPackedLayerLayouts() throws {
-        let (_, kv) = try makeManager(maxContext: 128,
-                                      storageMode: .turboQuant(.k4v4NormCorrected))
-
-        #expect(kv.storageMode == .turboQuant(.k4v4NormCorrected))
-
-        let swa = try #require(kv.turboQuantLayout(layer: 0))
-        #expect(swa.key.bytesPerToken == 1_040)
-        #expect(swa.value.bytesPerToken == 1_040)
-        #expect(kv.quantizedKeyBuffer(layer: 0, validTokenCount: 0).length == 128 * 1_040)
-        #expect(kv.quantizedValueBuffer(layer: 0, validTokenCount: 0).length == 128 * 1_040)
-
-        let full = try #require(kv.turboQuantLayout(layer: 5))
-        #expect(full.key.bytesPerToken == 516)
-        #expect(full.value.bytesPerToken == 516)
-        #expect(kv.quantizedKeyBuffer(layer: 5, validTokenCount: 0).length == 128 * 516)
-        #expect(kv.quantizedValueBuffer(layer: 5, validTokenCount: 0).length == 128 * 516)
-    }
-
-    @Test func turboQuantSlots_areLinearByRoleStride() throws {
-        let (_, kv) = try makeManager(maxContext: 128,
-                                      storageMode: .turboQuant(.k4v4NormCorrected))
-
-        let swa = try #require(kv.turboQuantLayout(layer: 0))
-        #expect(swa.key.bytesPerToken == 1_040)
-        #expect(swa.value.bytesPerToken == 1_040)
-
-        let k0 = kv.quantizedKeySlot(layer: 0, position: 3)
-        let v0 = kv.quantizedValueSlot(layer: 0, position: 3)
-        #expect(k0.offset == 3 * swa.key.bytesPerToken)
-        #expect(v0.offset == 3 * swa.value.bytesPerToken)
-        #expect(k0.buffer !== v0.buffer)
-    }
-
-    @Test func turboQuantReset_clearsPosition() throws {
-        let (_, kv) = try makeManager(maxContext: 128,
-                                      storageMode: .turboQuant(.k4v4NormCorrected))
-        for _ in 0..<9 { kv.advance() }
-        #expect(kv.position == 9)
-        kv.reset()
-        #expect(kv.position == 0)
-    }
 }

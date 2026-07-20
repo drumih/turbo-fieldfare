@@ -237,12 +237,19 @@ actor RealInferenceSession {
         !request.isPureGreedy
     }
 
-    static func generationConfig(for request: AppGenerationRequest) -> GenerationConfig {
-        GenerationConfig(maxNewTokens: request.maxNewTokens,
+    static func generationConfig(for request: AppGenerationRequest,
+                                 maxNewTokens: Int? = nil) -> GenerationConfig {
+        GenerationConfig(maxNewTokens: maxNewTokens ?? request.maxNewTokens,
                          temperature: request.temperature,
                          topK: request.topK,
                          topP: request.topP,
                          repetitionPenalty: request.repetitionPenalty)
+    }
+
+    static func effectiveMaxNewTokens(requested: Int,
+                                      promptTokenCount: Int,
+                                      maxContext: Int) -> Int {
+        min(requested, max(0, maxContext - promptTokenCount))
     }
 
     func unload() {
@@ -260,13 +267,11 @@ actor RealInferenceSession {
         let progress = ProgressState()
         do {
             try request.validate()
-            let kvStorageMode: PrefillKVStorageMode =
-                request.runtimeOptions.turboQuantKVEnabled ? .packedOnly : .fp16
             let executedPrefillMode: PrefillExecutedMode =
                 prefillConfig.mode == .chunked ? .chunked : .off
             let prefillDiagnostics = PrefillExecutionDiagnostics(config: prefillConfig,
                                                                  executedMode: executedPrefillMode,
-                                                                 kvStorageMode: kvStorageMode)
+                                                                 kvStorageMode: .fp16)
             let requestKey = SessionLoadKey(
                 directory: request.modelDirectory.standardizedFileURL,
                 maxContext: request.maxContextTokens,
@@ -278,16 +283,24 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let promptIds = tokenizer.encode(request.prompt, addBOS: true)
+            let renderedPrompt = try tokenizer.applyChatTemplate([
+                GFTokenizer.Message(role: .user, content: request.prompt)
+            ])
+            let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
             progress.promptTokenCount = promptIds.count
-            guard promptIds.count + request.maxNewTokens <= runner.maxContext else {
+            guard promptIds.count < runner.maxContext else {
                 throw AppInferenceError.contextOverflow(prompt: promptIds.count,
                                                         maxNew: request.maxNewTokens,
                                                         maxContext: runner.maxContext)
             }
             memorySampler.resetPeak()
             _ = memorySampler.sample()
-            let config = Self.generationConfig(for: request)
+            let config = Self.generationConfig(
+                for: request,
+                maxNewTokens: Self.effectiveMaxNewTokens(
+                    requested: request.maxNewTokens,
+                    promptTokenCount: promptIds.count,
+                    maxContext: runner.maxContext))
             runner.reset()
             progress.prefillStart = Date()
 
@@ -339,14 +352,12 @@ actor RealInferenceSession {
                                               prefill: PrefillExecutionDiagnostics(
                                                 config: prefillConfig,
                                                 executedMode: prefillConfig.mode == .chunked ? .chunked : .off,
-                                                kvStorageMode: request.runtimeOptions.turboQuantKVEnabled ? .packedOnly : .fp16))
+                                                kvStorageMode: .fp16))
             continuation.yield(.cancelled(diagnostics))
             continuation.finish(throwing: AppInferenceError.cancelled)
         } catch let prefillError as PrefillError {
-            let kvStorageMode: PrefillKVStorageMode =
-                request.runtimeOptions.turboQuantKVEnabled ? .packedOnly : .fp16
             let diagnostics = Self.prefillFailureDiagnostics(config: prefillConfig,
-                                                             kvStorageMode: kvStorageMode,
+                                                             kvStorageMode: .fp16,
                                                              reason: prefillError.description)
             failGeneration(.unknown(prefillError.description),
                            request: request,

@@ -2,6 +2,11 @@ import Foundation
 import Metal
 import TurboFieldfare
 
+private struct MessageJSON: Decodable {
+    let role: String
+    let content: String
+}
+
 public struct RunResult: Equatable, Sendable {
     public let exitCode: Int32
     public init(exitCode: Int32) { self.exitCode = exitCode }
@@ -11,8 +16,36 @@ public func run(args: Args,
                 stdout: FileHandle = .standardOutput,
                 stderr: FileHandle = .standardError) async -> RunResult {
     do {
+        let modelURL = URL(fileURLWithPath: args.model)
+        let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
+        let promptIds: [Int32]
+        if let rawPrompt = args.prompt {
+            promptIds = tokenizer.encode(rawPrompt, addBOS: true)
+        } else if let messagesFile = args.messagesFile {
+            let data = try Data(contentsOf: URL(fileURLWithPath: messagesFile),
+                                options: [.mappedIfSafe])
+            let rows = try JSONDecoder().decode([MessageJSON].self, from: data)
+            let messages = try rows.map { row -> GFTokenizer.Message in
+                guard let role = GFTokenizer.Role(rawValue: row.role) else {
+                    throw GFTokenizerError.invalidChatTemplate("unsupported role \(row.role)")
+                }
+                return GFTokenizer.Message(role: role, content: row.content)
+            }
+            let rendered = try tokenizer.applyChatTemplate(messages)
+            promptIds = tokenizer.encode(rendered, addBOS: false)
+        } else {
+            return errored(stderr, "one of --prompt or --messages-file is required", 2)
+        }
+        guard !promptIds.isEmpty else { return errored(stderr, "empty prompt", 2) }
+        guard promptIds.count < args.maxContext else {
+            return errored(
+                stderr,
+                "context overflow: prompt \(promptIds.count) reaches maxContext \(args.maxContext)",
+                2)
+        }
+        let effectiveMaxNew = min(args.maxNew, args.maxContext - promptIds.count)
         let config = GenerationConfig(
-            maxNewTokens: args.maxNew,
+            maxNewTokens: effectiveMaxNew,
             temperature: args.temperature,
             topK: args.topK,
             topP: args.topP,
@@ -22,16 +55,6 @@ public func run(args: Args,
             extraStopTokens: [])
         let runtime = RuntimeConfiguration(
             forceLogitsHead: !config.isPureGreedy)
-        let modelURL = URL(fileURLWithPath: args.model)
-        let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
-        let promptIds = tokenizer.encode(args.prompt, addBOS: true)
-        guard !promptIds.isEmpty else { return errored(stderr, "empty prompt", 2) }
-        guard promptIds.count + args.maxNew <= args.maxContext else {
-            return errored(
-                stderr,
-                "context overflow: prompt \(promptIds.count) + maxNew \(args.maxNew) exceeds maxContext \(args.maxContext)",
-                2)
-        }
 
         guard MTLCreateSystemDefaultDevice() != nil else {
             return errored(stderr, "no Metal device", 1)

@@ -6,9 +6,10 @@ import Testing
         let arguments = try Args.parse(["--model", "m.gturbo", "--prompt", "hi"])
         #expect(arguments.model == "m.gturbo")
         #expect(arguments.prompt == "hi")
+        #expect(arguments.messagesFile == nil)
         #expect(arguments.maxNew == 1_024)
         #expect(arguments.maxContext == 4096)
-        #expect(arguments.temperature == 1.0)
+        #expect(arguments.temperature == 0.2)
         #expect(arguments.topK == 64)
         #expect(arguments.topP == 0.95)
         #expect(arguments.repetitionPenalty == 1)
@@ -61,7 +62,7 @@ import Testing
 
     @Test func helpListsExactlyThePublicOptions() {
         let expected: Set<String> = [
-            "--model", "--prompt", "--max-new", "--max-context",
+            "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--seed", "--stop", "--quiet", "--help",
         ]
@@ -71,7 +72,7 @@ import Testing
     }
 
     @Test func unsupportedSelectorsAreRejected() {
-        for flag in ["--messages-file", "--runtime-profile", "--experiment-id", "-h"] {
+        for flag in ["--runtime-profile", "--experiment-id", "-h"] {
             #expect(throws: ArgsError.unknownFlag(flag)) {
                 _ = try Args.parse(["--model", "m.gturbo", "--prompt", "hi", flag])
             }
@@ -82,8 +83,25 @@ import Testing
         #expect(throws: ArgsError.requiredMissing("--model")) {
             _ = try Args.parse(["--prompt", "hi"])
         }
-        #expect(throws: ArgsError.requiredMissing("--prompt")) {
+        #expect(throws: ArgsError.modeMissing) {
             _ = try Args.parse(["--model", "m.gturbo"])
+        }
+    }
+
+    @Test func messagesFileSelectsChatMode() throws {
+        let arguments = try Args.parse([
+            "--model", "m.gturbo", "--messages-file", "chat.json",
+        ])
+        #expect(arguments.prompt == nil)
+        #expect(arguments.messagesFile == "chat.json")
+    }
+
+    @Test func promptAndMessagesFileAreMutuallyExclusive() {
+        #expect(throws: ArgsError.mutuallyExclusive("--prompt", "--messages-file")) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--messages-file", "chat.json",
+            ])
         }
     }
 }

@@ -31,6 +31,9 @@ public struct Model {
     public let streamingMode: ExpertStreamingMode
     public let expertCachePolicy: ExpertCachePolicy
     public let integrityPolicy: ModelIntegrityPolicy
+    public var modelID: String { manifest.modelID }
+    public var sourceSnapshotHash: String? { manifest.sourceSnapshotHash }
+    public var sharedExpertWeightBits: Int { manifest.quant?.sharedExpert.weightBits ?? 8 }
 
     let residentBuffer: ResidentBuffer
     let residentIndex: ResidentIndex

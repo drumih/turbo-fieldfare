@@ -141,7 +141,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     private let model: Model
     private let ctx: MetalContext
     private let kv: KVCacheManager?
-    private let turboQuantKV: KVCacheManager?
     private let cfg: ArchConfig
 
     // Kernels
@@ -149,14 +148,13 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     private let rms: RMSNorm
     private let int4: DequantInt4GEMV
     private let attention: Attention
-    private let shared: SharedExpertInt8
+    private let shared: SharedExpertRuntime
     private let moe: MoE
     private let fusionHead: LMHeadChainInt4
     private let fusedQKVGEMV: FusedQKVGEMV
     private let fusedQKVEpilogue: FusedQKVEpilogue
     private let fusedPostAttentionSetup: FusedPostAttentionSetup
     private let fusedTail: FusedLayerTail
-    private let turboQuantQuant: TurboQuantQuant?
 
     // Prefill kernels. These are initialized once per runner so the chunk path
     // cannot accidentally rebuild PSOs inside a per-layer loop.
@@ -186,7 +184,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     private let h2Buf: MTLBuffer         // [D] FP16 (routed output)
     private let routedX: MTLBuffer       // [D] FP16 (pre_feedforward_layernorm_2 output)
     private let denseX: MTLBuffer        // [D] FP16 (pre_feedforward_layernorm output)
-    private let denseScratchA: MTLBuffer // [F=2112] FP16
+    private let denseScratchGate: MTLBuffer // [F=2112] FP16
+    private let denseScratchUp: MTLBuffer   // [F=2112] FP16
+    private let denseScratchAct: MTLBuffer  // [F=2112] FP16
     private let routerInput: MTLBuffer   // [D] FP16 (rmsnorm_no_scale(h))
     private let zeroResidual: MTLBuffer  // [D] FP16 zeros — for routed branch base
     private let outIndices: MTLBuffer    // [topK] UInt32
@@ -204,7 +204,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     private static let rdadviseAdaptiveMissCap = 12
     private static let rdadviseAdaptiveByteCap: UInt64 = 384 * 1_048_576
     private static let rdadviseAdaptiveSlowCallNanos: UInt64 = 1_000_000
-    private static let turboQuantRotationSeed: UInt32 = 0xA11CE
     private static let prefillRoutedTileSchedulerConfig = PrefillRoutedTileSchedulerConfig()
 
     /// Per-layer `router.scale * D^-0.5` pre-folded into one BF16 buffer
@@ -220,7 +219,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// callers that sample from the logits buffer (non-greedy configs) must pass
     /// `forceLogitsHead: true` or they read a never-written buffer.
     private let useFusedGreedyHead: Bool
-    private let useTurboQuantKV: Bool
     public let rdadviseEnabled: Bool
     public let rdadvisePolicyMode: RDAdvicePolicyMode
     private var rdadviseSkipUntilPosition: Int = -1
@@ -242,27 +240,19 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 byteCap: Self.rdadviseAdaptiveByteCap,
                 slowCallNanos: Self.rdadviseAdaptiveSlowCallNanos))
         self.rdadviseEnabled = runtimeConfiguration.rdadviseEnabled
-        self.useTurboQuantKV = runtimeConfiguration.turboQuantKVEnabled
-        self.kv = useTurboQuantKV
-            ? nil
-            : try KVCacheManager(device: context.device,
-                                 config: cfg,
-                                 maxContext: maxContext,
-                                 fp16RingEnabled: useFP16Ring,
-                                 slidingWindow: cfg.slidingWindow,
-                                 maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
-        self.turboQuantKV = useTurboQuantKV
-            ? try KVCacheManager(device: context.device,
-                                 config: cfg,
-                                 maxContext: maxContext,
-                                 storageMode: .turboQuant(.k4v4NormCorrected))
-            : nil
+        self.kv = try KVCacheManager(device: context.device,
+                                     config: cfg,
+                                     maxContext: maxContext,
+                                     fp16RingEnabled: useFP16Ring,
+                                     slidingWindow: cfg.slidingWindow,
+                                     maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
 
         self.embedInt4 = try EmbedLookupInt4(context: context)
         self.rms       = try RMSNorm(context: context)
         self.int4      = try DequantInt4GEMV(context: context)
         self.attention = try Attention(context: context)
-        self.shared    = try SharedExpertInt8(context: context)
+        self.shared    = try SharedExpertRuntime(context: context,
+                                                  weightBits: model.sharedExpertWeightBits)
         self.moe       = try MoE(context: context)
         self.fusionHead = try LMHeadChainInt4(context: context,
                                               maxD: cfg.hiddenSize,
@@ -271,9 +261,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.fusedQKVEpilogue = try FusedQKVEpilogue(context: context)
         self.fusedPostAttentionSetup = try FusedPostAttentionSetup(context: context)
         self.fusedTail = try FusedLayerTail(context: context)
-        self.turboQuantQuant = useTurboQuantKV
-            ? try TurboQuantQuant(context: context)
-            : nil
         self.prefillEmbed = try PrefillEmbedLookupInt4(context: context)
         self.prefillRMS = try PrefillRMSNorm(context: context)
         self.prefillQMM = try PrefillInt4QMM(context: context)
@@ -282,7 +269,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.prefillAttention = try PrefillAttention(context: context)
         self.prefillPostAttention = try PrefillPostAttentionSetup(context: context)
         self.prefillRouter = try PrefillRouter(context: context)
-        self.prefillSharedExpert = try PrefillSharedExpert(context: context)
+        self.prefillSharedExpert = try PrefillSharedExpert(
+            context: context,
+            weightBits: model.sharedExpertWeightBits)
         self.prefillGroupedMoE = try PrefillGroupedRoutedMoE(context: context)
         self.prefillMoE = try PrefillMoE(context: context)
         self.prefillLayerTail = try PrefillLayerTail(context: context)
@@ -314,7 +303,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.h2Buf         = try buf(D)
         self.routedX       = try buf(D)
         self.denseX        = try buf(D)
-        self.denseScratchA = try buf(F)
+        self.denseScratchGate = try buf(F)
+        self.denseScratchUp   = try buf(F)
+        self.denseScratchAct  = try buf(F)
         self.routerInput   = try buf(D)
         self.zeroResidual  = try buf(D)
         // The routed MoE kernel seeds y[d] = residual[d]; pinning this buffer
@@ -332,8 +323,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         }
         self.greedyTokenBuf = tok
 
-        func sharedProj(_ view: TensorView, rows: UInt32, cols: UInt32) -> SharedExpertInt8Proj {
-            SharedExpertInt8Proj(weights: view.buffer,
+        func sharedProj(_ view: TensorView, rows: UInt32, cols: UInt32) -> SharedExpertProjection {
+            SharedExpertProjection(weights: view.buffer,
                                  scales: view.buffer,
                                  biases: view.buffer,
                                  weightsOffset: Int(view.offset),
@@ -385,7 +376,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
 
     public func reset() {
         kv?.reset()
-        turboQuantKV?.reset()
         prefillChunkState.reset()
         rdadviseSkipUntilPosition = -1
         rdadviseAdaptiveState.reset()
@@ -487,7 +477,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill startPosition must be non-negative")
         }
-        let kvPosition = kv?.position ?? turboQuantKV?.position ?? 0
+        let kvPosition = kv?.position ?? 0
         guard kvPosition == startPosition else {
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill cursor \(kvPosition) != startPosition \(startPosition)")
@@ -544,11 +534,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                      config: PrefillRuntimeConfig,
                                      writeFinalHead: Bool) async throws {
         guard !tokens.isEmpty else { return }
-        if kv == nil && turboQuantKV == nil {
-            throw PrefillError.chunkedUnsupported(
-                "chunked prefill attention requires fp16 or packed TurboQuant KV")
+        guard kv != nil else {
+            throw PrefillError.chunkedUnsupported("chunked prefill attention requires FP16 KV")
         }
-        let kvPosition = kv?.position ?? turboQuantKV?.position ?? 0
+        let kvPosition = kv?.position ?? 0
         guard kvPosition == startPosition else {
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill cursor \(kvPosition) != startPosition \(startPosition)")
@@ -847,50 +836,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                          valueSource: scratch.vStage,
                                          bytesPerToken: bytes / t)
             }
-            if let tqKV = turboQuantKV,
-               let tqQuant = turboQuantQuant,
-               let layerLayout = tqKV.turboQuantLayout(layer: L) {
-                let whtParams = TurboQuantWHTParams(numHeads: UInt32(numKVHeads),
-                                                    layer: UInt32(L),
-                                                    rotationSeed: Self.turboQuantRotationSeed,
-                                                    applyRotation: true)
-                let keyWriteParams = TurboQuantKVWriteParams(
-                    d: UInt32(headDim),
-                    numHeads: UInt32(numKVHeads),
-                    roleLayout: layerLayout.key,
-                    tokenBase: UInt32(startPosition))
-                let keyBulk = TurboQuantKVBulkWriteParams(
-                    kv: keyWriteParams,
-                    tokenCount: t,
-                    dstTokenBase: startPosition,
-                    cacheTokenCapacity: maxContext,
-                    sourceTokenStrideElements: kvDim)
-                let keyBuffer = tqKV.quantizedKeyBuffer(layer: L, validTokenCount: maxContext)
-                try tqQuant.encodeKVWriteWHTBulk(commandBuffer: cb,
-                                                 x: scratch.kStage,
-                                                 cache: keyBuffer,
-                                                 params: keyBulk,
-                                                 whtParams: whtParams)
-
-                let valueWriteParams = TurboQuantKVWriteParams(
-                    d: UInt32(headDim),
-                    numHeads: UInt32(numKVHeads),
-                    roleLayout: layerLayout.value,
-                    tokenBase: UInt32(startPosition))
-                let valueBulk = TurboQuantKVBulkWriteParams(
-                    kv: valueWriteParams,
-                    tokenCount: t,
-                    dstTokenBase: startPosition,
-                    cacheTokenCapacity: maxContext,
-                    sourceTokenStrideElements: kvDim)
-                let valueBuffer = tqKV.quantizedValueBuffer(layer: L, validTokenCount: maxContext)
-                try tqQuant.encodeKVWriteWHTBulk(commandBuffer: cb,
-                                                 x: scratch.vStage,
-                                                 cache: valueBuffer,
-                                                 params: valueBulk,
-                                                 whtParams: whtParams)
-            }
-
             let params = PrefillAttentionParams(
                     startPosition: UInt32(startPosition),
                     queryCount: UInt32(t),
@@ -917,29 +862,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   out: scratch.attentionOutput,
                                                   params: params,
                                                   kvRingCapacity: activeRingCapacity)
-            } else if let tqKV = turboQuantKV,
-                          let layerLayout = tqKV.turboQuantLayout(layer: L) {
-                    let keyBuffer = tqKV.quantizedKeyBuffer(
-                        layer: L,
-                        validTokenCount: startPosition + t)
-                    let valueBuffer = tqKV.quantizedValueBuffer(
-                        layer: L,
-                        validTokenCount: startPosition + t)
-                    let tqParams = PrefillTurboQuantAttentionParams(
-                        prefill: params,
-                        layer: UInt32(L),
-                        rotationSeed: Self.turboQuantRotationSeed,
-                        keyLayout: layerLayout.key,
-                        valueLayout: layerLayout.value)
-                    prefillAttention.encodeTurboQuantCausal(commandBuffer: cb,
-                                                           q: scratch.q,
-                                                           keyCache: keyBuffer,
-                                                           valueCache: valueBuffer,
-                                                           out: scratch.attentionOutput,
-                                                           params: tqParams)
             } else {
                 throw PrefillError.chunkedUnsupported(
-                    "chunked prefill attention requires fp16 or packed TurboQuant KV")
+                    "chunked prefill attention requires FP16 KV")
             }
             encodeInt4Projection(commandBuffer: cb,
                                      family: .o,
@@ -1043,6 +968,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                         gate: sharedProj.gate,
                                                         up: sharedProj.up,
                                                         down: sharedProj.down,
+                                                        scratchGate: scratch.sharedGateScratch,
+                                                        scratchUp: scratch.sharedUpScratch,
                                                         scratchAct: scratch.sharedActScratch,
                                                         queryCount: t,
                                                         d: D,
@@ -1299,7 +1226,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         }
 
         kv?.advance(by: tokens.count)
-        turboQuantKV?.advance(by: tokens.count)
         prefillChunkState.markCommitted()
     }
 
@@ -1308,7 +1234,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                               into logits: MTLBuffer,
                               emitHead: Bool,
                               outputMode: PrefillOutputMode) async throws {
-        let kvPosition = kv?.position ?? turboQuantKV?.position ?? 0
+        let kvPosition = kv?.position ?? 0
         guard kvPosition == position else {
             throw PrefillError.prefillCursorMismatch(
                 "produce cursor \(kvPosition) != position \(position)")
@@ -1460,85 +1386,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                         eps: eps)
             }
 
-            let gTurboQuantKVWrite: (MTLCommandBuffer) -> Void = { [self] cb in
-                guard let tqKV = turboQuantKV,
-                      let tqQuant = turboQuantQuant,
-                      let layerLayout = tqKV.turboQuantLayout(layer: L) else {
-                    return
-                }
-
-                let whtParams = TurboQuantWHTParams(numHeads: UInt32(numKVL),
-                                                    layer: UInt32(L),
-                                                    rotationSeed: Self.turboQuantRotationSeed,
-                                                    applyRotation: true)
-
-                let keySlot = tqKV.quantizedKeySlot(layer: L, position: position)
-                let keyWriteParams = TurboQuantKVWriteParams(
-                    d: UInt32(headDimL),
-                    numHeads: UInt32(numKVL),
-                    roleLayout: layerLayout.key,
-                    tokenBase: UInt32(position))
-                tqQuant.encodeKVWriteWHT(commandBuffer: cb,
-                                         x: kSlot.buffer,
-                                         xOffset: kSlot.offset,
-                                         cache: keySlot.buffer,
-                                         cacheOffset: keySlot.offset,
-                                         params: keyWriteParams,
-                                         whtParams: whtParams,
-                                         pairs: numKVL)
-
-                let valueSlot = tqKV.quantizedValueSlot(layer: L, position: position)
-                let valueWriteParams = TurboQuantKVWriteParams(
-                    d: UInt32(headDimL),
-                    numHeads: UInt32(numKVL),
-                    roleLayout: layerLayout.value,
-                    tokenBase: UInt32(position))
-                tqQuant.encodeKVWriteWHT(commandBuffer: cb,
-                                         x: vSlot.buffer,
-                                         xOffset: vSlot.offset,
-                                         cache: valueSlot.buffer,
-                                         cacheOffset: valueSlot.offset,
-                                         params: valueWriteParams,
-                                         whtParams: whtParams,
-                                         pairs: numKVL)
-            }
-
             let gAttention: (MTLCommandBuffer) -> Void = { [self] cb in
-                if useTurboQuantKV,
-                   let tqKV = turboQuantKV,
-                   let layerLayout = tqKV.turboQuantLayout(layer: L) {
-                    let keyBuffer = tqKV.quantizedKeyBuffer(
-                        layer: L,
-                        validTokenCount: Int(seqLen))
-                    let valueBuffer = tqKV.quantizedValueBuffer(
-                        layer: L,
-                        validTokenCount: Int(seqLen))
-                    let kvStart: UInt32 = isFull
-                        ? 0
-                        : (seqLen > UInt32(cfg.slidingWindow)
-                           ? seqLen - UInt32(cfg.slidingWindow)
-                           : 0)
-                    let params = AttentionTurboQuantKVParams(
-                        headDim: UInt32(headDimL),
-                        numQHeads: UInt32(cfg.numHeads),
-                        numKVHeads: UInt32(numKVL),
-                        seqLen: seqLen,
-                        kvStart: kvStart,
-                        scale: 1.0,
-                        layer: UInt32(L),
-                        rotationSeed: Self.turboQuantRotationSeed,
-                        keyLayout: layerLayout.key,
-                        valueLayout: layerLayout.value)
-                    attention.encodeTurboQuantSplit(
-                        commandBuffer: cb,
-                        q: qScratch,
-                        keyCache: keyBuffer,
-                        valueCache: valueBuffer,
-                        out: attnOut,
-                        params: params)
-                    return
-                }
-
                 guard kv != nil else {
                     preconditionFailure("FP16 attention requires an FP16 KV cache")
                 }
@@ -1614,9 +1462,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             gInputNorm(cb)
             gQKV(cb)
             gQKVEpilogue(cb)
-            if useTurboQuantKV {
-                gTurboQuantKVWrite(cb)
-            }
             gAttention(cb)
             gOProj(cb)
             gPostAttnSetup(cb)
@@ -1731,7 +1576,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                    up: sharedProj.up,
                                    down: sharedProj.down,
                                    y: h1Buf,
-                                   scratchAct:  denseScratchA)
+                                   scratchGate: denseScratchGate,
+                                   scratchUp: denseScratchUp,
+                                   scratchAct: denseScratchAct)
             }
             let gSharedNorm: (MTLCommandBuffer) -> Void = { [self] cb in
                 rms.encodeBF16W(commandBuffer: cb, x: h1Buf,
@@ -1893,7 +1740,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         }
 
         kv?.advance()
-        turboQuantKV?.advance()
     }
 
     private func runSync(_ body: (MTLCommandBuffer) -> Void) {

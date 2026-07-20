@@ -11,7 +11,8 @@ import Foundation
                                                           "turboQuantKV": false,
                                                           "aneSharedExpert": false],
                                  archOverrides: [String: Any] = [:],
-                                 filesOverride: [String: [String: Any]]? = nil) throws
+                                 filesOverride: [String: [String: Any]]? = nil,
+                                 config: ArchConfig = .gemma4Toy()) throws
                                  -> (URL, ArchConfig) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("gturbo-manifest-test-\(UUID().uuidString)")
@@ -20,7 +21,7 @@ import Foundation
             at: dir.appendingPathComponent("packed_experts"),
             withIntermediateDirectories: true)
 
-        let toy = ArchConfig.gemma4Toy()
+        let toy = config
         var archDict: [String: Any] = [
             "hiddenSize": toy.hiddenSize,
             "ffnIntermediate": toy.intermediateSize,
@@ -77,6 +78,26 @@ import Foundation
             options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try data.write(to: dir.appendingPathComponent("manifest.json"))
         return (dir, toy)
+    }
+
+    static func quant(sharedExpertBits: Int = 4,
+                      routerBits: Int = 8) -> [String: Any] {
+        func slot(_ bits: Int) -> [String: Any] {
+            [
+                "weightBits": bits,
+                "scheme": "affine",
+                "scaleType": "bf16",
+                "biasType": "bf16",
+                "groupSize": Quantization.groupSize,
+            ]
+        }
+        return [
+            "embedding": slot(4),
+            "attention": slot(4),
+            "router": slot(routerBits),
+            "sharedExpert": slot(sharedExpertBits),
+            "routedExpert": slot(4),
+        ]
     }
 
     @Test func loadsValidManifest() throws {
@@ -147,6 +168,61 @@ import Foundation
         } throws: { error in
             if case ModelError.unknownFlag(let n) = error { return n == "newFangledOption" }
             return false
+        }
+    }
+
+    @Test func removedTurboQuantFlagIsRejected() throws {
+        let (dir, toy) = try Self.writeToyManifest(flags: ["streamingPresent": true,
+                                                           "turboQuantKV": true,
+                                                           "aneSharedExpert": false])
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try ManifestReader.load(directoryURL: dir, expecting: toy)
+        } throws: { error in
+            guard case ModelError.indexCorrupt(let detail) = error else { return false }
+            return detail.contains("removed TurboQuant KV")
+        }
+    }
+
+    @Test func productionManifestRequiresQuantMetadata() throws {
+        let (dir, config) = try Self.writeToyManifest(config: .gemma4_26B_A4B)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try ManifestReader.load(directoryURL: dir, expecting: config)
+        } throws: { error in
+            guard case ModelError.indexCorrupt(let detail) = error else { return false }
+            return detail.contains("manifest.quant is required")
+        }
+    }
+
+    @Test func productionManifestAcceptsInt4SharedExpert() throws {
+        let (dir, config) = try Self.writeToyManifest(
+            ["quant": Self.quant(sharedExpertBits: 4)],
+            config: .gemma4_26B_A4B)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manifest = try ManifestReader.load(directoryURL: dir, expecting: config)
+        #expect(manifest.quant?.sharedExpert.weightBits == 4)
+    }
+
+    @Test func productionManifestAcceptsHistoricalInt8SharedExpert() throws {
+        let (dir, config) = try Self.writeToyManifest(
+            ["quant": Self.quant(sharedExpertBits: 8)],
+            config: .gemma4_26B_A4B)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manifest = try ManifestReader.load(directoryURL: dir, expecting: config)
+        #expect(manifest.quant?.sharedExpert.weightBits == 8)
+    }
+
+    @Test func productionManifestRejectsUnsupportedQuantMetadata() throws {
+        let (dir, config) = try Self.writeToyManifest(
+            ["quant": Self.quant(sharedExpertBits: 3, routerBits: 4)],
+            config: .gemma4_26B_A4B)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect {
+            _ = try ManifestReader.load(directoryURL: dir, expecting: config)
+        } throws: { error in
+            guard case ModelError.indexCorrupt(let detail) = error else { return false }
+            return detail.contains("unsupported quantization")
         }
     }
 

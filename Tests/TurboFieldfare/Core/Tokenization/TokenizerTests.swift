@@ -24,11 +24,12 @@ struct TokenizerTests {
         }
     }
 
-    @Test("Stop-token set covers EOS and end-of-turn")
+    @Test("Stop-token set covers EOS, end-of-turn, and tool response")
     func stopTokens() {
         #expect(tok.stopTokenIDs.contains(tok.eosID))
         #expect(tok.stopTokenIDs.contains(tok.endOfTurnID))
-        #expect(tok.stopTokenIDs.count == 2)
+        #expect(tok.stopTokenIDs.contains(tok.toolResponseID))
+        #expect(tok.stopTokenIDs.count == 3)
     }
 
     // MARK: - Encode / decode

@@ -168,7 +168,6 @@ import TurboFieldfareDecodeProtocol
             expertCachePolicy: cachePolicy,
             prefillEnabled: options.prefillEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
-            turboQuantKVEnabled: options.turboQuantKVEnabled,
             rdadvisePolicy: rdadvisePolicy,
             modelVerification: modelVerification)
         try resolved.validate()

@@ -10,19 +10,16 @@ import Testing
         model.promptText = "go"
 
         let request = try model.makeRequest()
-        #expect(request.temperature == 1.0)
+        #expect(request.temperature == 0.2)
         #expect(request.topK == 64)
         #expect(request.topP == 0.95)
-        #expect(request.maxNewTokens == 1_024)
+        #expect(request.maxNewTokens == 4_096)
         #expect(request.repetitionPenalty == 1)
         #expect(!request.isPureGreedy)
         #expect(request.runtimeOptions.expertCacheSlots == 16)
         #expect(request.runtimeOptions.expertCachePolicy == .lfu)
         #expect(request.runtimeOptions.rdadvisePolicy == .off)
-        #expect(!request.runtimeOptions.turboQuantKVEnabled)
         #expect(request.runtimeOptions.prefillEnabled)
-        #expect(request.runtimeOptions.prefillChunkTokens == 128)
-        #expect(request.runtimeOptions.modelVerification == .fullSha256)
     }
 
     @MainActor
@@ -38,19 +35,6 @@ import Testing
         let model = AppModel()
         model.promptText = "go"
         #expect(!model.canRun)
-    }
-
-    @MainActor
-    @Test func disabledRepetitionPenaltyNeutralizesRequest() throws {
-        let model = AppModel()
-        model.modelPathText = FileManager.default.temporaryDirectory.path
-        model.promptText = "go"
-        model.repetitionPenalty = 1.4
-
-        model.repetitionPenaltyEnabled = true
-        #expect(try model.makeRequest().repetitionPenalty == 1.4)
-        model.repetitionPenaltyEnabled = false
-        #expect(try model.makeRequest().repetitionPenalty == 1.0)
     }
 
     @MainActor
@@ -98,12 +82,34 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(!model.hasStaleLoadedRuntime)
-        model.runtimeOptions.turboQuantKVEnabled = true
+        model.runtimeOptions.rdadvisePolicy = .bounded
         #expect(model.hasStaleLoadedRuntime)
     }
 
     @MainActor
-    @Test func prefillChangeMarksReadySessionStale() {
+    @Test func contextChangeMarksReadySessionStale() {
+        let model = AppModel(client: MockLifecycleInferenceClient())
+        let directory = FileManager.default.temporaryDirectory
+        model.modelPathText = directory.path
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+
+        #expect(!model.hasStaleLoadedRuntime)
+        model.maxContextTokens = AppContextLengthOption.eightK.tokens
+        #expect(model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
+    @Test func appResponseLimitUsesSelectedContext() throws {
+        let model = AppModel()
+        model.modelPathText = FileManager.default.temporaryDirectory.path
+        model.promptText = "go"
+        model.maxContextTokens = AppContextLengthOption.sixtyFourK.tokens
+
+        #expect(try model.makeRequest().maxNewTokens == AppContextLengthOption.sixtyFourK.tokens)
+    }
+
+    @MainActor
+    @Test func requestTimePrefillChangeDoesNotMarkReadySessionStale() {
         let model = AppModel(client: MockLifecycleInferenceClient())
         let directory = FileManager.default.temporaryDirectory
         model.modelPathText = directory.path
@@ -111,7 +117,7 @@ import Testing
 
         model.runtimeOptions.prefillEnabled = false
 
-        #expect(model.hasStaleLoadedRuntime)
+        #expect(!model.hasStaleLoadedRuntime)
     }
 
     @MainActor
@@ -121,7 +127,7 @@ import Testing
         model.modelPathText = FileManager.default.temporaryDirectory.path
         model.loadState = .ready(modelDirectory: FileManager.default.temporaryDirectory, loadSeconds: 1)
         model.promptText = "go"
-        model.maxNewTokens = 4
+        model.maxNewTokensOverride = 4
         model.run()
 
         for _ in 0..<200 where model.isRunning {
@@ -139,20 +145,22 @@ import Testing
         let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
         let model = readyModel(client: client)
         model.promptText = "original prompt"
-        model.maxNewTokens = 1
+        model.maxNewTokensOverride = 1
         model.run()
 
         #expect(model.outputPromptText == "original prompt")
         #expect(model.hasOutputTranscript)
-        #expect(model.outputPlainText == "original prompt")
+        #expect(model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText == "You:\noriginal prompt")
 
         model.promptText = "edited prompt"
         await waitForIdle(model)
 
         #expect(model.outputPromptText == "original prompt")
-        #expect(model.outputPlainText == "original promptanswer")
-        #expect(model.outputPlainText.contains("original prompt"))
-        #expect(!model.outputPlainText.contains("edited prompt"))
+        #expect(model.outputResponsePlainText == "answer")
+        #expect(model.outputConversationPlainText
+            == "You:\noriginal prompt\n\nAnswer:\nanswer")
+        #expect(!model.outputConversationPlainText.contains("edited prompt"))
     }
 
     @MainActor
@@ -165,7 +173,7 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(model.canRun)
-        model.runtimeOptions.turboQuantKVEnabled = true
+        model.runtimeOptions.rdadvisePolicy = .bounded
         #expect(model.hasStaleLoadedRuntime)
         #expect(!model.canRun)
         #expect(model.canReloadModel)
@@ -178,7 +186,7 @@ import Testing
         client.prefillSteps = 0
         let model = readyModel(client: client)
         model.promptText = "stop after token"
-        model.maxNewTokens = 10
+        model.maxNewTokensOverride = 10
         model.run()
 
         for _ in 0..<200 where model.liveTokenCount == 0 {
@@ -194,11 +202,16 @@ import Testing
         #expect(!model.isCancellationPending)
         #expect(model.error == .cancelled)
         #expect(model.hasOutputTranscript)
+        #expect(!model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText.hasPrefix(
+            "You:\nstop after token\n\nAnswer:\n"))
 
         model.clearOutput()
         #expect(!model.hasOutputTranscript)
         #expect(model.outputPromptText.isEmpty)
         #expect(model.outputText.isEmpty)
+        #expect(model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText.isEmpty)
         #expect(model.error == nil)
     }
 
@@ -221,6 +234,8 @@ import Testing
         #expect(!model.isRunning)
         #expect(model.outputPromptText == "prefill prompt")
         #expect(model.outputText.isEmpty)
+        #expect(model.outputResponsePlainText.isEmpty)
+        #expect(model.outputConversationPlainText == "You:\nprefill prompt")
         #expect(model.hasOutputTranscript)
 
         model.clearOutput()

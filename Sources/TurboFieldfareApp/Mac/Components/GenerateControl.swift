@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct GenerateControl: View {
@@ -25,7 +26,7 @@ struct GenerateControl: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .background(.indigo, in: .capsule)
+        .background(TurboFieldfareMacTheme.accentColor, in: .capsule)
         .overlay {
             Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5)
         }
@@ -65,7 +66,7 @@ struct GenerateControl: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .background(.indigo, in: .capsule)
+        .background(TurboFieldfareMacTheme.accentColor, in: .capsule)
         .overlay {
             Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5)
         }

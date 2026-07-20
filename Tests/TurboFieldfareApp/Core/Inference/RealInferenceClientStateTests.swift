@@ -79,7 +79,7 @@ import TurboFieldfare
             prompt: "hello")
 
         let config = RealInferenceSession.generationConfig(for: request)
-        #expect(config.temperature == 1.0)
+        #expect(config.temperature == 0.2)
         #expect(config.topK == 64)
         #expect(config.topP == 0.95)
         #expect(config.repetitionPenalty == 1)
@@ -108,8 +108,7 @@ import TurboFieldfare
         let request = AppGenerationRequest(
             modelDirectory: modelDirectory,
             prompt: "hello",
-            runtimeOptions: AppRuntimeOptions(prefillEnabled: false,
-                                              turboQuantKVEnabled: true))
+            runtimeOptions: AppRuntimeOptions(prefillEnabled: false))
 
         var failure: AppInferenceError?
         var partial: AppDiagnostics?

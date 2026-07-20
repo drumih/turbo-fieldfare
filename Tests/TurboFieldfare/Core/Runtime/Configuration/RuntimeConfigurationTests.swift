@@ -4,7 +4,6 @@ import Testing
 @Suite struct RuntimeConfigurationTests {
     @Test func productionDefaultsAreStable() {
         let runtime = RuntimeConfiguration.production
-        #expect(runtime.kvStorage == .fp16)
         #expect(runtime.fp16RingEnabled)
         #expect(runtime.expertCacheSlots == 16)
         #expect(runtime.expertCachePolicy == .lfu)
@@ -22,14 +21,11 @@ import Testing
             rdadvisePolicy: .adaptive,
             prefillEnabled: false,
             prefillChunkTokens: 64,
-            turboQuantKVEnabled: true,
             forceLogitsHead: true)
         #expect(runtime.expertCacheSlots == 32)
         #expect(runtime.modelExpertCachePolicy == .lru)
         #expect(runtime.rdadviseEnabled)
         #expect(runtime.prefillConfig == .off)
-        #expect(runtime.turboQuantKVEnabled)
-        #expect(runtime.kvStorage == .packedK4V4)
         #expect(runtime.headPath == .logits)
     }
 

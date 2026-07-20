@@ -1,56 +1,38 @@
 # Contribute a benchmark result
 
-Results from other Apple Silicon Macs help show where TurboFieldfare runs well
-and where it needs more work. This guide uses the
-[canonical 1K prompt](benchmark-prompts/prefill-1024.txt) from the project's
-prefill and decode benchmarks. It contains 1,017 model tokens including BOS.
-Each run generates 256 greedy tokens so reports from different machines remain
-comparable.
+TurboFieldfare's community benchmark uses three chat-framed generation cases:
+a short explanation, a medium design review, and a long document synthesis.
+They exercise different prompt lengths and require coherent text that reaches
+the end of the model turn. A repeating calibration prompt is not a valid speed
+result because repeated expert choices can make decode artificially fast.
 
-This is an explicit reproducibility workload, not the interactive product
-default. The app and CLI normally allow up to 1,024 new tokens and sample with
-temperature `1.0`, Top-K `64`, and Top-P `0.95`; the commands below override
-those values with a fixed 256-token greedy decode.
+The frozen prompts are in
+[`benchmark-prompts/real-generation-v1/`](benchmark-prompts/real-generation-v1/).
+Runs use the app sampling defaults with fixed seeds: temperature `0.2`, Top-K
+`64`, Top-P `0.95`, a 4,096-token context, and up to 1,024 generated tokens.
 
-The public package uses `TurboFieldfareCLI` for this measurement. Its timing
-footer runs the production defaults and reports decode-only tokens per second.
-It excludes model installation, model loading, and prompt prefill.
-
-## Before you run
+## Prepare the Mac
 
 Install the model with the [README instructions](../README.md#command-line-interface),
-then prepare the Mac:
+connect a laptop to power, turn off Low Power Mode, quit other demanding apps,
+and build the release CLI:
 
-1. Connect a laptop to power and turn off Low Power Mode. Use the normal
-   Automatic energy mode unless you clearly report another mode.
-2. Build the release executable before measuring:
+```bash
+swift build -c release --product TurboFieldfareCLI
+```
 
-   ```bash
-   swift build -c release --product TurboFieldfareCLI
-   ```
+Confirm that no other model process is running:
 
-3. Quit every app you can, leaving only Terminal. In particular, close the
-   TurboFieldfare Mac app, Xcode, browsers, video calls, games, screen recorders,
-   local model runners, downloads, backups, and file indexing that you started.
-4. Let background CPU activity and the Mac's temperature settle.
-5. Check for another model process:
+```bash
+pgrep -fl 'TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'
+```
 
-   ```bash
-   pgrep -fl 'TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'
-   ```
-
-   Continue only when this prints nothing. Quit a listed app normally; do not
-   start two model runs at once.
-
-Do not change the prompt, token count, temperature, or public runtime defaults
-for the standard result.
+Continue only when that command prints nothing.
 
 ## Record the machine
 
-From the repository root, collect a privacy-safe system summary:
-
 ```bash
-mkdir -p benchmark-results
+mkdir -p benchmark-results/system benchmark-results/warmup benchmark-results/measured
 {
   git status --short
   git rev-parse HEAD
@@ -59,105 +41,81 @@ mkdir -p benchmark-results
   system_profiler SPHardwareDataType |
     awk -F': ' '/Model Name|Model Identifier|Chip|Total Number of Cores|Memory/ { print $1 ": " $2 }'
   shasum -a 256 scratch/gemma4.gturbo/manifest.json
-  shasum -a 256 docs/benchmark-prompts/prefill-1024.txt
-} 2>&1 | tee benchmark-results/system.txt
+  shasum -a 256 docs/benchmark-prompts/real-generation-v1/*.json
+} 2>&1 | tee benchmark-results/system/system.txt
 ```
 
-An empty first line from `git status --short` means the checkout is clean. If it
-prints changes, either use a clean checkout or describe those changes in the
-report. The filtered hardware command omits the serial number and hardware UUID,
-but review `benchmark-results/system.txt` before sharing it.
+Review the system file before sharing it. The filtered hardware command omits
+the serial number and hardware UUID.
 
-## Run the fixed workload
+## Run the cases
 
-First run one warmup. It also confirms that the model loads and the prompt
-completes:
+Run one discarded warmup for each case:
 
 ```bash
-.build/release/TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
-  --prompt "$(cat docs/benchmark-prompts/prefill-1024.txt)" \
-  --max-new 256 \
-  --max-context 4096 \
-  --temperature 0 \
-  > benchmark-results/warmup.txt 2>&1
-
-tail -n 2 benchmark-results/warmup.txt
-```
-
-Then run three measured rows, sequentially:
-
-```bash
-for run in 1 2 3; do
-  output="benchmark-results/run-${run}.txt"
+for case_seed in \
+  short-explanation:20260721 \
+  medium-review:20260722 \
+  long-synthesis:20260723; do
+  case_id="${case_seed%%:*}"
+  seed="${case_seed##*:}"
   .build/release/TurboFieldfareCLI \
     --model scratch/gemma4.gturbo \
-    --prompt "$(cat docs/benchmark-prompts/prefill-1024.txt)" \
-    --max-new 256 \
+    --messages-file "docs/benchmark-prompts/real-generation-v1/${case_id}.json" \
+    --max-new 1024 \
     --max-context 4096 \
-    --temperature 0 \
-    > "$output" 2>&1 || break
-  tail -n 2 "$output"
+    --temperature 0.2 \
+    --top-k 64 \
+    --top-p 0.95 \
+    --seed "$seed" \
+    > "benchmark-results/warmup/${case_id}.stdout" \
+    2> "benchmark-results/warmup/${case_id}.stderr"
 done
 ```
 
-Each successful file ends with a timing footer. Confirm that it contains this
-workload shape:
-
-```text
-prefill=1017tok new=256tok
-```
-
-Collect the three timing lines for easy copy and paste:
+Then run the three measured cases in fresh processes:
 
 ```bash
-grep -h '^\[stop=' benchmark-results/run-*.txt |
+for case_seed in \
+  short-explanation:20260721 \
+  medium-review:20260722 \
+  long-synthesis:20260723; do
+  case_id="${case_seed%%:*}"
+  seed="${case_seed##*:}"
+  .build/release/TurboFieldfareCLI \
+    --model scratch/gemma4.gturbo \
+    --messages-file "docs/benchmark-prompts/real-generation-v1/${case_id}.json" \
+    --max-new 1024 \
+    --max-context 4096 \
+    --temperature 0.2 \
+    --top-k 64 \
+    --top-p 0.95 \
+    --seed "$seed" \
+    > "benchmark-results/measured/${case_id}.stdout" \
+    2> "benchmark-results/measured/${case_id}.stderr"
+done
+
+grep -h '^\[stop=' benchmark-results/measured/*.stderr |
   tee benchmark-results/summary.txt
 ```
 
-This protocol uses one warmup followed by three fresh CLI processes. The file
-cache is warm but uncontrolled. Do not purge caches or average these rows with
-runs made under different conditions.
+Every measured footer must say `stop=endOfTurn`. Read the three output files as
+well: reject the result if an answer loops, repeats a block, or ends incomplete.
+Report the prompt and generated token counts from each footer because different
+output tokens create a different routing workload.
 
 ## Report the result
 
-Open an issue in this repository with the title
-`Benchmark: <chip>, <memory>, <macOS version>`. Paste this template:
+Open an issue titled `Benchmark: <chip>, <memory>, <macOS version>` and include:
 
-````markdown
-## TurboFieldfare benchmark
+- `benchmark-results/system/system.txt`;
+- `benchmark-results/summary.txt`;
+- the three measured stdout and stderr files;
+- energy mode, whether the Mac was connected to power, and any other active
+  workload; and
+- any output-quality problem or protocol change.
 
-- Energy mode: Automatic / High Power / other
-- Connected to power: yes / no
-- Other apps: quit / list anything left open
-- Thermal state before run: settled / uncertain
-- Protocol changes: none / describe every change
-
-### System
-
-```text
-Paste benchmark-results/system.txt here.
-```
-
-### Results
-
-```text
-Paste benchmark-results/summary.txt here.
-```
-
-### Notes
-
-Add unexpected output, errors, throttling, or other observations.
-````
-
-Attach the three `run-*.txt` files when possible. They contain the generated
-completion and timing footer, which helps us spot incomplete or non-equivalent
-runs.
-
-If you want to test a different app setting or code change, submit the standard
-result first. Then change one thing, repeat the same warmup and three-run policy,
-and label the follow-up as experimental. Never combine rows from different
-settings into one standard result.
-
-See [Benchmarks](BENCHMARKS.md) for the current reference measurements and how
-to interpret comparisons.
+Compare rows only when the case, prompt tokens, generated tokens, settings, and
+stop reason match. The [reference M5 range](BENCHMARKS.md#m5-measured-decode)
+uses controlled non-repeating continuations for stable token-for-token
+measurement, while this public protocol checks autonomous product generation.

@@ -31,6 +31,8 @@ import TurboFieldfareValidationSupport
         guard let xBuf = Fp16Buffer.make(ctx.device, halves: x),
               let yRef = Fp16Buffer.make(ctx.device, halves: Array(repeating: Self.sentinel, count: yElements)),
               let ySplit = Fp16Buffer.make(ctx.device, halves: Array(repeating: Self.sentinel, count: yElements)),
+              let scratchGate = Fp16Buffer.make(ctx.device, count: Self.f),
+              let scratchUp = Fp16Buffer.make(ctx.device, count: Self.f),
               let scratchAct = Fp16Buffer.make(ctx.device, count: Self.rows * Self.f) else {
             Issue.record("buffer allocation failed")
             return
@@ -48,6 +50,8 @@ import TurboFieldfareValidationSupport
                                 gate: gateProj,
                                 up: upProj,
                                 down: downProj,
+                                scratchGate: scratchGate,
+                                scratchUp: scratchUp,
                                 scratchAct: scratchAct,
                                 queryCount: Self.rows,
                                 d: Self.d,
@@ -103,6 +107,8 @@ import TurboFieldfareValidationSupport
         guard let xBuf = Fp16Buffer.make(ctx.device, halves: x),
               let yRef = Fp16Buffer.make(ctx.device, halves: Array(repeating: Self.sentinel, count: yElements)),
               let yGot = Fp16Buffer.make(ctx.device, halves: Array(repeating: Self.sentinel, count: yElements)),
+              let scratchGate = Fp16Buffer.make(ctx.device, count: Self.f),
+              let scratchUp = Fp16Buffer.make(ctx.device, count: Self.f),
               let scratchAct = Fp16Buffer.make(ctx.device, count: Self.f),
               let postF1Buf = ctx.device.makeBuffer(bytes: postF1,
                                                      length: postF1.count * MemoryLayout<UInt16>.stride,
@@ -147,6 +153,8 @@ import TurboFieldfareValidationSupport
                                 gate: gateProj,
                                 up: upProj,
                                 down: downProj,
+                                scratchGate: scratchGate,
+                                scratchUp: scratchUp,
                                 scratchAct: scratchAct,
                                 queryCount: Self.rows,
                                 d: Self.d,
@@ -183,6 +191,8 @@ import TurboFieldfareValidationSupport
         guard let xBuf = Fp16Buffer.make(ctx.device, halves: x),
               let yRef = Fp16Buffer.make(ctx.device, halves: Array(repeating: sentinel, count: rows * yStride)),
               let yGot = Fp16Buffer.make(ctx.device, halves: Array(repeating: sentinel, count: rows * yStride)),
+              let scratchGate = Fp16Buffer.make(ctx.device, count: f),
+              let scratchUp = Fp16Buffer.make(ctx.device, count: f),
               let scratchAct = Fp16Buffer.make(ctx.device, count: f) else {
             Issue.record("buffer allocation failed")
             return
@@ -216,6 +226,8 @@ import TurboFieldfareValidationSupport
                                 gate: gateProj,
                                 up: upProj,
                                 down: downProj,
+                                scratchGate: scratchGate,
+                                scratchUp: scratchUp,
                                 scratchAct: scratchAct,
                                 queryCount: rows,
                                 d: d,

@@ -5,17 +5,16 @@ This page records TurboFieldfare measurements on an 8 GB M2 MacBook Air and a
 generated length, cache state, and hardware all change throughput, so ranges
 across workloads are not run-to-run variation.
 
-All rows use greedy decoding and the same source checkpoint. TurboFieldfare
-uses the model installed by the
-[command-line instructions](../README.md#command-line-interface). Decode rate
-excludes model installation, model loading, and prompt prefill.
+Each table states its workload and decoding settings. TurboFieldfare uses the
+model installed by the [command-line instructions](../README.md#command-line-interface).
+Decode rate excludes model installation, model loading, and prompt prefill.
 
 ## Results at a glance
 
 | Host and runtime | Decode rate | Reported memory |
 | --- | ---: | ---: |
 | 8 GB M2, TurboFieldfare | 5.10-6.30 tok/s | ~1.9-2.1 GB footprint |
-| 24 GB M5 Pro, TurboFieldfare | 31.96-36.08 tok/s | ~2.0-2.2 GB footprint |
+| 24 GB M5 Pro, TurboFieldfare | 31-35 tok/s | ~2.1 GB footprint |
 | 24 GB M5 Pro, mlx-lm | 76.33-82.07 tok/s | 8.3-9.8 GB RSS; 14.7-15.3 GB GPU allocation |
 
 ## M2 measured decode
@@ -54,17 +53,24 @@ spent time; it does not describe independent speedups or a performance bound.
 
 ## M5 measured decode
 
-These rows ran on 2026-07-16 on a 24 GB M5 Pro (`Mac17,8`) with macOS 26.5.1,
+These rows ran on 2026-07-20 on a 24 GB M5 Pro (`Mac17,8`) with macOS 26.5.1,
 Xcode 26.6, and Swift 6.3.3. No profiler or trace mode was active.
 
-One warmup preceded three measured rows per workload. The table reports
-medians; the file cache was warm but uncontrolled.
+The benchmark uses chat-framed prompts and fixed, non-repeating natural
+continuations. This keeps the generated text and expert-routing workload stable
+without rewarding a model repetition loop. The complete production sampling
+and decode path still runs for every token.
+
+One warmup preceded three fresh-process measurements per workload. The table
+reports medians; the file cache was warm but uncontrolled. A separate
+free-generation smoke reached the end of each model turn without a repetition
+loop.
 
 | Prompt / generated tokens | Prefill / TTFT | Decode | Peak RSS / footprint |
 | --- | ---: | ---: | ---: |
-| 121 / 64 | 4,980 / 5,606 ms | 31.96 tok/s | 1,764 / 1,893 MiB |
-| 527 / 64 | 7,297 / 7,922 ms | 36.08 tok/s | 1,792 / 1,991 MiB |
-| 1,017 / 128 | 10,134 / 10,767 ms | 33.96 tok/s | 1,810 / 2,088 MiB |
+| 61 / 256 | 5,096 / 5,668 ms | 35.17 tok/s | 1,834 / 2,126 MiB |
+| 430 / 256 | 6,762 / 7,325 ms | 34.72 tok/s | 1,851 / 2,142 MiB |
+| 3,015 / 256 | 23,038 / 23,610 ms | 31.01 tok/s | 1,835 / 2,126 MiB |
 
 ## Same-host MLX comparison
 
@@ -87,15 +93,15 @@ deployment path.
 
 ## Reproduce and contribute a result
 
-The [community benchmark guide](COMMUNITY_BENCHMARKS.md) uses the established
-1,017-token prefill fixture followed by 256 greedy decode tokens. It provides
-the release CLI command, machine-preparation checklist, three-run policy, and
-issue template. The public CLI's timing footer reports the production decode
-rate without requiring a separate research benchmark harness.
+The [community benchmark guide](COMMUNITY_BENCHMARKS.md) uses short, medium,
+and long chat-framed prompts with fixed seeds. It requires coherent output and
+a normal end of turn, so a repetition loop cannot become a published speed
+result. The public CLI's timing footer reports decode-only throughput without a
+separate research harness.
 
-The community workload extends the historical 1,017 / 128 row above to 256
-generated tokens. Compare community submissions with other runs of the same
-protocol rather than treating them as direct reproductions of that row.
+Community runs generate their own output, while the reference table uses fixed
+non-repeating continuations for token-for-token stability. Compare community
+submissions only when their prompt and generated token counts match.
 
 A current checkout may not reproduce a historical number after the runtime,
 compiler, or operating system changes. Report the commit and all three rows

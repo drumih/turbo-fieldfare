@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import TurboFieldfare
+@testable import TurboFieldfareAppCore
 
 func makeCompleteModelInstall(_ tag: String) throws -> URL {
     let directory = FileManager.default.temporaryDirectory
@@ -26,6 +27,14 @@ func makeCompleteModelInstall(_ tag: String) throws -> URL {
         "versionMinor": 0,
         "flags": ["streamingPresent": true],
         "modelID": "test/gemma-4-26b-a4b",
+        "sourceSnapshotHash": "sha256:" + AppModelInstallDescriptor.default.sourceIndexSHA256,
+        "quant": [
+            "embedding": quantSlot(4),
+            "attention": quantSlot(4),
+            "router": quantSlot(8),
+            "sharedExpert": quantSlot(4),
+            "routedExpert": quantSlot(4),
+        ],
         "arch": [
             "hiddenSize": arch.hiddenSize,
             "ffnIntermediate": arch.intermediateSize,
@@ -69,4 +78,14 @@ func makeCompleteModelInstall(_ tag: String) throws -> URL {
     let receiptData = try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
     try receiptData.write(to: directory.appendingPathComponent("verified-install.json"))
     return directory
+}
+
+private func quantSlot(_ weightBits: Int) -> [String: Any] {
+    [
+        "weightBits": weightBits,
+        "scheme": "affine",
+        "scaleType": "bf16",
+        "biasType": "bf16",
+        "groupSize": Quantization.groupSize,
+    ]
 }

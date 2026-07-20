@@ -23,10 +23,12 @@ included for broader design context rather than a line-level claim.
   and [MLX-VLM Gemma 4](https://github.com/Blaizzy/mlx-vlm/blob/84f43753380355c0455a2bafb291d4b7cbcf81d1/mlx_vlm/models/gemma4/language.py)
   supplied independent implementation checks. MLX-LM also served as the
   bounded logit and quality reference.
-- The [Majentik Gemma 4 MLX 4-bit checkpoint](https://huggingface.co/majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit),
-  pinned at [`cc499c86`](https://huggingface.co/majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit/tree/cc499c86a958ea7f05cffaa91c7e7243240dabbe),
-  is the source of the weights, configuration, and tokenizer. The repacker
-  preserves its group-64 MLX affine values rather than requantizing them.
+- [`mlx-community/gemma-4-26b-a4b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit),
+  pinned at
+  [`0d77464e`](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit/tree/0d77464eeb233a2da68ebf9d7dc4edaac7db956d),
+  is the source of the weights, configuration, tokenizer, and chat-template
+  sidecars. The repacker preserves its group-64 MLX affine values rather than
+  requantizing them.
 - [Hugging Face swift-transformers](https://github.com/huggingface/swift-transformers)
   is the direct tokenizer dependency. TurboFieldfare adds bounded streaming
   detokenization around it.
@@ -86,7 +88,6 @@ included for broader design context rather than a line-level claim.
   and [vLLM Metal kernels v2](https://github.com/vllm-project/vllm-metal/tree/11f1b453b74c60d113d67f9a5e7fda41500fd5b5/vllm_metal/metal/kernels_v2)
   were implementation references for transformed and quantized KV caches,
   fused dequantization, and online-softmax reduction.
-- [TurboQuant](https://arxiv.org/abs/2504.19874) informed the transformed and
-  quantized K4/V4 cache experiments.
-- [Open-TQ-Metal](https://arxiv.org/abs/2604.16957) informed the per-group
-  asymmetric INT4 KV and `affine4g32` experiment.
+- [TurboQuant](https://arxiv.org/abs/2504.19874) and
+  [Open-TQ-Metal](https://arxiv.org/abs/2604.16957) informed the rejected K4/V4
+  KV-cache experiments.

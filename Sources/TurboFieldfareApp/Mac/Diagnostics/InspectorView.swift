@@ -8,8 +8,8 @@ struct InspectorView: View {
     var body: some View {
         Form {
             modelSection
-            samplingSection
-            expertCacheSection
+            memorySection
+            generationSection
             runtimeSection
             RunnerDiagnosticsSection(diagnostics: model.diagnostics)
         }
@@ -22,7 +22,7 @@ struct InspectorView: View {
         Section("Model") {
             LabeledContent("Path") {
                 HStack(spacing: 6) {
-                    Text((model.modelPathText as NSString).abbreviatingWithTildeInPath)
+                    Text(model.modelPathText)
                         .font(.caption)
                         .truncationMode(.middle)
                         .lineLimit(1)
@@ -70,20 +70,37 @@ struct InspectorView: View {
         .disabled(model.isRunning || model.isInstallingModel)
     }
 
-    private var samplingSection: some View {
-        Section("Sampling") {
-            LabeledContent("Max response") {
-                Stepper(value: $model.maxNewTokens, in: 1...4096, step: 16) {
-                    Text("\(model.maxNewTokens)").monospacedDigit()
+    private var memorySection: some View {
+        Section("Memory") {
+            LabeledContent("Context") {
+                Picker("Context", selection: $model.maxContextTokens) {
+                    ForEach(AppContextLengthOption.allCases) { option in
+                        Text(option.menuLabel).tag(option.tokens)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
                 .fixedSize()
             }
-            LabeledContent("Max context") {
-                Stepper(value: $model.maxContextTokens, in: 256...8192, step: 256) {
-                    Text("\(model.maxContextTokens)").monospacedDigit()
+            LabeledContent("Slots") {
+                Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {
+                    ForEach(AppRuntimeOptions.allowedSlotCounts, id: \.self) { slots in
+                        Text(AppRuntimeOptions.slotsLabel(for: slots)).tag(slots)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
                 .fixedSize()
             }
+            Text("Memory changes are compared with 4K context and 16 expert slots. Changes apply after reloading the model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(model.isRunning || model.loadState.isLoading)
+    }
+
+    private var generationSection: some View {
+        Section("Generation") {
             LabeledContent("Temperature") {
                 HStack(spacing: 8) {
                     Slider(value: $model.temperature, in: 0...2, step: 0.05)
@@ -115,52 +132,6 @@ struct InspectorView: View {
                     }
                 }
             }
-            Toggle("Repetition penalty", isOn: $model.repetitionPenaltyEnabled)
-                .toggleStyle(.switch)
-            if model.repetitionPenaltyEnabled {
-                LabeledContent("Penalty value") {
-                    HStack(spacing: 8) {
-                        Slider(value: $model.repetitionPenalty, in: 1...1.8, step: 0.05)
-                        Text(model.repetitionPenalty, format: .number.precision(.fractionLength(2)))
-                            .monospacedDigit()
-                            .frame(width: 36, alignment: .trailing)
-                    }
-                }
-            }
-            Text("Defaults: 1,024 tokens, temperature 1.00, Top-K 64, Top-P 0.95. Repetition penalty is off.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .disabled(model.isRunning || model.loadState.isLoading)
-    }
-
-    private var expertCacheSection: some View {
-        Section("Expert cache") {
-            LabeledContent("Slots") {
-                Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {
-                    ForEach(AppRuntimeOptions.allowedSlotCounts, id: \.self) { slots in
-                        Text(AppRuntimeOptions.slotsLabel(for: slots)).tag(slots)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Policy")
-                Picker("Policy", selection: $model.runtimeOptions.expertCachePolicy) {
-                    ForEach(AppExpertCachePolicy.allCases) { policy in
-                        Text(policy.label).tag(policy)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-            }
-            if model.runtimeOptions.expertCacheSlots > 16 {
-                Text("Slot counts above 16 trade extra RAM for fewer expert reads.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .disabled(model.isRunning || model.loadState.isLoading)
     }
@@ -168,50 +139,22 @@ struct InspectorView: View {
     private var runtimeSection: some View {
         Section("Runtime") {
             Toggle("Prefill", isOn: $model.runtimeOptions.prefillEnabled)
-            LabeledContent("Prefill chunk") {
-                Picker("Prefill chunk", selection: $model.runtimeOptions.prefillChunkTokens) {
-                    ForEach(AppRuntimeOptions.allowedPrefillChunkTokens, id: \.self) { tokens in
-                        Text("\(tokens) tokens").tag(tokens)
+            Text("This is an experimental feature and may reduce output quality.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LabeledContent("RDADVISE") {
+                Picker("RDADVISE", selection: $model.runtimeOptions.rdadvisePolicy) {
+                    ForEach(AppRDAdvicePolicy.allCases) { policy in
+                        Text(policy.label).tag(policy)
                     }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .fixedSize()
-            }
-            .disabled(!model.runtimeOptions.prefillEnabled)
-            Toggle("TurboQuant K4/V4 (Experimental)",
-                   isOn: $model.runtimeOptions.turboQuantKVEnabled)
-            Text("This is an experimental feature and may reduce output quality.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("RDADVISE")
-                Picker("RDADVISE", selection: $model.runtimeOptions.rdadvisePolicy) {
-                    ForEach(AppRDAdvicePolicy.allCases) { mode in
-                        Text(mode.label).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            LabeledContent("Model verification") {
-                Picker("Model verification", selection: $model.runtimeOptions.modelVerification) {
-                    ForEach(AppModelVerification.allCases) { choice in
-                        Text(choice.label).tag(choice)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-            }
-            if model.runtimeOptions.modelVerification == .trustedInstall {
-                Text("Trust verified install checks the signed-off receipt and file sizes instead of hashing all model files again.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             if model.hasStaleLoadedRuntime {
                 Text("Reload required")
                     .font(.caption)

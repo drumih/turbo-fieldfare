@@ -43,9 +43,7 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
     var routePartialElements: Int { chunkTokens * topK * hiddenSize }
     var routeIDElements: Int { chunkTokens * topK }
     var routeWeightElements: Int { routeIDElements }
-    var sharedExpertActScratchElements: Int {
-        sharedIntermediate
-    }
+    var sharedExpertScratchElements: Int { sharedIntermediate }
     var routedGateUpActElements: Int { 3 * routedPairMicrobatchRows * routedIntermediate }
     var routedDownOutputElements: Int { routedPairMicrobatchRows * hiddenSize }
 
@@ -62,7 +60,7 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
             + h1Elements
             + h2Elements
             + routePartialElements
-            + sharedExpertActScratchElements
+            + 3 * sharedExpertScratchElements
             + routedGateUpActElements
             + routedDownOutputElements
         return fp16Elements * MemoryLayout<Float16>.stride
@@ -94,6 +92,8 @@ struct PrefillChunkScratchBuffers {
     let routePartials: MTLBuffer
     let routeIDs: MTLBuffer
     let routeWeights: MTLBuffer
+    let sharedGateScratch: MTLBuffer
+    let sharedUpScratch: MTLBuffer
     let sharedActScratch: MTLBuffer
     let routedGateUpActScratch: MTLBuffer
     let routedDownScratch: MTLBuffer
@@ -138,7 +138,11 @@ struct PrefillChunkScratchBuffers {
                                        label: "prefill.routeIDs"),
             routeWeights: try sharedBuffer(layout.routeWeightElements * MemoryLayout<Float16>.stride,
                                            label: "prefill.routeWeights"),
-            sharedActScratch: try privateBuffer(layout.sharedExpertActScratchElements,
+            sharedGateScratch: try privateBuffer(layout.sharedExpertScratchElements,
+                                                 label: "prefill.sharedGateScratch"),
+            sharedUpScratch: try privateBuffer(layout.sharedExpertScratchElements,
+                                               label: "prefill.sharedUpScratch"),
+            sharedActScratch: try privateBuffer(layout.sharedExpertScratchElements,
                                                 label: "prefill.sharedActScratch"),
             routedGateUpActScratch: try privateBuffer(layout.routedGateUpActElements,
                                                       label: "prefill.routedGateUpActScratch"),

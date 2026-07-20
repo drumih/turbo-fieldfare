@@ -5,7 +5,7 @@ import Testing
 
 final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var files: [String: Data] = [:]
-    nonisolated(unsafe) static var commit = "cc499c86a958ea7f05cffaa91c7e7243240dabbe"
+    nonisolated(unsafe) static var commit = String(repeating: "a", count: 40)
     nonisolated(unsafe) static var failures: [String: [FakeFailure]] = [:]
     nonisolated(unsafe) static var requestCounts: [String: Int] = [:]
 
@@ -153,6 +153,8 @@ enum FakeFailure: Equatable {
 let remoteTokenizerJSON = Data(#"{"model":{"type":"BPE"}}"#.utf8)
 let remoteTokenizerConfigJSON = Data(#"{"tokenizer_class":"PreTrainedTokenizerFast"}"#.utf8)
 let remoteSpecialTokensMapJSON = Data(#"{"eos_token":"<eos>"}"#.utf8)
+let remoteChatTemplateJinja = Data("{{ bos_token }}".utf8)
+let remoteChatTemplateJSON = Data(#"{"chat_template":"{{ bos_token }}"}"#.utf8)
 
 @Suite(.serialized)
 struct RemotePayloadCopyTests {
@@ -176,6 +178,8 @@ func remoteFiles(snapshotDir: String,
     }
     if includeOptionalTokenizer {
         files["special_tokens_map.json"] = remoteSpecialTokensMapJSON
+        files["chat_template.jinja"] = remoteChatTemplateJinja
+        files["chat_template.json"] = remoteChatTemplateJSON
     }
     return files
 }
@@ -226,6 +230,10 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
         (tokenizerDir as NSString).appendingPathComponent("tokenizer_config.json"))) == remoteTokenizerConfigJSON)
     let specialTokensPath = (tokenizerDir as NSString).appendingPathComponent("special_tokens_map.json")
     #expect(FileManager.default.fileExists(atPath: specialTokensPath) == expectsOptionalSpecialTokens)
+    let chatTemplateJinjaPath = (tokenizerDir as NSString).appendingPathComponent("chat_template.jinja")
+    #expect(FileManager.default.fileExists(atPath: chatTemplateJinjaPath) == expectsOptionalSpecialTokens)
+    let chatTemplateJSONPath = (tokenizerDir as NSString).appendingPathComponent("chat_template.json")
+    #expect(FileManager.default.fileExists(atPath: chatTemplateJSONPath) == expectsOptionalSpecialTokens)
 
     let manifestData = try Data(contentsOf: URL(fileURLWithPath:
         (outputDir as NSString).appendingPathComponent("manifest.json")))
@@ -235,6 +243,8 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
     #expect(manifestFiles["tokenizer/tokenizer.json"] != nil)
     #expect(manifestFiles["tokenizer/tokenizer_config.json"] != nil)
     #expect((manifestFiles["tokenizer/special_tokens_map.json"] != nil) == expectsOptionalSpecialTokens)
+    #expect((manifestFiles["tokenizer/chat_template.jinja"] != nil) == expectsOptionalSpecialTokens)
+    #expect((manifestFiles["tokenizer/chat_template.json"] != nil) == expectsOptionalSpecialTokens)
 
     let receiptData = try Data(contentsOf: URL(fileURLWithPath:
         (outputDir as NSString).appendingPathComponent(VerifiedInstallReceiptWriter.fileName)))
@@ -244,6 +254,8 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
     #expect(receiptFiles["tokenizer/tokenizer.json"] != nil)
     #expect(receiptFiles["tokenizer/tokenizer_config.json"] != nil)
     #expect((receiptFiles["tokenizer/special_tokens_map.json"] != nil) == expectsOptionalSpecialTokens)
+    #expect((receiptFiles["tokenizer/chat_template.jinja"] != nil) == expectsOptionalSpecialTokens)
+    #expect((receiptFiles["tokenizer/chat_template.json"] != nil) == expectsOptionalSpecialTokens)
 }
 
 func assertNoInternalRemoteDirs(outputDir: String) throws {

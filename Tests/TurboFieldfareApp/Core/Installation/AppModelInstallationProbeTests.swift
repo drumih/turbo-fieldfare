@@ -39,4 +39,22 @@ import Testing
             return
         }
     }
+
+    @Test func differentCheckpointIsPartial() throws {
+        let url = try makeCompleteModelInstall("wrong-checkpoint")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let descriptor = AppModelInstallDescriptor(
+            displayName: "different",
+            repoID: "example/different",
+            revision: "revision",
+            sourceIndexSHA256: String(repeating: "f", count: 64),
+            approximateDownloadBytes: 1,
+            installedBytes: 1,
+            rangeStagingBytes: 1,
+            reserveBytes: 1)
+        guard case .partial = AppModelInstallationProbe.status(at: url, descriptor: descriptor) else {
+            Issue.record("expected checkpoint mismatch to be partial")
+            return
+        }
+    }
 }

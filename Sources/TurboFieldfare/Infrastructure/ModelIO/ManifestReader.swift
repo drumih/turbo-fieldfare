@@ -29,13 +29,31 @@ public struct ManifestArch: Decodable, Equatable, Sendable {
     public let fullAttentionLayerMask: [Int]
 }
 
+public struct ManifestQuantSlot: Decodable, Equatable, Sendable {
+    public let weightBits: Int
+    public let scheme: String
+    public let scaleType: String
+    public let biasType: String
+    public let groupSize: Int
+}
+
+public struct ManifestQuant: Decodable, Equatable, Sendable {
+    public let embedding: ManifestQuantSlot
+    public let attention: ManifestQuantSlot
+    public let router: ManifestQuantSlot
+    public let sharedExpert: ManifestQuantSlot
+    public let routedExpert: ManifestQuantSlot
+}
+
 public struct Manifest: Decodable, Equatable, Sendable {
     public let magic: String
     public let versionMajor: Int
     public let versionMinor: Int
     public let flags: [String: Bool]
     public let modelID: String
+    public let sourceSnapshotHash: String?
     public let arch: ManifestArch
+    public let quant: ManifestQuant?
     public let files: [String: ManifestFileEntry]
     public let expertsPerLayer: Int
     public let numLayers: Int
@@ -80,7 +98,8 @@ public enum ManifestReader {
             throw ModelError.indexCorrupt(detail: "manifest.json: \(error)")
         }
 
-        try validate(manifest, against: expecting)
+        try validate(manifest, against: expecting,
+                     directoryURL: directoryURL)
         return manifest
     }
 
@@ -94,7 +113,8 @@ public enum ManifestReader {
     }
 
     static func validate(_ m: Manifest,
-                         against expected: ArchConfig) throws {
+                         against expected: ArchConfig,
+                         directoryURL: URL) throws {
         guard m.magic == "GTURBO" else { throw ModelError.notAGTurboDirectory }
         guard m.versionMajor == 1 else {
             throw ModelError.unsupportedVersion(major: m.versionMajor, minor: m.versionMinor)
@@ -104,7 +124,17 @@ public enum ManifestReader {
                 throw ModelError.unknownFlag(name: key)
             }
         }
+        if m.flags["turboQuantKV"] == true {
+            throw ModelError.indexCorrupt(
+                detail: "manifest requests removed TurboQuant KV runtime support")
+        }
         try validateArch(m.arch, expected: expected)
+        if let quant = m.quant {
+            try validateQuant(quant)
+        } else if expected.numLayers == ArchConfig.gemma4_26B_A4B.numLayers,
+                  expected.hiddenSize == ArchConfig.gemma4_26B_A4B.hiddenSize {
+            throw ModelError.indexCorrupt(detail: "manifest.quant is required for the production architecture")
+        }
         let pageSize = UInt64(getpagesize())
         guard m.expertStride % pageSize == 0 else {
             throw ModelError.expertStrideNotPageAligned(stride: m.expertStride,
@@ -118,6 +148,25 @@ public enum ManifestReader {
             let plain  = "packed_experts/layer_\(L).bin"
             if m.files[padded] == nil && m.files[plain] == nil {
                 throw ModelError.missingFile(name: padded)
+            }
+        }
+    }
+
+    private static func validateQuant(_ quant: ManifestQuant) throws {
+        let slots: [(String, ManifestQuantSlot, Set<Int>)] = [
+            ("embedding", quant.embedding, [4]),
+            ("attention", quant.attention, [4]),
+            ("router", quant.router, [8]),
+            ("sharedExpert", quant.sharedExpert, [4, 8]),
+            ("routedExpert", quant.routedExpert, [4]),
+        ]
+        for (name, slot, allowedBits) in slots {
+            guard allowedBits.contains(slot.weightBits),
+                  slot.scheme.lowercased() == "affine",
+                  slot.scaleType.lowercased() == "bf16",
+                  slot.biasType.lowercased() == "bf16",
+                  slot.groupSize == Quantization.groupSize else {
+                throw ModelError.indexCorrupt(detail: "unsupported quantization for \(name)")
             }
         }
     }

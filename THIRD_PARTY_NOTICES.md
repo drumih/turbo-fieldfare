@@ -12,12 +12,13 @@ versions included in that product.
 
 ## Model weights
 
-Model weights are not included in this repository. The installer downloads a
-pinned revision of
-[`majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit`](https://huggingface.co/majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit)
-and repacks it locally. The model card labels that checkpoint Apache-2.0 and
-identifies `google/gemma-4-26B-A4B` as its base model. Google publishes Gemma 4
-under the
+Model weights are not included in this repository. The installer downloads
+the pinned revision
+`0d77464eeb233a2da68ebf9d7dc4edaac7db956d` of
+[`mlx-community/gemma-4-26b-a4b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit)
+and repacks it locally. Its model card describes it as an Apache-2.0
+quantization of Google's Gemma 4 26B-A4B instruction checkpoint.
+Google publishes Gemma 4 under the
 [Apache License 2.0](https://ai.google.dev/gemma/apache_2).
 
 Downloaded weights remain a separate work governed by their source terms. Do

@@ -2,7 +2,7 @@
 
 TurboFieldfare is a model-specific Swift and Metal runtime for text generation
 with Gemma 4 26B-A4B on Apple Silicon. Its defining constraint is an 8 GB
-machine running a text-only model installation of about 14.5 GB. The runtime
+machine running a text-only model installation of about 14.3 GB. The runtime
 therefore cannot treat the checkpoint as one resident allocation. It keeps the
 common language-model weights and working state available to Metal, stores the
 routed experts in per-layer files, and reads only the experts selected for the
@@ -14,7 +14,7 @@ TurboFieldfare](OPTIMIZATION_JOURNEY.md).
 
 Prefill and decode are the two execution modes used below. Prefill processes
 known prompt tokens in bounded chunks; decode generates one new token at a
-time. Both use the same mapped common weights, mixed KV cache, and per-layer
+time. Both use the same mapped common weights, FP16 KV cache, and per-layer
 streamed-expert cache.
 
 ## Why the runtime has this shape
@@ -27,9 +27,9 @@ Only a few properties of Gemma 4 determine most of the system design:
 - A dense shared expert runs in parallel with the routed branch and is added
   without a routing weight.
 - The embedding and language-model head share the same quantized weights.
-- The source checkpoint already uses MLX affine quantization: packed 4-bit
+- The pinned instruction checkpoint uses MLX affine quantization: packed 4-bit
   values with a BF16 scale and BF16 bias for each group of 64 weights. Router
-  and shared-expert projections use 8-bit overrides.
+  projections use 8-bit weights; shared and routed experts use 4-bit weights.
 
 The production FP16 KV cache uses a mixed per-layer layout. The 25
 sliding-window layers attend to the latest 1,024 tokens and store K/V in bounded
@@ -44,13 +44,23 @@ The runtime also preserves Gemma-specific details that affect correctness:
 NeoX RoPE, attention scale `1.0`, no router-logit softcap, parallel shared and
 routed FFNs, a learned layer scalar, and a final logit softcap of `30.0`.
 
+## Instruction framing
+
+The Mac app and CLI `--messages-file` mode format user, model, and optional
+leading system messages with the pinned text-only Gemma 4 chat format. The
+runtime stops generation on `<eos>` (token 1), `<turn|>` (token 106), or
+`<|tool_response>` (token 50). The third token is a defensive boundary; tool
+calling itself is not supported. CLI `--prompt` bypasses this framing for raw
+completion and reproducible comparisons.
+
 ## Source weights and bounded repack
 
-The installer reads the pinned
-[`majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit`](https://huggingface.co/majentik/gemma-4-26B-A4B-TurboQuant-MLX-4bit)
-checkpoint at revision
-`cc499c86a958ea7f05cffaa91c7e7243240dabbe`. It does not download a complete
-Hugging Face snapshot or materialize a safetensors shard.
+The installer reads
+[`mlx-community/gemma-4-26b-a4b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit)
+at revision `0d77464eeb233a2da68ebf9d7dc4edaac7db956d`. The accepted source index has
+SHA-256 `bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13`.
+The installer does not download a complete Hugging Face snapshot or
+materialize a safetensors shard.
 
 Instead, the repacker:
 
@@ -83,6 +93,8 @@ gemma4.gturbo/
     tokenizer.json
     tokenizer_config.json
     special_tokens_map.json        # optional
+    chat_template.jinja             # optional source sidecar
+    chat_template.json              # optional source sidecar
   packed_experts/
     layout.json
     layer_00.bin
@@ -96,6 +108,12 @@ contains 128 fixed-stride routed-expert blobs for one layer. `layout.json`
 describes the packed subregions within each blob. The expert stride is page
 aligned, and each sub-tensor carries its own offset; Metal kernels bind
 subregions of an existing buffer rather than creating one buffer per tensor.
+
+Production manifests must describe the model's group-64 affine quantization:
+4-bit embedding and attention weights, an 8-bit router, 4-bit routed experts,
+and a 4-bit or historical 8-bit shared expert. The instruction checkpoint uses
+4-bit shared experts. A production manifest with missing or incompatible
+quantization metadata is rejected.
 
 The final manifest is both the install commit marker and the runtime contract.
 It records architecture fields, file sizes, and SHA-256 hashes; a missing
@@ -114,17 +132,16 @@ alignment, or a failed integrity check.
 ## Resource split
 
 The tables distinguish file size, virtual allocation, and physical residency.
-They are not interchangeable. The common-model file is 1.51 GiB (1.62 GB in
-decimal units). Its hot pages form the roughly 1.58 GB common resident working
-set in the memory budget. Slot pages also consume physical memory when filled,
-while macOS may keep a separate, opportunistic file-cache copy of recently read
+They are not interchangeable. The common-model file is about 1.35 GB in
+decimal units. Slot pages also consume physical memory when filled, while
+macOS may keep a separate, opportunistic file-cache copy of recently read
 expert data.
 
 Resident and reusable app-owned resources:
 
 | Resource | Current size or capacity | Ownership and behavior |
 | --- | ---: | --- |
-| Common model file | 1,621,403,708 bytes (1.51 GiB) | Read-only file mapping wrapped by Metal buffers; hot pages form the common resident working set. |
+| Common model file | 1,353,771,068 bytes | Read-only file mapping wrapped by Metal buffers. |
 | FP16 KV cache at 4K | About 305 MiB | App-owned. The 25 sliding-window layers use bounded 1,152-row rings; the 5 full-attention layers use linear storage sized for the requested context. |
 | Reusable runtime scratch | 15.8 MiB for the production 128-token prefill arena, plus about 2 MiB of split-attention scratch and smaller decode buffers | App-owned and reused across layers or chunks. |
 
@@ -140,12 +157,12 @@ The default 16-slot capacity is per layer, not a promise that every slot page
 is resident immediately after load. Process RSS and physical footprint depend
 on which layers and experts have been touched, file-cache state, and memory
 pressure. For that reason, the table does not turn static byte counts into an
-unmeasured peak-RSS claim.
+RSS claim.
 
-The production FP16 KV cache is distinct from the experimental packed K4/V4
-cache. At 4K, packed K4/V4 uses about 223 MiB and saves about 82 MiB relative
-to the current FP16 cache, but it failed the full quality gate. It remains an
-explicit experiment and does not fund a larger production expert cache.
+The runtime stores KV data in FP16. Its 25 sliding-window layers use a fixed
+1,152-row circular cache: 1,024 rows for the attention window and 128 extra
+rows for chunked writes. Only the five full-attention layers grow with the
+selected context length.
 
 ## Load and ownership
 
@@ -352,10 +369,11 @@ helpers and tests.
   [`ModelExpertIO`](../Sources/TurboFieldfare/Runtime/Inference/ModelExpertIO.swift),
   and [`PreadExpertStreamer`](../Sources/TurboFieldfare/Infrastructure/Streaming/PreadExpertStreamer.swift)
   own common weights, expert-cache planning, slots, and parallel bounded reads.
-- **KV cache and attention.** [`KVCacheManager`](../Sources/TurboFieldfare/Runtime/KVCache/KVCacheManager.swift),
-  [`Attention`](../Sources/TurboFieldfare/Kernels/Attention/Attention.swift), and
-  [`TurboQuantKVLayout`](../Sources/TurboFieldfare/Runtime/KVCache/TurboQuantKVLayout.swift)
-  cover the mixed FP16 cache, SWA/full dispatch, and experimental packed layout.
+- **KV cache and attention.** [`KVCacheManager`](../Sources/TurboFieldfare/Runtime/KVCache/KVCacheManager.swift)
+  owns bounded circular SWA storage and linear full-attention storage.
+  [`Attention`](../Sources/TurboFieldfare/Kernels/Attention/Attention.swift) and
+  [`PrefillAttention`](../Sources/TurboFieldfare/Kernels/Attention/PrefillAttention.swift)
+  consume distinct FP16 K/V ranges.
 - **Prompt and decode orchestration.** [`runRawCompletion`](../Sources/TurboFieldfare/Runtime/Generation/RawCompletion.swift)
   owns the outer generation loop; [`RealForwardRunner`](../Sources/TurboFieldfare/Runtime/Inference/RealForwardRunner.swift)
   owns the per-layer prefill and decode graph.
@@ -390,14 +408,14 @@ helpers and tests.
 
 ## Scope and limitations
 
-The current runtime supports text-only, single-prompt generation with the
-pinned Gemma 4 26B-A4B checkpoint. The validated context envelope is through
-4K. Vision, audio, training, fine-tuning, server batching, and general model
-support are outside the current scope.
+The current runtime supports text-only generation with the pinned Gemma 4
+26B-A4B instruction checkpoint. The Mac app offers 4K, 8K, 16K, 32K, and 64K
+context lengths. Vision, audio, training, fine-tuning, server batching, and
+general model support are outside the current scope.
 
 TurboFieldfare is a research system. The Mac app exposes a small set of typed
-runtime controls. The production path uses FP16 KV, a 16-slot LFU expert cache,
-chunked prefill, MLX attention geometry v2, staged affine MPP prefill, and
+runtime controls. The production path uses FP16 KV, exact split-K/V attention,
+a 16-slot LFU expert cache, chunked prefill, staged affine MPP prefill, and
 batched routed MoE prefill, with RDADVISE off.
 
 ## Read next

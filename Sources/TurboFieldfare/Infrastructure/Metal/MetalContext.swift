@@ -73,7 +73,7 @@ public final class MetalContext: @unchecked Sendable {
         "attention",
         "moe",
         "logit",
-        "turboquant",
+        "utility",
         "fused",
         "prefill",
     ]
@@ -90,7 +90,7 @@ public final class MetalContext: @unchecked Sendable {
         "rmsnorm": "Metal/Primitives",
         "rope": "Metal/Primitives",
         "tensorops": "Metal/TensorCore",
-        "turboquant": "Metal/KVCache",
+        "utility": "Metal/Primitives",
     ]
 
     private static func shaderURL(module: String) -> URL? {

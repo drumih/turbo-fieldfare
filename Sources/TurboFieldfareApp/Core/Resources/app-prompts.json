@@ -1,0 +1,37 @@
+[
+  {
+    "id": "paris",
+    "title": "Paris",
+    "prompt": "Plan a memorable first trip to Paris for a curious traveller. Give a compact three-day itinerary with morning, afternoon, and evening ideas; explain the easiest ways to get around; suggest the best seasons and two practical ways to control costs. Use clear headings, distinguish timeless advice from details that should be checked before travel, and keep the whole guide under 450 words."
+  },
+  {
+    "id": "fibonacci",
+    "title": "Write Fibonacci in Python",
+    "prompt": "Write a complete, executable Python 3 example that defines `fibonacci(n: int) -> list[int]` and returns the first n Fibonacci numbers starting with 0, 1. Reject negative n with `ValueError`, return `[]` for n = 0, use iteration rather than recursion, and include exactly three assertions covering n = 0, n = 1, and n = 7. After the code block, use one plain-text sentence without LaTeX notation to state the time complexity and distinguish output space from extra working space. Do not use external packages."
+  },
+  {
+    "id": "fieldfare",
+    "title": "Meet the fieldfare",
+    "prompt": "What makes the fieldfare's winter migration to Britain so remarkable? Explain where the birds come from, what they eat, and why they gather in flocks. Focus only on these facts, keep it accurate, and stay under 250 words."
+  },
+  {
+    "id": "cosine-similarity",
+    "title": "Why perpendicular means zero",
+    "prompt": "Show why two perpendicular unit vectors have cosine similarity zero. Use u = [1, 0] and v = [0, 1], calculate the dot product and both lengths step by step, then give the geometric intuition, the general formula, and explain why a zero-length vector makes cosine similarity undefined. Keep it under 250 words. Use plain text only, without LaTeX notation."
+  },
+  {
+    "id": "recommendation-systems",
+    "title": "How recommendations learn",
+    "prompt": "Explain how a film service can learn recommendations with collaborative filtering and matrix factorization. Use exactly four short titled sections: Interaction matrix; Latent factors; Training and ranking; Limits and evaluation. Make clear that a missing interaction is unknown rather than a negative rating, explain the user-vector/item-vector dot product and regularized learning from observed interactions, then cover held-out ranking evaluation, cold start, and popularity bias. Keep it accessible and technically correct."
+  },
+  {
+    "id": "matrix-multiplication",
+    "title": "Matrix multiplication",
+    "prompt": "In plain text under 400 words, teach matrix multiplication using A = [[1, 2], [3, 4]] and B = [[5, 6], [7, 8]]. Show one line for each row-by-column calculation and verify AB = [[19, 22], [43, 50]]. Then explain why the inner dimensions must match and state that an m x n matrix times an n x p matrix produces an m x p matrix. End with the general formula `C[i,j] = sum from k=1 to n of A[i,k] * B[k,j]`. Use no LaTeX, no second example, and end immediately after explaining that formula."
+  },
+  {
+    "id": "metal-matmul",
+    "title": "Metal matrix multiplication",
+    "prompt": "Write a compact Metal Shading Language kernel that multiplies row-major matrices A[M×K] and B[K×N] into C[M×N].\n\nUse one GPU thread per output element and a straightforward loop over K. Do not use tiling, threadgroup memory, helper functions, or optimizations. Pass M, K, and N in a constant parameter struct. Use thread_position_in_grid, check row and column bounds, and store A, B, and C in buffers 0, 1, and 2."
+  }
+]

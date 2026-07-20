@@ -13,9 +13,9 @@ public struct AppGenerationRequest: Equatable, Sendable {
 
     public init(modelDirectory: URL,
                 prompt: String,
-                maxNewTokens: Int = 1_024,
+                maxNewTokens: Int = 4_096,
                 maxContextTokens: Int = 4096,
-                temperature: Float = 1.0,
+                temperature: Float = 0.2,
                 topK: Int? = 64,
                 topP: Float? = 0.95,
                 repetitionPenalty: Float = 1.0,

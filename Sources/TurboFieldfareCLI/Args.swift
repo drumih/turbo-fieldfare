@@ -1,6 +1,7 @@
 public struct Args: Equatable, Sendable {
     public var model: String
-    public var prompt: String
+    public var prompt: String?
+    public var messagesFile: String?
     public var maxNew: Int
     public var maxContext: Int
     public var temperature: Float
@@ -12,10 +13,11 @@ public struct Args: Equatable, Sendable {
     public var quiet: Bool
 
     public init(model: String,
-                prompt: String,
+                prompt: String? = nil,
+                messagesFile: String? = nil,
                 maxNew: Int = 1_024,
                 maxContext: Int = 4096,
-                temperature: Float = 1.0,
+                temperature: Float = 0.2,
                 topK: Int? = 64,
                 topP: Float? = 0.95,
                 repetitionPenalty: Float = 1.0,
@@ -24,6 +26,7 @@ public struct Args: Equatable, Sendable {
                 quiet: Bool = false) {
         self.model = model
         self.prompt = prompt
+        self.messagesFile = messagesFile
         self.maxNew = maxNew
         self.maxContext = maxContext
         self.temperature = temperature
@@ -42,6 +45,8 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
     case missingValue(flag: String)
     case invalidValue(flag: String, value: String)
     case requiredMissing(String)
+    case mutuallyExclusive(String, String)
+    case modeMissing
 
     public var description: String {
         switch self {
@@ -50,24 +55,27 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
         case .missingValue(let flag): return "missing value for \(flag)"
         case .invalidValue(let flag, let value): return "invalid value for \(flag): \(value)"
         case .requiredMissing(let flag): return "required flag missing: \(flag)"
+        case .mutuallyExclusive(let a, let b): return "\(a) and \(b) are mutually exclusive"
+        case .modeMissing: return "one of --prompt or --messages-file is required"
         }
     }
 }
 
 extension Args {
     public static let usage = """
-    TurboFieldfareCLI — text completion with Gemma 4 26B-A4B
+    TurboFieldfareCLI — Gemma 4 26B-A4B text generation
 
-    usage: TurboFieldfareCLI --model <dir> --prompt <string> [options]
+    usage: TurboFieldfareCLI --model <dir> (--prompt <string> | --messages-file <path>) [options]
 
     required:
       --model <dir>             Path to a .gturbo model directory.
       --prompt <string>         Raw-completion prompt.
+      --messages-file <path>    JSON chat messages with role and content fields.
 
     options:
       --max-new <int>           Generated-token limit (default 1024).
       --max-context <int>       Context limit in tokens (default 4096).
-      --temperature <float>     Sampling temperature (default 1.0; 0 = greedy).
+      --temperature <float>     Sampling temperature (default 0.2; 0 = greedy).
       --top-k <int>             Top-k truncation, 1...256 (default 64; 0 = off).
       --top-p <float>           Nucleus truncation (default 0.95).
       --repetition-penalty <f>  Repetition penalty (default 1.0).
@@ -80,9 +88,10 @@ extension Args {
     public static func parse(_ argv: [String]) throws -> Args {
         var model: String?
         var prompt: String?
+        var messagesFile: String?
         var maxNew = 1_024
         var maxContext = 4096
-        var temperature: Float = 1.0
+        var temperature: Float = 0.2
         var topK: Int? = 64
         var topP: Float? = 0.95
         var repetitionPenalty: Float = 1.0
@@ -103,6 +112,8 @@ extension Args {
                 model = try takeValue(argv, &index, flag: flag)
             case "--prompt":
                 prompt = try takeValue(argv, &index, flag: flag)
+            case "--messages-file":
+                messagesFile = try takeValue(argv, &index, flag: flag)
             case "--max-new":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value), parsed > 0 else {
@@ -153,7 +164,10 @@ extension Args {
         }
 
         guard let model else { throw ArgsError.requiredMissing("--model") }
-        guard let prompt else { throw ArgsError.requiredMissing("--prompt") }
+        if prompt != nil && messagesFile != nil {
+            throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
+        }
+        if prompt == nil && messagesFile == nil { throw ArgsError.modeMissing }
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw ArgsError.invalidValue(
                 flag: "--top-p",
@@ -161,6 +175,7 @@ extension Args {
         }
         return Args(model: model,
                     prompt: prompt,
+                    messagesFile: messagesFile,
                     maxNew: maxNew,
                     maxContext: maxContext,
                     temperature: temperature,

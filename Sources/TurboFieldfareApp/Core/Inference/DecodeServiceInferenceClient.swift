@@ -316,7 +316,6 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             expertCachePolicy: options.expertCachePolicy.rawValue,
             prefillEnabled: options.prefillEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
-            turboQuantKVEnabled: options.turboQuantKVEnabled,
             rdadvisePolicy: options.rdadvisePolicy.rawValue,
             modelVerification: options.modelVerification.rawValue)
     }
