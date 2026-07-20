@@ -109,6 +109,9 @@ struct InspectorView: View {
                         .frame(width: 36, alignment: .trailing)
                 }
             }
+            Text("0 uses deterministic greedy decoding. Higher values make sampling more varied.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Toggle("Top-K", isOn: $model.topKEnabled)
                 .toggleStyle(.switch)
             if model.topKEnabled {
