@@ -114,8 +114,8 @@ temperature to `0` for deterministic greedy output. The model can still repeat
 itself or give incorrect answers, so check important results.
 
 TurboFieldfare is text-only. It supports user and model messages, plus an
-optional system message at the start of a conversation. Tool calling, images,
-and audio are not supported.
+optional system message at the start of a conversation. Tool calling and image
+input are not supported.
 
 ### Mac app
 
