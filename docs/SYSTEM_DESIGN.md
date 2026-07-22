@@ -1,16 +1,14 @@
 # System design
 
-TurboFieldfare is a model-specific Swift and Metal runtime for text generation
-with Gemma 4 26B-A4B on Apple Silicon. Its defining constraint is an 8 GB
-machine running a text-only model installation of about 14.3 GB. The runtime
-therefore cannot treat the checkpoint as one resident allocation. It keeps the
-common language-model weights and working state available to Metal, stores the
-routed experts in per-layer files, and reads only the experts selected for the
-current work.
+TurboFieldfare is a Swift and Metal runtime for Gemma 4 26B-A4B on Apple
+Silicon. The text-only installation is about 14.3 GB, but the target machine
+has 8 GB of memory. The runtime keeps the common weights and working state
+available to Metal. It stores routed experts in per-layer files and reads only
+the experts chosen for the current token or prefill chunk.
 
-This document describes the current `production` path. The major wins,
-failures, and reversals belong in [the experiments that shaped
-TurboFieldfare](OPTIMIZATION_JOURNEY.md).
+This document covers the current `production` path. The [optimization
+journey](OPTIMIZATION_JOURNEY.md) covers the experiments, including the
+failures and changes we later reversed.
 
 Prefill and decode are the two execution modes used below. Prefill processes
 known prompt tokens in bounded chunks; decode generates one new token at a
@@ -24,34 +22,29 @@ Only a few properties of Gemma 4 determine most of the system design:
 - The model has 30 transformer layers: 25 sliding-window-attention layers and
   5 full-attention layers.
 - Every layer has 128 routed experts. The router selects 8 for each token.
-- A dense shared expert runs in parallel with the routed branch and is added
-  without a routing weight.
+- A dense shared expert forms a separate branch alongside the routed experts.
+  Its output is added without a routing weight.
 - The embedding and language-model head share the same quantized weights.
 - The pinned instruction checkpoint uses MLX affine quantization: packed 4-bit
   values with a BF16 scale and BF16 bias for each group of 64 weights. Router
   projections use 8-bit weights; shared and routed experts use 4-bit weights.
 
-The production FP16 KV cache uses a mixed per-layer layout. The 25
-sliding-window layers attend to the latest 1,024 tokens and store K/V in bounded
-1,152-row rings, with 128 extra physical rows for chunked-prefill writes. The 5
-full-attention layers use append-only linear storage and retain the complete
-context. Full-attention layers reuse the raw K projection as the raw V source,
-but the two paths immediately diverge: K receives scaled per-head normalization
-and RoPE, while V receives a separate no-scale per-head normalization and no
-RoPE. The cache therefore stores them separately.
+For a visual introduction to Gemma 4's hybrid attention and MoE structure, see
+[A Visual Guide to Gemma 4](https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-gemma-4).
 
-The runtime also preserves Gemma-specific details that affect correctness:
-NeoX RoPE, attention scale `1.0`, no router-logit softcap, parallel shared and
-routed FFNs, a learned layer scalar, and a final logit softcap of `30.0`.
+The production FP16 KV cache uses two layouts. The 25 sliding-window layers
+attend to the latest 1,024 tokens and store K/V in 1,152-row rings. The extra
+128 physical rows allow chunked-prefill writes. The 5 full-attention layers use
+append-only storage and keep the complete context.
 
-## Instruction framing
+In a full-attention layer, the raw K projection supplies both the raw K and V
+values. The paths then split. K receives scaled per-head normalization and
+RoPE. V receives a separate no-scale normalization and no RoPE, so the cache
+stores K and V separately.
 
-The Mac app and CLI `--messages-file` mode format user, model, and optional
-leading system messages with the pinned text-only Gemma 4 chat format. The
-runtime stops generation on `<eos>` (token 1), `<turn|>` (token 106), or
-`<|tool_response>` (token 50). The third token is a defensive boundary; tool
-calling itself is not supported. CLI `--prompt` bypasses this framing for raw
-completion and reproducible comparisons.
+The runtime must also match these Gemma-specific details: NeoX RoPE, attention
+scale `1.0`, no router-logit softcap, parallel shared and routed FFNs, a learned
+layer scalar, and a final logit softcap of `30.0`.
 
 ## Source weights and bounded repack
 
@@ -60,7 +53,7 @@ The installer reads
 at revision `0d77464eeb233a2da68ebf9d7dc4edaac7db956d`. The accepted source index has
 SHA-256 `bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13`.
 The installer does not download a complete Hugging Face snapshot or
-materialize a safetensors shard.
+write a complete safetensors shard to disk.
 
 Instead, the repacker:
 
@@ -69,15 +62,18 @@ Instead, the repacker:
 3. copies packed values, scales, and biases through tile-sized scratch;
 4. writes resident tensors and routed experts directly into their final
    locations;
-5. omits vision and audio tensors; and
-6. writes `manifest.json` only after every output file is complete and hashed.
+5. omits the vision tensors; and
+6. writes `manifest.json` after every file listed in it is complete and hashed,
+   then writes `verified-install.json`.
 
-The repack changes layout, not quantized values. There is no dequantize and
-requantize step. The largest payload and scratch heap in the validated install
-were each 524,288 bytes; the full 15 GB-class source never exists in a Swift
-heap buffer. See the [command-line instructions](../README.md#command-line-interface)
-for installation and [IO-10](experiments/summaries/01-model-install-and-expert-io.md#io-10)
-for the validation record.
+The repacker changes the layout but copies the quantized values unchanged. It
+never dequantizes and requantizes them. In the validated install, the largest
+payload and scratch heap were 524,288 bytes each. The full 15 GB-class source
+never exists in a Swift heap buffer.
+
+See the [command-line instructions](../README.md#command-line-interface) for
+installation. The [optimization journey](OPTIMIZATION_JOURNEY.md#explicit-reads-made-expert-streaming-work)
+records the current instruction-checkpoint validation.
 
 ## The `.gturbo` directory
 
@@ -105,37 +101,39 @@ gemma4.gturbo/
 `model_weights.bin` contains the embedding/head, attention projections,
 routers, shared experts, norms, and scalar parameters. Each `layer_XX.bin`
 contains 128 fixed-stride routed-expert blobs for one layer. `layout.json`
-describes the packed subregions within each blob. The expert stride is page
-aligned, and each sub-tensor carries its own offset; Metal kernels bind
-subregions of an existing buffer rather than creating one buffer per tensor.
+describes the packed subregions within each blob.
 
-Production manifests must describe the model's group-64 affine quantization:
-4-bit embedding and attention weights, an 8-bit router, 4-bit routed experts,
-and a 4-bit or historical 8-bit shared expert. The instruction checkpoint uses
-4-bit shared experts. A production manifest with missing or incompatible
-quantization metadata is rejected.
+The expert stride is page aligned, and each sub-tensor has its own offset.
+Metal kernels bind subregions of an existing buffer instead of creating one
+buffer per tensor.
 
-The final manifest is both the install commit marker and the runtime contract.
-It records architecture fields, file sizes, and SHA-256 hashes; a missing
-manifest means a partial install. `verified-install.json` separately binds a
-completed verification to that manifest, directory path, and file set.
+The current production manifest describes the model's group-64 affine
+quantization: 4-bit embedding and attention weights, an 8-bit router, and
+4-bit shared and routed experts. Missing or incompatible quantization metadata
+is rejected.
 
-Full SHA-256 verification remains the default. It verifies the common files at
-load and each routed-expert layer file on first use. The explicit
-trusted-receipt policy still hashes `manifest.json`, `model_weights.bin`, and
-`packed_experts/layout.json`; for the large layer files, it validates the
-receipt binding, manifest metadata, layout, and current size instead of reading
-every file end to end again. On load, TurboFieldfare rejects unknown format
-flags, incompatible architecture values, missing layer files, invalid
-alignment, or a failed integrity check.
+`manifest.json` marks the installation as complete and defines what the runtime
+may load. It records the architecture, file sizes, and SHA-256 hashes. Without
+it, the runtime treats the installation as partial. `verified-install.json`
+records which manifest, directory, and files were verified.
+
+By default, TurboFieldfare hashes `manifest.json`, `model_weights.bin`, and
+`packed_experts/layout.json` at load, then hashes each routed-expert layer file
+on first use. The trusted-receipt policy is an explicit alternative. It still
+hashes the same three common files. For large layer files, it checks the
+receipt binding, manifest metadata, layout, and current file size instead of
+hashing the complete file again.
+
+In both modes, the runtime rejects unknown format flags, incompatible
+architecture values, missing layer files, invalid alignment, and failed
+integrity checks.
 
 ## Resource split
 
-The tables distinguish file size, virtual allocation, and physical residency.
-They are not interchangeable. The common-model file is about 1.35 GB in
-decimal units. Slot pages also consume physical memory when filled, while
-macOS may keep a separate, opportunistic file-cache copy of recently read
-expert data.
+These tables separate three different numbers: file size, virtual allocation,
+and physical memory in use. The common-model file is about 1.35 GB in decimal
+units. Filled slot pages also use physical memory, and macOS may retain another
+copy of recently read expert data in its file cache.
 
 Resident and reusable app-owned resources:
 
@@ -143,7 +141,7 @@ Resident and reusable app-owned resources:
 | --- | ---: | --- |
 | Common model file | 1,353,771,068 bytes | Read-only file mapping wrapped by Metal buffers. |
 | FP16 KV cache at 4K | About 305 MiB | App-owned. The 25 sliding-window layers use bounded 1,152-row rings; the 5 full-attention layers use linear storage sized for the requested context. |
-| Reusable runtime scratch | 15.8 MiB for the production 128-token prefill arena, plus about 2 MiB of split-attention scratch and smaller decode buffers | App-owned and reused across layers or chunks. |
+| Reusable runtime scratch | About 15.6 MiB for the production 128-token prefill arena, plus about 2 MiB of split-attention scratch and smaller decode buffers | App-owned and reused across layers or chunks. |
 
 Streamed expert resources:
 
@@ -153,31 +151,26 @@ Streamed expert resources:
 | Routed-expert files | 12,897,484,800 bytes (12.01 GiB) on disk | Thirty per-layer files. Only selected blobs enter explicit slots; the files are not mapped as one resident pool. |
 | macOS unified file cache | Dynamic | OS-owned second-chance cache. It may make a `pread` cheap, but it is not a guaranteed part of the app budget. |
 
-The default 16-slot capacity is per layer, not a promise that every slot page
-is resident immediately after load. Process RSS and physical footprint depend
-on which layers and experts have been touched, file-cache state, and memory
-pressure. For that reason, the table does not turn static byte counts into an
-RSS claim.
-
-The runtime stores KV data in FP16. Its 25 sliding-window layers use a fixed
-1,152-row circular cache: 1,024 rows for the attention window and 128 extra
-rows for chunked writes. Only the five full-attention layers grow with the
-selected context length.
+Each opened layer has 16 expert slots, but untouched slot pages are not
+necessarily resident. RSS and physical footprint depend on the layers and
+experts used, file-cache state, and memory pressure. Static capacity therefore
+does not predict process RSS.
 
 ## Load and ownership
 
 The loader maps `model_weights.bin` read-only and wraps its aligned regions in
-`MTLBuffer` objects without copying their contents into Swift collections.
-Routed-expert files open lazily. Each opened layer owns one file descriptor and
-a fixed group of slot buffers allocated with 2 MiB alignment. A slot is
-allocated once, registered with Metal through `makeBuffer(bytesNoCopy:)`, filled
-with `pread`, and reused until the layer streamer is released.
+`MTLBuffer` objects without copying them into Swift collections.
 
-The expert cache records which expert occupies each slot. The production
-policy is LFU with recency as the tie-breaker. A hit reuses the existing
-buffer. A miss assigns an evictable slot and issues a bounded read. Distinct
-misses can run on the I/O executor in parallel, but no two reads may write the
-same slot concurrently.
+Routed-expert files open lazily. Each opened layer owns one file descriptor and
+a fixed group of slot buffers with 2 MiB alignment. Each slot is allocated
+once, registered with Metal through `makeBuffer(bytesNoCopy:)`, filled with
+`pread`, and reused until the layer streamer is released.
+
+The expert cache records which expert occupies each slot. Production uses
+least-frequently used (LFU) eviction with recency as the tie-breaker. A hit
+reuses the existing buffer. A miss assigns an evictable slot and starts a
+bounded read. Distinct misses can run in parallel, but no two reads may write
+the same slot concurrently.
 
 ```mermaid
 flowchart LR
@@ -230,11 +223,23 @@ flowchart LR
     linkStyle default stroke:#64748B,stroke-width:1.5px
 ```
 
+## Instruction framing
+
+The Mac app and CLI `--messages-file` mode use the pinned text-only Gemma 4 chat
+format. The app wraps one user prompt. `--messages-file` accepts user and
+assistant messages plus an optional leading system message. Assistant messages
+render with Gemma's `model` role.
+
+The runtime stops generation on `<eos>` (token 1), `<turn|>` (token 106), or
+`<|tool_response>` (token 50). The third token is a defensive boundary; tool
+calling itself is not supported. CLI `--prompt` bypasses chat framing for raw
+completion and reproducible comparisons.
+
 ## Prefill
 
-The production profile processes a prompt in chunks of at most 128 tokens.
-The runner remains layer-major: it advances a bounded group of rows through
-each transformer layer without materializing prompt-wide expert activations.
+The production profile handles up to 128 prompt tokens at a time. Execution
+stays layer-major: it moves each bounded group of rows through the transformer
+one layer at a time, without holding expert activations for the full prompt.
 
 For each chunk and layer, TurboFieldfare:
 
@@ -242,24 +247,24 @@ For each chunk and layer, TurboFieldfare:
 - applies causal sliding-window or full attention and writes K/V rows;
 - computes router outputs for all rows in the chunk;
 - groups token/expert pairs into bounded routed-MoE work;
-- streams at most eight experts per routed tile; one tile may remain queued
-  while the next is fetched, so both slot sets fit within the 16-slot cache
-  without reusing live slots; and
+- streams experts in tiles of at most eight;
+- may fetch the next tile while GPU work for the current tile remains queued,
+  with both tiles fitting in the 16-slot cache;
+- never reuses a slot while queued GPU work still owns it; and
 - combines the resident shared branch and routed branch before the layer tail.
 
-The staged affine MPP path is used for eligible 4-bit prefill projections. It
-unpacks source-affine tiles into bounded FP16 staging and passes them to Metal
-Performance Primitives. Grouped routed MoE reuses argument and activation
-scratch. The language-model head runs only for the final prompt row needed to
-begin generation.
+Eligible 4-bit prefill projections use staged affine Metal Performance
+Primitives (MPP). The runtime unpacks each tile of affine-quantized weights into
+bounded FP16 staging, then passes it to MPP. Grouped routed MoE reuses its
+argument and activation scratch. The language-model head runs only for the
+final prompt row needed to start generation.
 
 ## Decode
 
-Generation advances one token at a time. Each layer has a CPU and I/O handoff
-between the measured `cb1` and `cb2` phases because the CPU must read the
-router's top-8 result before it knows which expert files to read. Shared-expert
-and cached routed-expert work may use additional command buffers so they can
-overlap that handoff.
+Decode generates one token at a time. In each layer, the first Metal
+command-buffer phase, `cb1`, produces the router's top-8 result. The CPU must
+read those expert IDs before it knows which files to access, creating a CPU and
+I/O handoff before `cb2`.
 
 The resident router normalizes and scales the layer's post-attention hidden
 state, then projects it to 128 expert scores:
@@ -272,21 +277,22 @@ top8         = highest_8(logits)
 weights      = softmax(logits[top8]) * per_expert_scale[top8]
 ```
 
-The GPU writes eight expert IDs and eight FP16 routing weights. The CPU must
-read those IDs before it can plan cache hits, evictions, and file reads. This
-data-dependent handoff separates resident GPU work from streamed weights.
+The GPU returns eight expert IDs and eight FP16 routing weights. The IDs drive
+the cache-hit, eviction, and file-read plan.
 
-The last-run diagnostics divide the layer loop into three timing buckets:
+The implementation labels this handoff as three phases:
 
-| Bucket | Work |
+| Phase | Work |
 | --- | --- |
 | `cb1` | Metal runs input norm, Q/K/V projections, RoPE and KV writes, attention, output projection, post-attention setup, and the router. It completes when the top-8 IDs are ready for CPU readback. |
 | `io` | The CPU looks up the top-8 experts in the layer cache and fills only missing slots with `pread`. Metal starts the resident shared-expert branch after `cb1` so it overlaps these reads. Cached routed-expert work can also begin early. |
 | `cb2` | Metal finishes the routed top-8 branch, reduces it with the router weights, combines it with the shared branch, and applies the post-FFN norms, residual, and layer scalar. |
 
-These buckets overlap; they are not three serial pauses. Shared-expert GPU work
-overlaps `io`, and the command-buffer pipeline can defer the `cb2` wait while
-the next layer begins.
+Work overlaps across these phases. The command-buffer pipeline can delay
+waiting for `cb2` while the CPU encodes and queues the next layer. The
+diagnostic counters also use different clocks: `cb1` and `cb2` record CPU
+encode-and-commit overhead, while `io` records awaited read time. They are not
+three serial or directly comparable durations.
 
 ```mermaid
 flowchart TD
@@ -294,6 +300,7 @@ flowchart TD
     C1 --> R["CPU reads top-8 expert IDs"]
     R --> P["LFU plan: hits, misses, slot ownership"]
     P --> IO["parallel bounded pread for misses"]
+    P -->|cache hits| M
     C1 --> S["resident shared expert"]
     IO --> M["persistent routed MoE"]
     S --> T["layer tail: combine + residual"]
@@ -314,44 +321,46 @@ flowchart TD
     linkStyle default stroke:#64748B,stroke-width:1.5px
 ```
 
-The shared expert depends on the post-attention hidden state but not on routed
-weights, so its GPU work overlaps expert reads. The routed kernel consumes the
-selected slot buffers after the reads finish. Queue order ensures the layer
-tail sees both branches. After layer 30, the tied 4-bit head either emits a
-greedy token through the fused rows path or produces logits for sampling.
-For sampled generation, the production path applies full-distribution Top-P,
-then Top-K, then temperature. The default Top-K `64` path uses a specialized
-1,024-to-64 reduction; temperature `0` bypasses sampling and selects greedy
-output.
+Routed work for cache hits may start while reads for missing experts are still
+running. Work for a cache miss starts after its slot is filled. Queue order
+makes the layer tail wait for both the shared and routed branches.
+
+After layer 30, the tied 4-bit head has two output modes. A pure-greedy
+configuration (temperature `0` and repetition penalty `1`) returns the argmax
+token directly. Other configurations write the full logits vector for the
+sampler.
+
+Sampling applies Top-P to the full distribution, then Top-K, then temperature.
+The default Top-K `64` path uses a specialized 1,024-to-64 reduction.
+A pure-greedy configuration bypasses the sampler through the fused head. In the
+logits path, temperature `0` selects the argmax after any repetition penalty.
 
 ## Metal execution
 
-TurboFieldfare compiles its Metal source at runtime. The decode path uses
-custom affine INT4 and INT8 GEMV kernels that consume the checkpoint's packed
-values, BF16 scales, and BF16 biases directly. The MPP prefill path instead
-dequantizes one bounded weight tile into FP16 threadgroup memory and passes FP16
-tensors to `matmul2d`. The relevant Apple API sources are collected under
-[Apple Metal](IMPLEMENTATION_REFERENCES.md#apple-metal). The routed MoE kernels
-fuse affine decode, GeGLU, and the weighted expert reduction.
+TurboFieldfare compiles its Metal source at runtime. Decode uses custom affine
+INT4 and INT8 GEMV kernels that consume the checkpoint's packed values, BF16
+scales, and BF16 biases directly. MPP prefill dequantizes one bounded weight
+tile into FP16 threadgroup memory and passes FP16 tensors to `matmul2d`. The
+routed MoE kernels fuse affine decode, GeGLU, and the weighted expert reduction.
+The relevant Apple API sources are listed under
+[Apple Metal](IMPLEMENTATION_REFERENCES.md#apple-metal).
 
-Packed-weight load width follows the proven alignment of each live path.
-Resident INT4 GEMVs and routed gate/up projections assemble each 4-byte chunk
-from two `ushort` loads because their offsets are only guaranteed to be
-2-byte aligned. The current routed down-projection layout satisfies 4-byte
-alignment and uses `uint` loads. A wider load is incorrect when the live address
-does not satisfy its alignment.
+Packed-weight loads use the alignment guaranteed by each path. Resident INT4
+GEMVs and routed gate/up projections build each 4-byte value from two `ushort`
+loads because their offsets may be only 2-byte aligned. Routed down-projection
+offsets are 4-byte aligned, so that path uses `uint` loads. Wider loads are
+valid only when the address has matching alignment.
 
-The runtime uses targeted fusions around stable dataflow boundaries: QKV
-projection and epilogue, post-attention setup, shared-expert phase 1, the layer
-tail, and the tied head. It does not try to make the whole transformer layer
-one monolithic kernel. MPP is used where prefill supplies enough rows to suit
-matrix operations; single-token decode remains a custom GEMV workload.
+The runtime fuses operations where the dataflow is stable: the QKV projection
+and epilogue, post-attention setup, shared-expert phase 1, the layer tail, and
+the tied head. It keeps the rest of the transformer layer split across kernels.
+MPP handles prefill projections with enough rows to benefit from matrix
+operations. Single-token decode stays on custom GEMV kernels.
 
 ## Code map
 
-These entry points lead from the design above into the implementation. Each
-item names the owning types or hot-path files; follow their references for
-helpers and tests.
+These files are the main entry points for the design described above. Their
+references lead to the supporting code and tests.
 
 - **Model contract and runtime path.** [`ArchConfig`](../Sources/TurboFieldfare/Infrastructure/ModelIO/ModelTypes.swift)
   defines the fixed Gemma 4 shape; [`RuntimeConfiguration`](../Sources/TurboFieldfare/Runtime/Configuration/RuntimeConfiguration.swift)
@@ -397,9 +406,9 @@ helpers and tests.
   paths, even where the raw projection is shared.
 - Every queued GPU consumer owns its slot and scratch bank until completion.
   CPU reuse cannot race an earlier command buffer.
-- Reordered floating-point kernels use deterministic within-arm checks plus
-  reference-relative quality gates. Exact identity is not used as a universal
-  quality metric.
+- Kernels that reorder floating-point operations must remain deterministic
+  within each tested path and stay within the reference tolerances. Exact
+  output identity is not required across every path.
 - No normal install, load, test, or benchmark may place a whole model, shard,
   expert, or source tensor in Swift heap memory.
 - Only one real-model process runs at a time on the 8 GB validation host.
@@ -409,14 +418,19 @@ helpers and tests.
 ## Scope and limitations
 
 The current runtime supports text-only generation with the pinned Gemma 4
-26B-A4B instruction checkpoint. The Mac app offers 4K, 8K, 16K, 32K, and 64K
-context lengths. Vision, audio, training, fine-tuning, server batching, and
-general model support are outside the current scope.
+26B-A4B instruction checkpoint. The source model supports image input, but
+TurboFieldfare omits its vision tower. Gemma 4 26B-A4B has no audio encoder.
+
+The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Current
+acceptance evidence covers up to 4K; memory, correctness, and speed beyond 4K
+have not been characterized. Vision input, training, fine-tuning, server
+batching, and general model support are outside the current scope.
 
 TurboFieldfare is a research system. The Mac app exposes a small set of typed
-runtime controls. The production path uses FP16 KV, exact split-K/V attention,
-a 16-slot LFU expert cache, chunked prefill, staged affine MPP prefill, and
-batched routed MoE prefill, with RDADVISE off.
+runtime controls. The production path uses FP16 KV, exact split-K/V
+attention, a 16-slot LFU expert cache, chunked prefill, staged affine MPP
+prefill, and batched routed MoE prefill. File-read advice (`RDADVISE`) is off by
+default.
 
 ## Read next
 
