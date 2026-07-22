@@ -419,7 +419,7 @@ references lead to the supporting code and tests.
 
 The current runtime supports text-only generation with the pinned Gemma 4
 26B-A4B instruction checkpoint. The source model supports image input, but
-TurboFieldfare omits its vision tower. Gemma 4 26B-A4B has no audio encoder.
+TurboFieldfare omits its vision tower.
 
 The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Current
 acceptance evidence covers up to 4K; memory, correctness, and speed beyond 4K
