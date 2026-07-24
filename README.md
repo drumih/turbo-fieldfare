@@ -83,7 +83,7 @@ TurboFieldfare provides a native Mac app and a command-line interface. Both
 use the same `.gturbo` model directory. Start with the Mac app; use the CLI for
 scripts, reproducible runs, and direct control over generation settings.
 
-The Swift package exposes five products:
+The Swift package exposes six products:
 
 | Product | Purpose |
 | --- | --- |
@@ -92,6 +92,7 @@ The Swift package exposes five products:
 | `TurboFieldfareDecodeService` | One-shot local model and Metal owner used by the Mac app |
 | `TurboFieldfareCLI` | Command-line instruction chat and raw completion |
 | `TurboFieldfareRepack` | Streaming model installer and install verifier |
+| `TurboFieldfareServer` | LM Studio-style OpenAI-compatible HTTP API server |
 
 ### Requirements
 
@@ -230,6 +231,41 @@ swift run -c release TurboFieldfareCLI --help
 
 Generated text goes to standard output. Timing statistics go to standard error;
 add `--quiet` to suppress that footer in scripts.
+
+### API server
+
+`TurboFieldfareServer` serves an LM Studio-style OpenAI-compatible HTTP API
+over an existing `.gturbo` installation. The model loads once at startup,
+before the port binds; a listening socket always means ready.
+
+```bash
+swift run -c release TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --port 1234
+```
+
+Endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness check |
+| `GET /v1/models` | OpenAI model list with the served model id |
+| `POST /v1/chat/completions` | Chat completion; `stream: true` returns SSE chunks |
+| `POST /v1/completions` | Raw completion without chat formatting |
+
+Point any OpenAI client at `http://127.0.0.1:1234/v1`. Supported request
+fields: `messages`/`prompt`, `temperature`, `top_p`, `max_tokens` (or
+`max_completion_tokens`), `stop`, `seed`, `stream`, and
+`stream_options.include_usage`. Roles are `system`, `user`, and `assistant`;
+tool calling and `n > 1` are rejected. Generation defaults match the CLI
+(temperature `0.2`, Top-P `0.95`, Top-K `64`).
+
+One generation runs at a time — the runtime's single-in-flight contract.
+Concurrent requests queue FIFO and are served in arrival order. Disconnecting
+a streaming client cancels its decode.
+
+Useful flags: `--host` (default `127.0.0.1`), `--port` (default `1234`),
+`--max-context`, `--model-id` (reported by `/v1/models`), `--quiet`.
 
 ## Test and contribute
 

@@ -13,9 +13,11 @@ let package = Package(
         .executable(name: "TurboFieldfareCLI", targets: ["TurboFieldfareCLI"]),
         .executable(name: "TurboFieldfareMac", targets: ["TurboFieldfareMac"]),
         .executable(name: "TurboFieldfareDecodeService", targets: ["TurboFieldfareDecodeService"]),
+        .executable(name: "TurboFieldfareServer", targets: ["TurboFieldfareServer"]),
     ],
     dependencies: [
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
     ],
     targets: [
         .target(
@@ -79,6 +81,19 @@ let package = Package(
             ]
         ),
         .target(
+            name: "TurboFieldfareServerCore",
+            dependencies: [
+                "TurboFieldfare",
+                .product(name: "Hummingbird", package: "hummingbird"),
+            ],
+            path: "Sources/TurboFieldfareServer/Core"
+        ),
+        .executableTarget(
+            name: "TurboFieldfareServer",
+            dependencies: ["TurboFieldfareServerCore"],
+            path: "Sources/TurboFieldfareServer/Command"
+        ),
+        .target(
             name: "TurboFieldfareValidationSupport",
             dependencies: ["TurboFieldfare"],
             path: "Sources/TurboFieldfareValidation/Support"
@@ -102,6 +117,14 @@ let package = Package(
             name: "TurboFieldfareMacPresentationTests",
             dependencies: ["TurboFieldfareMacPresentation"],
             path: "Tests/TurboFieldfareApp/MacPresentation"
+        ),
+        .testTarget(
+            name: "TurboFieldfareServerTests",
+            dependencies: [
+                "TurboFieldfareServerCore",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ],
+            path: "Tests/TurboFieldfareServer"
         ),
     ]
 )
