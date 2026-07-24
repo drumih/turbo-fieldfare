@@ -19,6 +19,19 @@ public enum SupportedModelSource {
             outputDir: outputDirectory.path,
             overwrite: overwrite,
             token: token,
-            retainPartialOnFailure: retainPartialOnFailure)
+            retainPartialOnFailure: retainPartialOnFailure,
+            session: Self.downloadSession)
     }
+
+    /// URLSession.shared applies a 60 s per-request timeout that resets only
+    /// when data arrives; a single stalled byte-range on the Hugging Face CDN
+    /// (observed twice at ~3.3 GB into the first shard) then aborts the whole
+    /// ~14.6 GB install. Allow 5 minutes of silence per range request; the
+    /// retry policy still bounds genuinely dead connections.
+    private static let downloadSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 300
+        config.timeoutIntervalForResource = 7 * 24 * 3600
+        return URLSession(configuration: config)
+    }()
 }
