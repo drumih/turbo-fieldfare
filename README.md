@@ -83,7 +83,7 @@ TurboFieldfare provides a native Mac app and a command-line interface. Both
 use the same `.gturbo` model directory. Start with the Mac app; use the CLI for
 scripts, reproducible runs, and direct control over generation settings.
 
-The Swift package exposes five products:
+The Swift package exposes six products:
 
 | Product | Purpose |
 | --- | --- |
@@ -92,6 +92,7 @@ The Swift package exposes five products:
 | `TurboFieldfareDecodeService` | One-shot local model and Metal owner used by the Mac app |
 | `TurboFieldfareCLI` | Command-line instruction chat and raw completion |
 | `TurboFieldfareRepack` | Streaming model installer and install verifier |
+| `TurboFieldfareServer` | LM Studio-style OpenAI-compatible HTTP API server |
 
 ### Requirements
 
@@ -230,6 +231,56 @@ swift run -c release TurboFieldfareCLI --help
 
 Generated text goes to standard output. Timing statistics go to standard error;
 add `--quiet` to suppress that footer in scripts.
+
+### API server
+
+`TurboFieldfareServer` serves an LM Studio-style OpenAI-compatible HTTP API
+over an existing `.gturbo` installation. The model loads once at startup,
+before the port binds; a listening socket always means ready.
+
+```bash
+swift run -c release TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --port 1234
+```
+
+Endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Liveness check |
+| `GET /v1/models` | OpenAI model list with the served model id |
+| `POST /v1/chat/completions` | Chat completion; `stream: true` returns SSE chunks |
+| `POST /v1/completions` | Raw completion without chat formatting |
+| `POST /v1/messages` | Anthropic Messages API; `stream: true` returns Anthropic SSE events |
+
+Point any OpenAI client at `http://127.0.0.1:1234/v1`. Supported request
+fields: `messages`/`prompt`, `temperature`, `top_p`, `max_tokens` (or
+`max_completion_tokens`), `stop`, `seed`, `stream`, and
+`stream_options.include_usage`. Roles are `system`, `user`, and `assistant`;
+tool calling, `response_format`, and any `n` other than `1` are rejected. Generation defaults match the CLI
+(temperature `0.2`, Top-P `0.95`, Top-K `64`).
+
+`POST /v1/messages` speaks the Anthropic Messages API on the same port.
+`max_tokens` is required, message roles are limited to `user` and
+`assistant`, and `system` (a string or text blocks) becomes a leading system
+message. Supported fields: `model` (echoed only), `messages`, `system`,
+`max_tokens`, `temperature`, `top_p`, `stop_sequences`, and `stream`.
+`tools`, `tool_choice`, `thinking`, `metadata`, and `n > 1` are rejected
+with a 400. Streaming emits the standard `message_start` →
+`content_block_*` → `message_delta` → `message_stop` event sequence.
+
+One generation runs at a time — the runtime's single-in-flight contract.
+Concurrent requests queue FIFO and are served in arrival order. Disconnecting
+a streaming client cancels its decode.
+
+The server has no authentication and no rate limiting. It binds to
+`127.0.0.1` by default and is meant for local use. Binding it to a routable
+address exposes unauthenticated inference to the network; put it behind an
+authenticating reverse proxy if you need remote access.
+
+Useful flags: `--host` (default `127.0.0.1`), `--port` (default `1234`),
+`--max-context`, `--model-id` (reported by `/v1/models`), `--quiet`.
 
 ## Test and contribute
 
