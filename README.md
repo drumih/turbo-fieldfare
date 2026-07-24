@@ -258,7 +258,7 @@ Point any OpenAI client at `http://127.0.0.1:1234/v1`. Supported request
 fields: `messages`/`prompt`, `temperature`, `top_p`, `max_tokens` (or
 `max_completion_tokens`), `stop`, `seed`, `stream`, and
 `stream_options.include_usage`. Roles are `system`, `user`, and `assistant`;
-tool calling and `n > 1` are rejected. Generation defaults match the CLI
+tool calling, `response_format`, and any `n` other than `1` are rejected. Generation defaults match the CLI
 (temperature `0.2`, Top-P `0.95`, Top-K `64`).
 
 `POST /v1/messages` speaks the Anthropic Messages API on the same port.
@@ -273,6 +273,11 @@ with a 400. Streaming emits the standard `message_start` →
 One generation runs at a time — the runtime's single-in-flight contract.
 Concurrent requests queue FIFO and are served in arrival order. Disconnecting
 a streaming client cancels its decode.
+
+The server has no authentication and no rate limiting. It binds to
+`127.0.0.1` by default and is meant for local use. Binding it to a routable
+address exposes unauthenticated inference to the network; put it behind an
+authenticating reverse proxy if you need remote access.
 
 Useful flags: `--host` (default `127.0.0.1`), `--port` (default `1234`),
 `--max-context`, `--model-id` (reported by `/v1/models`), `--quiet`.

@@ -299,6 +299,63 @@ struct GenerationSessionTests {
                                              sampling: SamplingParams())
         #expect(outcome.text == "Hello, world")
     }
+
+    /// max_tokens near Int.max must produce a 400-class error, not trap on
+    /// checked `promptTokens + requested` overflow and kill the process.
+    @Test func hugeMaxTokensRejectedWithoutOverflow() async {
+        let session = makeSession(FakeTokenGenerator())
+        await #expect(
+            throws: GenerationRequestError.contextOverflow(prompt: 8, maxTokens: Int.max, maxContext: 64)
+        ) {
+            try await session.chat(
+                messages: [ChatMessage(role: "user", content: "hi")],
+                sampling: SamplingParams(maxTokens: Int.max))
+        }
+    }
+
+    /// +Inf passes `temperature >= 0` and would otherwise fail deep in the
+    /// runtime; reject it at the boundary like any other invalid value.
+    @Test func infiniteTemperatureRejected() async {
+        let session = makeSession(FakeTokenGenerator())
+        await #expect(throws: GenerationRequestError.unsupportedParameter("temperature must be >= 0")) {
+            try await session.chat(messages: [ChatMessage(role: "user", content: "hi")],
+                                   sampling: SamplingParams(temperature: .infinity))
+        }
+    }
+
+    /// A task cancelled exactly when the free slot is handed to it must not
+    /// wedge the slot: releaseSlot is installed before the cancellation
+    /// check, so the next request still runs.
+    @Test func slotReleasedWhenCancelledAtHandoff() async throws {
+        struct Timeout: Error {}
+        let generator = FakeTokenGenerator()
+        let session = makeSession(generator)
+
+        let cancelled = Task {
+            try await session.chat(messages: [ChatMessage(role: "user", content: "hi")],
+                                   sampling: SamplingParams())
+        }
+        cancelled.cancel()
+        _ = try? await cancelled.value
+
+        // If the slot stayed wedged this hangs; bound the wait so the
+        // regression fails instead of stalling the suite.
+        try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                let outcome = try await session.chat(
+                    messages: [ChatMessage(role: "user", content: "next")],
+                    sampling: SamplingParams())
+                return outcome.text
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 5_000_000_000)
+                throw Timeout()
+            }
+            let text = try await group.next()
+            group.cancelAll()
+            #expect(text == "Hello, world")
+        }
+    }
 }
 
 @Suite("StopReason to finish_reason mapping")

@@ -3,12 +3,16 @@ import TurboFieldfare
 
 /// Bridges the Metal runtime to the Metal-free `TokenGenerating` seam.
 ///
-/// One instance per server, owned by the `GenerationSession` actor which
-/// serializes every call — the single-in-flight contract
-/// `RawCompletionScratch` requires. The runner is built once with
-/// `forceLogitsHead: true`: an API server mostly serves sampling configs, and
-/// the logits head also serves pure-greedy configs, so one runner covers all
-/// requests.
+/// One instance per server, owned by the `GenerationSession` actor. Metal
+/// state (`runner` / `scratch` / `context`) is touched only from `generate`,
+/// which the session's single-in-flight slot serializes. `tokenCount` runs
+/// outside the slot so bad requests fail fast with a 400; it only encodes via
+/// `GFTokenizer`, whose underlying `Tokenizer` protocol is `Sendable` with
+/// immutable post-load state, so concurrent encode/detokenize is safe.
+///
+/// The runner is built once with `forceLogitsHead: true`: an API server
+/// mostly serves sampling configs, and the logits head also serves
+/// pure-greedy configs, so one runner covers all requests.
 final class RealTokenGenerator: TokenGenerating, @unchecked Sendable {
     private let tokenizer: GFTokenizer
     private let runner: RealForwardRunner

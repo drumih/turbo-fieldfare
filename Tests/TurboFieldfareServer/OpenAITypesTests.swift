@@ -76,12 +76,29 @@ struct ChatCompletionRequestDecodingTests {
         {
           "messages": [{"role": "user", "content": "hi"}],
           "frequency_penalty": 0.5,
-          "logit_bias": {"1": 2},
-          "tools": [{"type": "function"}],
-          "response_format": {"type": "json_object"}
+          "logit_bias": {"1": 2}
         }
         """#)
         #expect(request.messages.count == 1)
+        #expect(!request.hasTools)
+        #expect(!request.hasToolChoice)
+        #expect(!request.hasResponseFormat)
+    }
+
+    @Test func unsupportedSemanticFieldsTracked() throws {
+        let request = try decode(#"""
+        {
+          "messages": [{"role": "user", "content": "hi"}],
+          "tools": [{"type": "function"}],
+          "tool_choice": "auto",
+          "response_format": {"type": "json_object"}
+        }
+        """#)
+        // Presence is tracked so the route layer can reject these with a 400
+        // instead of silently ignoring semantics the runtime cannot honor.
+        #expect(request.hasTools)
+        #expect(request.hasToolChoice)
+        #expect(request.hasResponseFormat)
     }
 
     @Test func nIsDecoded() throws {

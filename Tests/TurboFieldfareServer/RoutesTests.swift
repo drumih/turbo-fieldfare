@@ -96,6 +96,59 @@ struct RoutesTests {
         }
     }
 
+    @Test func chatCompletionRejectsNZero() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/v1/chat/completions",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                body: jsonBody(#"{"messages": [{"role": "user", "content": "hi"}], "n": 0}"#)
+            ) { response in
+                #expect(response.status == .badRequest)
+            }
+        }
+    }
+
+    @Test func chatCompletionRejectsUnsupportedSemanticFields() async throws {
+        let bodies = [
+            #"{"messages": [{"role": "user", "content": "hi"}], "tools": [{"type": "function"}]}"#,
+            #"{"messages": [{"role": "user", "content": "hi"}], "tool_choice": "auto"}"#,
+            #"{"messages": [{"role": "user", "content": "hi"}], "response_format": {"type": "json_object"}}"#,
+        ]
+        for body in bodies {
+            try await makeApp().test(.router) { client in
+                try await client.execute(
+                    uri: "/v1/chat/completions",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: jsonBody(body)
+                ) { response in
+                    #expect(response.status == .badRequest)
+                    let object = try jsonObject(response.body)
+                    let error = try #require(object["error"] as? [String: Any])
+                    #expect(error["type"] as? String == "invalid_request_error")
+                }
+            }
+        }
+    }
+
+    @Test func chatCompletionRejectsHugeMaxTokens() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/v1/chat/completions",
+                method: .post,
+                headers: [.contentType: "application/json"],
+                // Int.max must yield a 400, not an integer-overflow trap.
+                body: jsonBody(#"{"messages": [{"role": "user", "content": "hi"}], "max_tokens": 9223372036854775807}"#)
+            ) { response in
+                #expect(response.status == .badRequest)
+                let object = try jsonObject(response.body)
+                let error = try #require(object["error"] as? [String: Any])
+                #expect(error["type"] as? String == "invalid_request_error")
+            }
+        }
+    }
+
     @Test func chatCompletionRejectsToolRole() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(

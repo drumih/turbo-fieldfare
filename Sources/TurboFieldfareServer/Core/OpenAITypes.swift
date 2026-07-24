@@ -73,6 +73,12 @@ public struct ChatCompletionRequest: Decodable, Sendable {
     public var stream: Bool?
     public var streamOptions: StreamOptions?
     public var n: Int?
+    /// Key-presence markers for unsupported semantic fields: the runtime
+    /// cannot honor them, so the route layer rejects the request instead of
+    /// silently generating unrestricted text.
+    public var hasTools = false
+    public var hasToolChoice = false
+    public var hasResponseFormat = false
 
     enum CodingKeys: String, CodingKey {
         case model
@@ -86,6 +92,9 @@ public struct ChatCompletionRequest: Decodable, Sendable {
         case stream
         case streamOptions = "stream_options"
         case n
+        case tools
+        case toolChoice = "tool_choice"
+        case responseFormat = "response_format"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -103,6 +112,9 @@ public struct ChatCompletionRequest: Decodable, Sendable {
         stream = try container.decodeIfPresent(Bool.self, forKey: .stream)
         streamOptions = try container.decodeIfPresent(StreamOptions.self, forKey: .streamOptions)
         n = try container.decodeIfPresent(Int.self, forKey: .n)
+        hasTools = container.contains(.tools)
+        hasToolChoice = container.contains(.toolChoice)
+        hasResponseFormat = container.contains(.responseFormat)
     }
 
     public init(model: String? = nil,

@@ -168,10 +168,12 @@ public actor GenerationSession {
     public func generate(_ prepared: PreparedGeneration,
                          onDelta: (@Sendable (String) -> Void)? = nil) async throws -> GenerationOutcome {
         try await acquireSlot()
-        // A waiter cancelled in the same instant the slot was handed over must
-        // not start a generation; check before touching the runtime.
-        try Task.checkCancellation()
+        // Installed before any further throwing call: a task cancelled exactly
+        // when the slot is handed over (cancelWaiter no-ops once the
+        // continuation was resumed) would otherwise throw below and leave
+        // slotBusy stuck, deadlocking every later request.
         defer { releaseSlot() }
+        try Task.checkCancellation()
         return try await generator.generate(prepared.input,
                                             sampling: prepared.sampling,
                                             effectiveMaxTokens: prepared.effectiveMaxTokens,
@@ -252,10 +254,12 @@ public actor GenerationSession {
         if let maxTokens = sampling.maxTokens, maxTokens <= 0 {
             throw GenerationRequestError.unsupportedParameter("max_tokens must be a positive integer")
         }
-        guard sampling.temperature >= 0 else {
+        // NaN fails `>= 0` and is rejected implicitly; +Inf passes it and
+        // would blow up later as a runtime error instead of a 400.
+        guard sampling.temperature.isFinite, sampling.temperature >= 0 else {
             throw GenerationRequestError.unsupportedParameter("temperature must be >= 0")
         }
-        guard sampling.topP > 0, sampling.topP <= 1 else {
+        guard sampling.topP.isFinite, sampling.topP > 0, sampling.topP <= 1 else {
             throw GenerationRequestError.unsupportedParameter("top_p must be in (0, 1]")
         }
     }
@@ -283,7 +287,9 @@ public actor GenerationSession {
                                           maxContext: Int) throws -> Int {
         guard promptTokens > 0 else { throw GenerationRequestError.emptyPrompt }
         if let requested {
-            guard promptTokens + requested <= maxContext else {
+            // Written overflow-safe: `promptTokens + requested` would trap on
+            // `max_tokens` near Int.max, killing the server instead of a 400.
+            guard requested <= maxContext, promptTokens <= maxContext - requested else {
                 throw GenerationRequestError.contextOverflow(prompt: promptTokens,
                                                              maxTokens: requested,
                                                              maxContext: maxContext)

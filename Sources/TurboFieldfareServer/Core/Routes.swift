@@ -37,8 +37,17 @@ private func handleChatCompletions(request: Request,
                                    session: GenerationSession) async -> Response {
     do {
         let body = try await request.decode(as: ChatCompletionRequest.self, context: context)
-        if let n = body.n, n > 1 {
-            throw GenerationRequestError.unsupportedParameter("n > 1 is not supported")
+        if body.hasTools {
+            throw GenerationRequestError.unsupportedParameter("tools is not supported")
+        }
+        if body.hasToolChoice {
+            throw GenerationRequestError.unsupportedParameter("tool_choice is not supported")
+        }
+        if body.hasResponseFormat {
+            throw GenerationRequestError.unsupportedParameter("response_format is not supported")
+        }
+        if let n = body.n, n != 1 {
+            throw GenerationRequestError.unsupportedParameter("n must be 1")
         }
         let sampling = SamplingParams(maxTokens: body.maxTokens,
                                       temperature: body.temperature,
@@ -84,8 +93,8 @@ private func handleCompletions(request: Request,
                                session: GenerationSession) async -> Response {
     do {
         let body = try await request.decode(as: CompletionRequest.self, context: context)
-        if let n = body.n, n > 1 {
-            throw GenerationRequestError.unsupportedParameter("n > 1 is not supported")
+        if let n = body.n, n != 1 {
+            throw GenerationRequestError.unsupportedParameter("n must be 1")
         }
         let sampling = SamplingParams(maxTokens: body.maxTokens,
                                       temperature: body.temperature,
@@ -146,8 +155,8 @@ private func handleMessages(request: Request,
         if body.hasMetadata {
             throw GenerationRequestError.unsupportedParameter("metadata is not supported")
         }
-        if let n = body.n, n > 1 {
-            throw GenerationRequestError.unsupportedParameter("n > 1 is not supported")
+        if let n = body.n, n != 1 {
+            throw GenerationRequestError.unsupportedParameter("n must be 1")
         }
         var messages: [ChatMessage] = []
         if let system = body.system {
