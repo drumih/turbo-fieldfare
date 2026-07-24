@@ -252,6 +252,7 @@ Endpoints:
 | `GET /v1/models` | OpenAI model list with the served model id |
 | `POST /v1/chat/completions` | Chat completion; `stream: true` returns SSE chunks |
 | `POST /v1/completions` | Raw completion without chat formatting |
+| `POST /v1/messages` | Anthropic Messages API; `stream: true` returns Anthropic SSE events |
 
 Point any OpenAI client at `http://127.0.0.1:1234/v1`. Supported request
 fields: `messages`/`prompt`, `temperature`, `top_p`, `max_tokens` (or
@@ -259,6 +260,15 @@ fields: `messages`/`prompt`, `temperature`, `top_p`, `max_tokens` (or
 `stream_options.include_usage`. Roles are `system`, `user`, and `assistant`;
 tool calling and `n > 1` are rejected. Generation defaults match the CLI
 (temperature `0.2`, Top-P `0.95`, Top-K `64`).
+
+`POST /v1/messages` speaks the Anthropic Messages API on the same port.
+`max_tokens` is required, message roles are limited to `user` and
+`assistant`, and `system` (a string or text blocks) becomes a leading system
+message. Supported fields: `model` (echoed only), `messages`, `system`,
+`max_tokens`, `temperature`, `top_p`, `stop_sequences`, and `stream`.
+`tools`, `tool_choice`, `thinking`, `metadata`, and `n > 1` are rejected
+with a 400. Streaming emits the standard `message_start` →
+`content_block_*` → `message_delta` → `message_stop` event sequence.
 
 One generation runs at a time — the runtime's single-in-flight contract.
 Concurrent requests queue FIFO and are served in arrival order. Disconnecting
