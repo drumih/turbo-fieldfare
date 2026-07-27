@@ -227,13 +227,17 @@ flowchart LR
 
 The Mac app and CLI `--messages-file` mode use the pinned text-only Gemma 4 chat
 format. The app wraps one user prompt. `--messages-file` accepts user and
-assistant messages plus an optional leading system message. Assistant messages
-render with Gemma's `model` role.
+assistant messages plus optional leading system guidance. Assistant messages
+render with Gemma's `model` role. The separate loopback server uses the pinned
+upstream Jinja template for developer messages, function declarations,
+assistant tool calls, and tool results.
 
 The runtime stops generation on `<eos>` (token 1), `<turn|>` (token 106), or
-`<|tool_response>` (token 50). The third token is a defensive boundary; tool
-calling itself is not supported. CLI `--prompt` bypasses chat framing for raw
-completion and reproducible comparisons.
+`<|tool_response>` (token 50). The app and CLI treat the third token as a
+defensive boundary. The server instead parses complete native
+`<|tool_call>` blocks before returning OpenAI function calls and fails closed
+on malformed output. CLI `--prompt` bypasses chat framing for raw completion
+and reproducible comparisons.
 
 ## Prefill
 
@@ -421,10 +425,13 @@ The current runtime supports text-only generation with the pinned Gemma 4
 26B-A4B instruction checkpoint. The source model supports image input, but
 TurboFieldfare omits its vision tower.
 
-The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Current
-acceptance evidence covers up to 4K; memory, correctness, and speed beyond 4K
-have not been characterized. Vision input, training, fine-tuning, server
-batching, and general model support are outside the current scope.
+The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Published app
+and CLI acceptance evidence covers up to 4K. Vision input, training,
+fine-tuning, server batching, remote serving, and general model support are
+outside the current scope. The optional HTTP server is loopback-only, owns one
+warm model, serializes generation, and retains one verified conversational KV
+prefix by default. It retains only that prefix. See the
+[local server guide](OPENAI_SERVER.md).
 
 TurboFieldfare is a research system. The Mac app exposes a small set of typed
 runtime controls. The production path uses FP16 KV, exact split-K/V
@@ -434,6 +441,7 @@ default.
 
 ## Read next
 
+- [Local OpenAI-compatible server](OPENAI_SERVER.md)
 - [Benchmarks](BENCHMARKS.md)
 - [The experiments that shaped TurboFieldfare](OPTIMIZATION_JOURNEY.md)
 - [Complete experiment inventory](experiments/EXPERIMENT_INVENTORY.md)

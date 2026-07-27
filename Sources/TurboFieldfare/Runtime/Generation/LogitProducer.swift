@@ -10,6 +10,11 @@ public protocol LogitProducer: AnyObject, Sendable {
     func produce(token: Int32, position: Int, into logits: MTLBuffer) async throws
 }
 
+public protocol ContinuableLogitProducer: LogitProducer {
+    var continuationPosition: Int { get }
+    func prepareForContinuation(expectedPosition: Int) throws
+}
+
 protocol ContextWindowReporting: Sendable {
     var maxContext: Int { get }
 }

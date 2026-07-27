@@ -24,7 +24,7 @@ swift build -c release --product TurboFieldfareCLI
 Confirm that no other model process is running:
 
 ```bash
-pgrep -fl 'TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'
+pgrep -fl 'TurboFieldfareServer|TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'
 ```
 
 Continue only when that command prints nothing.

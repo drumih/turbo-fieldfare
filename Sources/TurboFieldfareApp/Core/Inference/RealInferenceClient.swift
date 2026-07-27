@@ -452,6 +452,7 @@ actor RealInferenceSession {
         case .endOfTurn: return .endOfTurn
         case .maxTokens: return .maxTokens
         case .stopString: return .stopString
+        case .toolCalls: return .toolCalls
         }
     }
 

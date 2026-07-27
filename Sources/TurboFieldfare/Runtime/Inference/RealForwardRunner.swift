@@ -130,7 +130,7 @@ internal enum PrefillProjectionDispatchPolicy {
     }
 }
 
-public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporting, @unchecked Sendable {
+public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
     private struct LayerSharedExpertProjections {
         let gate: SharedExpertInt8Proj
         let up: SharedExpertInt8Proj
@@ -376,6 +376,26 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
 
     public func reset() {
         kv?.reset()
+        resetTransientState()
+    }
+
+    public var continuationPosition: Int {
+        kv?.position ?? 0
+    }
+
+    public func prepareForContinuation(expectedPosition: Int) throws {
+        guard let kv else {
+            throw PrefillError.prefillCursorMismatch(
+                "continuation requires an initialized KV cache")
+        }
+        guard expectedPosition > 0, kv.position == expectedPosition else {
+            throw PrefillError.prefillCursorMismatch(
+                "continuation expected KV position \(expectedPosition), current \(kv.position)")
+        }
+        resetTransientState()
+    }
+
+    private func resetTransientState() {
         prefillChunkState.reset()
         rdadviseSkipUntilPosition = -1
         rdadviseAdaptiveState.reset()

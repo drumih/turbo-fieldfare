@@ -8,7 +8,10 @@ This checkout is for running and reporting existing behavior. Do not edit source
 
 ## Layout and commands
 
-`Sources/TurboFieldfare/` is the runtime; `Sources/TurboFieldfareRepack/`, `Sources/TurboFieldfareCLI/`, and `Sources/TurboFieldfareApp/` contain the installer, CLI, and Mac app.
+`Sources/TurboFieldfare/` is the runtime; `Sources/TurboFieldfareRepack/`,
+`Sources/TurboFieldfareCLI/`, `Sources/TurboFieldfareServer/`, and
+`Sources/TurboFieldfareApp/` contain the installer, CLI, loopback server, and
+Mac app.
 `Tests/` contains focused public tests; `docs/` contains design, benchmark, and experiment notes.
 
 ```bash
@@ -23,9 +26,21 @@ swift run -c release TurboFieldfareCLI \
 
 The installer streams the pinned model without staging the full source checkpoint. Set `HF_TOKEN` only if requested. The download is about 15 GB.
 
+## Local server
+
+Follow the [server guide](docs/OPENAI_SERVER.md) for launch commands, health
+checks, client setup, prompt reuse, tool loops, and supported API behavior.
+Apply the model-process checks below first; never start a second model process
+or terminate an existing one.
+
+Keep the server on `127.0.0.1`; it has no remote authentication or TLS, so do
+not proxy, tunnel, or expose it. A tool call from the local model never bypasses
+the client's normal permission policy. Keep the execution session alive while
+the server is needed, and stop only a server you launched.
+
 ## Test rules
 
-Before a model run, require macOS 26+, Swift 6.2+, enough disk, acceptable `memory_pressure -Q`, a completed `scratch/gemma4.gturbo`, and no process from `pgrep -fl 'TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'`. If a check fails, inform the user and stop; do not terminate apps or delete or reinstall the model.
+Before a model run, require macOS 26+, Swift 6.2+, enough disk, acceptable `memory_pressure -Q`, a completed `scratch/gemma4.gturbo`, and no process from `pgrep -fl 'TurboFieldfareServer|TurboFieldfareMac|TurboFieldfareDecodeService|TurboFieldfareCLI|TurboFieldfarePackageTests|swiftpm-testing-helper|mlx_lm|mlx-lm'`. If a check fails, inform the user and stop; do not terminate apps or delete or reinstall the model.
 
 Run package tests through `Scripts/test.sh`. Run only one app, CLI, or model-using test at a time.
 

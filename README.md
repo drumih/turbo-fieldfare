@@ -18,6 +18,7 @@
 
 <p align="center">
   <a href="#try-it">Quick start</a> ·
+  <a href="docs/OPENAI_SERVER.md">Local server</a> ·
   <a href="docs/BENCHMARKS.md">Benchmarks</a> ·
   <a href="docs/COMMUNITY_BENCHMARKS.md">Contribute results</a> ·
   <a href="docs/SYSTEM_DESIGN.md">How it works</a> ·
@@ -79,11 +80,11 @@ To help measure another Apple Silicon Mac, follow the
 
 ## Using TurboFieldfare
 
-TurboFieldfare provides a native Mac app and a command-line interface. Both
-use the same `.gturbo` model directory. Start with the Mac app; use the CLI for
-scripts, reproducible runs, and direct control over generation settings.
+TurboFieldfare provides a native Mac app, a command-line interface, and an
+experimental loopback OpenAI-compatible server. They use the same `.gturbo`
+model directory, but only one model-owning product should run at a time.
 
-The Swift package exposes five products:
+The Swift package exposes six products:
 
 | Product | Purpose |
 | --- | --- |
@@ -91,6 +92,7 @@ The Swift package exposes five products:
 | `TurboFieldfareMac` | Native Mac app for installation and generation |
 | `TurboFieldfareDecodeService` | One-shot local model and Metal owner used by the Mac app |
 | `TurboFieldfareCLI` | Command-line instruction chat and raw completion |
+| `TurboFieldfareServer` | Loopback OpenAI-compatible Chat Completions server |
 | `TurboFieldfareRepack` | Streaming model installer and install verifier |
 
 ### Requirements
@@ -113,9 +115,11 @@ Generation defaults to temperature `0.2`, Top-K `64`, and Top-P `0.95`. Set
 temperature to `0` for deterministic greedy output. The model can still repeat
 itself or give incorrect answers, so check important results.
 
-TurboFieldfare is text-only. It supports user and model messages, plus an
-optional system message at the start of a conversation. Tool calling and image
-input are not supported.
+TurboFieldfare is text-only. The app and CLI support user and model messages
+plus optional system guidance; they do not expose or execute tools. The
+loopback server accepts function-tool declarations and returns
+model-produced tool calls for the client to authorize and execute. Images,
+audio, and video are not supported.
 
 ### Mac app
 
@@ -231,6 +235,24 @@ swift run -c release TurboFieldfareCLI --help
 Generated text goes to standard output. Timing statistics go to standard error;
 add `--quiet` to suppress that footer in scripts.
 
+### Local OpenAI-compatible server
+
+Build the server and point it at an installed model:
+
+```bash
+swift build -c release --product TurboFieldfareServer
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo
+```
+
+It listens on `http://127.0.0.1:8080/v1` and supports Chat Completions,
+streaming, function tools, and single-prefix prompt reuse. The client must
+authorize and run every tool call. Keep the server on loopback; it has no
+remote authentication or TLS.
+
+See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
+OpenCode setup, prompt reuse, tool handling, and the supported API subset.
+
 ## Test and contribute
 
 Run the public test suite serially:
@@ -241,7 +263,8 @@ Scripts/test.sh
 
 Before starting a model run, close memory-heavy apps and check
 `memory_pressure -Q`. If it reports little free memory, postpone the run. Run
-only one TurboFieldfare or local-model process at a time.
+only one TurboFieldfare app, decode service, CLI, server, test, or other
+local-model process at a time.
 
 To contribute a comparable performance result, follow the
 [community benchmark guide](docs/COMMUNITY_BENCHMARKS.md).
@@ -281,8 +304,9 @@ TurboFieldfare currently includes:
 - FP16 KV storage with bounded circular storage for 25 sliding-window layers
   and linear storage for 5 full-attention layers
 - Exact split-K/V decode attention with distinct normalized K and V paths
-- A Swift library, streaming installer, command-line interface, and native
-  SwiftUI/AppKit Mac app with a one-shot local decode service
+- A Swift library, streaming installer, command-line interface, loopback
+  OpenAI-compatible server, and native SwiftUI/AppKit Mac app with a one-shot
+  local decode service
 
 Current scope is text-only inference from the pinned Gemma 4 26B-A4B
 instruction checkpoint on Apple Silicon Macs with at least 8 GB of RAM.
@@ -304,6 +328,7 @@ audited entries as optional evidence.
 
 Useful entry points:
 
+- [Local OpenAI-compatible server](docs/OPENAI_SERVER.md)
 - [System design](docs/SYSTEM_DESIGN.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [The experiments that shaped TurboFieldfare](docs/OPTIMIZATION_JOURNEY.md)

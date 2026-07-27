@@ -8,6 +8,7 @@ public enum AppStopReason: String, Equatable, Sendable {
     case eos
     case endOfTurn
     case stopString
+    case toolCalls
 }
 
 public struct AppRunnerDiagnostics: Equatable, Sendable {

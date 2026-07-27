@@ -12,12 +12,22 @@ public enum RawDecodeProgress: Sendable {
     case tail(String)
 }
 
+public enum RawCompletionStart: Sendable, Equatable {
+    case reset
+    case resume(cachedPromptTokens: Int)
+}
+
 public struct RawDecodeResult: Sendable {
     public let prefillTokens: Int
+    public let cachedPromptTokens: Int
+    public let computedPrefillTokens: Int
     public let prefillSeconds: Double
     public let newTokens: Int
     public let decodeSeconds: Double
     public let reason: StopReason
+    public let kvPosition: Int
+    public let kvBackedTokenIDs: [Int32]
+    public let uncommittedBoundaryTokenIDs: [Int32]
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -75,6 +85,8 @@ public func runRawCompletion(producer: any LogitProducer,
                              context: MetalContext,
                              scratch: RawCompletionScratch,
                              prefillConfig: PrefillRuntimeConfig = .defaultChunked,
+                             start: RawCompletionStart = .reset,
+                             shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
     guard !promptIds.isEmpty else {
@@ -87,8 +99,25 @@ public func runRawCompletion(producer: any LogitProducer,
             "the fused-head producer cannot serve this sampling configuration; use a logits head")
     }
 
+    let cachedPromptTokens: Int
+    switch start {
+    case .reset:
+        cachedPromptTokens = 0
+    case .resume(let count):
+        guard count > 0, count < promptIds.count else {
+            throw GeneratorError.invalidContinuation(
+                "cached prompt token count must be greater than zero and less than the effective prompt")
+        }
+        guard producer is any ContinuableLogitProducer else {
+            throw GeneratorError.invalidContinuation(
+                "producer does not support continuation")
+        }
+        cachedPromptTokens = count
+    }
+    let computedPrefillTokens = promptIds.count - cachedPromptTokens
+
     var detok = GFDetokenizer(tokenizer: tokenizer)
-    var history: [Int32] = []
+    var history = Array(promptIds.prefix(cachedPromptTokens))
     history.reserveCapacity(promptIds.count + config.maxNewTokens)
 
     if let context = producer as? any ContextWindowReporting,
@@ -97,20 +126,27 @@ public func runRawCompletion(producer: any LogitProducer,
                                              maxNew: config.maxNewTokens,
                                              maxContext: context.maxContext)
     }
-    producer.reset()
+    switch start {
+    case .reset:
+        producer.reset()
+    case .resume:
+        let continuable = producer as! any ContinuableLogitProducer
+        try continuable.prepareForContinuation(expectedPosition: cachedPromptTokens)
+    }
     let prefillStart = Date()
-    var position = 0
+    var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
+    let prefillTokens = promptIds[cachedPromptTokens...]
     switch prefillConfig.mode {
     case .chunked where producer is any ChunkedPrefillRunner:
         let chunked = producer as! any ChunkedPrefillRunner
         let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
-        let result = try await chunked.prefillChunked(tokens: promptIds[...],
+        let result = try await chunked.prefillChunked(tokens: prefillTokens,
                                                       startPosition: position,
                                                       outputMode: mode,
                                                       config: prefillConfig,
                                                       into: scratch.logits) { done in
-            onProgress(.prefill(done: done, total: promptIds.count))
+            onProgress(.prefill(done: cachedPromptTokens + done, total: promptIds.count))
         }
         if mode == .logits, result.seed != .logitsWritten {
             throw PrefillError.unsupportedPrefillSeed(
@@ -122,12 +158,12 @@ public func runRawCompletion(producer: any LogitProducer,
         }
         position = result.newPosition
         prefillSeed = result.seed
-        history.append(contentsOf: promptIds)
+        history.append(contentsOf: prefillTokens)
     case .chunked:
         throw PrefillError.chunkedUnsupported(
             PrefillError.chunkedRequiresChunkedRunnerReason)
     case .off:
-        for t in promptIds {
+        for t in prefillTokens {
             try Task.checkCancellation()
             try await producer.produce(token: t, position: position, into: scratch.logits)
             position += 1
@@ -138,9 +174,10 @@ public func runRawCompletion(producer: any LogitProducer,
 
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
-    var accumulated = ""
+    var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
     var reason: StopReason = .maxTokens
+    var uncommittedBoundaryTokenIDs: [Int32] = []
 
     while true {
         try Task.checkCancellation()
@@ -161,22 +198,29 @@ public func runRawCompletion(producer: any LogitProducer,
                                  history: history, config: config, position: generated)
         }
         generated += 1
+        uncommittedBoundaryTokenIDs = [tokenID]
 
         if tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID) {
-            reason = tokenID == tokenizer.endOfTurnID ? .endOfTurn : .eos
-            let tail = detok.flush()
+            if tokenID == tokenizer.endOfTurnID {
+                reason = .endOfTurn
+            } else if tokenID == tokenizer.toolResponseID {
+                reason = .toolCalls
+            } else {
+                reason = .eos
+            }
+            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             break
         }
 
         let delta = detok.push(tokenID)
-        onProgress(.token(index: generated - 1, id: tokenID, delta: delta))
-        accumulated += delta
+        let visible = stopMatcher.push(delta)
+        onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
 
-        let hitStopString = config.stopStrings.contains { !$0.isEmpty && accumulated.contains($0) }
+        let hitStopString = stopMatcher.isStopped || shouldStop()
         let hitMax = generated >= config.maxNewTokens
         if hitStopString || hitMax {
-            let tail = detok.flush()
+            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             reason = hitStopString ? .stopString : .maxTokens
             break
@@ -185,13 +229,19 @@ public func runRawCompletion(producer: any LogitProducer,
         history.append(tokenID)
         try await producer.produce(token: tokenID, position: position, into: scratch.logits)
         position += 1
+        uncommittedBoundaryTokenIDs.removeAll(keepingCapacity: true)
     }
 
     return RawDecodeResult(prefillTokens: promptIds.count,
+                           cachedPromptTokens: cachedPromptTokens,
+                           computedPrefillTokens: computedPrefillTokens,
                            prefillSeconds: prefillSeconds,
                            newTokens: generated,
                            decodeSeconds: Date().timeIntervalSince(decodeStart),
-                           reason: reason)
+                           reason: reason,
+                           kvPosition: position,
+                           kvBackedTokenIDs: history,
+                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,

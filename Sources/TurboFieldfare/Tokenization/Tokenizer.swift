@@ -4,11 +4,14 @@ import Tokenizers
 public enum GFTokenizerError: Error, CustomStringConvertible {
     case missingSpecialToken(String)
     case invalidChatTemplate(String)
+    case missingToolTemplate
 
     public var description: String {
         switch self {
         case .missingSpecialToken(let t): return "tokenizer missing required special token: \(t)"
         case .invalidChatTemplate(let detail): return "invalid chat messages: \(detail)"
+        case .missingToolTemplate:
+            return "installed tokenizer is missing chat_template.jinja; reinstall the model"
         }
     }
 }
@@ -27,12 +30,18 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
 public struct GFTokenizer: @unchecked Sendable {
     public static let modelID = "google/gemma-4-26B-A4B-it"
     public static let chatTemplateIdentity = "gemma4-it-text-no-tools-v1"
+    public static let toolChatTemplateIdentity = "gemma4-it-tools-jinja-v1"
 
     public let bosID: Int32
     public let eosID: Int32
     public let padID: Int32
     public let endOfTurnID: Int32
+    public let toolCallStartID: Int32
+    public let toolCallEndID: Int32
     public let toolResponseID: Int32
+    public let toolResponseEndID: Int32
+    public let channelStartID: Int32
+    public let channelEndID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
 
@@ -104,12 +113,24 @@ public struct GFTokenizer: @unchecked Sendable {
         guard let toolResponse = tokenizer.convertTokenToId("<|tool_response>") else {
             throw GFTokenizerError.missingSpecialToken("<|tool_response>")
         }
+        guard let toolCallStart = tokenizer.convertTokenToId("<|tool_call>"),
+              let toolCallEnd = tokenizer.convertTokenToId("<tool_call|>"),
+              let toolResponseEnd = tokenizer.convertTokenToId("<tool_response|>"),
+              let channelStart = tokenizer.convertTokenToId("<|channel>"),
+              let channelEnd = tokenizer.convertTokenToId("<channel|>") else {
+            throw GFTokenizerError.missingSpecialToken("Gemma tool/channel markers")
+        }
 
         self.bosID = Int32(bos)
         self.eosID = Int32(eos)
         self.padID = Int32(pad)
         self.endOfTurnID = Int32(eot)
+        self.toolCallStartID = Int32(toolCallStart)
+        self.toolCallEndID = Int32(toolCallEnd)
         self.toolResponseID = Int32(toolResponse)
+        self.toolResponseEndID = Int32(toolResponseEnd)
+        self.channelStartID = Int32(channelStart)
+        self.channelEndID = Int32(channelEnd)
         self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
         self.vocabSize = 262_144
     }
@@ -132,13 +153,56 @@ public struct GFTokenizer: @unchecked Sendable {
 
     // MARK: - Chat template
 
-    public enum Role: String, Sendable { case system, user, assistant }
-    public struct Message: Sendable {
+    public enum Role: String, Sendable { case system, developer, user, assistant, tool }
+    public struct HistoricalToolCall: Sendable, Equatable {
+        public let id: String
+        public let name: String
+        public let arguments: JSONValue
+
+        public init(id: String, name: String, arguments: JSONValue) {
+            self.id = id
+            self.name = name
+            self.arguments = arguments
+        }
+    }
+
+    public struct FunctionDefinition: Sendable, Equatable {
+        public let name: String
+        public let description: String
+        public let parameters: JSONValue
+
+        public init(name: String, description: String, parameters: JSONValue) {
+            self.name = name
+            self.description = description
+            self.parameters = parameters
+        }
+    }
+
+    public struct Message: Sendable, Equatable {
         public let role: Role
-        public let content: String
+        public let content: String?
+        public let toolCalls: [HistoricalToolCall]
+        public let toolCallID: String?
+        public let name: String?
+
         public init(role: Role, content: String) {
             self.role = role
             self.content = content
+            self.toolCalls = []
+            self.toolCallID = nil
+            self.name = nil
+        }
+
+        public init(role: Role,
+                    content: String?,
+                    toolCalls: [HistoricalToolCall] = [],
+                    toolCallID: String? = nil,
+                    name: String? = nil) {
+            self.role = role
+            self.content = content
+            self.toolCalls = toolCalls
+            self.toolCallID = toolCallID
+            self.name = name
         }
     }
 
@@ -152,7 +216,10 @@ public struct GFTokenizer: @unchecked Sendable {
     public func applyChatTemplate(_ messages: [Message]) throws -> String {
         var s = Self.bosMark
         for (index, message) in messages.enumerated() {
-            let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let rawContent = message.content else {
+                throw GFTokenizerError.invalidChatTemplate("text-only messages require content")
+            }
+            let content = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
             if message.role == .system && index != 0 {
                 throw GFTokenizerError.invalidChatTemplate("system message must be first")
             }
@@ -161,6 +228,103 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         s += Self.turnOpen + "model\n<|channel>thought\n<channel|>"
         return s
+    }
+
+    public func encodeToolChat(messages: [Message],
+                               tools: [FunctionDefinition]) throws -> [Int32] {
+        guard tokenizer.hasChatTemplate else {
+            throw GFTokenizerError.missingToolTemplate
+        }
+        let upstreamMessages: [Tokenizers.Message] = try messages.map { message in
+            var value: Tokenizers.Message = [
+                "role": message.role.rawValue,
+                "content": message.content,
+            ]
+            if !message.toolCalls.isEmpty {
+                value["tool_calls"] = try message.toolCalls.map { call -> [String: any Sendable] in
+                    [
+                        "id": call.id,
+                        "type": "function",
+                        "function": [
+                            "name": call.name,
+                            "arguments": try call.arguments.jinjaSendableValue(),
+                        ] as [String: any Sendable],
+                    ]
+                }
+            }
+            if let toolCallID = message.toolCallID { value["tool_call_id"] = toolCallID }
+            if let name = message.name { value["name"] = name }
+            return value
+        }
+        let upstreamTools: [ToolSpec] = try tools.map { tool in
+            [
+                "type": "function",
+                "function": [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": try tool.parameters.jinjaSendableValue(),
+                ] as [String: any Sendable],
+            ]
+        }
+        return try tokenizer.applyChatTemplate(
+            messages: upstreamMessages,
+            chatTemplate: nil,
+            addGenerationPrompt: true,
+            truncation: false,
+            maxLength: nil,
+            tools: upstreamTools,
+            additionalContext: ["enable_thinking": false]
+        ).map(Int32.init)
+    }
+
+    public func encodeTextContinuation(userContent: String) -> [Int32] {
+        let content = userContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        return [endOfTurnID] + encode(
+            "\n\(Self.turnOpen)user\n\(content)\(Self.turnClose)\n"
+                + "\(Self.turnOpen)model\n<|channel>thought\n<channel|>",
+            addBOS: false)
+    }
+
+    public func encodeToolResultContinuation(
+        cachedMessages: [Message],
+        assistant: Message,
+        incomingMessages: [Message],
+        tools: [FunctionDefinition]
+    ) throws -> [Int32] {
+        let prefix = try encodeToolChat(
+            messages: cachedMessages + [assistant],
+            tools: tools)
+        let full = try encodeToolChat(messages: incomingMessages, tools: tools)
+        let callCount = assistant.toolCalls.count
+        let starts = prefix.indices.filter { prefix[$0] == toolCallStartID }
+        guard callCount > 0, starts.count >= callCount,
+              let callEnd = prefix.lastIndex(of: toolCallEndID) else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "cached assistant tool-call boundary is missing")
+        }
+        let callStart = starts[starts.count - callCount]
+        let callSequence = Array(prefix[callStart...callEnd])
+        let matches = full.subsequenceStartIndices(matching: callSequence)
+        guard matches.count == 1 else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "cached assistant tool-call boundary is ambiguous")
+        }
+        let suffixStart = matches[0] + callSequence.count
+        let suffix = Array(full[suffixStart...])
+        guard suffix.first == toolResponseID else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "tool-result continuation does not begin at the KV boundary")
+        }
+        return suffix
+    }
+}
+
+private extension Array where Element: Equatable {
+    func subsequenceStartIndices(matching needle: [Element]) -> [Int] {
+        guard !needle.isEmpty, needle.count <= count else { return [] }
+        return indices.dropLast(needle.count - 1).filter { start in
+            self[start..<(start + needle.count)].elementsEqual(needle)
+        }
     }
 }
 
