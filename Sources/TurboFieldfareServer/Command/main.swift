@@ -14,6 +14,7 @@ do {
 }
 
 do {
+    let signals = ServerTerminationSignals()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
     let backend = try await ServerModelSession.load(
         modelDirectory: modelURL,
@@ -23,22 +24,12 @@ do {
         modelID: arguments.modelID,
         queueLimit: arguments.queueLimit,
         backend: backend)
-    let channel = try await server.start(port: arguments.port)
+    _ = try await server.start(port: arguments.port)
     print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
 
-    signal(SIGINT, SIG_IGN)
-    signal(SIGTERM, SIG_IGN)
-    let signals = [SIGINT, SIGTERM].map { value in
-        let source = DispatchSource.makeSignalSource(signal: value, queue: .global())
-        source.setEventHandler {
-            channel.close(promise: nil)
-        }
-        source.resume()
-        return source
-    }
-    try await channel.closeFuture.get()
-    for source in signals { source.cancel() }
+    _ = await signals.wait()
     try await server.shutdown()
+    await signals.cancel()
 } catch {
     FileHandle.standardError.write(Data("error: \(error)\n".utf8))
     exit(1)

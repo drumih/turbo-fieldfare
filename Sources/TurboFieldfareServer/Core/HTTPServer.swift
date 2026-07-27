@@ -2,9 +2,10 @@ import Foundation
 import NIOCore
 import NIOHTTP1
 import NIOPosix
+import Synchronization
 import TurboFieldfare
 
-public final class TurboFieldfareHTTPServer: @unchecked Sendable {
+public actor TurboFieldfareHTTPServer {
     public static let maximumBodyBytes = 1_048_576
 
     private let group: MultiThreadedEventLoopGroup
@@ -14,6 +15,7 @@ public final class TurboFieldfareHTTPServer: @unchecked Sendable {
     private let heartbeatInterval: TimeAmount
     private let childChannels = ChildChannelRegistry()
     private var channel: Channel?
+    private var shutdownTask: Task<Void, any Error>?
 
     public init(modelID: String,
                 queueLimit: Int,
@@ -57,9 +59,53 @@ public final class TurboFieldfareHTTPServer: @unchecked Sendable {
     }
 
     public func shutdown() async throws {
-        try await channel?.close().get()
-        await childChannels.closeAll()
-        try await group.shutdownGracefully()
+        if let shutdownTask {
+            try await shutdownTask.value
+            return
+        }
+
+        let listeningChannel = channel
+        channel = nil
+        let childChannels = self.childChannels
+        let coordinator = self.coordinator
+        let group = self.group
+        let task = Task { @Sendable in
+            var firstError: (any Error)?
+            await coordinator.shutdown()
+            if let listeningChannel {
+                do {
+                    try await listeningChannel.close().get()
+                } catch ChannelError.alreadyClosed {
+                } catch {
+                    firstError = error
+                }
+            }
+            await childChannels.closeAll()
+            do {
+                try await group.shutdownGracefully()
+            } catch {
+                if firstError == nil {
+                    firstError = error
+                }
+            }
+            if let firstError {
+                throw firstError
+            }
+        }
+        shutdownTask = task
+        try await task.value
+    }
+
+    var queuedRequestCount: Int {
+        get async { await coordinator.queuedCount }
+    }
+
+    var hasActiveRequest: Bool {
+        get async { await coordinator.isActive }
+    }
+
+    var acceptedConnectionCount: Int {
+        childChannels.count
     }
 }
 
@@ -179,10 +225,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                delta: ["role": "assistant"],
                                finishReason: nil))
             }
-            activeTask = Task {
+            activeTask = childChannels.startTask {
                 defer { streamState.stop() }
                 do {
-                    let completion = try await coordinator.run(onQueued: startStream) {
+                    let completion = try await self.coordinator.run(onQueued: startStream) {
                         startStream()
                         return try await self.backend.generate(request) { event in
                             guard request.stream else { return }
@@ -465,27 +511,72 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 }
 
-private final class ChildChannelRegistry: @unchecked Sendable {
-    private let lock = NSLock()
-    private var channels: [ObjectIdentifier: Channel] = [:]
+private final class ChildChannelRegistry: Sendable {
+    private struct State {
+        var channels: [ObjectIdentifier: Channel] = [:]
+        var tasks: [UUID: Task<Void, Never>] = [:]
+        var shuttingDown = false
+    }
+
+    private let state = Mutex(State())
 
     func insert(_ channel: Channel) {
-        lock.withLock {
-            channels[ObjectIdentifier(channel)] = channel
+        let shouldClose = state.withLock {
+            guard !$0.shuttingDown else { return true }
+            $0.channels[ObjectIdentifier(channel)] = channel
+            return false
+        }
+        if shouldClose {
+            channel.close(promise: nil)
         }
     }
 
     func remove(_ channel: Channel) {
-        _ = lock.withLock {
-            channels.removeValue(forKey: ObjectIdentifier(channel))
+        _ = state.withLock {
+            $0.channels.removeValue(forKey: ObjectIdentifier(channel))
+        }
+    }
+
+    func startTask(
+        _ operation: @escaping @Sendable () async -> Void
+    ) -> Task<Void, Never> {
+        state.withLock { state in
+            let id = UUID()
+            let task = Task { [self] in
+                defer {
+                    _ = self.state.withLock {
+                        $0.tasks.removeValue(forKey: id)
+                    }
+                }
+                await operation()
+            }
+            state.tasks[id] = task
+            if state.shuttingDown {
+                task.cancel()
+            }
+            return task
         }
     }
 
     func closeAll() async {
-        let snapshot = lock.withLock { Array(channels.values) }
-        for channel in snapshot {
+        let channels = state.withLock {
+            $0.shuttingDown = true
+            return Array($0.channels.values)
+        }
+        for channel in channels {
             try? await channel.close().get()
         }
+        let tasks = state.withLock { Array($0.tasks.values) }
+        for task in tasks {
+            task.cancel()
+        }
+        for task in tasks {
+            await task.value
+        }
+    }
+
+    var count: Int {
+        state.withLock { $0.channels.count }
     }
 }
 

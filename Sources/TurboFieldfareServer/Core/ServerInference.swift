@@ -38,6 +38,7 @@ public actor ServerCoordinator {
     private let queueLimit: Int
     private var active = false
     private var waiters: [Waiter] = []
+    private var shuttingDown = false
 
     public init(queueLimit: Int) {
         self.queueLimit = queueLimit
@@ -54,6 +55,7 @@ public actor ServerCoordinator {
 
     private func acquire(onQueued: @escaping @Sendable () -> Void) async throws {
         try Task.checkCancellation()
+        guard !shuttingDown else { throw CancellationError() }
         if !active {
             active = true
             return
@@ -68,6 +70,10 @@ public actor ServerCoordinator {
         } onCancel: {
             Task { await self.cancelWaiter(id) }
         }
+        if Task.isCancelled {
+            release()
+            throw CancellationError()
+        }
     }
 
     private func cancelWaiter(_ id: UUID) {
@@ -81,6 +87,15 @@ public actor ServerCoordinator {
             active = false
         } else {
             waiters.removeFirst().continuation.resume()
+        }
+    }
+
+    public func shutdown() {
+        shuttingDown = true
+        let queued = waiters
+        waiters.removeAll()
+        for waiter in queued {
+            waiter.continuation.resume(throwing: CancellationError())
         }
     }
 

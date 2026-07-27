@@ -100,6 +100,29 @@ private actor PipelinedRequestBackend: ServerInferenceBackend {
     }
 }
 
+private actor CancellableServerBackend: ServerInferenceBackend {
+    private(set) var startedCount = 0
+    private(set) var cancellationCount = 0
+
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        startedCount += 1
+        do {
+            try await Task.sleep(for: .seconds(30))
+        } catch is CancellationError {
+            cancellationCount += 1
+            throw CancellationError()
+        }
+        return ServerCompletion(
+            content: "unexpected",
+            toolCalls: [],
+            finishReason: "stop",
+            usage: OpenAIUsage(promptTokens: 1, completionTokens: 1, totalTokens: 2))
+    }
+}
+
 @Suite("OpenAI HTTP server", .serialized)
 struct HTTPServerTests {
     @Test func healthModelsAndNonStreamingCompletion() async throws {
@@ -330,6 +353,68 @@ struct HTTPServerTests {
         #expect(await backend.generationCount == 1)
 
         Darwin.close(socket)
+        try await server.shutdown()
+    }
+
+    @Test func shutdownAfterListenerClosesIsIdempotent() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+
+        try await channel.close().get()
+        try await server.shutdown()
+        try await server.shutdown()
+    }
+
+    @Test func shutdownCancelsActiveAndQueuedRequestsBeforeReturning() async throws {
+        let backend = CancellableServerBackend()
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: backend)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let firstSocket = try connectedSocket(port: port)
+        let secondSocket = try connectedSocket(port: port)
+        defer {
+            Darwin.close(firstSocket)
+            Darwin.close(secondSocket)
+        }
+        let body =
+            #"{"model":"test-model","messages":[{"role":"user","content":"wait"}]}"#
+        let request =
+            "POST /v1/chat/completions HTTP/1.1\r\n"
+            + "Host: 127.0.0.1:\(port)\r\n"
+            + "Content-Type: application/json\r\n"
+            + "Content-Length: \(body.utf8.count)\r\n"
+            + "Connection: keep-alive\r\n"
+            + "\r\n"
+            + body
+
+        try writeAll(socket: firstSocket, text: request)
+        let activeDeadline = ContinuousClock.now + .seconds(2)
+        while await backend.startedCount != 1, ContinuousClock.now < activeDeadline {
+            await Task.yield()
+        }
+        #expect(await backend.startedCount == 1)
+
+        try writeAll(socket: secondSocket, text: request)
+        let queuedDeadline = ContinuousClock.now + .seconds(2)
+        while await server.queuedRequestCount != 1, ContinuousClock.now < queuedDeadline {
+            await Task.yield()
+        }
+        #expect(await server.queuedRequestCount == 1)
+        #expect(await server.acceptedConnectionCount == 2)
+
+        try await server.shutdown()
+
+        #expect(await backend.cancellationCount == 1)
+        #expect(await backend.startedCount == 1)
+        #expect(await server.queuedRequestCount == 0)
+        #expect(await !server.hasActiveRequest)
+        #expect(await server.acceptedConnectionCount == 0)
         try await server.shutdown()
     }
 }
