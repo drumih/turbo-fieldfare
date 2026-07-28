@@ -130,6 +130,64 @@ import TurboFieldfareValidationSupport
         }
     }
 
+    @Test(arguments: [
+        1,
+        63, 64, 65,
+        127, 128, 129,
+        255, 256, 257,
+        1_023, 1_024, 1_025,
+    ])
+    func tensorOps2DFullAttentionMatchesReferenceAtTileBoundaries(_ visibleKeys: Int) throws {
+        let context = try MetalContext()
+        guard context.device.supportsFamily(.apple10) else { return }
+        let fixture = Self.makeFixture(start: visibleKeys - 1,
+                                       chunk: 1,
+                                       window: 0,
+                                       seed: 0xA870 + UInt64(visibleKeys),
+                                       headDim: 512,
+                                       qHeads: 16,
+                                       kvHeads: 2)
+        let candidate = try Self.runKernel(
+            fixture,
+            path: .fullTensorOps2DValidityV2)
+        let repeated = try Self.runKernel(
+            fixture,
+            path: .fullTensorOps2DValidityV2)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(candidate == repeated,
+                "TensorOps 2D full attention is not byte-stable at \(visibleKeys) keys")
+        #expect(maxAbs <= 2e-2,
+                "TensorOps 2D maxAbs=\(maxAbs) rel=\(rel) keys=\(visibleKeys)")
+        #expect(rel <= 2e-2,
+                "TensorOps 2D rel=\(rel) maxAbs=\(maxAbs) keys=\(visibleKeys)")
+    }
+
+    @Test func preferredTensorOpsPathUsesSafeHardwareFallback() throws {
+        let context = try MetalContext()
+        let fixture = Self.makeFixture(start: 128,
+                                       chunk: 1,
+                                       window: 0,
+                                       seed: 0xA872,
+                                       headDim: 512,
+                                       qHeads: 16,
+                                       kvHeads: 2)
+        let preferred = try Self.runKernel(
+            fixture,
+            path: .fullTensorOps2DPreferred)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(preferred, reference)
+        let rel = RelError.compute(actual: preferred, reference: reference)
+        #expect(maxAbs <= 2e-2,
+                "preferred TensorOps maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2,
+                "preferred TensorOps rel=\(rel) maxAbs=\(maxAbs)")
+        if !context.device.supportsFamily(.apple10) {
+            let baseline = try Self.runKernel(fixture, path: .causalTiled)
+            #expect(preferred == baseline)
+        }
+    }
 
     private static func makeFixture(start: Int,
                                     chunk: Int,
@@ -179,8 +237,11 @@ import TurboFieldfareValidationSupport
         #expect(rel <= 2e-2, "\(label) rel=\(rel) maxAbs=\(maxAbs)")
     }
 
-    private static func runKernel(_ fixture: Fixture,
-                                  kvRingCapacity: UInt32 = 0) throws -> [Float] {
+    private static func runKernel(
+        _ fixture: Fixture,
+        kvRingCapacity: UInt32 = 0,
+        path: RuntimePrefillAttentionPath = .causalTiled
+    ) throws -> [Float] {
         let ctx = try MetalContext()
         let prefill = try PrefillAttention(context: ctx)
         let qPrefix = 17
@@ -224,7 +285,8 @@ import TurboFieldfareValidationSupport
                              out: outBuf,
                              outOffset: oPrefix * MemoryLayout<Float16>.size,
                              params: params,
-                             kvRingCapacity: kvRingCapacity)
+                             kvRingCapacity: kvRingCapacity,
+                             path: path)
         cb.commit()
         cb.waitUntilCompleted()
 

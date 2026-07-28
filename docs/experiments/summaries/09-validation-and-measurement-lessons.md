@@ -24,7 +24,7 @@ from representative holdouts.
 - **Hypothesis:** Exact cross-process tokens or raw logits could validate any
   candidate.
 - **Variants tested:** That oracle was applied to MLX attention,
-  staged MPP INT4 prefill, and batched routed MoE.
+  staged MPP INT4 prefill, batched routed MoE, and TensorOps prefill attention.
 - **Evidence:** Each candidate
   had a strong speed signal but crossed known near ties under reordered
   floating-point work. Reference-relative delta-NLL, top-k agreement, and
@@ -32,7 +32,7 @@ from representative holdouts.
 - **What changed the conclusion:** The validation
   contract, not the candidates, was wrong.
 - **Final disposition:** Methodology
-  corrected; three false rejections reversed.
+  corrected; four false rejections reversed.
 - **Lesson:** Numerical equivalence
   is a distributional claim, not a bit-identity claim.
 

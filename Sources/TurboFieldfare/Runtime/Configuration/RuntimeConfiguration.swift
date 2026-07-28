@@ -8,6 +8,12 @@ public enum RuntimePrefillPolicy: String, Codable, Sendable {
     case chunked
 }
 
+public enum RuntimePrefillAttentionPath: String, Codable, Sendable {
+    case causalTiled = "causal-tiled"
+    case fullTensorOps2DPreferred = "full-tensorops-2d-preferred"
+    case fullTensorOps2DValidityV2 = "full-tensorops-2d-validity-v2"
+}
+
 public enum RuntimeExpertCachePolicy: String, Codable, Sendable {
     case lfu
     case lru
@@ -22,6 +28,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
+    public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
 
     public init(expertCacheSlots: Int = 16,
@@ -29,6 +36,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 rdadvisePolicy: RDAdvicePolicyMode = .off,
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
+                prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
                 forceLogitsHead: Bool = false) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
@@ -39,6 +47,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         self.rdadvisePolicy = rdadvisePolicy
         self.prefillPolicy = prefillEnabled ? .chunked : .off
         self.prefillChunkTokens = prefillChunkTokens
+        self.prefillAttentionPath = prefillAttentionPath
         self.headPath = forceLogitsHead ? .logits : .fusedRows
     }
 

@@ -219,6 +219,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// callers that sample from the logits buffer (non-greedy configs) must pass
     /// `forceLogitsHead: true` or they read a never-written buffer.
     private let useFusedGreedyHead: Bool
+    private let prefillAttentionPath: RuntimePrefillAttentionPath
     public let rdadviseEnabled: Bool
     public let rdadvisePolicyMode: RDAdvicePolicyMode
     private var rdadviseSkipUntilPosition: Int = -1
@@ -232,6 +233,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.cfg = model.config
         self.maxContext = maxContext
         self.useFusedGreedyHead = runtimeConfiguration.headPath == .fusedRows
+        self.prefillAttentionPath = runtimeConfiguration.prefillAttentionPath
         let useFP16Ring = runtimeConfiguration.fp16RingEnabled
         self.rdadvisePolicyMode = runtimeConfiguration.rdadvisePolicy
         self.rdadviseAdaptiveState = RDAdviceAdaptivePolicyState(
@@ -881,7 +883,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   v: valueBuffer,
                                                   out: scratch.attentionOutput,
                                                   params: params,
-                                                  kvRingCapacity: activeRingCapacity)
+                                                  kvRingCapacity: activeRingCapacity,
+                                                  path: prefillAttentionPath)
             } else {
                 throw PrefillError.chunkedUnsupported(
                     "chunked prefill attention requires FP16 KV")

@@ -43,10 +43,14 @@ struct PrefillAttentionParams: Sendable, Equatable {
 final class PrefillAttention {
     private let context: MetalContext
     private let psoCausalTiled: MTLComputePipelineState
+    private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
 
     init(context: MetalContext) throws {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")
+        self.psoFullTensorOps2DValidityV2 = context.device.supportsFamily(.apple10)
+            ? try? context.pipeline("attention_prefill_full_tensorops_2d_validity_v2")
+            : nil
     }
 
     func encodeCausal(commandBuffer: MTLCommandBuffer,
@@ -55,13 +59,34 @@ final class PrefillAttention {
                              v: MTLBuffer, vOffset: Int = 0,
                              out: MTLBuffer, outOffset: Int = 0,
                              params: PrefillAttentionParams,
-                             kvRingCapacity: UInt32 = 0) {
+                             kvRingCapacity: UInt32 = 0,
+                             path: RuntimePrefillAttentionPath = .causalTiled) {
         validate(params)
 
-        let pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
+        let requestsTensorOps = path == .fullTensorOps2DPreferred
+            || path == .fullTensorOps2DValidityV2
+        let tensorOpsShape = requestsTensorOps
+            && kvRingCapacity == 0
+            && params.headDim == 512
+            && params.numQHeads == 16
+            && params.numKVHeads == 2
+            && params.scale == 1.0
+        let tensorOpsPipeline = tensorOpsShape ? psoFullTensorOps2DValidityV2 : nil
+        let useTensorOps = tensorOpsPipeline != nil
+        let pipeline: MTLComputePipelineState
+        if let tensorOpsPipeline {
+            pipeline = tensorOpsPipeline
+        } else if tensorOpsShape && path == .fullTensorOps2DValidityV2 {
+            preconditionFailure(
+                "TensorOps 2D prefill attention requires Apple10 MPP tensor support")
+        } else {
+            pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
+        }
         let headDim = Int(params.headDim)
         let threadWidth = max(1, pipeline.threadExecutionWidth)
-        let threadCount = roundUp(max(threadWidth, headDim), toMultipleOf: threadWidth)
+        let threadCount = useTensorOps
+            ? 128
+            : roundUp(max(threadWidth, headDim), toMultipleOf: threadWidth)
         precondition(threadCount <= pipeline.maxTotalThreadsPerThreadgroup,
                      "tiled prefill attention requires headDim <= maxTotalThreadsPerThreadgroup")
 
@@ -73,8 +98,15 @@ final class PrefillAttention {
         enc.setBuffer(out, offset: outOffset, index: 3)
         var p = params
         enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
+        let groups = useTensorOps
+            ? MTLSize(width: Int(params.queryCount),
+                      height: Int(params.numQHeads) / 8,
+                      depth: 1)
+            : MTLSize(width: Int(params.queryCount),
+                      height: Int(params.numQHeads),
+                      depth: 1)
         enc.dispatchThreadgroups(
-            MTLSize(width: Int(params.queryCount), height: Int(params.numQHeads), depth: 1),
+            groups,
             threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1))
         enc.endEncoding()
     }
