@@ -16,6 +16,7 @@ Mac app.
 
 ```bash
 swift run -c release TurboFieldfareRepack --output scratch/gemma4.gturbo
+swift run -c release TurboFieldfareRepack --output scratch/gemma4.gturbo --resume
 swift build -c release
 .build/release/TurboFieldfareMac
 swift run -c release TurboFieldfareCLI \
@@ -24,7 +25,7 @@ swift run -c release TurboFieldfareCLI \
   --max-new 64
 ```
 
-The installer streams the pinned model without staging the full source checkpoint. Set `HF_TOKEN` only if requested. The download is about 15 GB.
+The installer streams the pinned model without staging the full source checkpoint. Set `HF_TOKEN` only if requested. The download is about 15 GB. Cancellation preserves verified completed ranges; continue them with `--resume` or remove them with `--discard-partial --output scratch/gemma4.gturbo`.
 
 ## Local server
 

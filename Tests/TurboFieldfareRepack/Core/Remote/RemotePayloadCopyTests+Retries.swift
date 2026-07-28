@@ -32,7 +32,7 @@ extension RemotePayloadCopyTests {
     #expect(audit.remoteRangeRetries == 2)
     #expect((FakeHFURLProtocol.requestCounts["GET:model-00001-of-00001.safetensors"] ?? 0) >= 3)
     let payload = recorder.values.compactMap { event -> UInt64? in
-      guard case .copyingPayload(let downloaded, _) = event else { return nil }
+      guard case .copyingPayload(_, let downloaded, _) = event else { return nil }
       return downloaded
     }
     #expect(payload.last == result.remoteBytesToDownload)

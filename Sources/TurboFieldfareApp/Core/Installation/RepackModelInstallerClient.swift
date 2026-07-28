@@ -7,6 +7,7 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
         URL,
         @escaping @Sendable (ModelInstallProgress) -> Void
     ) async throws -> URL
+    typealias DiscardRunner = @Sendable (URL) async throws -> Void
 
     private struct ActiveInstall: Sendable {
         let id: UUID
@@ -19,33 +20,68 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
 
     public let descriptor: AppModelInstallDescriptor
     private let runInstall: InstallRunner
+    private let runDiscard: DiscardRunner
     private let taskState = InstallTaskState()
 
     public init(descriptor: AppModelInstallDescriptor = .default) {
         self.descriptor = descriptor
         self.runInstall = { outputDirectory, progress in
-            let options = SupportedModelSource.installOptions(
-                outputDirectory: outputDirectory,
-                overwrite: true,
+            let paths = try RemoteInstallPaths(outputDirectory: outputDirectory.path)
+            let resume = FileManager.default.fileExists(atPath: paths.checkpointFile)
+            let options = RemoteStreamingRepackOptions(
+                repoID: descriptor.repoID,
+                revision: descriptor.revision,
+                outputDir: outputDirectory.path,
                 token: ProcessInfo.processInfo.environment["HF_TOKEN"],
-                retainPartialOnFailure: false)
+                requireKnownSource: true,
+                minFreeReserveBytes: descriptor.reserveBytes,
+                overwrite: true,
+                resume: resume)
             let result = try await RemoteStreamingRepacker(options: options).run(progress: progress)
             return URL(fileURLWithPath: result.outputDir).standardizedFileURL
+        }
+        self.runDiscard = { outputDirectory in
+            try RemoteStreamingRepacker.discardPartial(
+                outputDirectory: outputDirectory.path)
         }
     }
 
     init(descriptor: AppModelInstallDescriptor = .default,
-         runInstall: @escaping InstallRunner) {
+         runInstall: @escaping InstallRunner,
+         runDiscard: @escaping DiscardRunner = { _ in }) {
         self.descriptor = descriptor
         self.runInstall = runInstall
+        self.runDiscard = runDiscard
     }
 
     public func checkInstallRequirement(outputDirectory: URL) throws -> AppModelInstallRequirement {
+        let saved = try RemoteStreamingRepacker.inspectPersistentInstall(
+            outputDirectory: outputDirectory.path,
+            repoID: descriptor.repoID,
+            requestedRevision: descriptor.revision)
+        let remainingBytes: UInt64
+        if let saved {
+            let reused = saved.completedRanges.reduce(UInt64(0)) {
+                $0 + $1.destinationBytes
+            }
+            remainingBytes = descriptor.installedBytes > reused
+                ? descriptor.installedBytes - reused
+                : 0
+        } else {
+            remainingBytes = descriptor.installedBytes
+        }
+        let requested = remainingBytes.addingReportingOverflow(
+            descriptor.rangeStagingBytes)
+        guard !requested.overflow else {
+            throw RepackError.configurationInvalid(
+                detail: "model install requirement overflows UInt64")
+        }
         let requirement = try DiskSpaceChecker.assess(
             path: outputDirectory.path,
-            bytes: descriptor.installedBytes + descriptor.rangeStagingBytes,
+            bytes: requested.partialValue,
             reserveBytes: descriptor.reserveBytes)
-        return AppModelInstallRequirement(requiredBytes: requirement.requiredBytes,
+        return AppModelInstallRequirement(probePath: requirement.path,
+                                          requiredBytes: requirement.requiredBytes,
                                           availableBytes: requirement.availableBytes)
     }
 
@@ -94,6 +130,13 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
         task?.cancel()
     }
 
+    public func discardPartialInstall(outputDirectory: URL) async throws {
+        let directory = outputDirectory.standardizedFileURL
+        try await Task.detached(priority: .utility) { [runDiscard] in
+            try await runDiscard(directory)
+        }.value
+    }
+
     static func event(for progress: ModelInstallProgress) -> AppModelInstallEvent {
         switch progress {
         case .downloadingMetadata:
@@ -104,8 +147,11 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
             return .checking
         case .reservingOutput:
             return .reservingOutput
-        case .copyingPayload(let downloaded, let total):
-            return .copyingPayload(doneBytes: downloaded, totalBytes: total)
+        case .copyingPayload(let reused, let downloadedThisRun, let total):
+            return .copyingPayload(
+                reusedBytes: reused,
+                downloadedThisRunBytes: downloadedThisRun,
+                totalBytes: total)
         case .hashingOutput(let file):
             return .hashingOutput(file)
         case .finalizing:

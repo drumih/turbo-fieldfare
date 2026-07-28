@@ -84,18 +84,26 @@ public struct AppPresentationState: Equatable, Sendable {
                 return Self(label: "Cancelling installation",
                             severity: .active, showsActivity: true)
             }
+            if case .discarding = snapshot.installState {
+                return Self(label: "Discarding download",
+                            severity: .active, showsActivity: true)
+            }
             return Self(label: installLabel(snapshot.installState),
                         severity: .active, showsActivity: true,
                         primaryAction: snapshot.installState.canCancel ? .cancelInstall : nil)
         }
 
         if snapshot.requiresInstallation {
+            if case .recoverable(let message) = snapshot.installState {
+                return Self(label: "Saved download needs attention", detail: message,
+                            severity: .warning)
+            }
             if case .failed(let message) = snapshot.installState {
                 return Self(label: "Installation failed", detail: message,
                             severity: .error, primaryAction: .install)
             }
             if case .cancelled = snapshot.installState {
-                return Self(label: "Installation cancelled", severity: .warning,
+                return Self(label: "Download paused", severity: .warning,
                             primaryAction: .install)
             }
             if case .failed(let message) = snapshot.installReadiness {
@@ -176,7 +184,8 @@ public struct AppPresentationState: Equatable, Sendable {
         case .hashingOutput(let file): return "Verifying \(file)"
         case .finalizing: return "Finalizing installation"
         case .cancelling: return "Cancelling installation"
-        case .idle, .cancelled, .installed, .failed:
+        case .discarding: return "Discarding download"
+        case .idle, .cancelled, .recoverable, .installed, .failed:
             return "Model required"
         }
     }

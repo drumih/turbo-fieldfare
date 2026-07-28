@@ -22,8 +22,10 @@ struct Sha256Stream {
     /// for fingerprinting `model.safetensors.index.json`.
     static func hashFile(path: String,
                                 tileBytes: Int = 65_536,
-                                noCache: Bool = false) throws -> String {
-        let fd = open(path, O_RDONLY)
+                                noCache: Bool = false,
+                                noFollow: Bool = false) throws -> String {
+        let flags = O_RDONLY | (noFollow ? O_NOFOLLOW : 0)
+        let fd = open(path, flags)
         if fd < 0 { throw RepackError.fileOpenFailed(path: path, errno: errno) }
         defer { close(fd) }
         if noCache {

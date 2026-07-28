@@ -2,16 +2,44 @@ import Foundation
 import Darwin
 
 /// Shared building blocks for the resident LM and routed-expert layer writers.
-enum WriterCore {
+public enum WriterCore {
 
     /// Tile size for pwrite (and the subsequent SHA-256 hashing pass). Chosen
-    /// so per-worker scratch and per-syscall payload both stay well under 1 MB.
-    static let tileBytes: Int = 512 * 1024
+    /// so per-worker scratch and per-syscall payload both stay well under
+    /// the 1 MB BoundedScratch budget.
+    public static let tileBytes: Int = 512 * 1024
+
+    /// Copy `size` bytes from `srcShard.base + srcOffset` to file `dstFd` at
+    /// `dstOffset`, in pwrite-sized tiles. Pages consumed from the source map
+    /// are evicted via madvise after each tile, capping the source-side RSS.
+    public static func pwriteTensorRegion(srcShard: MmapHandle,
+                                          srcAbsoluteOffset: UInt64,
+                                          size: UInt64,
+                                          dstFd: Int32, dstPath: String,
+                                          dstOffset: UInt64,
+                                          audit: RepackAudit) throws {
+        var remaining = Int(size)
+        var srcOff = srcAbsoluteOffset
+        var dstOff = dstOffset
+        let tile = WriterCore.tileBytes
+        while remaining > 0 {
+            let n = min(remaining, tile)
+            let p = srcShard.base.advanced(by: Int(srcOff))
+            try Posix.pwriteAll(fd: dstFd, path: dstPath, buf: p, count: n, offset: dstOff)
+            audit.recordTile(bytes: n)
+            audit.recordWrite(bytes: n)
+            audit.recordRead(bytes: n)
+            srcShard.adviseDontNeed(offset: srcOff, count: n)
+            srcOff += UInt64(n)
+            dstOff += UInt64(n)
+            remaining -= n
+        }
+    }
 
     /// Compute SHA-256 of an entire (presumed-written) file by streaming it
     /// through `tileBytes` pread chunks. Drops pages with `F_NOCACHE` style
     /// behaviour via fcntl. Allocates one bounded scratch buffer.
-    static func hashEntireFile(path: String, size: UInt64,
+    public static func hashEntireFile(path: String, size: UInt64,
                                       audit: RepackAudit,
                                       cancellationCheck: () throws -> Void = {}) throws -> String {
         let fd = try Posix.openRead(path)

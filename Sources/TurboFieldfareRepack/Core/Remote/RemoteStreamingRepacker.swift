@@ -1,44 +1,51 @@
 import Foundation
-import Darwin
-
 public struct RemoteStreamingRepackOptions: Sendable {
+    public let repoID: String
+    public let revision: String
     public let outputDir: String
+    public let token: String?
+    public let requireKnownSource: Bool
+    public let copyAuditPath: String?
+    public let rangeChunkBytes: Int
+    public let writeTileBytes: Int
+    public let minFreeReserveBytes: UInt64
     public let overwrite: Bool
-    let repoID: String
-    let revision: String
-    let token: String?
-    let requireKnownSource: Bool
-    let rangeChunkBytes: Int
-    let minFreeReserveBytes: UInt64
-    let retainPartialOnFailure: Bool
-    let session: URLSession
-    let baseURL: URL
-    let rangeRetryAttempts: Int
-    let retryBaseDelayNs: UInt64
+    public let resume: Bool
+    public let dryRunSpaceCheck: Bool
+    public let downloadSession: RemoteDownloadSession
+    public let baseURL: URL
+    public let rangeRetryAttempts: Int
+    public let retryBaseDelayNs: UInt64
 
-    init(outputDir: String,
-                overwrite: Bool,
-                repoID: String = SupportedModelSource.repoID,
-                revision: String = SupportedModelSource.revision,
+    public init(repoID: String,
+                revision: String,
+                outputDir: String,
                 token: String? = nil,
-                requireKnownSource: Bool = true,
+                requireKnownSource: Bool = false,
+                copyAuditPath: String? = nil,
                 rangeChunkBytes: Int = RemoteChunkPolicy.defaultBytes,
-                minFreeReserveBytes: UInt64 = SupportedModelSource.reserveBytes,
-                retainPartialOnFailure: Bool = true,
-                session: URLSession = .shared,
+                writeTileBytes: Int = WriterCore.tileBytes,
+                minFreeReserveBytes: UInt64 = 1 * 1024 * 1024 * 1024,
+                overwrite: Bool = false,
+                resume: Bool = false,
+                dryRunSpaceCheck: Bool = false,
+                downloadSession: RemoteDownloadSession = RemoteDownloadSession(),
                 baseURL: URL = URL(string: "https://huggingface.co")!,
                 rangeRetryAttempts: Int = 4,
                 retryBaseDelayNs: UInt64 = 1_000_000_000) {
-        self.outputDir = outputDir
-        self.overwrite = overwrite
         self.repoID = repoID
         self.revision = revision
+        self.outputDir = outputDir
         self.token = token
         self.requireKnownSource = requireKnownSource
+        self.copyAuditPath = copyAuditPath
         self.rangeChunkBytes = rangeChunkBytes
+        self.writeTileBytes = writeTileBytes
         self.minFreeReserveBytes = minFreeReserveBytes
-        self.retainPartialOnFailure = retainPartialOnFailure
-        self.session = session
+        self.overwrite = overwrite
+        self.resume = resume
+        self.dryRunSpaceCheck = dryRunSpaceCheck
+        self.downloadSession = downloadSession
         self.baseURL = baseURL
         self.rangeRetryAttempts = rangeRetryAttempts
         self.retryBaseDelayNs = retryBaseDelayNs
@@ -48,12 +55,20 @@ public struct RemoteStreamingRepackOptions: Sendable {
 public struct RemoteStreamingRepackResult: Sendable {
     public let outputDir: String
     public let resolvedCommit: String
+    let plan: RepackPlan
+    public let rangeRequestCount: Int
     public let remoteBytesToDownload: UInt64
+    public let remoteGapBytesDownloaded: UInt64
+    public let remoteRetryCount: UInt64
+    public let reusedBytes: UInt64
+    public let downloadedThisRunBytes: UInt64
+    public let dryRun: Bool
 }
 
 public final class RemoteStreamingRepacker {
     private let options: RemoteStreamingRepackOptions
     private let audit: RepackAudit
+    private let startTime = Date()
 
     public init(options: RemoteStreamingRepackOptions,
                 audit: RepackAudit = RepackAudit()) {
@@ -63,94 +78,234 @@ public final class RemoteStreamingRepacker {
 
     public func run(progress: @escaping @Sendable (ModelInstallProgress) -> Void = { _ in }) async throws
         -> RemoteStreamingRepackResult {
-        try Self.sweepStalePartials(outputDir: options.outputDir, audit: audit)
-        if FileManager.default.fileExists(atPath: options.outputDir), !options.overwrite {
+        try validateOptions()
+        let installLock = try InstallLock.acquire(outputDirectory: options.outputDir)
+        let paths = installLock.paths
+        if try Posix.entryKind(paths.finalDirectory) == .directory, !options.overwrite {
             throw RepackError.configurationInvalid(detail:
-                "output directory already exists: \(options.outputDir)")
+                "output directory already exists: \(paths.finalDirectory)")
         }
-
-        let partialDir = options.outputDir + ".partial.\(getpid())"
-        let metadataDir = (partialDir as NSString).appendingPathComponent(".remote-metadata")
-        let tempDir = (partialDir as NSString).appendingPathComponent(".range-tmp")
-        try? FileManager.default.removeItem(atPath: partialDir)
-
+        let hasPartial = try Posix.entryKind(paths.partialDirectory) == .directory
+        let hasCheckpoint = try Posix.entryKind(paths.checkpointFile) == .regular
+        guard hasPartial == hasCheckpoint else {
+            throw RepackError.installStateCorrupt(
+                path: paths.partialDirectory,
+                detail: "partial directory and checkpoint must exist together")
+        }
+        if options.resume {
+            guard hasPartial else {
+                throw RepackError.installStateMissing(path: paths.checkpointFile)
+            }
+        } else if hasPartial {
+            throw RepackError.installStateIncompatible(
+                detail: "saved download exists; resume or discard it")
+        }
         do {
-            return try await runPrepared(partialDir: partialDir,
-                                         metadataDir: metadataDir,
-                                         tempDir: tempDir,
-                                         progress: progress)
+            return try await runPrepared(paths: paths, progress: progress)
         } catch {
-            if error is CancellationError || !options.retainPartialOnFailure {
-                try? FileManager.default.removeItem(atPath: partialDir)
+            if !hasCheckpoint,
+               (try? Posix.entryKind(paths.checkpointFile)) != .regular {
+                try? FileManager.default.removeItem(atPath: paths.partialDirectory)
             }
             throw error
         }
     }
 
-    private func runPrepared(partialDir: String,
-                             metadataDir: String,
-                             tempDir: String,
+    public static func inspectPersistentInstall(
+        outputDirectory: String,
+        repoID: String,
+        requestedRevision: String
+    ) throws -> RemoteInstallCheckpoint? {
+        let lock = try InstallLock.acquire(outputDirectory: outputDirectory)
+        let paths = lock.paths
+        let partial = try Posix.entryKind(paths.partialDirectory)
+        let checkpoint = try Posix.entryKind(paths.checkpointFile)
+        if partial == .absent, checkpoint == .absent { return nil }
+        guard partial == .directory, checkpoint == .regular else {
+            throw RepackError.installStateCorrupt(
+                path: paths.partialDirectory,
+                detail: "partial directory and checkpoint must exist together")
+        }
+        let value = try RemoteInstallCheckpoint.load(from: paths.checkpointFile)
+        guard value.repoID == repoID, value.requestedRevision == requestedRevision else {
+            throw RepackError.installStateIncompatible(
+                detail: "saved download belongs to a different source")
+        }
+        return value
+    }
+
+    public static func discardPartial(outputDirectory: String) throws {
+        let lock = try InstallLock.acquire(outputDirectory: outputDirectory)
+        let paths = lock.paths
+        let hasPartial = try Posix.entryKind(paths.partialDirectory) != .absent
+        let hasCheckpoint = try Posix.entryKind(paths.checkpointFile) != .absent
+        guard hasPartial || hasCheckpoint else {
+            throw RepackError.installStateMissing(path: paths.checkpointFile)
+        }
+        if hasPartial {
+            try FileManager.default.removeItem(atPath: paths.partialDirectory)
+        }
+        if hasCheckpoint {
+            try FileManager.default.removeItem(atPath: paths.checkpointFile)
+        }
+        try Posix.fsyncDirectory(paths.parentDirectory)
+    }
+
+    private func runPrepared(paths: RemoteInstallPaths,
                              progress: @escaping @Sendable (ModelInstallProgress) -> Void) async throws
         -> RemoteStreamingRepackResult {
         try Task.checkCancellation()
+        let saved = options.resume
+            ? try RemoteInstallCheckpoint.load(from: paths.checkpointFile)
+            : nil
+        if let saved {
+            guard saved.repoID == options.repoID,
+                  saved.requestedRevision == options.revision else {
+                throw RepackError.installStateIncompatible(
+                    detail: "saved download belongs to a different source")
+            }
+        }
         let retryPolicy = RemoteRetryPolicy(attempts: options.rangeRetryAttempts,
                                             baseDelayNs: options.retryBaseDelayNs)
         let remote = HuggingFaceRemoteSource(repoID: options.repoID,
                                              requestedRevision: options.revision,
+                                             resolvedCommit: saved?.resolvedCommit,
                                              token: options.token,
-                                             session: options.session,
+                                             downloadSession: options.downloadSession,
                                              baseURL: options.baseURL,
-                                             tempDirectory: tempDir,
+                                             tempDirectory: paths.partialDirectory,
                                              retryPolicy: retryPolicy)
         progress(.downloadingMetadata)
         let snapshot = try await RemoteSnapshotLoader.load(remote: remote,
                                                            requireKnownSource: options.requireKnownSource,
-                                                           metadataDirectory: metadataDir,
+                                                           metadataDirectory: paths.metadataDirectory,
                                                            audit: audit)
         try Task.checkCancellation()
         let plan = try RepackPlanner.plan(meta: snapshot.metadata,
                                           arch: snapshot.arch,
                                           shardHeaders: snapshot.shardHeaders,
-                                          outputDir: partialDir)
+                                          outputDir: paths.partialDirectory)
         let rangePlan = try RangeCopyPlanner.plan(repackPlan: plan,
-                                                  rangeChunkBytes: options.rangeChunkBytes)
+                                                  rangeChunkBytes: options.rangeChunkBytes,
+                                                  layoutMode: "identity",
+                                                  layoutOrderSha256: nil)
+        var checkpoint = saved ?? RemoteInstallCheckpoint(
+            repoID: options.repoID,
+            requestedRevision: options.revision,
+            resolvedCommit: snapshot.resolvedCommit,
+            sourceIndexSHA256: snapshot.metadata.indexSha256Hex,
+            planFingerprint: rangePlan.canonicalFingerprint,
+            totalSourceBytes: rangePlan.remoteBytesToDownload)
+        if saved != nil {
+            guard checkpoint.resolvedCommit == snapshot.resolvedCommit,
+                  checkpoint.totalSourceBytes == rangePlan.remoteBytesToDownload,
+                  checkpoint.matches(
+                      repoID: options.repoID,
+                      requestedRevision: options.revision,
+                      sourceIndexSHA256: snapshot.metadata.indexSha256Hex,
+                      planFingerprint: rangePlan.canonicalFingerprint) else {
+                throw RepackError.installStateIncompatible(
+                    detail: "saved download source or copy plan changed")
+            }
+            if try outputFilesMatch(plan: plan, rangePlan: rangePlan) {
+                checkpoint.completedRanges = try Self.validatedCompletedRanges(
+                    checkpoint.completedRanges,
+                    copies: rangePlan.coalescedCopies,
+                    partialDirectory: paths.partialDirectory)
+            } else {
+                checkpoint.completedRanges = []
+                try FileManager.default.removeItem(atPath: paths.partialDirectory)
+                try Posix.mkdirP(paths.partialDirectory)
+                try createOutputFiles(plan: plan, paths: paths)
+            }
+            try checkpoint.write(
+                to: paths.checkpointFile,
+                parentDirectory: paths.parentDirectory)
+        }
         let outputBytes = plan.resident.totalSize
             + plan.layers.reduce(UInt64(0)) { $0 + $1.fileSize }
         progress(.planning(downloadBytes: rangePlan.remoteBytesToDownload,
                            outputBytes: outputBytes))
+        let reusedDestinationBytes = checkpoint.completedRanges.reduce(UInt64(0)) {
+            $0 + $1.destinationBytes
+        }
+        let remainingOutputBytes = outputBytes > reusedDestinationBytes
+            ? outputBytes - reusedDestinationBytes
+            : 0
         let diskRequirement = try DiskSpaceChecker.requireAvailable(
-            path: partialDir,
-            bytes: outputBytes + UInt64(options.rangeChunkBytes),
+            path: paths.parentDirectory,
+            bytes: remainingOutputBytes + UInt64(options.rangeChunkBytes),
             reserveBytes: options.minFreeReserveBytes)
         progress(.checkingDisk(diskRequirement))
         try Task.checkCancellation()
 
-        progress(.reservingOutput(bytes: outputBytes))
-        try Task.checkCancellation()
-        try Posix.mkdirP((partialDir as NSString).appendingPathComponent("packed_experts"))
-        try Posix.mkdirP(tempDir)
+        audit.remoteRepoID = options.repoID
+        audit.remoteRequestedRevision = options.revision
+        audit.remoteResolvedCommit = snapshot.resolvedCommit
+        audit.remoteRangeStreamingSupported = true
+        audit.remoteGapBytesDownloaded = rangePlan.remoteGapBytesDownloaded
+        audit.sourceSnapshotSha256 = snapshot.metadata.indexSha256Hex
+        audit.bitWidthOverridesHonored = snapshot.metadata.bitsOverrides.count
+        audit.tensorsDroppedMultimodal = plan.excludedMultimodalTensorNames
+        audit.packedExpertLayoutMode = "identity"
 
-        let residentFd = try ResidentWriter.createAndWriteIndex(plan: plan.resident, audit: audit)
-        try Posix.fsync(residentFd, path: plan.resident.path)
-        close(residentFd)
-        for layer in plan.layers where layer.expertsPerLayer > 0 {
-            try Task.checkCancellation()
-            try Posix.mkdirP((layer.path as NSString).deletingLastPathComponent)
-            let fd = try Posix.openCreateRW(layer.path)
-            try Posix.ftruncate(fd, path: layer.path, size: layer.fileSize)
-            try Posix.fsync(fd, path: layer.path)
-            close(fd)
+        if options.dryRunSpaceCheck {
+            if saved == nil {
+                try? FileManager.default.removeItem(atPath: paths.partialDirectory)
+            }
+            return RemoteStreamingRepackResult(outputDir: options.outputDir,
+                                               resolvedCommit: snapshot.resolvedCommit,
+                                               plan: plan,
+                                               rangeRequestCount: rangePlan.coalescedCopies.count,
+                                               remoteBytesToDownload: rangePlan.remoteBytesToDownload,
+                                               remoteGapBytesDownloaded: rangePlan.remoteGapBytesDownloaded,
+                                               remoteRetryCount: audit.remoteRangeRetries,
+                                               reusedBytes: checkpoint.completedRanges.reduce(0) {
+                                                   $0 + $1.sourceBytes
+                                               },
+                                               downloadedThisRunBytes: 0,
+                                               dryRun: true)
+        }
+
+        if saved == nil {
+            progress(.reservingOutput(bytes: outputBytes))
+            try createOutputFiles(plan: plan, paths: paths)
+            try checkpoint.write(
+                to: paths.checkpointFile,
+                parentDirectory: paths.parentDirectory)
         }
 
         let provider = HTTPRangeSourceByteProvider(remote: remote.pinned(commit: snapshot.resolvedCommit),
                                                    files: snapshot.remoteFiles,
-                                                   writeTileBytes: WriterCore.tileBytes)
-        progress(.copyingPayload(downloadedBytes: 0,
-                                 totalBytes: rangePlan.remoteBytesToDownload))
-        try await provider.copyBatch(rangePlan.coalescedCopies, audit: audit) { downloadedBytes in
-            progress(.copyingPayload(downloadedBytes: downloadedBytes,
-                                     totalBytes: rangePlan.remoteBytesToDownload))
+                                                   writeTileBytes: options.writeTileBytes)
+        let reusedBytes = checkpoint.completedRanges.reduce(UInt64(0)) {
+            $0 + $1.sourceBytes
         }
+        let payloadDownloadStart = audit.remoteBytesDownloaded
+        progress(.copyingPayload(
+            reusedBytes: reusedBytes,
+            downloadedThisRunBytes: 0,
+            totalBytes: rangePlan.remoteBytesToDownload))
+        try await provider.copyBatch(
+            rangePlan.coalescedCopies,
+            completedRangeIDs: Set(checkpoint.completedRanges.map(\.id)),
+            partialDirectory: paths.partialDirectory,
+            temporaryPath: paths.rangeTemporaryFile,
+            audit: audit,
+            progress: { downloadedBytes in
+                progress(.copyingPayload(
+                    reusedBytes: reusedBytes,
+                    downloadedThisRunBytes: downloadedBytes,
+                    totalBytes: rangePlan.remoteBytesToDownload))
+            },
+            commit: { completed in
+                checkpoint.completedRanges.removeAll { $0.id == completed.id }
+                checkpoint.completedRanges.append(completed)
+                checkpoint.completedRanges.sort { $0.id < $1.id }
+                try checkpoint.write(
+                    to: paths.checkpointFile,
+                    parentDirectory: paths.parentDirectory)
+            })
 
         try recordOutputFile(relativePath: "model_weights.bin",
                              path: plan.resident.path,
@@ -161,7 +316,8 @@ public final class RemoteStreamingRepacker {
             try recordOutputFile(relativePath: rel, path: layer.path, progress: progress)
         }
 
-        let layoutPath = ((partialDir as NSString).appendingPathComponent("packed_experts") as NSString)
+        let layoutPath = ((paths.partialDirectory as NSString)
+            .appendingPathComponent("packed_experts") as NSString)
             .appendingPathComponent("layout.json")
         let expertStride = plan.layers.first(where: { $0.expertsPerLayer > 0 })?.expertStride ?? 0
         let layoutData = try GTurboJSON.encodeLayout(plan: plan, expertStride: expertStride)
@@ -174,47 +330,148 @@ public final class RemoteStreamingRepacker {
         try Task.checkCancellation()
         try await copyRemoteMetadataSidecars(snapshot: snapshot,
                                              remote: remote,
-                                             partialDir: partialDir,
+                                             partialDir: paths.partialDirectory,
                                              progress: progress)
-        try? FileManager.default.removeItem(atPath: tempDir)
-        try? FileManager.default.removeItem(atPath: metadataDir)
+        try? FileManager.default.removeItem(atPath: paths.rangeTemporaryFile)
+        try? FileManager.default.removeItem(atPath: paths.metadataDirectory)
         progress(.finalizing)
         try Task.checkCancellation()
         try writeManifest(plan: plan,
-                          partialDir: partialDir,
+                          partialDir: paths.partialDirectory,
                           metadata: snapshot.metadata,
                           expertStride: expertStride,
                           resolvedCommit: snapshot.resolvedCommit)
 
         try Task.checkCancellation()
-        if FileManager.default.fileExists(atPath: options.outputDir) {
-            try FileManager.default.removeItem(atPath: options.outputDir)
+        if try Posix.entryKind(paths.finalDirectory) == .directory {
+            try Posix.renameSwap(paths.partialDirectory, paths.finalDirectory)
+            try Posix.fsyncDirectory(paths.parentDirectory)
+            try? FileManager.default.removeItem(atPath: paths.partialDirectory)
+        } else {
+            try Posix.rename(from: paths.partialDirectory, to: paths.finalDirectory)
+            try Posix.fsyncDirectory(paths.parentDirectory)
         }
-        try Posix.rename(from: partialDir, to: options.outputDir)
+        try? FileManager.default.removeItem(atPath: paths.checkpointFile)
+
+        audit.wallTimeSeconds = Date().timeIntervalSince(startTime)
+        audit.wholeFileHeapBuffers = false
+        if let auditPath = options.copyAuditPath {
+            let data = try audit.toJSONData(outputDir: options.outputDir)
+            try Posix.mkdirP((auditPath as NSString).deletingLastPathComponent)
+            try data.write(to: URL(fileURLWithPath: auditPath))
+        }
 
         return RemoteStreamingRepackResult(outputDir: options.outputDir,
                                            resolvedCommit: snapshot.resolvedCommit,
-                                           remoteBytesToDownload: rangePlan.remoteBytesToDownload)
+                                           plan: plan,
+                                           rangeRequestCount: rangePlan.coalescedCopies.count,
+                                           remoteBytesToDownload: rangePlan.remoteBytesToDownload,
+                                           remoteGapBytesDownloaded: rangePlan.remoteGapBytesDownloaded,
+                                           remoteRetryCount: audit.remoteRangeRetries,
+                                           reusedBytes: reusedBytes,
+                                           downloadedThisRunBytes:
+                                               audit.remoteBytesDownloaded - payloadDownloadStart,
+                                           dryRun: false)
     }
 
-    static func sweepStalePartials(outputDir: String, audit: RepackAudit? = nil) throws {
-        let parent = (outputDir as NSString).deletingLastPathComponent
-        let searchDir = parent.isEmpty ? "." : parent
-        let prefix = (outputDir as NSString).lastPathComponent + ".partial."
-        let fm = FileManager.default
-        for entry in (try? fm.contentsOfDirectory(atPath: searchDir)) ?? []
-        where entry.hasPrefix(prefix) {
-            let path = (searchDir as NSString).appendingPathComponent(entry)
-            let suffix = String(entry.dropFirst(prefix.count))
-            if let pid = Int32(suffix),
-               kill(pid, 0) == 0 {
-                throw RepackError.configurationInvalid(detail:
-                    "another repack (pid \(pid)) appears to own \(path); " +
-                    "delete it manually if that process is not a repack")
-            }
-            try fm.removeItem(atPath: path)
-            audit?.stalePartialsRemoved.append(path)
+    private func validateOptions() throws {
+        guard options.rangeChunkBytes > 0,
+              options.rangeChunkBytes <= RemoteChunkPolicy.maxBytes else {
+            throw RepackError.configurationInvalid(detail: "bad range chunk bytes \(options.rangeChunkBytes)")
         }
+        guard options.writeTileBytes > 0,
+              options.writeTileBytes <= BoundedScratch.defaultLimitBytes else {
+            throw RepackError.configurationInvalid(detail: "bad write tile bytes \(options.writeTileBytes)")
+        }
+        guard options.rangeRetryAttempts >= 0 else {
+            throw RepackError.configurationInvalid(detail:
+                "bad range retry attempts \(options.rangeRetryAttempts)")
+        }
+    }
+
+    private func createOutputFiles(plan: RepackPlan,
+                                   paths: RemoteInstallPaths) throws {
+        try Posix.mkdirP((paths.partialDirectory as NSString)
+            .appendingPathComponent("packed_experts"))
+        let resident = try ResidentWriter.createAndWriteIndex(
+            plan: plan.resident,
+            audit: audit)
+        try Posix.fsync(resident, path: plan.resident.path)
+        close(resident)
+        for layer in plan.layers where layer.expertsPerLayer > 0 {
+            try Task.checkCancellation()
+            let descriptor = try Posix.openCreateRW(layer.path)
+            try Posix.ftruncate(descriptor, path: layer.path, size: layer.fileSize)
+            try Posix.fsync(descriptor, path: layer.path)
+            close(descriptor)
+        }
+        try Posix.fsyncDirectory(paths.partialDirectory)
+    }
+
+    private func outputFilesMatch(plan: RepackPlan,
+                                  rangePlan: RangeCopyPlan) throws -> Bool {
+        for output in rangePlan.expectedOutputs {
+            let path = ((plan.resident.path as NSString).deletingLastPathComponent
+                as NSString).appendingPathComponent(output.relativePath)
+            guard try Posix.entryKind(path) == .regular else { return false }
+            let descriptor = try Posix.openReadNoFollow(path)
+            defer { close(descriptor) }
+            guard try Posix.fileSize(fd: descriptor, path: path) == output.size else {
+                return false
+            }
+        }
+
+        let expectedIndex = try ResidentWriter.encodeIndex(plan: plan.resident)
+        let descriptor = try Posix.openReadNoFollow(plan.resident.path)
+        defer { close(descriptor) }
+        let scratch = UnsafeMutableRawBufferPointer.allocate(
+            byteCount: min(WriterCore.tileBytes, max(1, expectedIndex.count)),
+            alignment: 16_384)
+        defer { scratch.deallocate() }
+        return try expectedIndex.withUnsafeBytes { expected in
+            var offset = 0
+            while offset < expected.count {
+                let count = min(scratch.count, expected.count - offset)
+                try Posix.preadAll(
+                    fd: descriptor,
+                    path: plan.resident.path,
+                    buf: scratch.baseAddress!,
+                    count: count,
+                    offset: UInt64(offset))
+                guard memcmp(
+                    scratch.baseAddress!,
+                    expected.baseAddress!.advanced(by: offset),
+                    count) == 0 else { return false }
+                offset += count
+            }
+            return true
+        }
+    }
+
+    static func validatedCompletedRanges(
+        _ completed: [RemoteCompletedRange],
+        copies: [CoalescedRangeCopy],
+        partialDirectory: String
+    ) throws -> [RemoteCompletedRange] {
+        let copiesByID = Dictionary(uniqueKeysWithValues: copies.map { ($0.id, $0) })
+        var valid: [RemoteCompletedRange] = []
+        for range in completed {
+            guard let copy = copiesByID[range.id],
+                  range.sourceBytes == copy.size,
+                  range.destinationBytes
+                      == copy.destinations.reduce(UInt64(0), { $0 + $1.size }) else {
+                throw RepackError.installStateCorrupt(
+                    path: partialDirectory,
+                    detail: "checkpoint contains an unknown range")
+            }
+            let digest = try HTTPRangeSourceByteProvider.destinationDigest(
+                copy,
+                partialDirectory: partialDirectory)
+            if digest == range.destinationDigest {
+                valid.append(range)
+            }
+        }
+        return valid.sorted { $0.id < $1.id }
     }
 
     private func recordOutputFile(relativePath: String,
@@ -272,7 +529,7 @@ public final class RemoteStreamingRepacker {
             do {
                 info = try await pinned.resolveFileInfo(filename: file.name, audit: audit)
             } catch {
-                if file.required {
+                if file.required || !isRemoteNotFound(error) {
                     throw error
                 }
                 continue
@@ -285,8 +542,18 @@ public final class RemoteStreamingRepacker {
                                             audit: audit)
             try recordOutputFile(relativePath: "tokenizer/\(file.name)",
                                  path: dst,
-                                 progress: progress)
+                                            progress: progress)
         }
+    }
+
+    private func isRemoteNotFound(_ error: Error) -> Bool {
+        if case RepackError.remoteHTTPStatus(_, 404) = error {
+            return true
+        }
+        if case RepackError.remoteHTTPResponse(_, 404, _) = error {
+            return true
+        }
+        return false
     }
 
     private func writeManifest(plan: RepackPlan,
@@ -294,16 +561,25 @@ public final class RemoteStreamingRepacker {
                                metadata: IndexLoader.SourceMetadata,
                                expertStride: UInt64,
                                resolvedCommit: String) throws {
-        var bits = GTurboJSON.QuantBitWidths(embedding: 4,
-                                             attention: 4,
-                                             router: 8,
-                                             sharedExpert: 8,
-                                             routedExpert: 4)
+        var bits = GTurboJSON.QuantBitWidths(
+            embedding: 4,
+            attention: 4,
+            router: 8,
+            sharedExpert: 8,
+            routedExpert: 4)
         for e in plan.resident.entries {
-            if e.name == "language_model.model.embed_tokens.weight", let s = e.quantSpec { bits.embedding = s.bits }
-            if e.name.hasSuffix(".self_attn.q_proj.weight"), let s = e.quantSpec { bits.attention = s.bits }
-            if e.name.hasSuffix(".router.proj.weight"), let s = e.quantSpec { bits.router = s.bits }
-            if e.name.hasSuffix(".mlp.gate_proj.weight"), let s = e.quantSpec { bits.sharedExpert = s.bits }
+            if e.name == "language_model.model.embed_tokens.weight", let s = e.quantSpec {
+                bits.embedding = s.bits
+            }
+            if e.name.hasSuffix(".self_attn.q_proj.weight"), let s = e.quantSpec {
+                bits.attention = s.bits
+            }
+            if e.name.hasSuffix(".router.proj.weight"), let s = e.quantSpec {
+                bits.router = s.bits
+            }
+            if e.name.hasSuffix(".mlp.gate_proj.weight"), let s = e.quantSpec {
+                bits.sharedExpert = s.bits
+            }
         }
         if let layer = plan.layers.first(where: { !$0.subTensors.isEmpty }),
            let routedBits = layer.subTensors.first?.bitsForWeights {

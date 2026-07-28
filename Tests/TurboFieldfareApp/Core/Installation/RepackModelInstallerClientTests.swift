@@ -15,7 +15,10 @@ import Testing
                                                         requiredBytes: 30,
                                                         availableBytes: 40)))
             progress(.reservingOutput(bytes: 20))
-            progress(.copyingPayload(downloadedBytes: 4, totalBytes: 10))
+            progress(.copyingPayload(
+                reusedBytes: 1,
+                downloadedThisRunBytes: 3,
+                totalBytes: 10))
             progress(.hashingOutput("model_weights.bin"))
             progress(.finalizing)
             return outputDirectory
@@ -32,7 +35,10 @@ import Testing
             .planning,
             .checking,
             .reservingOutput,
-            .copyingPayload(doneBytes: 4, totalBytes: 10),
+            .copyingPayload(
+                reusedBytes: 1,
+                downloadedThisRunBytes: 3,
+                totalBytes: 10),
             .hashingOutput("model_weights.bin"),
             .finalizing,
             .installed(output.standardizedFileURL),

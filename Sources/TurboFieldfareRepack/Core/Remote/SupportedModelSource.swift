@@ -13,12 +13,16 @@ public enum SupportedModelSource {
     public static func installOptions(outputDirectory: URL,
                                       overwrite: Bool,
                                       token: String?,
-                                      retainPartialOnFailure: Bool = false)
+                                      resume: Bool = false)
         -> RemoteStreamingRepackOptions {
         RemoteStreamingRepackOptions(
+            repoID: repoID,
+            revision: revision,
             outputDir: outputDirectory.path,
-            overwrite: overwrite,
             token: token,
-            retainPartialOnFailure: retainPartialOnFailure)
+            requireKnownSource: true,
+            minFreeReserveBytes: reserveBytes,
+            overwrite: overwrite,
+            resume: resume)
     }
 }

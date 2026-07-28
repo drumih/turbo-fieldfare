@@ -58,18 +58,26 @@ write a complete safetensors shard to disk.
 Instead, the repacker:
 
 1. reads the source index and tensor metadata;
-2. requests bounded remote byte ranges;
-3. copies packed values, scales, and biases through tile-sized scratch;
-4. writes resident tensors and routed experts directly into their final
+2. binds a versioned checkpoint to the pinned source and canonical range plan;
+3. requests bounded remote byte ranges;
+4. copies packed values, scales, and biases through tile-sized scratch;
+5. makes each completed range durable before recording its destination digest;
+6. writes resident tensors and routed experts directly into their final
    locations;
-5. omits the vision tensors; and
-6. writes `manifest.json` after every file listed in it is complete and hashed,
-   then writes `verified-install.json`.
+7. omits the vision tensors; and
+8. writes and verifies `manifest.json` and `verified-install.json` in the
+   partial directory before atomically promoting it.
 
 The repacker changes the layout but copies the quantized values unchanged. It
 never dequantizes and requantizes them. In the validated install, the largest
 payload and scratch heap were 524,288 bytes each. The full 15 GB-class source
 never exists in a Swift heap buffer.
+
+Cancellation pauses the transaction instead of deleting it. Resume
+revalidates the recorded destination digest for every completed range and
+downloads only missing or damaged ranges. An advisory lock serializes
+inspection, install, resume, discard, and promotion for the target path.
+Discard is explicit.
 
 See the [command-line instructions](../README.md#command-line-interface) for
 installation. The [optimization journey](OPTIMIZATION_JOURNEY.md#explicit-reads-made-expert-streaming-work)

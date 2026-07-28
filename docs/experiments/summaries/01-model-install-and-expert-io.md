@@ -174,7 +174,8 @@ runtime artifact appears last.
 - **Hypothesis:** The installer could convert the source model directly from
   remote byte ranges without storing or loading the complete source checkpoint.
 - **Variants tested:** A pinned remote revision, range planning, bounded payload
-  copying, interruption guards, and final manifest verification.
+  copying, durable per-range checkpoints, interruption and process-death
+  recovery, explicit discard, and atomic final promotion.
 - **Evidence:** A
   validated run downloaded 14,952,958,284 bytes in 229 ranges. Its largest
   transfer was 64 MiB; peak payload and scratch heap were each 524,288 bytes.
@@ -182,10 +183,13 @@ runtime artifact appears last.
   for `The capital of France is` generated at 5.015 tok/s; this validated the
   install/load path, not answer quality.
 - **What changed the conclusion:** Nothing; later installs kept the same
-  core path.
+  core path. A later interruption gate reused every checkpointed range,
+  redownloaded only the unfinished work, and produced output identical to an
+  uninterrupted install.
 - **Final disposition:** Production.
-- **Lesson:** Model installation
-  must obey the same bounded-memory architecture as inference.
+- **Lesson:** Model installation must obey the same bounded-memory architecture
+  as inference, and resumability must trust only durable, digest-verified
+  destination bytes.
 
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |
 [Optimization journey](../../OPTIMIZATION_JOURNEY.md) |

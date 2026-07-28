@@ -53,7 +53,12 @@ public enum DiskSpaceChecker {
             throw RepackError.fileStatFailed(path: path, errno: errno)
         }
         let available = UInt64(st.f_bavail) * UInt64(st.f_bsize)
-        let required = bytes + reserveBytes
+        let sum = bytes.addingReportingOverflow(reserveBytes)
+        guard !sum.overflow else {
+            throw RepackError.configurationInvalid(
+                detail: "disk-space requirement overflows UInt64")
+        }
+        let required = sum.partialValue
         return DiskSpaceRequirement(path: path,
                                     requiredBytes: required,
                                     availableBytes: available)

@@ -3,18 +3,22 @@ import TurboFieldfareRepackCore
 
 private let usage = """
 Usage:
-  TurboFieldfareRepack --output <model.gturbo> [--overwrite]
+  TurboFieldfareRepack --output <model.gturbo> [--overwrite] [--resume]
+  TurboFieldfareRepack --discard-partial --output <model.gturbo>
   TurboFieldfareRepack --verify-install --input-gturbo <model.gturbo>
   TurboFieldfareRepack --help
 
 The installer streams the supported Gemma 4 checkpoint from Hugging Face and
 repackages it without materializing the source checkpoint on disk. Set HF_TOKEN
-only if Hugging Face requests authentication.
+only if Hugging Face requests authentication. A cancelled or interrupted
+download can be continued with --resume or removed with --discard-partial.
 """
 
 private struct Arguments {
     var output: String?
     var overwrite = false
+    var resume = false
+    var discardPartial = false
     var verifyInstall = false
     var inputGTurbo: String?
 
@@ -28,6 +32,12 @@ private struct Arguments {
                 throw ParseError.help
             case "--overwrite":
                 parsed.overwrite = true
+                index += 1
+            case "--resume":
+                parsed.resume = true
+                index += 1
+            case "--discard-partial":
+                parsed.discardPartial = true
                 index += 1
             case "--verify-install":
                 parsed.verifyInstall = true
@@ -47,11 +57,23 @@ private struct Arguments {
             }
         }
 
+        guard !(parsed.resume && parsed.discardPartial) else {
+            throw ParseError.invalidMode("--resume and --discard-partial are mutually exclusive")
+        }
+        if parsed.discardPartial {
+            guard parsed.output != nil else {
+                throw ParseError.missingRequired("--output")
+            }
+            guard parsed.inputGTurbo == nil, !parsed.overwrite, !parsed.verifyInstall else {
+                throw ParseError.invalidMode("--discard-partial only accepts --output")
+            }
+            return parsed
+        }
         if parsed.verifyInstall {
             guard parsed.inputGTurbo != nil else {
                 throw ParseError.missingRequired("--input-gturbo")
             }
-            guard parsed.output == nil, !parsed.overwrite else {
+            guard parsed.output == nil, !parsed.overwrite, !parsed.resume else {
                 throw ParseError.invalidMode("verification accepts only --input-gturbo")
             }
         } else {
@@ -100,6 +122,17 @@ private func run(_ values: [String]) async -> Int32 {
         return 2
     }
 
+    if arguments.discardPartial, let output = arguments.output {
+        do {
+            try RemoteStreamingRepacker.discardPartial(outputDirectory: output)
+            print("Discarded saved download for \(output)")
+            return 0
+        } catch {
+            printError("discard failed: \(error)")
+            return 1
+        }
+    }
+
     if arguments.verifyInstall, let input = arguments.inputGTurbo {
         do {
             let result = try VerifiedInstallTool.run(
@@ -117,7 +150,8 @@ private func run(_ values: [String]) async -> Int32 {
     let options = SupportedModelSource.installOptions(
         outputDirectory: URL(fileURLWithPath: output),
         overwrite: arguments.overwrite,
-        token: ProcessInfo.processInfo.environment["HF_TOKEN"])
+        token: ProcessInfo.processInfo.environment["HF_TOKEN"],
+        resume: arguments.resume)
     do {
         let result = try await RemoteStreamingRepacker(options: options).run()
         print("Installed \(SupportedModelSource.displayName)")

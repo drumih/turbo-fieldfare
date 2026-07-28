@@ -10,6 +10,12 @@ public enum RepackError: Error, CustomStringConvertible {
     case renameFailed(from: String, to: String, errno: Int32)
     case fsyncFailed(path: String, errno: Int32)
     case mkdirFailed(path: String, errno: Int32)
+    case installBusy(path: String)
+    case installPathUnsafe(path: String, detail: String)
+    case installStateMissing(path: String)
+    case installStateCorrupt(path: String, detail: String)
+    case installStateIncompatible(detail: String)
+    case promotionUnsupported(path: String, errno: Int32)
 
     case safetensorsHeaderTooLarge(path: String, size: UInt64)
     case safetensorsHeaderInvalid(path: String, detail: String)
@@ -31,6 +37,11 @@ public enum RepackError: Error, CustomStringConvertible {
 
     case remoteProtocolInvalid(detail: String)
     case remoteHTTPStatus(url: String, status: Int)
+    case remoteHTTPResponse(url: String, status: Int, retryAfter: String?)
+    case remoteBodyTruncated(path: String, expected: UInt64, actual: UInt64)
+    case remoteBodyExceeded(path: String, limit: UInt64, attempted: UInt64)
+    case remoteRedirectRejected(url: String, detail: String)
+    case remoteRetryDelayExceeded(value: String, capSeconds: UInt64)
     case remoteFileTooLarge(path: String, size: UInt64, cap: UInt64)
     case diskSpaceInsufficient(path: String, required: UInt64, available: UInt64)
 
@@ -51,6 +62,18 @@ public enum RepackError: Error, CustomStringConvertible {
         case .renameFailed(let a, let b, let e):return "rename(\(a) -> \(b)) failed: errno \(e)"
         case .fsyncFailed(let p, let e):        return "fsync(\(p)) failed: errno \(e)"
         case .mkdirFailed(let p, let e):        return "mkdir(\(p)) failed: errno \(e)"
+        case .installBusy(let p):
+            return "another installer holds \(p)"
+        case .installPathUnsafe(let p, let d):
+            return "unsafe installer path \(p): \(d)"
+        case .installStateMissing(let p):
+            return "no resumable install state exists for \(p)"
+        case .installStateCorrupt(let p, let d):
+            return "install state at \(p) is corrupt: \(d)"
+        case .installStateIncompatible(let d):
+            return "install state is incompatible: \(d)"
+        case .promotionUnsupported(let p, let e):
+            return "atomic directory promotion is unsupported for \(p): errno \(e)"
         case .safetensorsHeaderTooLarge(let p, let s):
             return "safetensors header at \(p) size \(s) exceeds bound"
         case .safetensorsHeaderInvalid(let p, let d):
@@ -75,6 +98,19 @@ public enum RepackError: Error, CustomStringConvertible {
             return "remote protocol invalid: \(d)"
         case .remoteHTTPStatus(let u, let s):
             return "remote HTTP \(s): \(u)"
+        case .remoteHTTPResponse(let u, let s, let retryAfter):
+            if let retryAfter {
+                return "remote HTTP \(s): \(u), Retry-After \(retryAfter)"
+            }
+            return "remote HTTP \(s): \(u)"
+        case .remoteBodyTruncated(let p, let e, let a):
+            return "remote body for \(p) was truncated: expected \(e), received \(a)"
+        case .remoteBodyExceeded(let p, let l, let a):
+            return "remote body for \(p) exceeded \(l) bytes at \(a) bytes"
+        case .remoteRedirectRejected(let u, let d):
+            return "remote redirect rejected for \(u): \(d)"
+        case .remoteRetryDelayExceeded(let v, let c):
+            return "remote Retry-After \(v) exceeds \(c)-second cap"
         case .remoteFileTooLarge(let p, let s, let c):
             return "remote file \(p) size \(s) exceeds cap \(c)"
         case .diskSpaceInsufficient(let p, let r, let a):

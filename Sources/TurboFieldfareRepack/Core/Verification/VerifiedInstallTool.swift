@@ -65,6 +65,13 @@ public enum VerifiedInstallTool {
                                    unexpectedEntries: unexpectedEntries)
     }
 
+    static func validatePackedExpertLayout(inputGTurbo: String) throws {
+        let root = URL(fileURLWithPath: inputGTurbo).standardizedFileURL
+        let manifest = try loadManifest(
+            path: root.appendingPathComponent("manifest.json").path)
+        try validatePackedExpertLayout(root: root, manifest: manifest)
+    }
+
     private struct ManifestFileEntry: Decodable {
         let size: UInt64
         let sha256: String

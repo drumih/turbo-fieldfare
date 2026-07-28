@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ModelInstallView: View {
     let model: AppModel
+    @State private var showingDiscardConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -17,6 +18,18 @@ struct ModelInstallView: View {
             .padding(.horizontal, 28)
             .padding(.vertical, 48)
             .frame(maxWidth: .infinity)
+        }
+        .confirmationDialog(
+            "Discard the saved model download?",
+            isPresented: $showingDiscardConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Download", role: .destructive) {
+                model.discardModelDownload()
+            }
+            Button("Keep Download", role: .cancel) {}
+        } message: {
+            Text("Downloaded ranges will be removed. The installed model, if any, is preserved.")
         }
     }
 
@@ -94,13 +107,13 @@ struct ModelInstallView: View {
     @ViewBuilder
     private var progressArea: some View {
         if model.isInstallingModel {
-            VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let fraction = model.installProgressFraction,
                    let downloaded = model.installDownloadedBytes,
                    let total = model.installTotalBytes {
                     ProgressView(value: fraction)
                         .accessibilityLabel("Model download")
-                        .accessibilityValue(Text(MetricFormat.percent(fraction * 100)))
+                        .accessibilityValue(Text(accessibleProgressValue(fraction: fraction)))
                     HStack {
                         Text("Downloaded \(MetricFormat.storage(downloaded)) of \(MetricFormat.storage(total))")
                         Spacer()
@@ -108,6 +121,19 @@ struct ModelInstallView: View {
                     }
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 16) {
+                        if let reused = model.installReusedBytes, reused > 0 {
+                            Text("Reused \(MetricFormat.storage(reused)) from the saved download")
+                                .font(.caption)
+                        }
+                        Spacer(minLength: 16)
+                        if let eta = model.installETAText {
+                            Text(eta)
+                                .font(.caption.monospacedDigit())
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
                 } else {
                     Text(model.presentation.label)
                         .font(.callout)
@@ -116,12 +142,17 @@ struct ModelInstallView: View {
             }
             .frame(maxWidth: .infinity)
         } else if case .cancelled = model.installState {
-            Label("Installation cancelled", systemImage: "xmark.circle")
+            Label("Download paused", systemImage: "pause.circle")
                 .foregroundStyle(.secondary)
         } else if case .failed(let message) = model.installState {
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .font(.callout)
                 .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+        } else if case .recoverable(let message) = model.installState {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.orange)
                 .multilineTextAlignment(.center)
         }
     }
@@ -134,11 +165,20 @@ struct ModelInstallView: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(!model.canCancelInstall)
             } else {
+                if model.hasPartialModelDownload {
+                    Button("Discard Download", role: .destructive) {
+                        showingDiscardConfirmation = true
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!model.canDiscardModelDownload)
+                }
+
                 Button("Check Again", action: model.recheckModelAtCurrentLocation)
                 .buttonStyle(.bordered)
                 .disabled(model.isInstallingModel)
 
-                Button("Install", action: model.installModel)
+                Button(model.hasPartialModelDownload ? "Resume" : "Download",
+                       action: model.installModel)
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canInstallModel)
             }
@@ -155,6 +195,12 @@ struct ModelInstallView: View {
         case .ready, .insufficientSpace:
             return "Checking available space"
         }
+    }
+
+    private func accessibleProgressValue(fraction: Double) -> String {
+        let percent = MetricFormat.percent(fraction * 100)
+        guard let eta = model.installETAText else { return percent }
+        return "\(percent), \(eta)"
     }
 }
 

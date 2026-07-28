@@ -63,7 +63,7 @@ import Testing
         snapshot.installState = .cancelling
         cases.append((snapshot, "Cancelling installation", true))
         snapshot.installState = .cancelled
-        cases.append((snapshot, "Installation cancelled", false))
+        cases.append((snapshot, "Download paused", false))
         snapshot.installState = .failed("network")
         cases.append((snapshot, "Installation failed", false))
 

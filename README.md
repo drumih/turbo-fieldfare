@@ -56,7 +56,7 @@ On the first run, Swift Package Manager downloads and builds the Swift packages
 required by the tokenizer. The complete release build includes the foreground
 Mac app and its sibling decode-service executable.
 
-When the app opens, choose **Install** and let TurboFieldfare fetch and repack
+When the app opens, choose **Download** and let TurboFieldfare fetch and repack
 the pinned model (about 15 GB). Once it is ready, choose **Load Model**, type
 your prompt, and press **Generate**.
 
@@ -137,7 +137,7 @@ available. When launched from this checkout, the app stores the model in
 #### Install the model
 
 On first launch, the app checks the available storage and shows the download
-and installed sizes. Choose **Install** to begin.
+and installed sizes. Choose **Download** to begin.
 
 The installer never materializes the full source checkpoint. It streams the
 required byte ranges from the pinned Hugging Face revision and repacks them
@@ -174,6 +174,23 @@ Otherwise, install it from the command line:
 swift run -c release TurboFieldfareRepack \
   --output scratch/gemma4.gturbo \
   --overwrite
+```
+
+Continue a cancelled or interrupted download:
+
+```bash
+swift run -c release TurboFieldfareRepack \
+  --output scratch/gemma4.gturbo \
+  --overwrite \
+  --resume
+```
+
+Remove saved download state:
+
+```bash
+swift run -c release TurboFieldfareRepack \
+  --discard-partial \
+  --output scratch/gemma4.gturbo
 ```
 
 The runtime accepts only a completed `.gturbo` directory with a final

@@ -64,6 +64,10 @@ struct LayerFilePlan: Sendable {
     let subTensors: [PerExpertTensorSlice]  // 9 entries: gate/up/down × {weights, scales, biases}
     var fileSize: UInt64 { UInt64(expertsPerLayer) * expertStride }
 
+    func physicalRank(for logicalExpert: Int) -> Int {
+        logicalExpert
+    }
+
     init(layerIndex: Int,
                 path: String,
                 expertsPerLayer: Int,
@@ -85,6 +89,7 @@ struct RepackPlan: Sendable {
     let resident: ResidentFilePlan
     let layers: [LayerFilePlan]
     let matchedModelID: String?
+    let excludedMultimodalTensorNames: [String]
 }
 
 // MARK: - Planner
@@ -151,8 +156,12 @@ enum RepackPlanner {
         let bitsOverrideCount = meta.bitsOverrides.count
 
         var lmResidentBases: [String] = []
+        var excludedMultimodalNames: [String] = []
         var routedByLayerAndRole: [Int: [String: String]] = [:]
         for (name, _) in registry {
+            if isMultimodalTensorName(name) {
+                excludedMultimodalNames.append(name)
+            }
             if name.hasSuffix(".scales") || name.hasSuffix(".biases") { continue }
             let b = classify(name, numLayers: arch.numLayers)
             switch b {
@@ -172,6 +181,7 @@ enum RepackPlanner {
 
         // Sort deterministically. The LM order follows a fixed template.
         lmResidentBases.sort(by: lmResidentOrdering())
+        excludedMultimodalNames.sort()
 
         let residentPath = (outputDir as NSString).appendingPathComponent("model_weights.bin")
         let resident = try planResidentFile(path: residentPath,
@@ -212,7 +222,8 @@ enum RepackPlanner {
                           bitsOverrideCount: bitsOverrideCount,
                           resident: resident,
                           layers: layerPlans,
-                          matchedModelID: matched)
+                          matchedModelID: matched,
+                          excludedMultimodalTensorNames: excludedMultimodalNames)
     }
 
     private static func isMultimodalTensorName(_ name: String) -> Bool {

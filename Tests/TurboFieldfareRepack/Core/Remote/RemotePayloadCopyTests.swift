@@ -5,9 +5,12 @@ import Testing
 
 final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var files: [String: Data] = [:]
-    nonisolated(unsafe) static var commit = String(repeating: "a", count: 40)
+    nonisolated(unsafe) static var commit = "cc499c86a958ea7f05cffaa91c7e7243240dabbe"
     nonisolated(unsafe) static var failures: [String: [FakeFailure]] = [:]
     nonisolated(unsafe) static var requestCounts: [String: Int] = [:]
+    nonisolated(unsafe) static var requestedRanges: [String: [String]] = [:]
+    nonisolated(unsafe) static var etagOverrides: [String: String] = [:]
+    nonisolated(unsafe) static var xetHashOverrides: [String: String] = [:]
 
     override class func canInit(with request: URLRequest) -> Bool {
         request.url?.host == "hf.test"
@@ -31,6 +34,9 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
         let method = request.httpMethod ?? "GET"
         let key = "\(method):\(filename)"
         Self.requestCounts[key, default: 0] += 1
+        if let range = request.value(forHTTPHeaderField: "Range") {
+            Self.requestedRanges[filename, default: []].append(range)
+        }
         let failure = Self.nextFailure(for: key)
         switch failure {
         case .url(let code):
@@ -42,6 +48,16 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
                                            httpVersion: nil,
                                            headerFields: nil)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        case .response(let status, let headers, let body):
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: headers)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
             client?.urlProtocolDidFinishLoading(self)
             return
         case .truncatedBody, nil:
@@ -59,7 +75,8 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
         }
 
         if method == "HEAD" {
-            let headers = baseHeaders(data: data,
+            let headers = baseHeaders(filename: filename,
+                                      data: data,
                                       contentLength: data.count)
             let response = HTTPURLResponse(url: url,
                                            statusCode: 200,
@@ -87,7 +104,8 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
         } else {
             body = Data(data[start...end])
         }
-        var headers = baseHeaders(data: data,
+        var headers = baseHeaders(filename: filename,
+                                  data: data,
                                   contentLength: expectedLength)
         headers["Content-Range"] = "bytes \(start)-\(end)/\(data.count)"
         let response = HTTPURLResponse(url: url,
@@ -101,15 +119,22 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {}
 
-    func baseHeaders(data: Data,
+    func baseHeaders(filename: String,
+                             data: Data,
                              contentLength: Int) -> [String: String] {
-        [
+        var headers = [
             "X-Repo-Commit": Self.commit,
             "X-Linked-Size": "\(data.count)",
+            "X-Linked-ETag": Self.etagOverrides[filename] ?? "\"\(filename)-etag\"",
             "Accept-Ranges": "bytes",
             "Content-Length": "\(contentLength)",
             "Content-Encoding": "identity",
         ]
+        if let xetHash = Self.xetHashOverrides[filename] {
+            headers["X-Xet-Hash"] = xetHash
+            headers["ETag"] = "\"\(xetHash)\""
+        }
+        return headers
     }
 
     static func filename(from url: URL) -> String? {
@@ -147,6 +172,7 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
 enum FakeFailure: Equatable {
     case url(URLError.Code)
     case http(Int)
+    case response(status: Int, headers: [String: String], body: Data)
     case truncatedBody
 }
 
@@ -154,7 +180,6 @@ let remoteTokenizerJSON = Data(#"{"model":{"type":"BPE"}}"#.utf8)
 let remoteTokenizerConfigJSON = Data(#"{"tokenizer_class":"PreTrainedTokenizerFast"}"#.utf8)
 let remoteSpecialTokensMapJSON = Data(#"{"eos_token":"<eos>"}"#.utf8)
 let remoteChatTemplateJinja = Data("{{ bos_token }}".utf8)
-let remoteChatTemplateJSON = Data(#"{"chat_template":"{{ bos_token }}"}"#.utf8)
 
 @Suite(.serialized)
 struct RemotePayloadCopyTests {
@@ -179,7 +204,6 @@ func remoteFiles(snapshotDir: String,
     if includeOptionalTokenizer {
         files["special_tokens_map.json"] = remoteSpecialTokensMapJSON
         files["chat_template.jinja"] = remoteChatTemplateJinja
-        files["chat_template.json"] = remoteChatTemplateJSON
     }
     return files
 }
@@ -188,28 +212,36 @@ func resetFakeHF() {
     FakeHFURLProtocol.files = [:]
     FakeHFURLProtocol.failures = [:]
     FakeHFURLProtocol.requestCounts = [:]
+    FakeHFURLProtocol.requestedRanges = [:]
+    FakeHFURLProtocol.etagOverrides = [:]
+    FakeHFURLProtocol.xetHashOverrides = [:]
+    FakeHFURLProtocol.commit = "cc499c86a958ea7f05cffaa91c7e7243240dabbe"
 }
 
-func fakeHFSession() -> URLSession {
-    let config = URLSessionConfiguration.ephemeral
-    config.protocolClasses = [FakeHFURLProtocol.self]
-    return URLSession(configuration: config)
+func fakeHFSession() -> RemoteDownloadSession {
+    RemoteDownloadSession(protocolClasses: [FakeHFURLProtocol.self])
 }
 
 func remoteOptions(outputDir: String,
-                           session: URLSession,
+                           session: RemoteDownloadSession,
                            rangeRetryAttempts: Int = 4,
-                           retainPartialOnFailure: Bool = true) -> RemoteStreamingRepackOptions {
+                           resume: Bool = false,
+                           overwrite: Bool = true,
+                           repoID: String = "owner/model",
+                           revision: String = "main",
+                           rangeChunkBytes: Int = 4096,
+                           copyAuditPath: String? = nil) -> RemoteStreamingRepackOptions {
     RemoteStreamingRepackOptions(
+        repoID: repoID,
+        revision: revision,
         outputDir: outputDir,
-        overwrite: true,
-        repoID: "owner/model",
-        revision: "main",
         requireKnownSource: false,
-        rangeChunkBytes: 4096,
+        copyAuditPath: copyAuditPath,
+        rangeChunkBytes: rangeChunkBytes,
         minFreeReserveBytes: 0,
-        retainPartialOnFailure: retainPartialOnFailure,
-        session: session,
+        overwrite: overwrite,
+        resume: resume,
+        downloadSession: session,
         baseURL: URL(string: "https://hf.test")!,
         rangeRetryAttempts: rangeRetryAttempts,
         retryBaseDelayNs: 0)
@@ -230,10 +262,8 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
         (tokenizerDir as NSString).appendingPathComponent("tokenizer_config.json"))) == remoteTokenizerConfigJSON)
     let specialTokensPath = (tokenizerDir as NSString).appendingPathComponent("special_tokens_map.json")
     #expect(FileManager.default.fileExists(atPath: specialTokensPath) == expectsOptionalSpecialTokens)
-    let chatTemplateJinjaPath = (tokenizerDir as NSString).appendingPathComponent("chat_template.jinja")
-    #expect(FileManager.default.fileExists(atPath: chatTemplateJinjaPath) == expectsOptionalSpecialTokens)
-    let chatTemplateJSONPath = (tokenizerDir as NSString).appendingPathComponent("chat_template.json")
-    #expect(FileManager.default.fileExists(atPath: chatTemplateJSONPath) == expectsOptionalSpecialTokens)
+    let chatTemplatePath = (tokenizerDir as NSString).appendingPathComponent("chat_template.jinja")
+    #expect(FileManager.default.fileExists(atPath: chatTemplatePath) == expectsOptionalSpecialTokens)
 
     let manifestData = try Data(contentsOf: URL(fileURLWithPath:
         (outputDir as NSString).appendingPathComponent("manifest.json")))
@@ -244,7 +274,6 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
     #expect(manifestFiles["tokenizer/tokenizer_config.json"] != nil)
     #expect((manifestFiles["tokenizer/special_tokens_map.json"] != nil) == expectsOptionalSpecialTokens)
     #expect((manifestFiles["tokenizer/chat_template.jinja"] != nil) == expectsOptionalSpecialTokens)
-    #expect((manifestFiles["tokenizer/chat_template.json"] != nil) == expectsOptionalSpecialTokens)
 
     let receiptData = try Data(contentsOf: URL(fileURLWithPath:
         (outputDir as NSString).appendingPathComponent(VerifiedInstallReceiptWriter.fileName)))
@@ -255,7 +284,6 @@ func assertRemoteTokenizerFilesRecorded(outputDir: String,
     #expect(receiptFiles["tokenizer/tokenizer_config.json"] != nil)
     #expect((receiptFiles["tokenizer/special_tokens_map.json"] != nil) == expectsOptionalSpecialTokens)
     #expect((receiptFiles["tokenizer/chat_template.jinja"] != nil) == expectsOptionalSpecialTokens)
-    #expect((receiptFiles["tokenizer/chat_template.json"] != nil) == expectsOptionalSpecialTokens)
 }
 
 func assertNoInternalRemoteDirs(outputDir: String) throws {
@@ -282,5 +310,9 @@ func tmpPathForRemote(_ tag: String) -> String {
 func cleanUpRemote(_ paths: [String]) {
     for path in paths {
         try? FileManager.default.removeItem(atPath: path)
+        try? FileManager.default.removeItem(atPath: path + ".partial")
+        try? FileManager.default.removeItem(atPath: path + ".install-state")
+        try? FileManager.default.removeItem(atPath: path + ".install-state.cleanup")
+        try? FileManager.default.removeItem(atPath: path + ".install.lock")
     }
 }

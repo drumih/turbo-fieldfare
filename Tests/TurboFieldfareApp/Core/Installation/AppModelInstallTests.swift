@@ -110,7 +110,10 @@ import TurboFieldfareRepackCore
     let installer = MockModelInstallerClient(
       events: [
         .checking,
-        .copyingPayload(doneBytes: 4, totalBytes: 10),
+        .copyingPayload(
+          reusedBytes: 1,
+          downloadedThisRunBytes: 3,
+          totalBytes: 10),
       ], holdOpen: true)
     let model = AppModel(
       modelDirectory: directory,
@@ -118,7 +121,12 @@ import TurboFieldfareRepackCore
       installer: installer)
     model.installModel()
 
-    try await waitUntil { model.installState == .copyingPayload(doneBytes: 4, totalBytes: 10) }
+    try await waitUntil {
+      model.installState == .copyingPayload(
+        reusedBytes: 1,
+        downloadedThisRunBytes: 3,
+        totalBytes: 10)
+    }
     #expect(model.installDownloadedBytes == 4)
     #expect(model.installTotalBytes == 10)
     #expect(model.installProgressFraction == 0.4)
@@ -198,7 +206,10 @@ import TurboFieldfareRepackCore
 
   @MainActor
   @Test func cancelInstallWaitsForAcknowledgementAndAllowsRetry() async throws {
-    let installer = MockModelInstallerClient(events: [.downloadingMetadata], holdOpen: true)
+    let installer = MockModelInstallerClient(
+      events: [.downloadingMetadata],
+      holdOpen: true,
+      delayCancellationAcknowledgement: true)
     let model = AppModel(
       modelDirectory: temporaryInstallPath("cancel"),
       client: MockLifecycleInferenceClient(),
@@ -208,7 +219,11 @@ import TurboFieldfareRepackCore
 
     model.cancelInstall()
     #expect(installer.cancelCalled)
-    #expect(model.installState == .cancelling || model.installState == .cancelled)
+    try await waitUntil { installer.cancellationAcknowledgementPending }
+    #expect(model.installState == .cancelling)
+    #expect(!model.canInstallModel)
+
+    await installer.releaseCancellationAcknowledgement()
     try await waitUntil { model.installState == .cancelled }
 
     #expect(model.loadState == .notLoaded)

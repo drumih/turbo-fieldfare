@@ -11,9 +11,9 @@ struct RemoteSnapshot {
 
 enum RemoteSnapshotLoader {
     static func load(remote: HuggingFaceRemoteSource,
-                            requireKnownSource: Bool,
-                            metadataDirectory: String,
-                            audit: RepackAudit? = nil) async throws -> RemoteSnapshot {
+                     requireKnownSource: Bool,
+                     metadataDirectory: String,
+                     audit: RepackAudit? = nil) async throws -> RemoteSnapshot {
         try Posix.mkdirP(metadataDirectory)
 
         let indexInfo = try await remote.resolveFileInfo(filename: "model.safetensors.index.json",

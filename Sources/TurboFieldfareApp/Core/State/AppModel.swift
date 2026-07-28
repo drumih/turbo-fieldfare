@@ -26,6 +26,8 @@ public final class AppModel {
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
+    public private(set) var installETAPresentation: DownloadETAPresentation = .hidden
+    public private(set) var installETAText: String?
     public private(set) var installReadiness: AppModelInstallReadiness = .checking
     public private(set) var installationStatus: AppModelInstallationStatus
 
@@ -53,6 +55,9 @@ public final class AppModel {
     private var hasHandledTerminalEvent = false
     private let memorySampler: AppMemorySampler
     private let settingsPersistenceEnabled: Bool
+    private let installETAClock: SuspendingClock
+    private let installETAOrigin: SuspendingClock.Instant
+    private var installETAEstimator = DownloadETAEstimator()
 
     public init(modelDirectory: URL? = nil,
                 client: any AppInferenceClient = RealInferenceClient(),
@@ -60,6 +65,7 @@ public final class AppModel {
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 settingsPersistenceEnabled: Bool = false) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
+        let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
             ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
             : MacAppSettings()
@@ -78,6 +84,8 @@ public final class AppModel {
         self.installer = installer
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
+        self.installETAClock = installETAClock
+        self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
     }
 
@@ -121,6 +129,7 @@ public final class AppModel {
 
     public var canInstallModel: Bool {
         guard case .ready = installReadiness else { return false }
+        if case .recoverable = installState { return false }
         return !isRunning && !loadState.isLoading && !isInstallingModel
             && requiresModelInstallation
     }
@@ -128,19 +137,41 @@ public final class AppModel {
     public var canCancelInstall: Bool { installState.canCancel }
 
     public var installDownloadedBytes: UInt64? {
-        guard case .copyingPayload(let done, _) = installState else { return nil }
-        return done
+        guard case .copyingPayload(let reused, let downloaded, let total) = installState else {
+            return nil
+        }
+        let addition = reused.addingReportingOverflow(downloaded)
+        return min(addition.overflow ? UInt64.max : addition.partialValue, total)
     }
 
     public var installTotalBytes: UInt64? {
-        guard case .copyingPayload(_, let total) = installState else { return nil }
+        guard case .copyingPayload(_, _, let total) = installState else {
+            return nil
+        }
         return total
     }
 
-    public var installProgressFraction: Double? {
-        guard case .copyingPayload(let done, let total) = installState, total > 0 else {
+    public var installReusedBytes: UInt64? {
+        guard case .copyingPayload(let reused, _, _) = installState else {
             return nil
         }
+        return reused
+    }
+
+    public var installDownloadedThisRunBytes: UInt64? {
+        guard case .copyingPayload(_, let downloaded, _) = installState else {
+            return nil
+        }
+        return downloaded
+    }
+
+    public var installProgressFraction: Double? {
+        guard case .copyingPayload(let reused, let downloaded, let total) = installState,
+              total > 0 else {
+            return nil
+        }
+        let addition = reused.addingReportingOverflow(downloaded)
+        let done = addition.overflow ? UInt64.max : addition.partialValue
         return min(max(Double(done) / Double(total), 0), 1)
     }
 
@@ -155,7 +186,9 @@ public final class AppModel {
         case .hashingOutput(let file): return "Verifying \(file)"
         case .finalizing: return "Finalizing installation"
         case .cancelling: return "Cancelling"
-        case .cancelled: return "Installation cancelled"
+        case .discarding: return "Discarding download"
+        case .cancelled: return "Download paused"
+        case .recoverable: return "Saved download needs attention"
         case .installed: return "Model installed"
         case .failed: return "Installation failed"
         }
@@ -249,6 +282,7 @@ public final class AppModel {
         installTask?.cancel()
         installer.cancel()
         installTask = nil
+        resetInstallETA()
         installState = .idle
         pendingExplicitLoadRuntimeKey = nil
         activeRunRuntimeKey = nil
@@ -377,6 +411,7 @@ public final class AppModel {
         guard canInstallModel else { return }
         installTask?.cancel()
         installer.cancel()
+        resetInstallETA()
         let outputDirectory = URL(fileURLWithPath: modelPathText)
         installGeneration &+= 1
         let generation = installGeneration
@@ -400,7 +435,38 @@ public final class AppModel {
         guard canCancelInstall else { return }
         installState = .cancelling
         installer.cancel()
-        installTask?.cancel()
+    }
+
+    public var hasPartialModelDownload: Bool {
+        guard let paths = try? RemoteInstallPaths(outputDirectory: modelPathText) else {
+            return false
+        }
+        return FileManager.default.fileExists(atPath: paths.partialDirectory)
+            || FileManager.default.fileExists(atPath: paths.checkpointFile)
+    }
+
+    public var canDiscardModelDownload: Bool {
+        hasPartialModelDownload && !isInstallingModel && !isRunning
+    }
+
+    public func discardModelDownload() {
+        guard canDiscardModelDownload else { return }
+        let outputDirectory = URL(fileURLWithPath: modelPathText)
+        installGeneration &+= 1
+        let generation = installGeneration
+        installState = .discarding
+        installTask = Task { [weak self, installer] in
+            do {
+                try await installer.discardPartialInstall(
+                    outputDirectory: outputDirectory)
+                guard let self, generation == self.installGeneration else { return }
+                self.installTask = nil
+                self.installState = .idle
+                self.refreshInstallReadiness()
+            } catch {
+                self?.finishInstallFailure(error, generation: generation)
+            }
+        }
     }
 
     public func refreshInstallReadiness() {
@@ -436,20 +502,34 @@ public final class AppModel {
         guard generation == installGeneration else { return }
         switch event {
         case .checking:
+            resetInstallETA()
             installState = .checking
         case .downloadingMetadata:
+            resetInstallETA()
             installState = .downloadingMetadata
         case .planning:
+            resetInstallETA()
             installState = .planning
         case .reservingOutput:
+            resetInstallETA()
             installState = .reservingOutput
-        case .copyingPayload(let done, let total):
-            installState = .copyingPayload(doneBytes: done, totalBytes: total)
+        case .copyingPayload(let reused, let downloadedThisRun, let total):
+            installState = .copyingPayload(
+                reusedBytes: reused,
+                downloadedThisRunBytes: downloadedThisRun,
+                totalBytes: total)
+            updateInstallETA(
+                reusedBytes: reused,
+                downloadedThisRunBytes: downloadedThisRun,
+                totalBytes: total)
         case .hashingOutput(let file):
+            resetInstallETA()
             installState = .hashingOutput(file)
         case .finalizing:
+            resetInstallETA()
             installState = .finalizing
         case .installed(let directory):
+            resetInstallETA()
             let directory = directory.standardizedFileURL
             installationStatus = AppModelInstallationProbe.status(
                 at: directory,
@@ -482,7 +562,41 @@ public final class AppModel {
         guard generation == installGeneration else { return }
         installTask = nil
         installState = .cancelled
+        resetInstallETA()
         refreshInstallReadiness()
+    }
+
+    private func updateInstallETA(
+        reusedBytes: UInt64,
+        downloadedThisRunBytes: UInt64,
+        totalBytes: UInt64
+    ) {
+        let observation = DownloadETAObservation(
+            reusedBytes: reusedBytes,
+            downloadedThisRunBytes: downloadedThisRunBytes,
+            totalBytes: totalBytes)
+        let timestamp = installETATimestamp
+        setInstallETAPresentation(
+            installETAEstimator.update(observation, timestamp: timestamp))
+    }
+
+    private var installETATimestamp: Double {
+        let components = installETAOrigin.duration(to: installETAClock.now).components
+        return Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+    }
+
+    private func resetInstallETA() {
+        installETAEstimator.reset()
+        installETAPresentation = .hidden
+        installETAText = nil
+    }
+
+    private func setInstallETAPresentation(
+        _ presentation: DownloadETAPresentation
+    ) {
+        installETAPresentation = presentation
+        installETAText = DownloadETAFormatter.string(for: presentation)
     }
 
     private func applyPersistedSettings(forModelDirectory modelDirectory: URL) {
@@ -520,7 +634,9 @@ public final class AppModel {
     private func finishInstallFailure(_ error: Error, generation: UInt64) {
         guard generation == installGeneration else { return }
         installTask = nil
-        installState = .failed("\(error)")
+        resetInstallETA()
+        let hasSavedDownload = hasPartialModelDownload
+        installState = hasSavedDownload ? .recoverable("\(error)") : .failed("\(error)")
         if let repackError = error as? RepackError,
            case .diskSpaceInsufficient(let path, let required, let available) = repackError {
             let requirement = AppModelInstallRequirement(probePath: path,
@@ -529,6 +645,9 @@ public final class AppModel {
             installReadiness = .insufficientSpace(requirement)
         } else {
             refreshInstallReadiness()
+            if hasSavedDownload {
+                installState = .recoverable("\(error)")
+            }
         }
     }
 
