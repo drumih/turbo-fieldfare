@@ -37,12 +37,16 @@ struct TurboFieldfareMacApp: App {
     var body: some Scene {
         Window("TurboFieldfare", id: "main") {
             RootView(model: model)
-                .frame(minWidth: 1040, minHeight: 560)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1040, height: 720)
+        .defaultSize(width: 1280, height: 760)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandMenu("Chat") {
+                Button("New Chat") { model.createChat() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.isRunning)
+            }
             CommandMenu("Generation") {
                 Button("Cancel Generation") { model.cancel() }
                     .keyboardShortcut(".", modifiers: .command)

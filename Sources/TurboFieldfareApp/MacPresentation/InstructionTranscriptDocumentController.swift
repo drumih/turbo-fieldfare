@@ -1,6 +1,21 @@
 import AppKit
 import Foundation
 
+public struct InstructionTranscriptMessage: Equatable, Sendable {
+    public enum Role: Equatable, Sendable {
+        case user
+        case assistant
+    }
+
+    public let role: Role
+    public let content: String
+
+    public init(role: Role, content: String) {
+        self.role = role
+        self.content = content
+    }
+}
+
 @MainActor
 public final class InstructionTranscriptDocumentController {
     public enum Mutation: Equatable {
@@ -21,6 +36,7 @@ public final class InstructionTranscriptDocumentController {
     }
 
     public private(set) var prompt = ""
+    public private(set) var history: [InstructionTranscriptMessage] = []
     public private(set) var response = ""
     public private(set) var isFinalized = false
     public private(set) var showsPrefillPlaceholder = false
@@ -60,10 +76,42 @@ public final class InstructionTranscriptDocumentController {
         requested && response.isEmpty && !isTerminal
     }
 
+    public static func resolvedResponse(
+        output: String,
+        streamedResponse: String?,
+        isTerminal: Bool
+    ) -> String {
+        guard !isTerminal,
+              let streamedResponse,
+              !streamedResponse.isEmpty else {
+            return output
+        }
+        return streamedResponse
+    }
+
     @discardableResult
     public func synchronize(
         storage: NSMutableAttributedString,
         prompt: String,
+        response: String,
+        isTerminal: Bool,
+        showsPrefillPlaceholder: Bool = false
+    ) -> UpdateResult {
+        let history = prompt.isEmpty
+            ? []
+            : [InstructionTranscriptMessage(role: .user, content: prompt)]
+        return synchronize(
+            storage: storage,
+            history: history,
+            response: response,
+            isTerminal: isTerminal,
+            showsPrefillPlaceholder: showsPrefillPlaceholder)
+    }
+
+    @discardableResult
+    public func synchronize(
+        storage: NSMutableAttributedString,
+        history: [InstructionTranscriptMessage],
         response: String,
         isTerminal: Bool,
         showsPrefillPlaceholder: Bool = false
@@ -73,7 +121,7 @@ public final class InstructionTranscriptDocumentController {
             response: response,
             isTerminal: isTerminal,
             requested: showsPrefillPlaceholder)
-        let needsRebuild = prompt != self.prompt
+        let needsRebuild = history != self.history
             || !response.hasPrefix(self.response)
             || (isFinalized && !isTerminal)
             || displaysPrefillPlaceholder != self.showsPrefillPlaceholder
@@ -81,10 +129,10 @@ public final class InstructionTranscriptDocumentController {
         var mutation: Mutation = .none
         if needsRebuild
             || storage.length == 0
-                && (!prompt.isEmpty || !response.isEmpty || displaysPrefillPlaceholder) {
+                && (!history.isEmpty || !response.isEmpty || displaysPrefillPlaceholder) {
             rebuild(
                 storage: storage,
-                prompt: prompt,
+                history: history,
                 response: response,
                 showsPrefillPlaceholder: displaysPrefillPlaceholder)
             mutation = .rebuilt
@@ -97,7 +145,8 @@ public final class InstructionTranscriptDocumentController {
             mutation = .appended
         }
 
-        self.prompt = prompt
+        self.history = history
+        self.prompt = history.last(where: { $0.role == .user })?.content ?? ""
         self.response = response
         self.showsPrefillPlaceholder = displaysPrefillPlaceholder
 
@@ -133,18 +182,26 @@ public final class InstructionTranscriptDocumentController {
 
     private func rebuild(
         storage: NSMutableAttributedString,
-        prompt: String,
+        history: [InstructionTranscriptMessage],
         response: String,
         showsPrefillPlaceholder: Bool
     ) {
         let document = NSMutableAttributedString()
-        if !prompt.isEmpty {
-            document.append(NSAttributedString(
-                string: "You\n",
-                attributes: Self.userLabelAttributes()))
-            document.append(NSAttributedString(
-                string: prompt,
-                attributes: Self.promptAttributes()))
+        for message in history {
+            switch message.role {
+            case .user:
+                document.append(NSAttributedString(
+                    string: "You\n",
+                    attributes: Self.userLabelAttributes()))
+                document.append(NSAttributedString(
+                    string: message.content,
+                    attributes: Self.promptAttributes()))
+            case .assistant:
+                document.append(NSAttributedString(
+                    string: "Answer\n",
+                    attributes: Self.assistantLabelAttributes()))
+                document.append(renderer.render(message.content).attributedString)
+            }
             document.append(NSAttributedString(
                 string: "\n\n",
                 attributes: Self.promptAttributes()))

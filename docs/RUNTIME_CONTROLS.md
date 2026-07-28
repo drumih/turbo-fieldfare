@@ -1,8 +1,16 @@
 # Runtime controls
 
-The Mac app exposes generation and runtime controls in its fixed right
-settings pane. FP16 is the fixed KV format. Generation settings apply to the
-next request; load-time settings require a reload.
+The Mac app exposes generation and runtime controls in its collapsible right
+settings pane. Use the right-sidebar button in the status bar or
+<kbd>Shift</kbd>+<kbd>Command</kbd>+<kbd>I</kbd> to hide or restore it. FP16 is
+the fixed KV format. Generation settings apply to the next request; load-time
+settings require a reload.
+
+Chat navigation lives separately in the collapsible left sidebar. Use its
+**New chat** button or <kbd>Command</kbd>+<kbd>N</kbd> to create an independent
+context. The left-sidebar buttons or
+<kbd>Control</kbd>+<kbd>Command</kbd>+<kbd>S</kbd> toggle the chat list without
+changing the right settings pane.
 
 ## Generation controls
 
@@ -34,6 +42,12 @@ Changing context length, expert-cache slots, or RDADVISE requires a reload.
 Some sampling changes also require a reload because greedy and sampled
 generation use different output-head paths. Prompt-prefill settings apply to
 each request and do not require a reload.
+
+Multi-turn chat history is fitted with the model tokenizer before generation.
+When older complete turns no longer fit, the app runs a bounded local
+compression pass and replaces those turns in model context with a rolling
+summary. The full transcript stays available in the UI, and each chat keeps a
+separate summary. The current user turn is never silently discarded.
 
 ## Run an experiment
 

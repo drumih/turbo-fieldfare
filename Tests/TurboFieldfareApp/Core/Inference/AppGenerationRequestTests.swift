@@ -91,4 +91,101 @@ import Testing
             try request.validate()
         }
     }
+
+    @Test func conversationCannotStartWithAssistant() {
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            messages: [
+                AppGenerationMessage(role: .assistant, content: "orphan answer"),
+                AppGenerationMessage(role: .user, content: "question"),
+            ])
+        #expect(throws: AppInferenceError.self) {
+            try request.validate()
+        }
+    }
+
+    @Test func everySystemMessageAfterTheFirstPositionIsRejected() {
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            messages: [
+                AppGenerationMessage(role: .system, content: "first"),
+                AppGenerationMessage(role: .user, content: "question"),
+                AppGenerationMessage(role: .system, content: "second"),
+                AppGenerationMessage(role: .user, content: "follow-up"),
+            ])
+        #expect(throws: AppInferenceError.self) {
+            try request.validate()
+        }
+    }
+
+    @Test func completeMultiTurnConversationWithLeadingSystemMessageIsValid() throws {
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            messages: [
+                AppGenerationMessage(role: .system, content: "memory"),
+                AppGenerationMessage(role: .user, content: "question"),
+                AppGenerationMessage(role: .assistant, content: "answer"),
+                AppGenerationMessage(role: .user, content: "follow-up"),
+            ])
+
+        try request.validate()
+        #expect(request.prompt == "follow-up")
+    }
+
+    @Test func emptyConversationEmptyMessageAndTrailingAssistantAreRejected() {
+        let invalidMessageSets: [[AppGenerationMessage]] = [
+            [],
+            [.init(role: .user, content: "\n\t ")],
+            [
+                .init(role: .user, content: "question"),
+                .init(role: .assistant, content: "answer"),
+            ],
+            [
+                .init(role: .user, content: "question"),
+                .init(role: .assistant, content: " "),
+                .init(role: .user, content: "follow-up"),
+            ],
+        ]
+
+        for messages in invalidMessageSets {
+            let request = AppGenerationRequest(
+                modelDirectory: existingDirectory,
+                messages: messages)
+            #expect(throws: AppInferenceError.self) {
+                try request.validate()
+            }
+        }
+    }
+
+    @Test func compatibilityPromptSetterReplacesPriorConversation() {
+        var request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            messages: [
+                .init(role: .system, content: "memory"),
+                .init(role: .user, content: "old"),
+                .init(role: .assistant, content: "answer"),
+                .init(role: .user, content: "follow-up"),
+            ])
+
+        request.prompt = "replacement"
+
+        #expect(request.messages == [
+            AppGenerationMessage(role: .user, content: "replacement"),
+        ])
+        #expect(request.prompt == "replacement")
+    }
+
+    @Test func generationMessageCodableRoundTripKeepsEveryRole() throws {
+        let messages: [AppGenerationMessage] = [
+            .init(role: .system, content: "memory"),
+            .init(role: .user, content: "question"),
+            .init(role: .assistant, content: "answer"),
+        ]
+
+        let decoded = try JSONDecoder().decode(
+            [AppGenerationMessage].self,
+            from: JSONEncoder().encode(messages))
+
+        #expect(decoded == messages)
+    }
 }

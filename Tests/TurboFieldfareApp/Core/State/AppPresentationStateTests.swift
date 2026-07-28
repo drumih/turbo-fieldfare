@@ -10,6 +10,7 @@ import Testing
         snapshot.lastStopReason = .maxTokens
         let state = AppPresentationState.resolve(snapshot)
         #expect(state.label == "Reload required")
+        #expect(state.primaryAction == .reload)
     }
 
     @Test func loadFailureIsVisibleAndRetryable() {
@@ -18,6 +19,7 @@ import Testing
         #expect(state.label == "Model load failed")
         #expect(state.detail == "Model load failed: synthetic")
         #expect(state.severity == .error)
+        #expect(state.primaryAction == .retryLoad)
     }
 
     @Test func readinessFailureIsStoppedNotActive() {
@@ -44,6 +46,7 @@ import Testing
         var snapshot = Self.installedSnapshot(loadState: .notLoaded)
         var state = AppPresentationState.resolve(snapshot)
         #expect(state.label == "Installed · Not loaded")
+        #expect(state.primaryAction == .load)
 
         snapshot.loadState = .ready(modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
                                     loadSeconds: 1)
@@ -74,6 +77,8 @@ import Testing
 
         snapshot = Self.installedSnapshot(loadState: ready)
         snapshot.isRunning = true
+        snapshot.generationPhase = .compressing
+        cases.append((snapshot, "Compressing history", true))
         snapshot.generationPhase = .prefill
         cases.append((snapshot, "Prefill", false))
         snapshot.generationPhase = .decode
@@ -101,6 +106,59 @@ import Testing
         let state = AppPresentationState.resolve(snapshot)
 
         #expect(state.label == "Prefill (128/514)")
+    }
+
+    @Test func primaryHeaderActionCoversEveryModelRecoveryState() {
+        var snapshot = Self.installedSnapshot(loadState: .notLoaded)
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .load)
+
+        snapshot.loadState = .loading(.tokenizer)
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .cancelLoad)
+
+        snapshot.loadState = .failed(.modelLoadFailed("synthetic"))
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .retryLoad)
+
+        snapshot.loadState = .ready(
+            modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
+            loadSeconds: 1)
+        snapshot.hasStaleRuntime = true
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .reload)
+
+        snapshot.hasStaleRuntime = false
+        snapshot.isRunning = true
+        snapshot.generationPhase = .decode
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == nil)
+
+        snapshot = Self.installedSnapshot(loadState: .notLoaded)
+        snapshot.requiresInstallation = true
+        snapshot.installReadiness = .ready(AppModelInstallRequirement(
+            requiredBytes: 1,
+            availableBytes: 2))
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .install)
+
+        snapshot.installState = .copyingPayload(
+            reusedBytes: 0,
+            downloadedThisRunBytes: 1,
+            totalBytes: 2)
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == .cancelInstall)
+
+        snapshot.installState = .cancelling
+        #expect(AppPresentationState.resolve(snapshot).primaryAction == nil)
+    }
+
+    @Test func readyModelOnlyOffersUnloadAsASecondaryAction() {
+        var snapshot = Self.installedSnapshot(loadState: .ready(
+            modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
+            loadSeconds: 1))
+
+        var state = AppPresentationState.resolve(snapshot)
+        #expect(state.primaryAction == nil)
+        #expect(state.secondaryAction == .unload)
+
+        snapshot.lastStopReason = .eos
+        state = AppPresentationState.resolve(snapshot)
+        #expect(state.label == "Done · eos")
+        #expect(state.secondaryAction == .unload)
     }
 
     private static func installedSnapshot(loadState: AppModelLoadState) -> AppPresentationSnapshot {

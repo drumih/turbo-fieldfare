@@ -5,6 +5,17 @@ public protocol AppInferenceClient: Sendable {
     func cancel()
 }
 
+/// Lets a client validate and trim chat history with the exact tokenizer before
+/// the UI commits the pending user turn to durable history.
+public protocol AppGenerationRequestPreparing: AppInferenceClient {
+    func prepare(_ request: AppGenerationRequest) async throws -> AppGenerationRequest
+}
+
+public protocol AppGenerationContextReporting: AppGenerationRequestPreparing {
+    func prepareWithContextReport(_ request: AppGenerationRequest) async throws
+        -> AppPreparedGenerationRequest
+}
+
 /// A client that owns a loadable model session. Loading is split from
 /// generation so the UI can pre-load the ~1.6 GB resident weights once and
 /// keep them warm across runs. Generation never loads or replaces a session.
