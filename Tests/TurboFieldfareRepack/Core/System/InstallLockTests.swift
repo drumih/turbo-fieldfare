@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import TurboFieldfareRepackCore
 
@@ -17,6 +18,49 @@ import Testing
         first = nil
         _ = try InstallLock.acquire(outputDirectory: output)
         #expect(first == nil)
+    }
+
+    @Test func asyncInstallHoldsLockUntilOperationFinishes() async throws {
+        let root = temporaryRoot("async-operation")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let output = (root as NSString).appendingPathComponent("model.gturbo")
+        HangingInstallURLProtocol.reset()
+        let task = Task {
+            try await RemoteStreamingRepacker(
+                options: RemoteStreamingRepackOptions(
+                    repoID: "owner/model",
+                    revision: "main",
+                    outputDir: output,
+                    minFreeReserveBytes: 0,
+                    overwrite: true,
+                    downloadSession: RemoteDownloadSession(
+                        protocolClasses: [HangingInstallURLProtocol.self]),
+                    baseURL: URL(string: "https://lock.test")!,
+                    rangeRetryAttempts: 0,
+                    retryBaseDelayNs: 0)
+            ).run()
+        }
+
+        for _ in 0..<200 where !HangingInstallURLProtocol.started {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(HangingInstallURLProtocol.started)
+        do {
+            _ = try InstallLock.acquire(outputDirectory: output)
+            Issue.record("second contender acquired the active install lock")
+        } catch let error as RepackError {
+            guard case .installBusy = error else {
+                Issue.record("expected installBusy, got \(error)")
+                task.cancel()
+                return
+            }
+        }
+
+        task.cancel()
+        await #expect(throws: (any Error).self) {
+            _ = try await task.value
+        }
+        _ = try InstallLock.acquire(outputDirectory: output)
     }
 
     @Test func symlinkedParentAliasesContendOnOnePhysicalLock() throws {
@@ -111,4 +155,30 @@ import Testing
             withIntermediateDirectories: true)
         return path
     }
+}
+
+private final class HangingInstallURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let state = Mutex(false)
+
+    static var started: Bool {
+        state.withLock { $0 }
+    }
+
+    static func reset() {
+        state.withLock { $0 = false }
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.state.withLock { $0 = true }
+    }
+
+    override func stopLoading() {}
 }

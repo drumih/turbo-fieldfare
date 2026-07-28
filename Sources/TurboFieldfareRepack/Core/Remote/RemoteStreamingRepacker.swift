@@ -80,6 +80,7 @@ public final class RemoteStreamingRepacker {
         -> RemoteStreamingRepackResult {
         try validateOptions()
         let installLock = try InstallLock.acquire(outputDirectory: options.outputDir)
+        defer { withExtendedLifetime(installLock) {} }
         let paths = installLock.paths
         if try Posix.entryKind(paths.finalDirectory) == .directory, !options.overwrite {
             throw RepackError.configurationInvalid(detail:
@@ -117,6 +118,7 @@ public final class RemoteStreamingRepacker {
         requestedRevision: String
     ) throws -> RemoteInstallCheckpoint? {
         let lock = try InstallLock.acquire(outputDirectory: outputDirectory)
+        defer { withExtendedLifetime(lock) {} }
         let paths = lock.paths
         let partial = try Posix.entryKind(paths.partialDirectory)
         let checkpoint = try Posix.entryKind(paths.checkpointFile)
@@ -136,6 +138,7 @@ public final class RemoteStreamingRepacker {
 
     public static func discardPartial(outputDirectory: String) throws {
         let lock = try InstallLock.acquire(outputDirectory: outputDirectory)
+        defer { withExtendedLifetime(lock) {} }
         let paths = lock.paths
         let hasPartial = try Posix.entryKind(paths.partialDirectory) != .absent
         let hasCheckpoint = try Posix.entryKind(paths.checkpointFile) != .absent

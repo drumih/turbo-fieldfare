@@ -129,7 +129,6 @@ public final class AppModel {
 
     public var canInstallModel: Bool {
         guard case .ready = installReadiness else { return false }
-        if case .recoverable = installState { return false }
         return !isRunning && !loadState.isLoading && !isInstallingModel
             && requiresModelInstallation
     }

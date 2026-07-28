@@ -41,6 +41,33 @@ struct RemoteInstallCheckpointTests {
         }
     }
 
+    @Test func destinationByteTotalRejectsOverflowAndValuesAboveBound() throws {
+        #expect(try sampleCheckpoint().validatedDestinationBytes(
+            maximum: 8,
+            path: "resume.json") == 8)
+        for values in [[UInt64.max], [UInt64.max, 1], [9]] {
+            let checkpoint = RemoteInstallCheckpoint(
+                repoID: "owner/model",
+                requestedRevision: "main",
+                resolvedCommit: String(repeating: "a", count: 40),
+                sourceIndexSHA256: String(repeating: "b", count: 64),
+                planFingerprint: String(repeating: "c", count: 64),
+                totalSourceBytes: UInt64(values.count),
+                completedRanges: values.enumerated().map { index, bytes in
+                    RemoteCompletedRange(
+                        id: "range-\(index)",
+                        destinationDigest: String(repeating: "d", count: 64),
+                        sourceBytes: 1,
+                        destinationBytes: bytes)
+                })
+            #expect(throws: RepackError.self) {
+                _ = try checkpoint.validatedDestinationBytes(
+                    maximum: 8,
+                    path: "resume.json")
+            }
+        }
+    }
+
     @Test func damagedDestinationInvalidatesItsRange() throws {
         let root = tmpDirForRemote("checkpoint-digest")
         let path = (root as NSString).appendingPathComponent("weights.bin")

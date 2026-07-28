@@ -179,6 +179,91 @@ import TurboFieldfareRepackCore
   }
 
   @MainActor
+  @Test func networkFailureWithSavedProgressLeavesResumeEnabled() async throws {
+    struct NetworkFailure: Error {}
+    let directory = temporaryInstallPath("network-resume")
+    let paths = try makeSavedDownload(at: directory)
+    defer { cleanUpSavedDownload(paths) }
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(failure: NetworkFailure()))
+
+    model.installModel()
+    try await waitUntil {
+      if case .recoverable = model.installState { return true }
+      return false
+    }
+
+    #expect(model.canInstallModel)
+    #expect(model.canDiscardModelDownload)
+  }
+
+  @MainActor
+  @Test func diskFailureCanResumeAfterSpaceRecheck() async throws {
+    let directory = temporaryInstallPath("disk-resume")
+    let paths = try makeSavedDownload(at: directory)
+    defer { cleanUpSavedDownload(paths) }
+    let error = RepackError.diskSpaceInsufficient(
+      path: "/volume",
+      required: 120,
+      available: 45)
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(failure: error))
+
+    model.installModel()
+    try await waitUntil {
+      if case .recoverable = model.installState { return true }
+      return false
+    }
+    #expect(!model.canInstallModel)
+
+    model.recheckModelAtCurrentLocation()
+
+    #expect(model.canInstallModel)
+    #expect(model.canDiscardModelDownload)
+  }
+
+  @MainActor
+  @Test func invalidSavedDownloadsRemainDiscardOnly() throws {
+    let descriptor = AppModelInstallDescriptor.default
+    for incompatible in [false, true] {
+      let directory = temporaryInstallPath(
+        incompatible ? "incompatible-checkpoint" : "corrupt-checkpoint")
+      let paths = try makeSavedDownload(at: directory)
+      defer { cleanUpSavedDownload(paths) }
+      if incompatible {
+        try RemoteInstallCheckpoint(
+          repoID: "other/model",
+          requestedRevision: descriptor.revision,
+          resolvedCommit: String(repeating: "a", count: 40),
+          sourceIndexSHA256: String(repeating: "b", count: 64),
+          planFingerprint: String(repeating: "c", count: 64),
+          totalSourceBytes: 1
+        ).write(
+          to: paths.checkpointFile,
+          parentDirectory: paths.parentDirectory)
+      } else {
+        try Data("{}".utf8).write(
+          to: URL(fileURLWithPath: paths.checkpointFile))
+      }
+      let model = AppModel(
+        modelDirectory: directory,
+        client: MockLifecycleInferenceClient(),
+        installer: RepackModelInstallerClient(descriptor: descriptor))
+
+      #expect(!model.canInstallModel)
+      #expect(model.canDiscardModelDownload)
+      guard case .failed = model.installReadiness else {
+        Issue.record("invalid checkpoint did not fail readiness")
+        continue
+      }
+    }
+  }
+
+  @MainActor
   @Test func diskFailureKeepsExactRequirementAndShortfall() async throws {
     let error = RepackError.diskSpaceInsufficient(
       path: "/volume",
@@ -233,6 +318,25 @@ import TurboFieldfareRepackCore
   private func temporaryInstallPath(_ tag: String) -> URL {
     FileManager.default.temporaryDirectory
       .appendingPathComponent("turbofieldfare-app-install-\(tag)-\(UUID().uuidString).gturbo")
+  }
+
+  private func makeSavedDownload(at directory: URL) throws -> RemoteInstallPaths {
+    let paths = try RemoteInstallPaths(outputDirectory: directory.path)
+    try FileManager.default.createDirectory(
+      atPath: paths.partialDirectory,
+      withIntermediateDirectories: true)
+    return paths
+  }
+
+  private func cleanUpSavedDownload(_ paths: RemoteInstallPaths) {
+    for path in [
+      paths.finalDirectory,
+      paths.partialDirectory,
+      paths.checkpointFile,
+      paths.lockFile,
+    ] {
+      try? FileManager.default.removeItem(atPath: path)
+    }
   }
 
   @MainActor

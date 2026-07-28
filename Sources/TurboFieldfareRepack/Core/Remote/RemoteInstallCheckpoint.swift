@@ -73,13 +73,29 @@ public struct RemoteInstallCheckpoint: Codable, Sendable, Equatable {
             && self.planFingerprint == planFingerprint
     }
 
+    public func validatedDestinationBytes(maximum: UInt64, path: String) throws -> UInt64 {
+        try validate(path: path)
+        var total: UInt64 = 0
+        for range in completedRanges {
+            let sum = total.addingReportingOverflow(range.destinationBytes)
+            guard !sum.overflow, sum.partialValue <= maximum else {
+                throw RepackError.installStateCorrupt(
+                    path: path,
+                    detail: "completed destination bytes exceed the installed model")
+            }
+            total = sum.partialValue
+        }
+        return total
+    }
+
     private func validate(path: String) throws {
         guard schema == Self.schemaVersion,
               !repoID.isEmpty,
               !requestedRevision.isEmpty,
               resolvedCommit.count == 40,
               sourceIndexSHA256.count == 64,
-              planFingerprint.count == 64 else {
+              planFingerprint.count == 64,
+              totalSourceBytes > 0 else {
             throw RepackError.installStateCorrupt(
                 path: path,
                 detail: "invalid checkpoint identity")
@@ -90,10 +106,27 @@ public struct RemoteInstallCheckpoint: Codable, Sendable, Equatable {
                   !$0.id.isEmpty
                       && $0.destinationDigest.count == 64
                       && $0.sourceBytes > 0
+                      && $0.destinationBytes > 0
               }) else {
             throw RepackError.installStateCorrupt(
                 path: path,
                 detail: "invalid completed range")
+        }
+        var sourceTotal: UInt64 = 0
+        var destinationTotal: UInt64 = 0
+        for range in completedRanges {
+            let nextSource = sourceTotal.addingReportingOverflow(range.sourceBytes)
+            let nextDestination = destinationTotal.addingReportingOverflow(
+                range.destinationBytes)
+            guard !nextSource.overflow,
+                  nextSource.partialValue <= totalSourceBytes,
+                  !nextDestination.overflow else {
+                throw RepackError.installStateCorrupt(
+                    path: path,
+                    detail: "completed range byte totals are invalid")
+            }
+            sourceTotal = nextSource.partialValue
+            destinationTotal = nextDestination.partialValue
         }
     }
 }

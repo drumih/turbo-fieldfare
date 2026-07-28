@@ -61,9 +61,11 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
             requestedRevision: descriptor.revision)
         let remainingBytes: UInt64
         if let saved {
-            let reused = saved.completedRanges.reduce(UInt64(0)) {
-                $0 + $1.destinationBytes
-            }
+            let checkpointPath = try RemoteInstallPaths(
+                outputDirectory: outputDirectory.path).checkpointFile
+            let reused = try saved.validatedDestinationBytes(
+                maximum: descriptor.installedBytes,
+                path: checkpointPath)
             remainingBytes = descriptor.installedBytes > reused
                 ? descriptor.installedBytes - reused
                 : 0

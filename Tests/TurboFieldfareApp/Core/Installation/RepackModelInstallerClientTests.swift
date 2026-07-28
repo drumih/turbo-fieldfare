@@ -69,6 +69,72 @@ import Testing
             try await consume.value
         }
     }
+
+    @Test func rejectsUInt64MaxCheckpointDestinationBytes() throws {
+        try expectCorruptCheckpoint(destinationBytes: [UInt64.max])
+    }
+
+    @Test func rejectsCheckpointDestinationByteOverflow() throws {
+        try expectCorruptCheckpoint(destinationBytes: [UInt64.max, 1])
+    }
+
+    @Test func rejectsCheckpointDestinationBytesAboveInstalledModel() throws {
+        try expectCorruptCheckpoint(destinationBytes: [101])
+    }
+
+    private func expectCorruptCheckpoint(destinationBytes: [UInt64]) throws {
+        let descriptor = AppModelInstallDescriptor(
+            displayName: "Test",
+            repoID: "owner/model",
+            revision: "main",
+            sourceIndexSHA256: String(repeating: "b", count: 64),
+            approximateDownloadBytes: 100,
+            installedBytes: 100,
+            rangeStagingBytes: 0,
+            reserveBytes: 0)
+        let output = FileManager.default.temporaryDirectory
+            .appendingPathComponent("checkpoint-bytes-\(UUID().uuidString).gturbo")
+        let paths = try RemoteInstallPaths(outputDirectory: output.path)
+        defer {
+            for path in [
+                paths.partialDirectory,
+                paths.checkpointFile,
+                paths.lockFile,
+            ] {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
+        try FileManager.default.createDirectory(
+            atPath: paths.partialDirectory,
+            withIntermediateDirectories: true)
+        let checkpoint = RemoteInstallCheckpoint(
+            repoID: descriptor.repoID,
+            requestedRevision: descriptor.revision,
+            resolvedCommit: String(repeating: "a", count: 40),
+            sourceIndexSHA256: descriptor.sourceIndexSHA256,
+            planFingerprint: String(repeating: "c", count: 64),
+            totalSourceBytes: UInt64(destinationBytes.count),
+            completedRanges: destinationBytes.enumerated().map { index, bytes in
+                RemoteCompletedRange(
+                    id: "range-\(index)",
+                    destinationDigest: String(repeating: "d", count: 64),
+                    sourceBytes: 1,
+                    destinationBytes: bytes)
+            })
+        try JSONEncoder().encode(checkpoint).write(
+            to: URL(fileURLWithPath: paths.checkpointFile))
+        let client = RepackModelInstallerClient(descriptor: descriptor)
+
+        do {
+            _ = try client.checkInstallRequirement(outputDirectory: output)
+            Issue.record("invalid checkpoint byte total was accepted")
+        } catch let error as RepackError {
+            guard case .installStateCorrupt = error else {
+                Issue.record("expected installStateCorrupt, got \(error)")
+                return
+            }
+        }
+    }
 }
 
 private final class Flag: Sendable {
