@@ -201,8 +201,8 @@ K/V head across eight query heads, but the tiled kernel handled each query head
 separately. It launched eight threadgroups and read the same K/V data eight
 times.
 
-TensorOps let us process the whole group together. The new kernel was 11.24x
-faster at 16K and 11.63x faster at 64K.
+TensorOps processes all eight heads at once, making attention 11x faster at
+64K.
 
 The full runtime kept much of that gain. On the same 32K input, prefill fell
 from 491.09 to 204.29 seconds, a 2.404x speedup without increasing memory use.
