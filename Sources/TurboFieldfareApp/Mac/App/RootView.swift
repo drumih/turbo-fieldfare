@@ -17,7 +17,7 @@ struct RootView: View {
                 ChatSidebarView(model: model)
                     .frame(width: CGFloat(AppChromeLayout.chatSidebarWidth))
                     .frame(maxHeight: .infinity)
-                    .background(Color(nsColor: .underPageBackgroundColor))
+                    .background(TurboFieldfareMacTheme.sidebarBackgroundColor)
                     .transition(.move(edge: .leading).combined(with: .opacity))
 
                 Divider()

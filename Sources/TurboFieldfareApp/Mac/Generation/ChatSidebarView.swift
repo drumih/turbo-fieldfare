@@ -4,6 +4,8 @@ import SwiftUI
 
 struct ChatSidebarView: View {
     @Bindable var model: AppModel
+    @AppStorage(AppAppearance.storageKey)
+    private var appearanceRawValue = AppAppearance.system.rawValue
 
     @State private var hoveredChatID: AppChat.ID?
     @State private var chatBeingRenamed: AppChat?
@@ -212,11 +214,35 @@ struct ChatSidebarView: View {
             Image(systemName: "internaldrive")
             Text("\(model.chats.count) local \(model.chats.count == 1 ? "chat" : "chats")")
             Spacer()
+            appearanceMenu
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
         .frame(height: 42)
+    }
+
+    private var appearanceMenu: some View {
+        let appearance = AppAppearance.resolve(appearanceRawValue)
+        return Menu {
+            Picker("Appearance", selection: $appearanceRawValue) {
+                ForEach(AppAppearance.allCases) { option in
+                    Label(option.label, systemImage: option.systemImage)
+                        .tag(option.rawValue)
+                }
+            }
+        } label: {
+            Label("Appearance", systemImage: appearance.systemImage)
+                .labelStyle(.iconOnly)
+                .frame(width: 26, height: 26)
+                .contentShape(Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Appearance: \(appearance.label)")
+        .accessibilityLabel("Appearance")
+        .accessibilityValue(appearance.label)
     }
 
     private var sortedChats: [AppChat] {

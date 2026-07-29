@@ -42,8 +42,7 @@ public enum AppChromeLayout {
     public static let inspectorWidth = 320
     public static let dividerWidth = 1
     public static let minimumHeight = 560
-    public static let regularHeaderLeadingPadding = 20
-    public static let trafficLightHeaderLeadingPadding = 84
+    public static let headerHorizontalPadding = 20
 
     public static func minimumWindowWidth(
         isChatSidebarVisible: Bool,
@@ -54,13 +53,6 @@ public enum AppChromeLayout {
             + (isInspectorVisible ? inspectorWidth + dividerWidth : 0)
     }
 
-    public static func headerLeadingPadding(
-        isChatSidebarVisible: Bool
-    ) -> Int {
-        isChatSidebarVisible
-            ? regularHeaderLeadingPadding
-            : trafficLightHeaderLeadingPadding
-    }
 }
 
 public struct AppModelActionPresentation: Equatable, Sendable {

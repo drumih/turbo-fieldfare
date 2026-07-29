@@ -12,9 +12,9 @@ struct StatusHUDView: View {
     var body: some View {
         strip
             .padding(.top, 10)
-            .padding(.leading, CGFloat(AppChromeLayout.headerLeadingPadding(
-                isChatSidebarVisible: isChatSidebarVisible)))
-            .padding(.trailing, 20)
+            .padding(
+                .horizontal,
+                CGFloat(AppChromeLayout.headerHorizontalPadding))
     }
 
     private var strip: some View {

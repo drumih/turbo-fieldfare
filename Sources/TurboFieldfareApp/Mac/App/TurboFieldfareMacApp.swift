@@ -1,5 +1,6 @@
 import AppKit
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 // Run as a regular foreground app even when launched as a bare SwiftPM
@@ -27,6 +28,8 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
 struct TurboFieldfareMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
     @State private var model: AppModel
+    @AppStorage(AppAppearance.storageKey)
+    private var appearanceRawValue = AppAppearance.system.rawValue
 
     init() {
         _model = State(initialValue: AppModel(
@@ -37,6 +40,9 @@ struct TurboFieldfareMacApp: App {
     var body: some Scene {
         Window("TurboFieldfare", id: "main") {
             RootView(model: model)
+                .preferredColorScheme(
+                    AppAppearance.resolve(appearanceRawValue)
+                        .preferredColorScheme)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1280, height: 760)
@@ -61,6 +67,14 @@ struct TurboFieldfareMacApp: App {
                     .disabled(!model.canReloadModel)
                 Button("Unload Model", action: model.unloadModel)
                     .disabled(!model.canUnloadModel)
+            }
+            CommandMenu("Appearance") {
+                Picker("Appearance", selection: $appearanceRawValue) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Label(appearance.label, systemImage: appearance.systemImage)
+                            .tag(appearance.rawValue)
+                    }
+                }
             }
         }
     }

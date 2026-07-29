@@ -3,6 +3,25 @@ import TurboFieldfareAppCore
 @testable import TurboFieldfareMacPresentation
 
 @Suite struct AppChromePresentationTests {
+    @Test func appearanceOptionsHaveStablePersistenceAndPresentation() {
+        #expect(AppAppearance.storageKey == "TurboFieldfare.appearance")
+        #expect(AppAppearance.allCases.map(\.rawValue)
+            == ["system", "light", "dark"])
+        #expect(AppAppearance.allCases.map(\.label)
+            == ["System", "Light", "Dark"])
+        #expect(AppAppearance.allCases.map(\.systemImage)
+            == ["circle.lefthalf.filled", "sun.max", "moon"])
+        #expect(AppAppearance.system.preferredColorScheme == nil)
+        #expect(AppAppearance.light.preferredColorScheme == .light)
+        #expect(AppAppearance.dark.preferredColorScheme == .dark)
+    }
+
+    @Test func invalidPersistedAppearanceFallsBackToSystem() {
+        #expect(AppAppearance.resolve("dark") == .dark)
+        #expect(AppAppearance.resolve("unexpected") == .system)
+        #expect(AppAppearance.resolve("") == .system)
+    }
+
     @Test func sidebarControlsAlwaysRemainInTheHeader() {
         for sidebar in AppSidebarKind.allCases {
             let visible = AppSidebarControlPresentation(
@@ -67,11 +86,8 @@ import TurboFieldfareAppCore
             isInspectorVisible: true) == 1_274)
     }
 
-    @Test func hiddenChatSidebarLeavesRoomForWindowTrafficLights() {
-        #expect(AppChromeLayout.headerLeadingPadding(
-            isChatSidebarVisible: true) == 20)
-        #expect(AppChromeLayout.headerLeadingPadding(
-            isChatSidebarVisible: false) == 84)
+    @Test func headerUsesSymmetricHorizontalPadding() {
+        #expect(AppChromeLayout.headerHorizontalPadding == 20)
     }
 
     @Test(
