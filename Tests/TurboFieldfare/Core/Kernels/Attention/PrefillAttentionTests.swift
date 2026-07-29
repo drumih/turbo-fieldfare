@@ -139,6 +139,8 @@ import TurboFieldfareValidationSupport
     ])
     func tensorOps2DFullAttentionMatchesReferenceAtTileBoundaries(_ visibleKeys: Int) throws {
         let context = try MetalContext()
+        // Hosted CI has no Apple10 GPU, so it returns without dispatching this
+        // kernel. Run this suite on Apple10 before changing the TensorOps path.
         guard context.device.supportsFamily(.apple10) else { return }
         let fixture = Self.makeFixture(start: visibleKeys - 1,
                                        chunk: 1,

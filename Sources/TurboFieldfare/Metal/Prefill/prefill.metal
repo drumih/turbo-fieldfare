@@ -1007,6 +1007,8 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         }
     }
 
+    // This full-attention kernel starts at key zero and ignores slidingWindow.
+    // The Swift selector must dispatch it only when every prior key is visible.
     const uint last =
         min(p.kvValidCount, p.startPosition + query_start + valid_query_rows);
     for (uint key_start = 0u;

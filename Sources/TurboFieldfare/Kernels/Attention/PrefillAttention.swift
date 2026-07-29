@@ -65,6 +65,9 @@ final class PrefillAttention {
 
         let requestsTensorOps = path == .fullTensorOps2DPreferred
             || path == .fullTensorOps2DValidityV2
+        // The pinned model uses 512/16/2 only for full attention; its
+        // sliding-window layers use 256/16/8. A future model that reuses this
+        // shape for sliding attention must add a full-visibility check here.
         let tensorOpsShape = requestsTensorOps
             && kvRingCapacity == 0
             && params.headDim == 512
@@ -80,6 +83,8 @@ final class PrefillAttention {
             preconditionFailure(
                 "TensorOps 2D prefill attention requires Apple10 MPP tensor support")
         } else {
+            // Explicit mode also falls back for incompatible shapes. Benchmark
+            // fixtures must use 512/16/2 to prove that TensorOps ran.
             pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
         }
         let headDim = Int(params.headDim)
