@@ -1,8 +1,9 @@
 # Local OpenAI-compatible server
 
 `TurboFieldfareServer` exposes a local Chat Completions API for one Gemma
-model. It binds to `127.0.0.1` without authentication or TLS. Do not expose it
-through a proxy or tunnel.
+model. It binds to `127.0.0.1` by default, or to the machine's exact Tailscale
+IPv4 address with `--bind tailnet`. It has no application-level authentication
+or TLS; do not expose it through a wildcard interface, proxy, or tunnel.
 
 ## Start the server
 
