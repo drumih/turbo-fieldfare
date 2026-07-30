@@ -15,6 +15,7 @@ do {
 
 do {
     let signals = ServerTerminationSignals()
+    let host = try arguments.bindMode.host()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
     let backend = try await ServerModelSession.load(
         modelDirectory: modelURL,
@@ -24,8 +25,8 @@ do {
         modelID: arguments.modelID,
         queueLimit: arguments.queueLimit,
         backend: backend)
-    _ = try await server.start(port: arguments.port)
-    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
+    _ = try await server.start(host: host, port: arguments.port)
+    print("TurboFieldfareServer ready at http://\(host):\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
 
     _ = await signals.wait()
     try await server.shutdown()

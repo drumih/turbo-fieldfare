@@ -29,7 +29,7 @@ public actor TurboFieldfareHTTPServer {
         self.heartbeatInterval = heartbeatInterval
     }
 
-    public func start(port: Int) async throws -> Channel {
+    public func start(host: String = "127.0.0.1", port: Int) async throws -> Channel {
         let modelID = self.modelID
         let backend = self.backend
         let coordinator = self.coordinator
@@ -53,7 +53,7 @@ public actor TurboFieldfareHTTPServer {
                 }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-        let channel = try await bootstrap.bind(host: "127.0.0.1", port: port).get()
+        let channel = try await bootstrap.bind(host: host, port: port).get()
         self.channel = channel
         return channel
     }
