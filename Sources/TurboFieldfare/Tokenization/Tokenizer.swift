@@ -262,7 +262,8 @@ public struct GFTokenizer: @unchecked Sendable {
                 "function": [
                     "name": tool.name,
                     "description": tool.description,
-                    "parameters": try tool.parameters.jinjaSendableValue(),
+                    "parameters": try tool.parameters
+                        .gemmaSchemaNormalized().jinjaSendableValue(),
                 ] as [String: any Sendable],
             ]
         }

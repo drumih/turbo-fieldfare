@@ -198,6 +198,91 @@ struct OpenAIValidationTests {
         #expect(parsed.arguments.objectValue?["file-path"] == .string("/tmp/x"))
     }
 
+    @Test func unionAndTypelessToolSchemasRenderWithoutThrowing() async throws {
+        // pi's `mcp` tool (anyOf string|object), a kagi-style nullable integer
+        // (anyOf integer|null), a github-style anyOf string|array, and a bare
+        // enum with no `type` — every shape that used to abort template rendering.
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[{"role":"user","content":"hi"}],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"mcp",
+              "description":"gateway",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "args":{"description":"tool args","anyOf":[
+                    {"type":"string"},
+                    {"type":"object","properties":{},"additionalProperties":true}
+                  ]},
+                  "limit":{"anyOf":[{"type":"integer"},{"type":"null"}]},
+                  "files":{"anyOf":[
+                    {"type":"string"},
+                    {"type":"array","items":{"type":"string"}}
+                  ]},
+                  "mode":{"enum":["a","b"]},
+                  "nick":{"type":["string","null"]}
+                }
+              }
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = tokenizer.decode(
+            try tokenizer.encodeToolChat(
+                messages: validated.messages, tools: validated.tools),
+            skipSpecialTokens: false)
+        #expect(rendered.contains("mcp"))
+        #expect(rendered.contains("args"))
+    }
+
+    @Test func unionSchemaCollapsesToFirstConcreteBranch() throws {
+        let schema = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"description":"d","anyOf":[{"type":"string"},{"type":"object"}]}
+        """#.utf8))
+        let normalized = schema.gemmaSchemaNormalized().objectValue
+        #expect(normalized?["type"] == .string("string"))
+        #expect(normalized?["description"] == .string("d"))
+        #expect(normalized?["anyOf"] == nil)
+    }
+
+    @Test func nullableTypeArrayCollapsesToConcreteType() throws {
+        let schema = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"type":["null","integer"]}
+        """#.utf8))
+        #expect(schema.gemmaSchemaNormalized().objectValue?["type"] == .string("integer"))
+    }
+
+    @Test func typelessSchemaDefaultsByShape() throws {
+        let object = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"properties":{"a":{"type":"string"}}}
+        """#.utf8))
+        #expect(object.gemmaSchemaNormalized().objectValue?["type"] == .string("object"))
+        let scalar = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"title":"x"}"#.utf8))
+        #expect(scalar.gemmaSchemaNormalized().objectValue?["type"] == .string("string"))
+    }
+
+    @Test func consecutiveSystemMessagesCoalesceButKeepDeveloperDistinct() throws {
+        let data = Data(#"""
+        {"model":"m","messages":[
+          {"role":"system","content":"first"},
+          {"role":"system","content":"second"},
+          {"role":"developer","content":"dev"},
+          {"role":"user","content":"hello"}
+        ]}
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.messages.map(\.role) == [.system, .developer, .user])
+        #expect(validated.messages.first?.content == "first\n\nsecond")
+    }
+
     @Test func ambiguousParameterKeysFailValidation() throws {
         let data = Data(#"""
         {
