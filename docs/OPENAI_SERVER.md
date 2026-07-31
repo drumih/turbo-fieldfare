@@ -88,6 +88,39 @@ OpenCode:
 
 Select `turbofieldfare/gemma-4-26b-a4b-it` in OpenCode.
 
+Pi, in `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "turbofieldfare": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsReasoningEffort": false,
+        "supportsStrictMode": false,
+        "supportsUsageInStreaming": true
+      },
+      "models": [
+        {
+          "id": "gemma-4-26b-a4b-it",
+          "name": "Gemma 4 26B-A4B IT",
+          "reasoning": false,
+          "contextWindow": 16384,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}
+```
+
+Keep `contextWindow` at or below the server's `--max-context`, or Pi will send
+histories the server rejects. The `compat` flags match the unsupported
+features listed under [Supported API](#supported-api). Select the model with
+`/model` in Pi, or make it the default in `~/.pi/agent/settings.json`.
+
 ## Prompt reuse
 
 Single-prefix KV reuse is on by default. Send the complete message history with
