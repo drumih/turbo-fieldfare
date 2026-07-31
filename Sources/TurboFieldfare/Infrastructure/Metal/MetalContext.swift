@@ -101,9 +101,11 @@ public final class MetalContext: @unchecked Sendable {
 
     /// MSL version used for every runtime shader compile.
     ///
-    /// The MPP prefill path requires MSL 4.0 tensor operations, which need both
-    /// a macOS 26 SDK to name the enum case and a macOS 26 runtime to accept it.
-    /// When either is missing we compile at 3.2; the shader sources guard their
+    /// The MPP prefill path requires MSL 4.0 tensor operations, which the Metal
+    /// compiler only accepts on macOS 26. `MTLLanguageVersion.msl4_0` is built
+    /// from a raw value and is non-nil on every SDK, so the `#available` check
+    /// is what actually keeps MSL 4.0 away from older systems — do not remove
+    /// it. Below macOS 26 we compile at 3.2; the shader sources guard their
     /// tensor-ops kernels behind `__HAVE_TENSOR__`, so those kernels drop out of
     /// the library and their Swift callers take the non-tensor path.
     private static var shaderLanguageVersion: MTLLanguageVersion {

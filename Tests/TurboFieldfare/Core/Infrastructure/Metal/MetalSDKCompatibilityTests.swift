@@ -4,44 +4,34 @@ import Metal
 
 /// Guards the raw-value lookups in `MetalSDKCompatibility.swift`.
 ///
-/// Those shims decide whether shaders compile at MSL 4.0. If they silently
-/// answer "no" on a Metal 4 machine, the TensorOps prefill kernels drop out of
-/// the library and prefill falls back to the causal-tiled path — everything
-/// still builds, still runs, and still produces correct output, just slower.
-/// These tests exist so that failure mode is loud instead.
+/// Those values decide whether shaders compile at MSL 4.0. Get the encoding
+/// wrong in one direction and a Metal 4 machine silently drops its tensor-ops
+/// kernels — everything still builds and produces correct output, just slower.
+/// Get it wrong in the other and the entire shader library fails to compile.
 @Suite struct MetalSDKCompatibilityTests {
 
     /// `MTLLanguageVersion` encodes its raw value as `(major << 16) + minor`.
-    /// Pin that against cases every supported SDK declares, so a wrong
-    /// assumption is caught even on a toolchain that has never heard of
-    /// MSL 4.0 and therefore cannot exercise `msl4_0` directly.
+    /// Pin that against cases the macOS 15 SDK declares, so a wrong assumption
+    /// is caught on the floor toolchain, which cannot name MSL 4.0 at all.
     @Test func languageVersionRawValueUsesMajorMinorEncoding() {
         #expect(MTLLanguageVersion(rawValue: 3 << 16) == .version3_0)
         #expect(MTLLanguageVersion(rawValue: (3 << 16) + 2) == .version3_2)
     }
 
-    /// The shims depend on `init?(rawValue:)` rejecting values the SDK does not
-    /// declare. If it ever started returning a constructed value instead, they
-    /// would claim Metal 4 support on every SDK, and `shaderLanguageVersion`
-    /// would hand `MTLCompileOptions` a version the compiler cannot honor.
-    @Test func unknownRawValuesAreRejected() {
-        #expect(MTLLanguageVersion(rawValue: 99 << 16) == nil)
-        #expect(MTLGPUFamily(rawValue: 9_999) == nil)
+    /// The value handed to `MTLCompileOptions` on macOS 26 must be exactly
+    /// MSL 4.0. It is built by raw value, so nothing else type-checks it.
+    @Test func msl4ShimCarriesTheMSL4RawValue() {
+        #expect(MTLLanguageVersion.msl4_0?.rawValue == 4 << 16)
     }
 
-    /// `MTLLanguageVersion.version4_0` and `MTLGPUFamily.apple10` both ship in
-    /// the macOS 26 SDK, so the two lookups must agree: either this build can
-    /// see Metal 4 or it cannot. A split means one raw value is wrong, and the
-    /// shims would misreport what the toolchain supports.
-    @Test func metal4ShimsResolveTogether() {
-        let hasMSL4 = MTLLanguageVersion.msl4_0 != nil
-        let hasApple10 = MTLGPUFamily.apple10IfAvailable != nil
-        #expect(hasMSL4 == hasApple10, """
-            Metal 4 SDK shims disagree: MTLLanguageVersion.msl4_0 \
-            \(hasMSL4 ? "resolved" : "was nil") but MTLGPUFamily.apple10IfAvailable \
-            \(hasApple10 ? "resolved" : "was nil"). Both are declared in the macOS 26 \
-            SDK, so either both resolve or neither does. Check the raw values in \
-            MetalSDKCompatibility.swift.
-            """)
+    /// Metal's enums import as non-frozen, so `init?(rawValue:)` constructs
+    /// undeclared values instead of rejecting them. That means nil-ness cannot
+    /// be used to detect whether the SDK knows a case, which is why
+    /// `MetalContext.shaderLanguageVersion` gates on `#available` instead.
+    /// If this ever starts failing, that guard could be simplified — until
+    /// then, removing it would hand MSL 4.0 to a macOS 15 Metal compiler.
+    @Test func unknownRawValuesAreConstructedNotRejected() {
+        #expect(MTLLanguageVersion(rawValue: 99 << 16) != nil)
+        #expect(MTLGPUFamily(rawValue: 9_999) != nil)
     }
 }

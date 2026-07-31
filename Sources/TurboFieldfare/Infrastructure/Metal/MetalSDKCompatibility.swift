@@ -5,32 +5,37 @@ import Metal
 ///
 /// The package deploys to macOS 15 so it can be built by the Swift 6.1
 /// toolchain, whose SDK does not declare `MTLLanguageVersion.version4_0` or
-/// `MTLGPUFamily.apple10`. Both are integer-backed `NS_ENUM`s, so we look them
-/// up by raw value instead of naming the case: the lookup returns `nil` on the
-/// older SDK and the real case on the newer one. That keeps the MPP tensor-ops
-/// fast path available to anyone building with Xcode 26 without breaking the
-/// older toolchain.
+/// `MTLGPUFamily.apple10`. Both are integer-backed `NS_ENUM`s, so we pass their
+/// raw values through instead of naming the cases.
+///
+/// These import as non-frozen enums, so `init?(rawValue:)` does **not** reject
+/// undeclared values — it constructs one, and `MetalSDKCompatibilityTests` pins
+/// that. Nothing here can tell you whether the SDK knows a case, so callers must
+/// gate on the runtime OS instead:
+///
+/// - `MTLGPUFamily` is safe to pass through. `supportsFamily` is a runtime
+///   query, so a system with no Apple10 answers `false`.
+/// - `MTLLanguageVersion` is **not** safe to pass through. Handing MSL 4.0 to
+///   the macOS 15 Metal compiler fails the entire shader library, which takes
+///   the whole runtime down — so `MetalContext.shaderLanguageVersion` guards it
+///   with `#available` and must keep doing so.
 
 extension MTLLanguageVersion {
     /// MSL 4.0 — the version that enables the MPP tensor-ops kernels.
-    /// `nil` when compiled against an SDK that predates it.
     ///
     /// `MTLLanguageVersion` encodes its raw value as `(major << 16) + minor`.
+    /// Never hand this to Metal outside a macOS 26 availability check.
     static var msl4_0: MTLLanguageVersion? { MTLLanguageVersion(rawValue: 4 << 16) }
-}
-
-extension MTLGPUFamily {
-    /// `MTLGPUFamily.apple10` — the first family with MPP tensor support.
-    /// `nil` when compiled against an SDK that predates it.
-    static var apple10IfAvailable: MTLGPUFamily? { MTLGPUFamily(rawValue: 1010) }
 }
 
 extension MTLDevice {
     /// Whether this device supports the Apple10 MPP tensor operations that back
-    /// the TensorOps prefill kernels. Always `false` when the package is built
-    /// against an SDK that has no Apple10 family to ask about.
+    /// the TensorOps prefill kernels.
+    ///
+    /// Safe to ask on any OS: an older system simply reports `false` for a
+    /// family it has never heard of.
     var supportsApple10TensorOps: Bool {
-        guard let family = MTLGPUFamily.apple10IfAvailable else { return false }
+        guard let family = MTLGPUFamily(rawValue: 1010) else { return false }
         return supportsFamily(family)
     }
 }
