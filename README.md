@@ -153,10 +153,16 @@ Build the complete package so the app and its sibling decode service are both
 available. When launched from this checkout, the app stores the model in
 `scratch/gemma4.gturbo`.
 
+To reuse a model from another checkout or disk, choose **Model → Choose Model
+Folder…** and select the `.gturbo` directory that contains `manifest.json`.
+The Mac app remembers that location across launches, so parallel builds can
+share one installation without copying it.
+
 #### Install the model
 
 On first launch, the app checks the available storage and shows the download
-and installed sizes. Choose **Download** to begin.
+and installed sizes. Choose **Choose Existing Model…** to use an installation
+already on disk, or choose **Download** to begin a new one.
 
 The installer never materializes the full source checkpoint. It streams the
 required byte ranges from the pinned Hugging Face revision and repacks them

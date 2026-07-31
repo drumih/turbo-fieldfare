@@ -165,6 +165,12 @@ struct ModelInstallView: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(!model.canCancelInstall)
             } else {
+                Button("Choose Existing Model…") {
+                    ModelLocationPicker.choose(for: model)
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.loadState.isLoading)
+
                 if model.hasPartialModelDownload {
                     Button("Discard Download", role: .destructive) {
                         showingDiscardConfirmation = true

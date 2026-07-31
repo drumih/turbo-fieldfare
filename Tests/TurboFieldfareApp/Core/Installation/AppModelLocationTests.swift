@@ -3,6 +3,18 @@ import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct AppModelLocationTests {
+    @Test func rememberedURLBecomesDefaultAcrossLaunches() throws {
+        let suiteName = "AppModelLocationTests-\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let modelURL = URL(fileURLWithPath: "/models/shared.gturbo", isDirectory: true)
+
+        AppModelLocation.remember(modelURL, userDefaults: userDefaults)
+
+        #expect(AppModelLocation.defaultURL(userDefaults: userDefaults).path
+            == "/models/shared.gturbo")
+    }
+
     @Test func explicitURLWins() {
         let result = AppModelLocation.resolve(
             explicitURL: URL(fileURLWithPath: "/models/explicit.gturbo"),
