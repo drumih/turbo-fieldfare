@@ -227,6 +227,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             }
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
+                let started = ContinuousClock.now
+                ServerLog.requestStarted(id: responseID, streaming: request.stream)
                 do {
                     let completion = try await self.coordinator.run(onQueued: startStream) {
                         startStream()
@@ -248,6 +250,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             }
                         }
                     }
+                    ServerLog.requestCompleted(id: responseID,
+                                               duration: started.duration(to: .now),
+                                               completion: completion)
                     if request.stream {
                         self.finishStream(contextBox.value,
                                           id: responseID,
