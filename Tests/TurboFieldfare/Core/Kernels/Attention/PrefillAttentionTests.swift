@@ -141,7 +141,7 @@ import TurboFieldfareValidationSupport
         let context = try MetalContext()
         // Hosted CI has no Apple10 GPU, so it returns without dispatching this
         // kernel. Run this suite on Apple10 before changing the TensorOps path.
-        guard context.device.supportsFamily(.apple10) else { return }
+        guard context.device.supportsApple10TensorOps else { return }
         let fixture = Self.makeFixture(start: visibleKeys - 1,
                                        chunk: 1,
                                        window: 0,
@@ -185,7 +185,7 @@ import TurboFieldfareValidationSupport
                 "preferred TensorOps maxAbs=\(maxAbs) rel=\(rel)")
         #expect(rel <= 2e-2,
                 "preferred TensorOps rel=\(rel) maxAbs=\(maxAbs)")
-        if !context.device.supportsFamily(.apple10) {
+        if !context.device.supportsApple10TensorOps {
             let baseline = try Self.runKernel(fixture, path: .causalTiled)
             #expect(preferred == baseline)
         }

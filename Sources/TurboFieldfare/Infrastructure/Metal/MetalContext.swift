@@ -99,6 +99,20 @@ public final class MetalContext: @unchecked Sendable {
                                  subdirectory: subdirectory)
     }
 
+    /// MSL version used for every runtime shader compile.
+    ///
+    /// The MPP prefill path requires MSL 4.0 tensor operations, which need both
+    /// a macOS 26 SDK to name the enum case and a macOS 26 runtime to accept it.
+    /// When either is missing we compile at 3.2; the shader sources guard their
+    /// tensor-ops kernels behind `__HAVE_TENSOR__`, so those kernels drop out of
+    /// the library and their Swift callers take the non-tensor path.
+    private static var shaderLanguageVersion: MTLLanguageVersion {
+        if #available(macOS 26.0, iOS 26.0, *), let version4 = MTLLanguageVersion.msl4_0 {
+            return version4
+        }
+        return .version3_2
+    }
+
     private static func compileShaderLibrary(device: MTLDevice) throws -> MTLLibrary {
         var combined = ""
         for name in shaderModules {
@@ -110,8 +124,7 @@ public final class MetalContext: @unchecked Sendable {
         }
         do {
             let opts = MTLCompileOptions()
-            // The MPP prefill path requires MSL 4.0 tensor operations.
-            opts.languageVersion = .version4_0
+            opts.languageVersion = shaderLanguageVersion
             return try device.makeLibrary(source: combined, options: opts)
         } catch {
             throw MetalError.libraryCompileFailed("\(error)")
@@ -125,7 +138,7 @@ public final class MetalContext: @unchecked Sendable {
         }
         let src = try String(contentsOf: url, encoding: .utf8)
         let opts = MTLCompileOptions()
-        opts.languageVersion = .version4_0
+        opts.languageVersion = shaderLanguageVersion
         do {
             return try device.makeLibrary(source: src, options: opts)
         } catch {
