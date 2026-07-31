@@ -100,6 +100,34 @@ private actor PipelinedRequestBackend: ServerInferenceBackend {
     }
 }
 
+private struct DecodeFailure: Error {}
+
+/// Fails after `onEvent` has already put content on the wire, the way a decode
+/// failure does mid-generation.
+private actor FailingMidStreamBackend: ServerInferenceBackend {
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        onEvent(.content("partial"))
+        throw DecodeFailure()
+    }
+}
+
+/// Rejects the request from inside `generate`, the way an overlong prompt does
+/// once the streaming head has been committed.
+private actor RejectingBackend: ServerInferenceBackend {
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        throw ServerRequestError.invalid(
+            message: "prompt exceeds the configured context",
+            param: "messages",
+            code: "context_length_exceeded")
+    }
+}
+
 private actor CancellableServerBackend: ServerInferenceBackend {
     private(set) var startedCount = 0
     private(set) var cancellationCount = 0
@@ -186,6 +214,65 @@ struct HTTPServerTests {
         #expect(text.contains(#""prompt_tokens":3"#))
         #expect(text.contains(#""cached_tokens":0"#))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func streamingFailureAfterHeadReportsErrorInBand() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: FailingMidStreamBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}
+        """#.utf8)
+        // A dropped connection fails this call: the body must end normally.
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""content":"partial""#))
+        #expect(text.contains(#""code":"internal_error""#))
+        #expect(text.contains(#""type":"server_error""#))
+        #expect(!text.contains(#""finish_reason":"stop""#))
+        #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func streamingRejectionAfterHeadNamesTheCause() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: RejectingBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}
+        """#.utf8)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""code":"context_length_exceeded""#))
+        #expect(text.contains(#""param":"messages""#))
+        #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        // The same request without a stream still gets a real status code.
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}]}
+        """#.utf8)
+        let (blocking, blockingResponse) = try await URLSession.shared.data(for: request)
+        #expect((blockingResponse as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: blocking, as: UTF8.self)
+            .contains(#""code":"context_length_exceeded""#))
 
         try await server.shutdown()
     }

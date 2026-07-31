@@ -11,9 +11,12 @@ public struct OpenAIErrorEnvelope: Codable, Equatable, Sendable {
 
     public let error: Detail
 
-    public init(message: String, param: String? = nil, code: String) {
+    public init(message: String,
+                param: String? = nil,
+                type: String = "invalid_request_error",
+                code: String) {
         error = Detail(message: message,
-                       type: "invalid_request_error",
+                       type: type,
                        param: param,
                        code: code)
     }
