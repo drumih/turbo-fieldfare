@@ -45,6 +45,11 @@ final class PrefillAttention {
     private let psoCausalTiled: MTLComputePipelineState
     private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
 
+    /// Whether the Apple10 MPP tensor-ops prefill kernel is usable here. False
+    /// on hosts without Apple10 support and on shader libraries compiled below
+    /// MSL 4.0, in which case `encodeCausal` uses the causal-tiled kernel.
+    var tensorOpsPipelineAvailable: Bool { psoFullTensorOps2DValidityV2 != nil }
+
     init(context: MetalContext) throws {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")

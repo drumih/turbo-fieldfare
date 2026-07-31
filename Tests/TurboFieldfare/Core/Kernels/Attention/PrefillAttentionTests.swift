@@ -191,6 +191,26 @@ import TurboFieldfareValidationSupport
         }
     }
 
+    /// The other TensorOps tests return early when the path is unavailable, so
+    /// on their own they would stay green if the kernel silently disappeared
+    /// from the shader library. This one fails loudly instead: once a device
+    /// reports Apple10 MPP tensor support, the pipeline must exist.
+    @Test func apple10DevicesMustProvideTheTensorOpsPipeline() throws {
+        let context = try MetalContext()
+        // A false reading means either a non-Apple10 GPU or a build against an
+        // SDK with no Apple10 family to ask about. Neither is a regression, and
+        // the second case cannot be distinguished from the first, so skip.
+        guard context.device.supportsApple10TensorOps else { return }
+        let prefill = try PrefillAttention(context: context)
+        #expect(prefill.tensorOpsPipelineAvailable, """
+            This device reports Apple10 MPP tensor support, but the TensorOps \
+            prefill pipeline is missing, so prefill silently fell back to the \
+            causal-tiled kernel. The usual cause is MetalContext's \
+            shaderLanguageVersion resolving below MSL 4.0, which drops every \
+            kernel guarded by __HAVE_TENSOR__ from the shader library.
+            """)
+    }
+
     private static func makeFixture(start: Int,
                                     chunk: Int,
                                     window: Int,
