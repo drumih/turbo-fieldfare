@@ -151,6 +151,29 @@ the connection, so a client that sees an aborted transport (`TypeError:
 terminated` under undici, for example) should look for a dead server process
 or its own timeout rather than a generation error.
 
+## Server log
+
+The server writes one line per request to stderr:
+
+```text
+[2026-07-31T17:03:10Z] request chatcmpl-f6a02587… started streaming=true
+[2026-07-31T17:03:12Z] request chatcmpl-f6a02587… completed in 2.4s prompt=812 cached=768 completion=96 finish=stop
+```
+
+The start line is written before the model runs, so a long prefill — which
+emits nothing for minutes — is distinguishable from a wedged server. The
+completion line reports how much of the prompt the KV prefix supplied in
+`cached`, matching `usage.prompt_tokens_details.cached_tokens`.
+
+A failed request logs the status it would have carried, whether or not a
+stream had already committed `200`, along with the underlying error — which is
+more detail than the response carries, since responses deliberately do not
+leak runtime internals:
+
+```text
+[2026-07-31T17:09:32Z] request chatcmpl-b36dd1ed… failed status=400 streaming=true error=context_length_exceeded: prompt exceeds the configured context
+```
+
 ## Supported API
 
 Endpoints:
