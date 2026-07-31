@@ -75,8 +75,9 @@ your prompt, and press **Generate**.
 
 The measured result is a reference point, not a performance ceiling. Prompt
 length, generated length, page-cache state, and hardware all affect throughput.
-To help measure another Apple Silicon Mac, follow the
-[community benchmark guide](docs/COMMUNITY_BENCHMARKS.md).
+See [community benchmark results](docs/COMMUNITY_BENCHMARKS.md#community-results)
+from other Macs, or follow the
+[community benchmark guide](docs/COMMUNITY_BENCHMARKS.md) to add your own.
 
 ## Using TurboFieldfare
 
