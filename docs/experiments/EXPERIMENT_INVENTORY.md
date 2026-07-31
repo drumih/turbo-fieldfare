@@ -51,13 +51,13 @@ resident set size; and **NLL** is negative log-likelihood. See
 | Expert cache and layout | [Replacement policy, capacity, prediction, and disk layout](summaries/03-expert-cache-prediction-and-layout.md) | 9 |
 | RDADVISE | [The complete short-win to long-context-rejection arc](summaries/04-rdadvise.md) | 7 |
 | Attention and KV cache | [Split attention, MLX geometry, K4/V4, and FP16 ring](summaries/05-attention-and-kv-cache.md) | 14 |
-| Prefill | [Chunking, MPP, routed MoE, overlap, and allocation experiments](summaries/06-prefill.md) | 16 |
+| Prefill | [Chunking, MPP, routed MoE, overlap, attention, and allocation experiments](summaries/06-prefill.md) | 17 |
 | Fusions and orchestration | [Targeted fusions, head variants, queues, and synchronization](summaries/07-fusions-head-and-orchestration.md) | 15 |
 | Sampling and output | [Gumbel sampling, tokenizer caching, and detokenization](summaries/08-sampling-tokenization-and-output.md) | 4 |
 | Validation methodology | [False rejections, holdouts, thermal state, and benchmark artifacts](summaries/09-validation-and-measurement-lessons.md) | 9 |
-| **Total** | | **102** |
+| **Total** | | **103** |
 
-## All 102 experiments
+## All 103 experiments
 
 ### Model installation and expert I/O
 
@@ -162,6 +162,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [PF-14](summaries/06-prefill.md#pf-14) — QMM TG reuse | Families +3.2-9.7%; current opportunity about 0.41%. | Rejected. |
 | [PF-15](summaries/06-prefill.md#pf-15) — Batched routed MoE | Isolated +30.91%; balanced end to end about +2%. | Reversed rejection; production. |
 | [PF-16](summaries/06-prefill.md#pf-16) — Long endpoint gate | Delta-NLL +0.002588; top-1 16/16; RSS 888.3 MiB. | Production; validation result. |
+| [PF-17](summaries/06-prefill.md#pf-17) — Apple10 TensorOps full attention | Isolated 11.24x at 16K and 11.63x at 64K; 32K end to end 2.404x. | Production on Apple10; tiled fallback elsewhere. |
 
 ### Fusions, head, and orchestration
 
@@ -196,7 +197,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 
 | ID | Lesson | Consequence |
 | --- | --- | --- |
-| [METH-01](summaries/09-validation-and-measurement-lessons.md#meth-01) | Reordered floating-point work needs a distributional quality oracle. | Corrected false rejections of MLX attention, staged MPP, and batched MoE. |
+| [METH-01](summaries/09-validation-and-measurement-lessons.md#meth-01) | Reordered floating-point work needs a distributional quality oracle. | Corrected false rejections of MLX attention, staged MPP, batched MoE, and TensorOps prefill attention. |
 | [METH-02](summaries/09-validation-and-measurement-lessons.md#meth-02) | Claimed-lossless work still needs exact identity. | Retained strict gates for cache, storage, and load-width changes. |
 | [METH-03](summaries/09-validation-and-measurement-lessons.md#meth-03) | Test production-shaped offsets. | Found the live 2-byte INT4 alignment defect. |
 | [METH-04](summaries/09-validation-and-measurement-lessons.md#meth-04) | Prove synchronization scope. | Repaired one reused scratch bank; audited other paths by ownership and queue order. |

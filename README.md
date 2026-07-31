@@ -40,7 +40,7 @@ RAM.
 The runtime, streaming installer, CLI, and native Mac app are written in Swift
 and Metal. TurboFieldfare is model-specific rather than a wrapper around MLX or
 llama.cpp. The curated [experiment record](docs/experiments/EXPERIMENT_INVENTORY.md)
-summarizes 102 measured results across kernels, caching, I/O, prefill, and
+summarizes 103 measured results across kernels, caching, I/O, prefill, and
 decode.
 
 ## Try it
@@ -367,7 +367,7 @@ instruction checkpoint on Apple Silicon Macs with at least 8 GB of RAM.
 The [experiments that shaped TurboFieldfare](docs/OPTIMIZATION_JOURNEY.md)
 explain the largest wins, the plausible ideas that failed, and the early
 results that reversed under stronger validation. The detailed
-[experiment record](docs/experiments/EXPERIMENT_INVENTORY.md) keeps all 102
+[experiment record](docs/experiments/EXPERIMENT_INVENTORY.md) keeps all 103
 audited entries as optional evidence.
 
 Useful entry points:

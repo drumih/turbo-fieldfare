@@ -11,6 +11,7 @@ import Testing
         #expect(!runtime.rdadviseEnabled)
         #expect(runtime.prefillPolicy == .chunked)
         #expect(runtime.prefillChunkTokens == 128)
+        #expect(runtime.prefillAttentionPath == .fullTensorOps2DPreferred)
         #expect(runtime.headPath == .fusedRows)
     }
 
@@ -21,11 +22,13 @@ import Testing
             rdadvisePolicy: .adaptive,
             prefillEnabled: false,
             prefillChunkTokens: 64,
+            prefillAttentionPath: .causalTiled,
             forceLogitsHead: true)
         #expect(runtime.expertCacheSlots == 32)
         #expect(runtime.modelExpertCachePolicy == .lru)
         #expect(runtime.rdadviseEnabled)
         #expect(runtime.prefillConfig == .off)
+        #expect(runtime.prefillAttentionPath == .causalTiled)
         #expect(runtime.headPath == .logits)
     }
 

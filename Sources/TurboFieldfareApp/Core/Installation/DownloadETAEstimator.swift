@@ -77,10 +77,6 @@ public struct DownloadETAEstimator: Sendable {
         let estimate = Double(observation.totalBytes - completed) / rate
         guard estimate.isFinite, estimate >= 0 else { return .estimating }
 
-        if let lastETA,
-           abs(estimate - lastETA) <= max(60, lastETA * 0.2) {
-            return .remaining(seconds: lastETA)
-        }
         lastETA = estimate
         lastUpdateTime = timestamp
         return .remaining(seconds: estimate)

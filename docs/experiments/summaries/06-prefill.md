@@ -13,6 +13,7 @@ failed the M2 long-row gate.
 | Current result | Disposition |
 | --- | --- |
 | Chunk 128, staged affine MPP, and batched routed MoE | Production |
+| Apple10 TensorOps full attention | Production on Apple10; tiled fallback elsewhere |
 | Shared/fetch overlap v3 | Rejected and removed |
 | Shared INT8 QMM, deeper lookahead, and argument-buffer rings | Rejected on M2 |
 
@@ -265,6 +266,28 @@ failed the M2 long-row gate.
 - **Final disposition:** Production validation.
 - **Lesson:** Long endpoint sweeps
   separate a local tie from a systematic quality change.
+
+<a id="pf-17"></a>
+### PF-17: Apple10 TensorOps full-prefill attention
+
+- **Hypothesis:** One threadgroup could process all eight Q heads in a full
+  attention GQA group, reuse K/V reads, and map QK/PV onto cooperative matrix
+  operations.
+- **Variants tested:** Production tiled attention, four-head grouped online
+  softmax, and an eight-head TensorOps path with FP32 QK/PV accumulation.
+- **Evidence:** TensorOps was 11.24x faster at isolated 16K and 11.63x at 64K.
+  Same-input 32K prefill fell from 491.09 to 204.29 seconds, a 2.404x
+  end-to-end speedup, with identical post-prefill RSS. Direct attention
+  reference checks passed through 64K, and frozen MLX-relative endpoints
+  matched top-1 at 8K/16K/32K/64K.
+- **What changed the conclusion:** Exact production-logit identity falsely
+  rejected a valid floating-point reduction order. Direct attention error and
+  independent MLX quality gates isolated top-k routing amplification instead
+  of a shader semantic defect.
+- **Final disposition:** Production on Apple10; automatic causal-tiled fallback
+  on earlier GPU families and a named rollback remain.
+- **Lesson:** Reordered floating-point kernels need a direct numerical oracle
+  plus model-quality gates, not identity with one reduction order.
 
 [Previous: Attention and KV cache](05-attention-and-kv-cache.md) |
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |

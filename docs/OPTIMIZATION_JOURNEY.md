@@ -196,6 +196,22 @@ about 0.4% of the remaining prefill time.
 The optimization worked, but the affected kernels were now too small to
 matter.
 
+Full attention became expensive for a different reason. Gemma 4 shares one
+K/V head across eight query heads, but the tiled kernel handled each query head
+separately. It launched eight threadgroups and read the same K/V data eight
+times.
+
+TensorOps processes all eight heads at once, making attention 11x faster at
+64K.
+
+The full runtime kept much of that gain. On the same 32K input, prefill fell
+from 491.09 to 204.29 seconds, a 2.404x speedup without increasing memory use.
+
+We nearly threw this result away because the new reduction order changed the
+final logits slightly. Better checks showed the differences were harmless.
+
+TensorOps is now the Apple10 path. Earlier GPUs keep tiled attention.
+
 ## Sampling removed repeated vocabulary scans
 
 Sampling revealed an algorithmic problem rather than a slow kernel.
