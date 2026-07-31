@@ -173,7 +173,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         switch (head.method, head.uri) {
         case (.GET, "/health"):
             writeJSON(context, status: .ok, object: ["status": "ok"])
-        case (.GET, "/v1/models"):
+        case (.GET, "/v1/models"), (.GET, "/v1/models?"):
             let response = OpenAIModelList(
                 object: "list",
                 data: [.init(id: modelID,
