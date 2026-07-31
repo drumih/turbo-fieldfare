@@ -1,11 +1,14 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.1
 import PackageDescription
 
+// macOS 15 / iOS 18 is the floor set by `Synchronization.Mutex` and SwiftUI's
+// `WindowDragGesture`. Building against a newer SDK still lights up the MSL 4.0
+// tensor-ops kernels at runtime; see `MetalSDKCompatibility.swift`.
 let package = Package(
     name: "TurboFieldfare",
     platforms: [
-        .macOS(.v26),
-        .iOS(.v26),
+        .macOS(.v15),
+        .iOS(.v18),
     ],
     products: [
         .library(name: "TurboFieldfare", targets: ["TurboFieldfare"]),

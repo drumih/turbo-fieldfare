@@ -25,7 +25,7 @@ body:
     id: environment
     attributes:
       label: macOS and Swift versions
-      placeholder: macOS 26.x, Swift 6.2
+      placeholder: macOS 15.x, Swift 6.1
     validations:
       required: true
   - type: textarea

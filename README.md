@@ -10,9 +10,9 @@
 </p>
 
 <p align="center">
-  <img alt="Swift 6.2" src="https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&logoColor=white">
-  <img alt="Metal 4" src="https://img.shields.io/badge/Metal-4-5E5CE6">
-  <img alt="macOS 26 or later" src="https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&logoColor=white">
+  <img alt="Swift 6.1 or later" src="https://img.shields.io/badge/Swift-6.1%2B-F05138?logo=swift&logoColor=white">
+  <img alt="Metal 3.2 or later" src="https://img.shields.io/badge/Metal-3.2%2B-5E5CE6">
+  <img alt="macOS 15 or later" src="https://img.shields.io/badge/macOS-15%2B-000000?logo=apple&logoColor=white">
   <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/License-Apache%202.0-2ea44f"></a>
 </p>
 
@@ -69,7 +69,7 @@ your prompt, and press **Generate**.
 | Memory          | ~2 GB of weights and 4K KV cache                                                                                         |
 | Storage         | About 14.3 GB for the installed text-only model                                                                          |
 | Hardware        | Apple Silicon Mac; 8 GB of RAM                                                                                            |
-| Platform        | macOS 26, Metal 4, Swift 6.2                                                                                             |
+| Platform        | macOS 15+, Metal 3.2, Swift 6.1+; macOS 26 on Apple10 adds the Metal 4 tensor-ops prefill path                            |
 | M2 measured decode | [5.1-6.3 tok/s](docs/BENCHMARKS.md#m2-measured-decode) on an 8 GB M2 MacBook Air |
 | M5 measured decode | [31-35 tok/s](docs/BENCHMARKS.md#m5-measured-decode) on a 24 GB M5 Pro |
 
@@ -99,12 +99,16 @@ The Swift package exposes six products:
 ### Requirements
 
 - An Apple Silicon Mac; the validated target is an 8 GB M2 MacBook Air
-- macOS 26 with Metal 4
-- Xcode 26 and Swift 6.2 or newer
+- macOS 15 or later, with Metal 3.2
+- Xcode 16.3 and Swift 6.1 or newer
 - Enough free storage for the ~14.3 GB model installation
 - An internet connection for the first model install
 
-The package is arm64-only. Older macOS and Metal versions are not supported.
+The package is arm64-only; earlier macOS versions are not supported. Building
+on macOS 26 with Xcode 26 additionally compiles the shaders at MSL 4.0, which
+enables the Metal 4 tensor-ops prefill kernels on Apple10 GPUs. Every other
+supported configuration selects the non-tensor kernels automatically, so the
+runtime is functionally identical and differs only in prefill throughput.
 
 ### Prompting the model
 

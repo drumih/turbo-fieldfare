@@ -22,12 +22,28 @@ concurrency:
 jobs:
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: macos-26
+    # macos-15 holds the Swift 6.1 / macOS 15 SDK floor; macos-26 exercises the
+    # MSL 4.0 tensor-ops path. Both must build.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-15
+          - macos-26
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - name: Report toolchain
+        run: swift --version
       - name: Build release products
         run: swift build -c release
       - name: Run serial tests
         run: Scripts/test.sh
+
+  docs:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
       - name: Check Markdown links
         run: ruby Scripts/check_markdown_links.rb
