@@ -6,6 +6,9 @@ They exercise different prompt lengths and require coherent text that reaches
 the end of the model turn. A repeating calibration prompt is not a valid speed
 result because repeated expert choices can make decode artificially fast.
 
+Submitted measurements are listed under
+[Community results](#community-results).
+
 The frozen prompts are in
 [`benchmark-prompts/real-generation-v1/`](benchmark-prompts/real-generation-v1/).
 Runs use the app sampling defaults with fixed seeds: temperature `0.2`, Top-K
@@ -119,3 +122,26 @@ Compare rows only when the case, prompt tokens, generated tokens, settings, and
 stop reason match. The [reference M5 range](BENCHMARKS.md#m5-measured-decode)
 uses controlled non-repeating continuations for stable token-for-token
 measurement, while this public protocol checks autonomous product generation.
+
+## Community results
+
+These measurements were submitted by GitHub users. They are collected here
+for reference, not as a controlled hardware comparison.
+Prompt length, generated tokens, storage, cache state, and the number of runs
+all affect decode speed.
+
+| Source | Mac | Memory | Storage | Prompt / generated tokens | Decode | Measurement |
+| --- | --- | ---: | --- | ---: | ---: | --- |
+| [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 61 / 516 | 19.09 tok/s | One submitted run |
+| [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 430 / 780 | 16.50 tok/s | One submitted run |
+| [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 3,015 / 617 | 13.88 tok/s | One submitted run |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 61 / 516 | 11.38 tok/s | Median of five runs |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 430 / 780 | 8.43 tok/s | Median of five runs |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 3,015 / 617 | 8.58 tok/s | Median of five runs |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 61 / 516 | 11.53 tok/s | Median of five runs |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 430 / 780 | 10.79 tok/s | Median of five runs |
+| [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 3,015 / 617 | 11.21 tok/s | Median of five runs |
+
+These submissions use the public community prompts and generate until the end
+of the model turn. Compare rows only when the prompt and generated-token counts
+match.
