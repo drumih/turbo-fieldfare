@@ -230,9 +230,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 let started = ContinuousClock.now
                 ServerLog.requestStarted(id: responseID, streaming: request.stream)
                 do {
+                    // Rendering and the context check happen before the head
+                    // is written, so a rejected prompt still gets a status
+                    // code even when the client asked for a stream.
+                    let prepared = try await self.backend.prepare(request)
                     let completion = try await self.coordinator.run(onQueued: startStream) {
                         startStream()
-                        return try await self.backend.generate(request) { event in
+                        return try await self.backend.generate(prepared) { event in
                             guard request.stream else { return }
                             switch event {
                             case .content(let text):

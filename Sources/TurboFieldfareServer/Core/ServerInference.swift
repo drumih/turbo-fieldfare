@@ -24,9 +24,38 @@ public struct ServerCompletion: Equatable, Sendable {
     }
 }
 
+/// A request that has been rendered and measured against the context window.
+public struct PreparedGeneration: Sendable {
+    public let request: ValidatedChatRequest
+    public let promptIDs: [Int32]
+    public let needsToolTemplate: Bool
+
+    public init(request: ValidatedChatRequest,
+                promptIDs: [Int32] = [],
+                needsToolTemplate: Bool = false) {
+        self.request = request
+        self.promptIDs = promptIDs
+        self.needsToolTemplate = needsToolTemplate
+    }
+}
+
 public protocol ServerInferenceBackend: Sendable {
-    func generate(_ request: ValidatedChatRequest,
+    /// Everything that can reject a request must happen here, because the
+    /// caller commits the response status once `generate` starts: a streaming
+    /// request has `200` and the SSE head on the wire by then, and no status
+    /// left to send.
+    func prepare(_ request: ValidatedChatRequest) async throws -> PreparedGeneration
+
+    func generate(_ prepared: PreparedGeneration,
                   onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void) async throws -> ServerCompletion
+}
+
+extension ServerInferenceBackend {
+    /// Backends that do not tokenize inherit a pass-through. A backend that
+    /// renders a prompt must override this, or `generate` receives no tokens.
+    public func prepare(_ request: ValidatedChatRequest) async throws -> PreparedGeneration {
+        PreparedGeneration(request: request)
+    }
 }
 
 public actor ServerCoordinator {
@@ -193,17 +222,10 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.promptCacheDomain = promptCacheDomain
     }
 
-    public func generate(
-        _ request: ValidatedChatRequest,
-        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
-    ) async throws -> ServerCompletion {
-        var completed = false
-        defer {
-            if !completed {
-                promptCache.invalidate()
-                runner.reset()
-            }
-        }
+    /// Renders the prompt and checks it against the context window. Runs
+    /// before the response status is committed, and touches no generation
+    /// state, so it is safe to run while another request is generating.
+    public func prepare(_ request: ValidatedChatRequest) throws -> PreparedGeneration {
         let needsToolTemplate = !request.tools.isEmpty
             || request.messages.contains {
                 $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
@@ -220,6 +242,25 @@ public actor ServerModelSession: ServerInferenceBackend {
                 message: "prompt exceeds the configured context",
                 param: "messages",
                 code: "context_length_exceeded")
+        }
+        return PreparedGeneration(request: request,
+                                  promptIDs: promptIDs,
+                                  needsToolTemplate: needsToolTemplate)
+    }
+
+    public func generate(
+        _ prepared: PreparedGeneration,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        let request = prepared.request
+        let needsToolTemplate = prepared.needsToolTemplate
+        let promptIDs = prepared.promptIDs
+        var completed = false
+        defer {
+            if !completed {
+                promptCache.invalidate()
+                runner.reset()
+            }
         }
 
         let effectivePromptIDs: [Int32]

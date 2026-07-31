@@ -13,7 +13,7 @@ private actor ScriptedServerBackend: ServerInferenceBackend {
     }
 
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         if delayNanoseconds > 0 {
@@ -30,7 +30,7 @@ private actor ScriptedServerBackend: ServerInferenceBackend {
 
 private actor MultipleToolBackend: ServerInferenceBackend {
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         let first = ParsedToolCall(
@@ -55,7 +55,7 @@ private actor MultipleToolBackend: ServerInferenceBackend {
 
 private actor ContentAndToolBackend: ServerInferenceBackend {
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         let content = "I will read it."
@@ -86,7 +86,7 @@ private actor PipelinedRequestBackend: ServerInferenceBackend {
     }
 
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         generationCount += 1
@@ -106,7 +106,7 @@ private struct DecodeFailure: Error {}
 /// failure does mid-generation.
 private actor FailingMidStreamBackend: ServerInferenceBackend {
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         onEvent(.content("partial"))
@@ -114,11 +114,12 @@ private actor FailingMidStreamBackend: ServerInferenceBackend {
     }
 }
 
-/// Rejects the request from inside `generate`, the way an overlong prompt does
-/// once the streaming head has been committed.
+/// Rejects from inside `generate`, once the streaming head is committed. The
+/// live equivalent is the effective-prompt check, which cannot run earlier
+/// because it depends on the KV prefix the request will be matched against.
 private actor RejectingBackend: ServerInferenceBackend {
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         throw ServerRequestError.invalid(
@@ -128,12 +129,30 @@ private actor RejectingBackend: ServerInferenceBackend {
     }
 }
 
+/// Rejects during `prepare`, the way an overlong prompt does.
+private actor RejectingPrepareBackend: ServerInferenceBackend {
+    func prepare(_ request: ValidatedChatRequest) async throws -> PreparedGeneration {
+        throw ServerRequestError.invalid(
+            message: "prompt exceeds the configured context",
+            param: "messages",
+            code: "context_length_exceeded")
+    }
+
+    func generate(
+        _ prepared: PreparedGeneration,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        Issue.record("generate must not run after prepare fails")
+        throw DecodeFailure()
+    }
+}
+
 private actor CancellableServerBackend: ServerInferenceBackend {
     private(set) var startedCount = 0
     private(set) var cancellationCount = 0
 
     func generate(
-        _ request: ValidatedChatRequest,
+        _ prepared: PreparedGeneration,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
         startedCount += 1
@@ -241,6 +260,32 @@ struct HTTPServerTests {
         #expect(text.contains(#""type":"server_error""#))
         #expect(!text.contains(#""finish_reason":"stop""#))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func streamingPrepareRejectionKeepsItsStatusCode() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: RejectingPrepareBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let httpResponse = try #require(response as? HTTPURLResponse)
+        // Rejected before the head, so the stream was never opened.
+        #expect(httpResponse.statusCode == 400)
+        #expect(httpResponse.value(forHTTPHeaderField: "content-type") == "application/json")
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""code":"context_length_exceeded""#))
+        #expect(!text.contains("data:"))
 
         try await server.shutdown()
     }
