@@ -119,6 +119,38 @@ The server accepts only function tools. Omit `tool_choice` or set it to `auto`
 to allow calls. Set it to `none` to disable them. The server does not support
 `required`, named tool selection, or `parallel_tool_calls: false`.
 
+## Errors
+
+The prompt is rendered and checked against the context window before any
+response is written, so an overlong prompt, an unknown model, an unsupported
+parameter, an oversized body, or a full queue comes back as a JSON error
+envelope with a real status code — `400`, `404`, `413`, `415`, or `429` — and
+no stream is started. Asking for `"stream": true` does not change this.
+
+A failure raised after that point cannot change the status, because a
+streaming request already has `200` and the SSE head on the wire. It is
+reported in-band instead: one frame carrying an `error` object, then
+`data: [DONE]`, then a normal end of the chunked body.
+
+```text
+data: {"error":{"message":"generation failed","code":"internal_error","type":"server_error"}}
+
+data: [DONE]
+
+```
+
+The frame carries the same envelope the blocking path would have returned, so
+a failure that can only surface once generation is under way still names its
+cause. Reusing a KV prefix is the case that reaches it: whether the retained
+prefix plus the new turn fits the context window is known only after the
+prompt cache has been matched, which happens after the head is committed.
+
+Treat any frame with an `error` key as fatal for that request; no
+`finish_reason` chunk precedes it. The stream is never terminated by dropping
+the connection, so a client that sees an aborted transport (`TypeError:
+terminated` under undici, for example) should look for a dead server process
+or its own timeout rather than a generation error.
+
 ## Supported API
 
 Endpoints:
