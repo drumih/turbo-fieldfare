@@ -2431,6 +2431,8 @@ Add the observable state and the install/delete entry points the picker calls. T
 
 `runInstall(for:)` drives `installer.install(entry:outputDirectory:)` from Task 12, mapping each `AppModelInstallEvent` onto `installStates.setState(_:for:)` exactly as the current single-model path maps onto `installState`.
 
+**Also replace the resident-weight estimate.** Task 9 shipped `AppMemoryBudget.residentWeightEstimateBytes`, a hardcoded 1.6 GiB, because nothing in the repo exposed a real figure at the time. The spec calls for the value to come from the manifest at load time. Now that a model is loaded here, read the real resident byte count and thread it through to `AppContextLengthOption.availableOptions(residentWeightBytes:)`, keeping the constant only as the pre-load fallback. Leaving the estimate in place makes the context picker's memory math wrong for any model that is not Gemma — which is the case the whole feature exists to enable.
+
 On a successful load, set `settings.lastGoodRepoID = entry.repoID` and persist. On launch, prefer `settings.selectedRepoID`, falling back to `settings.lastGoodRepoID`, then to `SupportedModelSource.repoID`.
 
 Replace the `loadConversations(forModelDirectory:)` call with `ConversationFileStore.loadGlobal(inSupportDirectory:)`, and `persistConversations` with `saveGlobal`. Run the Task 10 migration once at launch before the first load, passing every installed model directory and its repository ID.

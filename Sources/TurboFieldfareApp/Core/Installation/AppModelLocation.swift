@@ -1,14 +1,17 @@
 import Foundation
 
 enum AppModelLocation {
-    static func defaultURL() -> URL {
+    static let modelDirectoryName = "model.gturbo"
+
+    static func defaultURL(forRepoID repoID: String) throws -> URL {
         let fileManager = FileManager.default
         let applicationSupport = (try? fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: false)) ?? fileManager.homeDirectoryForCurrentUser
-        return resolve(
+        return try resolve(
+            repoID: repoID,
             explicitURL: nil,
             executableURL: Bundle.main.executableURL,
             currentDirectoryURL: URL(fileURLWithPath: fileManager.currentDirectoryPath,
@@ -17,27 +20,65 @@ enum AppModelLocation {
             fileExists: fileManager.fileExists(atPath:))
     }
 
-    static func resolve(explicitURL: URL?,
+    /// Default location for the curated model, for callers that cannot throw.
+    ///
+    /// The curated repository ID is a compile-time constant that always passes
+    /// slug validation, so the throwing path is unreachable; the fallback
+    /// exists only to keep this total. Replaced by the user's selection once a
+    /// model has been picked.
+    static func curatedDefaultURL() -> URL {
+        let repoID = ModelCatalog.curated.first?.repoID ?? ""
+        if let url = try? defaultURL(forRepoID: repoID) { return url }
+        let fileManager = FileManager.default
+        let applicationSupport = (try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false)) ?? fileManager.homeDirectoryForCurrentUser
+        return supportDirectory(applicationSupportURL: applicationSupport)
+            .appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent(modelDirectoryName, isDirectory: true)
+            .standardizedFileURL
+    }
+
+    /// The directory holding `catalog.json`, `conversations.json`, and the
+    /// per-model `models/` tree.
+    static func supportDirectory(applicationSupportURL: URL) -> URL {
+        applicationSupportURL
+            .appendingPathComponent("TurboFieldfare", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    static func resolve(repoID: String,
+                        explicitURL: URL?,
                         executableURL: URL?,
                         currentDirectoryURL: URL,
                         applicationSupportURL: URL,
-                        fileExists: (String) -> Bool) -> URL {
+                        fileExists: (String) -> Bool) throws -> URL {
         if let explicitURL {
             return absoluteURL(explicitURL, relativeTo: currentDirectoryURL)
         }
+        // Derived before any path is built, so a hostile repository ID cannot
+        // reach `appendingPathComponent`.
+        let slug = try ModelSlug.make(repoID: repoID)
         if let executableURL,
            let root = packageRoot(startingAt: executableURL.deletingLastPathComponent(),
                                   fileExists: fileExists) {
-            return root.appendingPathComponent("scratch/gemma4.gturbo", isDirectory: true)
-                .standardizedFileURL
+            return modelURL(under: root.appendingPathComponent("scratch", isDirectory: true),
+                            slug: slug)
         }
         if let root = packageRoot(startingAt: currentDirectoryURL, fileExists: fileExists) {
-            return root.appendingPathComponent("scratch/gemma4.gturbo", isDirectory: true)
-                .standardizedFileURL
+            return modelURL(under: root.appendingPathComponent("scratch", isDirectory: true),
+                            slug: slug)
         }
-        return applicationSupportURL
-            .appendingPathComponent("TurboFieldfare", isDirectory: true)
-            .appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        return modelURL(under: supportDirectory(applicationSupportURL: applicationSupportURL),
+                        slug: slug)
+    }
+
+    private static func modelURL(under base: URL, slug: String) -> URL {
+        base.appendingPathComponent("models", isDirectory: true)
+            .appendingPathComponent(slug, isDirectory: true)
+            .appendingPathComponent(modelDirectoryName, isDirectory: true)
             .standardizedFileURL
     }
 

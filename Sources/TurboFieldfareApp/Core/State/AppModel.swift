@@ -75,7 +75,7 @@ public final class AppModel {
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 settingsPersistenceEnabled: Bool = false,
                 conversationsPersistenceEnabled: Bool = false) {
-        let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
+        let directory = (modelDirectory ?? AppModelLocation.curatedDefaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
             ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
