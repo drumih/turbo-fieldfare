@@ -247,7 +247,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                      maxContext: maxContext,
                                      fp16RingEnabled: useFP16Ring,
                                      slidingWindow: cfg.slidingWindow,
-                                     maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
+                                     // Sized from the CONFIGURED chunk so
+                                     // sliding-window ring memory grows only
+                                     // when a larger prefill chunk is opted
+                                     // into, never from the static cap.
+                                     maxPrefillChunkTokens: runtimeConfiguration.prefillConfig.chunkTokens)
 
         self.embedInt4 = try EmbedLookupInt4(context: context)
         self.rms       = try RMSNorm(context: context)

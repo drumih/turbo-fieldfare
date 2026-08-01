@@ -13,7 +13,7 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
     init(config: ArchConfig,
                 chunkTokens: Int,
                 routedPairMicrobatchRows: Int = 32) {
-        self.chunkTokens = max(1, min(chunkTokens, 128))
+        self.chunkTokens = max(1, min(chunkTokens, PrefillRuntimeConfig.maxChunkTokens))
         self.hiddenSize = config.hiddenSize
         self.maxQElementsPerToken = config.numHeads * max(config.headDim, config.fullHeadDim)
         self.maxKVElementsPerToken = max(config.numKVHeads * config.headDim,
