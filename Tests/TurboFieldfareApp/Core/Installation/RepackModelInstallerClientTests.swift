@@ -8,7 +8,7 @@ import Testing
     @Test func mapsCoreProgressAndCompletion() async throws {
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("scripted.gturbo")
-        let client = RepackModelInstallerClient { outputDirectory, progress in
+        let client = RepackModelInstallerClient { _, outputDirectory, progress in
             progress(.downloadingMetadata)
             progress(.planning(downloadBytes: 10, outputBytes: 20))
             progress(.checkingDisk(DiskSpaceRequirement(path: "/",
@@ -47,7 +47,7 @@ import Testing
 
     @Test func cancelPropagatesCancellationToConsumer() async throws {
         let started = Flag()
-        let client = RepackModelInstallerClient { outputDirectory, progress in
+        let client = RepackModelInstallerClient { _, outputDirectory, progress in
             progress(.downloadingMetadata)
             started.set()
             try await Task.sleep(for: .seconds(60))

@@ -4,6 +4,7 @@ import Synchronization
 
 public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable {
     typealias InstallRunner = @Sendable (
+        ModelCatalogEntry,
         URL,
         @escaping @Sendable (ModelInstallProgress) -> Void
     ) async throws -> URL
@@ -25,17 +26,13 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
 
     public init(descriptor: AppModelInstallDescriptor = .default) {
         self.descriptor = descriptor
-        self.runInstall = { outputDirectory, progress in
+        self.runInstall = { entry, outputDirectory, progress in
             let paths = try RemoteInstallPaths(outputDirectory: outputDirectory.path)
             let resume = FileManager.default.fileExists(atPath: paths.checkpointFile)
-            let options = RemoteStreamingRepackOptions(
-                repoID: descriptor.repoID,
-                revision: descriptor.revision,
-                outputDir: outputDirectory.path,
+            let options = Self.repackOptions(
+                entry: entry,
+                outputDirectory: outputDirectory,
                 token: ProcessInfo.processInfo.environment["HF_TOKEN"],
-                requireKnownSource: true,
-                minFreeReserveBytes: descriptor.reserveBytes,
-                overwrite: true,
                 resume: resume)
             let result = try await RemoteStreamingRepacker(options: options).run(progress: progress)
             return URL(fileURLWithPath: result.outputDir).standardizedFileURL
@@ -54,7 +51,40 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
         self.runDiscard = runDiscard
     }
 
+    /// Extracted so the trust decision is testable without a network install:
+    /// `requireKnownSource` is the gate that keeps a curated model pinned to the
+    /// project's fingerprint, and getting it backwards would silently accept an
+    /// unvetted upload in the verified tier.
+    static func repackOptions(entry: ModelCatalogEntry,
+                              outputDirectory: URL,
+                              token: String?,
+                              resume: Bool) -> RemoteStreamingRepackOptions {
+        RemoteStreamingRepackOptions(
+            repoID: entry.repoID,
+            revision: entry.revision,
+            outputDir: outputDirectory.path,
+            token: token,
+            requireKnownSource: ModelTrustPolicy.requiresKnownSource(for: entry),
+            minFreeReserveBytes: entry.reserveBytes,
+            overwrite: true,
+            resume: resume)
+    }
+
+    public func checkInstallRequirement(entry: ModelCatalogEntry,
+                                        outputDirectory: URL) throws -> AppModelInstallRequirement {
+        try Self.checkInstallRequirement(
+            descriptor: AppModelInstallDescriptor(entry: entry),
+            outputDirectory: outputDirectory)
+    }
+
     public func checkInstallRequirement(outputDirectory: URL) throws -> AppModelInstallRequirement {
+        try Self.checkInstallRequirement(descriptor: descriptor,
+                                         outputDirectory: outputDirectory)
+    }
+
+    private static func checkInstallRequirement(
+        descriptor: AppModelInstallDescriptor,
+        outputDirectory: URL) throws -> AppModelInstallRequirement {
         let saved = try RemoteStreamingRepacker.inspectPersistentInstall(
             outputDirectory: outputDirectory.path,
             repoID: descriptor.repoID,
@@ -88,12 +118,22 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
     }
 
     public func installDefaultModel(outputDirectory: URL) -> AsyncThrowingStream<AppModelInstallEvent, Error> {
+        // Uses this client's own descriptor rather than the curated head so an
+        // injected descriptor still drives the install, and maps to the curated
+        // tier to preserve the pre-multi-model behaviour of always requiring a
+        // known source on this path.
+        install(entry: ModelCatalogEntry(descriptor: descriptor, trustTier: .curated),
+                outputDirectory: outputDirectory)
+    }
+
+    public func install(entry: ModelCatalogEntry,
+                        outputDirectory: URL) -> AsyncThrowingStream<AppModelInstallEvent, Error> {
         AsyncThrowingStream { continuation in
             let id = UUID()
             let task = Task { [runInstall] in
                 do {
                     continuation.yield(.checking)
-                    let completedDirectory = try await runInstall(outputDirectory) { progress in
+                    let completedDirectory = try await runInstall(entry, outputDirectory) { progress in
                         continuation.yield(Self.event(for: progress))
                     }
                     try Task.checkCancellation()

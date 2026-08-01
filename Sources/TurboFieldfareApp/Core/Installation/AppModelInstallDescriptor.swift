@@ -29,6 +29,21 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         self.reserveBytes = reserveBytes
     }
 
+    public init(entry: ModelCatalogEntry) {
+        self.init(
+            displayName: entry.displayName,
+            repoID: entry.repoID,
+            revision: entry.revision,
+            // Empty for a custom entry on its first install; the repacker is
+            // told not to require a known source in that case, and the observed
+            // value is recorded afterwards.
+            sourceIndexSHA256: entry.recordedIndexSHA256 ?? "",
+            approximateDownloadBytes: entry.approximateDownloadBytes,
+            installedBytes: entry.installedBytes,
+            rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
+            reserveBytes: entry.reserveBytes)
+    }
+
     public var requiredFreeBytes: UInt64 {
         installedBytes + rangeStagingBytes + reserveBytes
     }

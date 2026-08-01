@@ -26,6 +26,22 @@ public struct ModelCatalogEntry: Codable, Equatable, Sendable, Identifiable {
     public let installedBytes: UInt64
     public let reserveBytes: UInt64
 
+    /// Rebuilds an entry from a descriptor, for the legacy single-model install
+    /// path that still starts from `AppModelInstallDescriptor`.
+    public init(descriptor: AppModelInstallDescriptor, trustTier: ModelTrustTier) {
+        self.init(
+            displayName: descriptor.displayName,
+            repoID: descriptor.repoID,
+            revision: descriptor.revision,
+            trustTier: trustTier,
+            recordedIndexSHA256: descriptor.sourceIndexSHA256.isEmpty
+                ? nil
+                : descriptor.sourceIndexSHA256,
+            approximateDownloadBytes: descriptor.approximateDownloadBytes,
+            installedBytes: descriptor.installedBytes,
+            reserveBytes: descriptor.reserveBytes)
+    }
+
     public init(displayName: String,
                 repoID: String,
                 revision: String,
