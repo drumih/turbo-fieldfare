@@ -132,6 +132,9 @@ all affect decode speed.
 
 | Source | Mac | Memory | Storage | Prompt / generated tokens | Decode | Measurement |
 | --- | --- | ---: | --- | ---: | ---: | --- |
+| [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 61 / 511 | 9.477 tok/s | One submitted run |
+| [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 430 / 669 | 8.576 tok/s | One submitted run |
+| [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 3,015 / 604 | 7.805 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 61 / 516 | 19.09 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 430 / 780 | 16.50 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 3,015 / 617 | 13.88 tok/s | One submitted run |
