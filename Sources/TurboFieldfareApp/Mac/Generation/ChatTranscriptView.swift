@@ -1,0 +1,133 @@
+import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
+import SwiftUI
+
+/// A chat-style transcript: user turns are compact trailing bubbles while
+/// assistant turns use the full Markdown-rendered reading column.
+struct ChatTranscriptView: View {
+    let prompt: String
+    let messages: [AppChatMessage]
+    let output: String
+    let mailbox: GenerationTranscriptMailbox?
+    let isRunning: Bool
+
+    private let renderer = ResponseMarkdownRenderer()
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 26) {
+                    messageList
+
+                    if messages.isEmpty, !prompt.isEmpty {
+                        userMessage(prompt)
+                    }
+
+                    if isRunning || !effectiveOutput.isEmpty {
+                        assistantMessage(effectiveOutput)
+                            .id("active-response")
+                    }
+
+                    Color.clear
+                        .frame(height: 1)
+                        .id("transcript-bottom")
+                }
+                .frame(maxWidth: 820)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 24)
+            }
+            .scrollIndicators(.automatic)
+            .onChange(of: messages) { _, _ in
+                scrollToBottom(proxy)
+            }
+            .onChange(of: effectiveOutput) { _, _ in
+                scrollToBottom(proxy)
+            }
+            .onAppear {
+                scrollToBottom(proxy, animated: false)
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private var messageList: some View {
+        ForEach(Array(messages.enumerated()), id: \.offset) { _, message in
+            switch message.role {
+            case .system:
+                systemMessage(message.content)
+            case .user:
+                userMessage(message.content)
+            case .assistant:
+                assistantMessage(message.content)
+            }
+        }
+    }
+
+    private func userMessage(_ content: String) -> some View {
+        HStack {
+            Spacer(minLength: 48)
+            Text(content)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(
+                    Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Your message")
+    }
+
+    private func assistantMessage(_ content: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if content.isEmpty && isRunning {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.secondary)
+                    .padding(.top, 3)
+            } else if !content.isEmpty {
+                Text(AttributedString(renderer.render(content).attributedString))
+                    .font(.body)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Assistant response")
+    }
+
+    private func systemMessage(_ content: String) -> some View {
+        Text(content)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var effectiveOutput: String {
+        let mailboxText = mailbox?.completeText ?? ""
+        return mailboxText.isEmpty ? output : mailboxText
+    }
+
+    private func scrollToBottom(
+        _ proxy: ScrollViewProxy,
+        animated: Bool = true
+    ) {
+        if animated {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo("transcript-bottom", anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo("transcript-bottom", anchor: .bottom)
+        }
+    }
+}

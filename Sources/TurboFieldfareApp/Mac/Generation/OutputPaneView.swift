@@ -53,14 +53,12 @@ struct OutputPaneView: View {
     }
 
     private var transcript: some View {
-        IncrementalTranscriptView(
+        ChatTranscriptView(
             prompt: model.outputPromptText,
             messages: model.outputMessages,
             output: model.outputText,
             mailbox: model.generationTranscriptMailbox,
-            isTerminal: !model.isRunning,
-            showsPrefillPlaceholder: model.isRunning
-                && model.outputResponsePlainText.isEmpty)
+            isRunning: model.isRunning)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
