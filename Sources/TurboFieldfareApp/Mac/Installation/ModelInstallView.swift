@@ -10,6 +10,7 @@ struct ModelInstallView: View {
         ScrollView {
             VStack(spacing: 22) {
                 identity
+                ModelPickerView(model: model)
                 storageCard
                 progressArea
                 actions

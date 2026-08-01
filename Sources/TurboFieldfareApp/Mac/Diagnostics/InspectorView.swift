@@ -7,6 +7,9 @@ struct InspectorView: View {
 
     var body: some View {
         Form {
+            Section {
+                ModelPickerView(model: model)
+            }
             modelSection
             memorySection
             generationSection
