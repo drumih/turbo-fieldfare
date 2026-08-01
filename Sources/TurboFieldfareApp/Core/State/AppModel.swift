@@ -58,12 +58,20 @@ public final class AppModel {
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
     private var unloadTask: Task<Void, Never>?
+    private var runGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private var unloadGeneration: UInt64 = 0
     private var installGeneration: UInt64 = 0
     private var pendingExplicitLoadRuntimeKey: AppLoadedRuntimeKey?
     private var activeRunRuntimeKey: AppLoadedRuntimeKey?
     private var hasHandledTerminalEvent = false
+    /// The original completed turn while a regeneration is in progress. It is
+    /// kept both in memory and on disk until its replacement succeeds.
+    private var regenerationBackup: [AppChatMessage]?
+    /// While a response is streaming, periodically checkpoint the displayed
+    /// turn. This keeps a stopped or unexpectedly interrupted reply from
+    /// disappearing from the selected chat without writing on every token.
+    private var lastChatPersistenceDate: Date?
     private let memorySampler: AppMemorySampler
     private let settingsPersistenceEnabled: Bool
     private let installETAClock: SuspendingClock
@@ -790,6 +798,9 @@ public final class AppModel {
     }
 
     public func deleteChat(_ id: UUID) {
+        // Instruction edits do not otherwise have a dedicated Save button;
+        // synchronize the selected chat before an unrelated sidebar action.
+        saveActiveChat()
         guard canManageChats,
               let index = chats.firstIndex(where: { $0.id == id }) else { return }
         chats.remove(at: index)
@@ -806,6 +817,7 @@ public final class AppModel {
     }
 
     public func renameChat(_ id: UUID, to title: String) {
+        saveActiveChat()
         guard canManageChats,
               let index = chats.firstIndex(where: { $0.id == id }) else { return }
         let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -830,7 +842,6 @@ public final class AppModel {
             return
         }
         persistSettings()
-        saveActiveChat(titleForFirstPrompt: request.prompt)
 
         // The request retains the submitted prompt; clear the composer so the
         // user can prepare the next turn while this response streams.
@@ -855,17 +866,47 @@ public final class AppModel {
         liveMemoryBytes = nil
         phase = .prefill
         runState = .running
+        runGeneration &+= 1
+        let generation = runGeneration
+        lastChatPersistenceDate = Date()
+        // Store the submitted turn before prefill starts. In particular, this
+        // preserves a prompt when the app is closed or generation is stopped
+        // before the first token arrives.
+        saveActiveChat(titleForFirstPrompt: request.prompt)
 
-        runTask = Task.detached { [weak self, client, request] in
+        runTask = Task.detached { [weak self, client, request, generation] in
             guard let self else { return }
+            guard await self.canStartRun(generation: generation) else {
+                await self.finishStreamFailure(.cancelled, generation: generation)
+                return
+            }
+
+            let stream = client.generate(request)
+            // `cancel()` can arrive before the client task has registered its
+            // generation. Check again after creating the stream so Stop is
+            // never lost in that narrow startup window.
+            guard await self.canStartRun(generation: generation) else {
+                client.cancel()
+                await self.finishStreamFailure(.cancelled, generation: generation)
+                return
+            }
             do {
-                for try await event in client.generate(request) {
-                    await self.apply(event)
+                for try await event in stream {
+                    await self.apply(event, generation: generation)
                 }
+                if await self.hasActiveRun(generation: generation) {
+                    let wasCancelled = await self.isCancellationPending
+                    let error: AppInferenceError = wasCancelled
+                        ? .cancelled
+                        : .unknown("Generation ended without a completion event.")
+                    await self.finishStreamFailure(error, generation: generation)
+                }
+            } catch is CancellationError {
+                await self.finishStreamFailure(.cancelled, generation: generation)
             } catch let appError as AppInferenceError {
-                await self.finishStreamFailure(appError)
+                await self.finishStreamFailure(appError, generation: generation)
             } catch {
-                await self.finishStreamFailure(.unknown("\(error)"))
+                await self.finishStreamFailure(.unknown("\(error)"), generation: generation)
             }
         }
     }
@@ -901,10 +942,15 @@ public final class AppModel {
     public func regenerateLastResponse() {
         guard canRegenerate,
               conversation.count >= 2 else { return }
+        let previousConversation = conversation
         let userMessage = conversation[conversation.count - 2]
         conversation.removeLast(2)
+        regenerationBackup = previousConversation
         promptText = userMessage.content
         run()
+        if !isRunning {
+            restoreRegenerationBackupIfNeeded()
+        }
     }
 
     func apply(_ event: AppInferenceEvent) {
@@ -925,6 +971,7 @@ public final class AppModel {
             if !token.textDelta.isEmpty {
                 outputText += token.textDelta
             }
+            persistActiveRunIfNeeded()
         case .finished(let diagnostics):
             finishSuccessfully(diagnostics)
         case .cancelled(let diagnostics):
@@ -936,15 +983,16 @@ public final class AppModel {
         }
     }
 
+    private func apply(_ event: AppInferenceEvent, generation: UInt64) {
+        guard generation == runGeneration, isRunning else { return }
+        apply(event)
+    }
+
     private func finishSuccessfully(_ diagnostics: AppDiagnostics) {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
-        conversation = outputMessages
-        if !outputText.isEmpty {
-            conversation.append(AppChatMessage(role: .assistant, content: outputText))
-        }
-        saveActiveChat()
+        commitDisplayedTurnToConversation()
         self.diagnostics = diagnostics
         finishTerminalRun()
     }
@@ -953,6 +1001,9 @@ public final class AppModel {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
+        if !restoreRegenerationBackupIfNeeded() {
+            commitDisplayedTurnToConversation()
+        }
         self.diagnostics = diagnostics
         error = .cancelled
         finishTerminalRun()
@@ -969,6 +1020,10 @@ public final class AppModel {
     private func finishWithError(_ appError: AppInferenceError) {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
+        materializeServiceTranscript()
+        if !restoreRegenerationBackupIfNeeded() {
+            commitDisplayedTurnToConversation()
+        }
         error = appError
         finishTerminalRun()
     }
@@ -978,12 +1033,50 @@ public final class AppModel {
         finishWithError(appError)
     }
 
+    private func finishStreamFailure(_ appError: AppInferenceError, generation: UInt64) {
+        guard generation == runGeneration, isRunning else { return }
+        finishStreamFailure(appError)
+    }
+
     private func finishTerminalRun() {
         phase = .idle
         runState = .idle
         isCancellationPending = false
         activeRunRuntimeKey = nil
         runTask = nil
+        lastChatPersistenceDate = nil
+    }
+
+    /// Makes the transcript currently visible in the chat authoritative. A
+    /// completed answer, a stopped partial answer, and a failed partial answer
+    /// all remain available when the user changes chats or relaunches the app.
+    private func commitDisplayedTurnToConversation() {
+        conversation = outputMessages
+        if !outputText.isEmpty {
+            conversation.append(AppChatMessage(role: .assistant, content: outputText))
+        }
+        regenerationBackup = nil
+        saveActiveChat()
+    }
+
+    @discardableResult
+    private func restoreRegenerationBackupIfNeeded() -> Bool {
+        guard let regenerationBackup else { return false }
+        self.regenerationBackup = nil
+        conversation = regenerationBackup
+        generationTranscriptMailbox?.reset()
+        if let response = regenerationBackup.last, response.role == .assistant {
+            outputMessages = Array(regenerationBackup.dropLast())
+            outputPromptText = regenerationBackup.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            outputText = response.content
+        } else {
+            outputMessages = regenerationBackup
+            outputPromptText = regenerationBackup.last(where: { $0.role == .user })?.content ?? ""
+            outputText = ""
+        }
+        saveActiveChat()
+        return true
     }
 
     private func apply(chat: AppChatThread) {
@@ -1036,10 +1129,21 @@ public final class AppModel {
         persistChatHistory()
     }
 
+    private func persistActiveRunIfNeeded(now: Date = Date()) {
+        guard settingsPersistenceEnabled, isRunning else { return }
+        if let lastChatPersistenceDate,
+           now.timeIntervalSince(lastChatPersistenceDate) < 1 {
+            return
+        }
+        lastChatPersistenceDate = now
+        saveActiveChat()
+    }
+
     /// Uses the displayed transcript while a generation is finishing so a
     /// chat switch cannot lose the submitted turn or its latest response.
     private func messagesForPersistence() -> [AppChatMessage] {
         guard isRunning else { return conversation }
+        if let regenerationBackup { return regenerationBackup }
         var messages = outputMessages
         let response = outputResponsePlainText
         if !response.isEmpty {
@@ -1058,6 +1162,14 @@ public final class AppModel {
 
     private func orderChatsByRecency() {
         chats.sort(by: Self.isMoreRecent)
+    }
+
+    private func canStartRun(generation: UInt64) -> Bool {
+        generation == runGeneration && isRunning && !isCancellationPending
+    }
+
+    private func hasActiveRun(generation: UInt64) -> Bool {
+        generation == runGeneration && isRunning
     }
 
     private static func isMoreRecent(_ lhs: AppChatThread, _ rhs: AppChatThread) -> Bool {

@@ -10,6 +10,13 @@ public enum TurboFieldfareMacTheme {
 
     public static let accentColor = Color(nsColor: accentNSColor)
 
+    public static var accentGradient: LinearGradient {
+        LinearGradient(
+            colors: [accentColor, accentColor.opacity(0.68)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing)
+    }
+
     /// A small set of semantic surfaces keeps the app visually coherent while
     /// still respecting the user's macOS appearance and accessibility settings.
     public static var appBackground: Color {
@@ -36,7 +43,15 @@ public enum TurboFieldfareMacTheme {
         accentColor.opacity(0.12)
     }
 
+    public static var hoverSurface: Color {
+        accentColor.opacity(0.075)
+    }
+
     public static var border: Color {
         Color.primary.opacity(0.10)
+    }
+
+    public static var cardBorder: Color {
+        Color.primary.opacity(0.13)
     }
 }

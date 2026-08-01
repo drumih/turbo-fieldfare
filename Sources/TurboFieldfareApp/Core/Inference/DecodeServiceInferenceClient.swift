@@ -17,6 +17,10 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     private let connection = Mutex(Connection())
     private let serviceURL: URL
     private let inferenceMemory = Mutex<UInt64?>(nil)
+    /// A cancellation command is not tagged on the wire, so retain the active
+    /// local ID and only let the stream that owns it send Stop.
+    private let activeGeneration = Mutex<UUID?>(nil)
+    private let commandWriteLock = NSLock()
     public let generationTranscriptMailbox = GenerationTranscriptMailbox()
 
     public var currentInferenceMemoryBytes: UInt64? {
@@ -38,8 +42,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             modelPath: modelDirectory.path, maxContextTokens: maxContextTokens,
             runtimeOptions: Self.decodeRuntimeOptions(options),
             forceLogitsHead: forceLogitsHead)
-        try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.load(request)))
+        try send(.load(request), to: handles.input)
         let event = try await handles.responses.next(matching: request.requestID)
         switch event.kind {
         case .ready:
@@ -59,8 +62,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public func unload() async {
         guard let handles = currentHandles() else { return }
         let requestID = UUID()
-        try? handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.unload(requestID)))
+        try? send(.unload(requestID), to: handles.input)
         guard let event = try? await handles.responses.next(matching: requestID),
               event.kind == .unloaded else { return }
         connection.withLock { $0.loadedDirectory = nil }
@@ -69,14 +71,16 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
 
     public func generate(_ request: AppGenerationRequest)
         -> AsyncThrowingStream<AppInferenceEvent, Error> {
-        AsyncThrowingStream { continuation in
+        let generationID = UUID()
+        return AsyncThrowingStream { continuation in
+            markActiveGeneration(generationID)
             let task = Task.detached(priority: .userInitiated) { [self] in
+                defer { clearActiveGeneration(generationID) }
                 do {
                     try request.validate()
                     guard let handles = currentHandles() else {
                         throw AppInferenceError.modelNotLoaded
                     }
-                    let generationID = UUID()
                     generationTranscriptMailbox.reset()
                     let command = DecodeGenerationRequest(
                         prompt: request.prompt, maxNewTokens: request.maxNewTokens,
@@ -94,8 +98,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                             }
                             return DecodeChatMessage(role: role, content: message.content)
                         })
-                    try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-                        DecodeServiceCommand.generate(command)))
+                    try send(.generate(command), to: handles.input)
 
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
@@ -158,17 +161,45 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     continuation.finish(throwing: error)
                 }
             }
-            continuation.onTermination = { [weak self] _ in
+            continuation.onTermination = { [weak self] termination in
                 task.cancel()
-                self?.cancel()
+                guard case .cancelled = termination else { return }
+                self?.cancel(generationID: generationID)
             }
         }
     }
 
     public func cancel() {
-        guard let input = currentHandles()?.input else { return }
-        try? input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.cancel))
+        guard let generationID = activeGeneration.withLock({ $0 }) else { return }
+        cancel(generationID: generationID)
+    }
+
+    private func cancel(generationID: UUID) {
+        guard activeGeneration.withLock({ $0 == generationID }),
+              let input = currentHandles()?.input else { return }
+        try? send(.cancel, to: input)
+    }
+
+    private func markActiveGeneration(_ generationID: UUID) {
+        activeGeneration.withLock { $0 = generationID }
+    }
+
+    private func clearActiveGeneration(_ generationID: UUID) {
+        activeGeneration.withLock { active in
+            if active == generationID { active = nil }
+        }
+    }
+
+    private func send(_ command: DecodeServiceCommand, to input: FileHandle) throws {
+        // A Stop action can be sent from the main actor while the detached
+        // generation task is framing a large prompt. Keep socket frames whole.
+        commandWriteLock.lock()
+        defer { commandWriteLock.unlock() }
+        try input.write(contentsOf: DecodeFrameCodec.encode(command))
+    }
+
+    private func sendShutdown(to input: FileHandle) {
+        try? send(.shutdown, to: input)
     }
 
     deinit {
@@ -177,8 +208,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             return value
         }
         if let input = state.input {
-            try? input.write(contentsOf: DecodeFrameCodec.encode(
-                DecodeServiceCommand.shutdown))
+            sendShutdown(to: input)
             try? input.close()
         }
         if let label = state.launchLabel { Self.removeLaunchJob(label: label) }

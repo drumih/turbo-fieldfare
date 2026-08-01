@@ -58,7 +58,9 @@ struct OutputPaneView: View {
             messages: model.outputMessages,
             output: model.outputText,
             mailbox: model.generationTranscriptMailbox,
-            isRunning: model.isRunning)
+            isRunning: model.isRunning,
+            canRegenerate: model.canRegenerate,
+            onRegenerate: { model.regenerateLastResponse() })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, 8)
     }

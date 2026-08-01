@@ -27,7 +27,12 @@ struct PromptComposerView: View {
                             lineWidth: promptFocused ? 1 : 0.5)
                 }
         }
-        .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
+        .shadow(
+            color: promptFocused
+                ? TurboFieldfareMacTheme.accentColor.opacity(0.18)
+                : .black.opacity(0.08),
+            radius: promptFocused ? 14 : 12,
+            y: 5)
         .animation(.easeOut(duration: 0.16), value: promptFocused)
     }
 
@@ -82,7 +87,15 @@ struct PromptComposerView: View {
     }
 
     private var editorHeight: CGFloat {
-        model.promptText.isEmpty ? 46 : 84
+        let explicitLineCount = max(
+            1,
+            model.promptText.split(separator: "\n", omittingEmptySubsequences: false).count)
+        // This keeps the composer comfortable for a longer thought while
+        // deliberately capping it so the conversation remains visible.
+        let estimatedWrappedLineCount = max(
+            explicitLineCount,
+            max(1, (model.promptText.count + 67) / 68))
+        return min(168, max(46, CGFloat(estimatedWrappedLineCount) * 22 + 22))
     }
 
     private var footer: some View {
@@ -96,7 +109,7 @@ struct PromptComposerView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Text("⌘↵ to send")
+            Text("↵ Send  ·  ⇧↵ New line")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             clearAction

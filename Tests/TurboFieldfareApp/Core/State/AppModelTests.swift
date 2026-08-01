@@ -405,6 +405,80 @@ import Testing
     }
 
     @MainActor
+    @Test func immediateStopFinalizesTheSubmittedTurn() async throws {
+        let client = MockInferenceClient(response: "unused", tokenDelayNanos: 20_000_000)
+        client.prefillSteps = 8
+        let model = readyModel(client: client)
+        model.promptText = "stop immediately"
+
+        model.run()
+        model.cancel()
+        await waitForIdle(model)
+
+        #expect(!model.isRunning)
+        #expect(model.error == .cancelled)
+        #expect(model.conversation == [
+            AppChatMessage(role: .user, content: "stop immediately"),
+        ])
+    }
+
+    @MainActor
+    @Test func cancelledTurnPersistsAcrossRestoration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppModelCancelledChat-\(UUID().uuidString)",
+                                    isDirectory: true)
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = MockInferenceClient(
+            response: "one two three four five",
+            tokenDelayNanos: 20_000_000)
+        client.prefillSteps = 0
+        let model = AppModel(
+            modelDirectory: directory,
+            client: client,
+            settingsPersistenceEnabled: true)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
+        model.promptText = "keep my stopped answer"
+        model.run()
+
+        for _ in 0..<200 where model.liveTokenCount == 0 {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        model.cancel()
+        await waitForIdle(model)
+
+        let restored = AppModel(
+            modelDirectory: directory,
+            client: MockInferenceClient(),
+            settingsPersistenceEnabled: true)
+        #expect(restored.conversation.first ==
+            AppChatMessage(role: .user, content: "keep my stopped answer"))
+        #expect(restored.conversation.last?.role == .assistant)
+        #expect(!(restored.conversation.last?.content ?? "").isEmpty)
+    }
+
+    @MainActor
+    @Test func failedRegenerationRestoresThePreviousAnswer() async throws {
+        let client = MockInferenceClient(response: "original answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 8
+        model.promptText = "regenerate safely"
+        model.run()
+        await waitForIdle(model)
+        let originalConversation = model.conversation
+
+        client.failureMessage = "replacement failed"
+        model.regenerateLastResponse()
+        await waitForIdle(model)
+
+        #expect(model.error?.userMessage == "replacement failed")
+        #expect(model.conversation == originalConversation)
+        #expect(model.outputText == originalConversation.last?.content)
+    }
+
+    @MainActor
     @Test func failedEventThenThrownErrorKeepsFirstTerminalState() async throws {
         let client = MockInferenceClient(tokenDelayNanos: 1, failureMessage: "synthetic failure")
         let model = readyModel(client: client)

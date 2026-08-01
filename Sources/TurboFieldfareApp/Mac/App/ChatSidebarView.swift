@@ -8,6 +8,7 @@ struct ChatSidebarView: View {
     @Binding var isCollapsed: Bool
     @State private var chatToRename: AppChatThread?
     @State private var renameText = ""
+    @State private var hoveredChatID: UUID?
 
     var body: some View {
         Group {
@@ -47,7 +48,7 @@ struct ChatSidebarView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
-            .background(TurboFieldfareMacTheme.accentColor, in: RoundedRectangle(cornerRadius: 10))
+            .background(TurboFieldfareMacTheme.accentGradient, in: RoundedRectangle(cornerRadius: 10))
             .disabled(!model.canManageChats)
             .help("New chat")
 
@@ -85,7 +86,7 @@ struct ChatSidebarView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white)
-            .background(TurboFieldfareMacTheme.accentColor, in: RoundedRectangle(cornerRadius: 10))
+            .background(TurboFieldfareMacTheme.accentGradient, in: RoundedRectangle(cornerRadius: 10))
             .overlay {
                 RoundedRectangle(cornerRadius: 10)
                     .stroke(.white.opacity(0.15), lineWidth: 0.5)
@@ -122,14 +123,7 @@ struct ChatSidebarView: View {
     private var sidebarMark: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            TurboFieldfareMacTheme.accentColor,
-                            TurboFieldfareMacTheme.accentColor.opacity(0.64),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing))
+                .fill(TurboFieldfareMacTheme.accentGradient)
             Image(systemName: "sparkles")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.white)
@@ -155,73 +149,105 @@ struct ChatSidebarView: View {
     }
 
     private func chatRow(_ chat: AppChatThread) -> some View {
-        Button {
-            model.selectChat(chat.id)
-        } label: {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: chat.id == model.selectedChatID
-                      ? "bubble.left.and.bubble.right.fill"
-                      : "bubble.left.and.bubble.right")
-                    .font(.caption)
-                    .foregroundStyle(chat.id == model.selectedChatID
-                                     ? TurboFieldfareMacTheme.accentColor
-                                     : .secondary)
-                    .frame(width: 17)
+        let isSelected = chat.id == model.selectedChatID
+        let isHovered = chat.id == hoveredChatID
 
-                VStack(alignment: .leading, spacing: 4) {
+        return HStack(spacing: 2) {
+            Button {
+                model.selectChat(chat.id)
+            } label: {
+                chatRowContent(chat, isSelected: isSelected)
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canManageChats)
+
+            Menu {
+                chatActions(for: chat)
+            } label: {
+                Label("Chat actions", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 26, height: 28)
+                    .contentShape(Circle())
+            }
+            .menuStyle(.borderlessButton)
+            .help("Chat actions")
+            .opacity(isSelected || isHovered ? 1 : 0)
+            .allowsHitTesting(isSelected || isHovered)
+            .disabled(!model.canManageChats)
+        }
+        .padding(.trailing, 3)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .background(
+            isSelected
+                ? TurboFieldfareMacTheme.accentSurface
+                : isHovered ? TurboFieldfareMacTheme.hoverSurface : .clear,
+            in: RoundedRectangle(cornerRadius: 10))
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Capsule()
+                    .fill(TurboFieldfareMacTheme.accentColor)
+                    .frame(width: 3, height: 24)
+                    .offset(x: 1)
+            }
+        }
+        .onHover { isHovering in
+            hoveredChatID = isHovering ? chat.id : nil
+        }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .contextMenu {
+            chatActions(for: chat)
+        }
+    }
+
+    private func chatRowContent(_ chat: AppChatThread, isSelected: Bool) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSelected
+                  ? "bubble.left.and.bubble.right.fill"
+                  : "bubble.left.and.bubble.right")
+                .font(.caption)
+                .foregroundStyle(isSelected
+                                 ? TurboFieldfareMacTheme.accentColor
+                                 : .secondary)
+                .frame(width: 17)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
                     Text(chat.title)
-                        .font(.callout.weight(
-                            chat.id == model.selectedChatID ? .semibold : .regular))
+                        .font(.callout.weight(isSelected ? .semibold : .regular))
                         .lineLimit(1)
-                    HStack(spacing: 5) {
-                        if !chat.preview.isEmpty {
-                            Text(chat.preview)
-                                .lineLimit(1)
-                        }
-                        if !chat.preview.isEmpty {
-                            Text("·")
-                        }
-                        Text(chat.updatedAt, style: .relative)
-                            .lineLimit(1)
-                    }
+                    Spacer(minLength: 4)
+                    Text(chat.updatedAt, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                Text(chat.preview.isEmpty ? "Empty chat" : chat.preview)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-            .background(
-                chat.id == model.selectedChatID
-                    ? TurboFieldfareMacTheme.accentSurface
-                    : .clear,
-                in: RoundedRectangle(cornerRadius: 8))
-            .overlay(alignment: .leading) {
-                if chat.id == model.selectedChatID {
-                    Capsule()
-                        .fill(TurboFieldfareMacTheme.accentColor)
-                        .frame(width: 3, height: 24)
-                        .offset(x: 1)
-                }
+                    .lineLimit(1)
             }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func chatActions(for chat: AppChatThread) -> some View {
+        Button("Rename") {
+            renameText = chat.title
+            chatToRename = chat
+        }
         .disabled(!model.canManageChats)
-        .contextMenu {
-            Button("Rename") {
-                renameText = chat.title
-                chatToRename = chat
-            }
-            .disabled(!model.canManageChats)
 
-            Divider()
+        Divider()
 
-            Button("Delete", role: .destructive) {
-                model.deleteChat(chat.id)
-            }
-            .disabled(!model.canManageChats)
+        Button("Delete", role: .destructive) {
+            model.deleteChat(chat.id)
         }
+        .disabled(!model.canManageChats)
     }
 
     private var renameAlertIsPresented: Binding<Bool> {
