@@ -8,6 +8,8 @@ struct RootView: View {
     @State private var conversationChromeHeight: CGFloat = 0
     @AppStorage("chatSidebarCollapsed") private var isChatSidebarCollapsed = false
 
+    private let readableContentWidth: CGFloat = 820
+
     var body: some View {
         HStack(spacing: 0) {
             ChatSidebarView(
@@ -63,36 +65,26 @@ struct RootView: View {
     }
 
     private var conversationView: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .bottom) {
-                if model.hasOutputTranscript {
-                    OutputPaneView(model: model)
-                        .padding(.bottom, conversationChromeHeight)
-                } else if conversationChromeHeight > 0 {
-                    OutputPaneView(model: model)
-                        .frame(
-                            height: max(
-                                0,
-                                geometry.size.height - conversationChromeHeight))
-                        .frame(maxHeight: .infinity, alignment: .top)
-                }
+        ZStack(alignment: .bottom) {
+            OutputPaneView(model: model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, conversationChromeHeight)
 
-                conversationChrome
-                    .background {
-                        GeometryReader { chromeGeometry in
-                            Color.clear.preference(
-                                key: ConversationChromeHeightKey.self,
-                                value: chromeGeometry.size.height)
-                        }
+            conversationChrome
+                .background {
+                    GeometryReader { chromeGeometry in
+                        Color.clear.preference(
+                            key: ConversationChromeHeightKey.self,
+                            value: chromeGeometry.size.height)
                     }
-            }
-            .onPreferenceChange(ConversationChromeHeightKey.self) { height in
-                guard height > 0 else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    conversationChromeHeight = height
                 }
+        }
+        .onPreferenceChange(ConversationChromeHeightKey.self) { height in
+            guard height > 0 else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                conversationChromeHeight = height
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -111,11 +103,12 @@ struct RootView: View {
                     model.promptText = preset.prompt
                 }
             }
-            ModelActionBanner(model: model)
             PromptComposerView(model: model)
         }
+        .frame(maxWidth: readableContentWidth)
         .padding(.horizontal, 20)
         .padding(.bottom, 18)
+        .frame(maxWidth: .infinity)
         .animation(
             .smooth(duration: 0.2),
             value: model.promptText.isEmpty
@@ -189,6 +182,8 @@ private struct ConversationHeaderView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 11)
+        .frame(maxWidth: 820)
+        .frame(maxWidth: .infinity)
         .background(TurboFieldfareMacTheme.appBackground.opacity(0.96))
         .overlay(alignment: .bottom) {
             Rectangle()

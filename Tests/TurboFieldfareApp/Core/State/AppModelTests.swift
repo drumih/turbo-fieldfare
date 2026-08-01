@@ -258,6 +258,22 @@ import Testing
     }
 
     @MainActor
+    @Test func repeatedNewChatReusesTheSingleEmptyChat() {
+        let model = AppModel()
+        let initialID = model.selectedChatID
+
+        model.promptText = "unsent draft"
+        model.newChat()
+        model.newChat()
+
+        #expect(model.chats.count == 1)
+        #expect(model.selectedChatID == initialID)
+        #expect(model.promptText.isEmpty)
+        #expect(model.conversation.isEmpty)
+        #expect(model.outputText.isEmpty)
+    }
+
+    @MainActor
     @Test func savedConversationRestoresAcrossModelInstances() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppModelChatPersistence-\(UUID().uuidString)",

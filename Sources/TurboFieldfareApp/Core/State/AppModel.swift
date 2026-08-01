@@ -92,9 +92,12 @@ public final class AppModel {
             ? AppChatHistoryFileStore.load(forModelDirectory: directory)
             : .fresh()
         let orderedChats = chatHistory.chats.sorted(by: Self.isMoreRecent)
-        let selectedChat = orderedChats.first(where: {
+        let normalizedChats = Self.normalizedChatList(
+            orderedChats,
+            preserving: chatHistory.selectedChatID)
+        let selectedChat = normalizedChats.first(where: {
             $0.id == chatHistory.selectedChatID
-        }) ?? orderedChats[0]
+        }) ?? normalizedChats[0]
         self.modelPathText = directory.path
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: settings.expertCacheSlots,
@@ -107,7 +110,7 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
-        self.chats = orderedChats
+        self.chats = normalizedChats
         self.selectedChatID = selectedChat.id
         self.conversation = selectedChat.messages
         self.systemPromptText = selectedChat.systemPrompt
@@ -127,6 +130,9 @@ public final class AppModel {
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
+        if normalizedChats.count != orderedChats.count {
+            persistChatHistory()
+        }
     }
 
     public var isRunning: Bool { runState == .running }
@@ -775,11 +781,23 @@ public final class AppModel {
         diagnostics = nil
         error = nil
         saveActiveChat()
+        normalizeNewChatPlaceholders()
+        persistChatHistory()
     }
 
     public func newChat() {
         guard canManageChats else { return }
         saveActiveChat()
+
+        normalizeNewChatPlaceholders()
+        if let existing = chats.first(where: Self.isPristineNewChat) {
+            // Reuse the existing blank page and reset any unsent draft so
+            // repeated taps always land on a genuinely new-chat surface.
+            apply(chat: existing)
+            persistChatHistory()
+            return
+        }
+
         let chat = AppChatThread()
         chats.append(chat)
         orderChatsByRecency()
@@ -813,6 +831,7 @@ public final class AppModel {
             selectedChatID = replacement.id
             apply(chat: replacement)
         }
+        normalizeNewChatPlaceholders()
         persistChatHistory()
     }
 
@@ -1103,10 +1122,13 @@ public final class AppModel {
         let history = settingsPersistenceEnabled
             ? AppChatHistoryFileStore.load(forModelDirectory: modelDirectory)
             : .fresh()
-        chats = history.chats
+        chats = Self.normalizedChatList(
+            history.chats,
+            preserving: history.selectedChatID)
         orderChatsByRecency()
         let chat = chats.first(where: { $0.id == history.selectedChatID }) ?? chats[0]
         apply(chat: chat)
+        persistChatHistory()
     }
 
     private func saveActiveChat(titleForFirstPrompt prompt: String? = nil) {
@@ -1164,6 +1186,18 @@ public final class AppModel {
         chats.sort(by: Self.isMoreRecent)
     }
 
+    private func normalizeNewChatPlaceholders() {
+        let blankChats = chats.filter(Self.isPristineNewChat)
+        guard blankChats.count > 1 else { return }
+
+        let keepID = blankChats.first(where: { $0.id == selectedChatID })?.id
+            ?? blankChats[0].id
+        chats.removeAll { chat in
+            Self.isPristineNewChat(chat) && chat.id != keepID
+        }
+        orderChatsByRecency()
+    }
+
     private func canStartRun(generation: UInt64) -> Bool {
         generation == runGeneration && isRunning && !isCancellationPending
     }
@@ -1175,6 +1209,26 @@ public final class AppModel {
     private static func isMoreRecent(_ lhs: AppChatThread, _ rhs: AppChatThread) -> Bool {
         if lhs.updatedAt == rhs.updatedAt { return lhs.createdAt > rhs.createdAt }
         return lhs.updatedAt > rhs.updatedAt
+    }
+
+    private static func normalizedChatList(
+        _ chats: [AppChatThread],
+        preserving preferredID: UUID?
+    ) -> [AppChatThread] {
+        let blankChats = chats.filter(Self.isPristineNewChat)
+        guard blankChats.count > 1 else { return chats }
+
+        let keepID = blankChats.first(where: { $0.id == preferredID })?.id
+            ?? blankChats[0].id
+        return chats.filter { chat in
+            !Self.isPristineNewChat(chat) || chat.id == keepID
+        }
+    }
+
+    private static func isPristineNewChat(_ chat: AppChatThread) -> Bool {
+        chat.title.trimmingCharacters(in: .whitespacesAndNewlines) == "New chat"
+            && chat.messages.isEmpty
+            && chat.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func chatTitle(for prompt: String) -> String {

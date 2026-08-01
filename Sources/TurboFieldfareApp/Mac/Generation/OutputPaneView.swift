@@ -49,6 +49,7 @@ struct OutputPaneView: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 20)
+        .frame(maxWidth: 820, maxHeight: .infinity)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
