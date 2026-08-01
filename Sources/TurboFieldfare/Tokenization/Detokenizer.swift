@@ -59,16 +59,22 @@ struct GFDetokenizer {
 
     @usableFromInline
     mutating func commitDelta(_ current: String) -> String {
-        guard current.hasPrefix(emitted) else {
-            // Decoder altered the prefix — extremely rare in append-only streams.
-            // Resync rather than emit garbage; the user-visible loss is bounded
-            // to whatever was retokenized.
+        // Compare at the UTF-8 byte level, NOT with String.hasPrefix/dropFirst:
+        // those operate on grapheme clusters, so a token boundary that splits a
+        // combining-mark cluster (Thai sara/tone marks: "ห" then "้าม") makes
+        // hasPrefix("ห") fail against "ห้าม" and the resync path silently drops
+        // the delta. Byte-wise, append-only decodes are always a strict prefix.
+        let cur = Array(current.utf8)
+        let old = Array(emitted.utf8)
+        guard cur.count >= old.count, cur.starts(with: old) else {
+            // Decoder truly altered the prefix — extremely rare in append-only
+            // streams. Resync rather than emit garbage; the user-visible loss
+            // is bounded to whatever was retokenized.
             emitted = current
             return ""
         }
-        let delta = String(current.dropFirst(emitted.count))
         emitted = current
-        return delta
+        return String(decoding: cur[old.count...], as: UTF8.self)
     }
 
     @usableFromInline
