@@ -56,7 +56,7 @@ import TurboFieldfare
     @Test func generationRunnerPolicyKeepsFusionHeadForPureGreedyChunkedPrefill() {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
-            prompt: "hello",
+            messages: [.init(role: .user, content: "hello")],
             temperature: 0,
             repetitionPenalty: 1)
 
@@ -66,7 +66,7 @@ import TurboFieldfare
     @Test func generationRunnerPolicyForcesLogitsForSamplingChunkedPrefill() {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
-            prompt: "hello",
+            messages: [.init(role: .user, content: "hello")],
             temperature: 0.7,
             repetitionPenalty: 1)
 
@@ -76,7 +76,7 @@ import TurboFieldfare
     @Test func generationConfigCarriesDocumentedSamplingPolicy() {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
-            prompt: "hello")
+            messages: [.init(role: .user, content: "hello")])
 
         let config = RealInferenceSession.generationConfig(for: request)
         #expect(config.temperature == 0.2)
@@ -107,7 +107,7 @@ import TurboFieldfare
         defer { try? FileManager.default.removeItem(at: modelDirectory) }
         let request = AppGenerationRequest(
             modelDirectory: modelDirectory,
-            prompt: "hello",
+            messages: [.init(role: .user, content: "hello")],
             runtimeOptions: AppRuntimeOptions(prefillEnabled: false))
 
         var failure: AppInferenceError?
@@ -152,7 +152,7 @@ import TurboFieldfare
         let client = RealInferenceClient()
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: "/nonexistent/model.gturbo"),
-            prompt: "hello")
+            messages: [.init(role: .user, content: "hello")])
 
         var failure: AppInferenceError?
         do {

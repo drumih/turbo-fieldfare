@@ -141,6 +141,87 @@ import Testing
         #expect(controller.response == "Hello")
     }
 
+    @Test func committedTurnsPrecedeTheLiveTurn() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        controller.synchronize(
+            storage: storage,
+            committed: [
+                TranscriptTurn(role: .user, content: "first"),
+                TranscriptTurn(role: .assistant, content: "one"),
+            ],
+            prompt: "second",
+            response: "two",
+            isTerminal: false)
+
+        #expect(storage.string
+            == "You\nfirst\n\nAnswer\none\n\nYou\nsecond\n\nAnswer\ntwo")
+        #expect(controller.committed.count == 2)
+    }
+
+    /// The streaming fast path is what keeps the pane from re-laying out on
+    /// every token, and it has to survive a conversation growing in front of it.
+    @Test func streamingStillAppendsWithCommittedHistoryPresent() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+        let history = [
+            TranscriptTurn(role: .user, content: "first"),
+            TranscriptTurn(role: .assistant, content: "one"),
+        ]
+
+        let first = controller.synchronize(
+            storage: storage, committed: history,
+            prompt: "second", response: "tw", isTerminal: false)
+        let second = controller.synchronize(
+            storage: storage, committed: history,
+            prompt: "second", response: "two", isTerminal: false)
+
+        #expect(first.mutation == .rebuilt)
+        #expect(second.mutation == .appended)
+        #expect(storage.string.hasSuffix("Answer\ntwo"))
+    }
+
+    @Test func committingATurnRebuildsAndDropsTheLiveSection() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        controller.synchronize(
+            storage: storage, prompt: "first", response: "one", isTerminal: true)
+        // What AppModel does at a terminal event: the live turn becomes history.
+        let update = controller.synchronize(
+            storage: storage,
+            committed: [
+                TranscriptTurn(role: .user, content: "first"),
+                TranscriptTurn(role: .assistant, content: "one"),
+            ],
+            prompt: "",
+            response: "",
+            isTerminal: true)
+
+        #expect(update.mutation == .rebuilt)
+        #expect(storage.string == "You\nfirst\n\nAnswer\none\n\n")
+        // A trailing "Answer" header with nothing under it would look like the
+        // model was about to speak.
+        #expect(storage.string.components(separatedBy: "Answer").count == 2)
+    }
+
+    @Test func switchingToAnEmptyConversationClearsTheDocument() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        controller.synchronize(
+            storage: storage,
+            committed: [TranscriptTurn(role: .user, content: "first")],
+            prompt: "", response: "", isTerminal: true)
+        controller.synchronize(
+            storage: storage, committed: [],
+            prompt: "", response: "", isTerminal: true)
+
+        #expect(storage.string == "Answer\n")
+        #expect(controller.committed.isEmpty)
+    }
+
     @Test func animatedPrefillPlaceholderIsPresentationOnlyAndFirstResponseRemovesIt() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()

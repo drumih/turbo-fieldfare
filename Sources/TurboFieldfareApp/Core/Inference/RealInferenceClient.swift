@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Metal
 import TurboFieldfare
@@ -156,6 +157,8 @@ actor RealInferenceSession {
     private var tokenizerDirectoryCache = TokenizerDirectoryCache()
     private var runner: RealForwardRunner?
     private var scratch: RawCompletionScratch?
+    private var promptCache = AppPromptCache()
+    private var promptCacheDomain: AppPromptCacheDomain?
 
     func ensureLoaded(key: SessionLoadKey,
                       onState: @Sendable (AppModelLoadState) -> Void) async throws {
@@ -164,6 +167,9 @@ actor RealInferenceSession {
         runner = nil
         scratch = nil
         loadedKey = nil
+        // A reload destroys the KV cache; any cached prefix is stale.
+        promptCache.invalidate()
+        promptCacheDomain = nil
 
         let start = Date()
         do {
@@ -215,6 +221,10 @@ actor RealInferenceSession {
             runner = loadedRunner
             scratch = loadedScratch
             loadedKey = key
+            promptCacheDomain = Self.promptCacheDomain(
+                for: loadedModel,
+                runtimeConfiguration: runtimeConfiguration,
+                maxContext: key.maxContext)
             onState(.ready(modelDirectory: key.directory,
                            loadSeconds: Date().timeIntervalSince(start)))
         } catch is CancellationError {
@@ -231,6 +241,38 @@ actor RealInferenceSession {
 
     private static func loadTokenizer(for modelDirectory: URL) async throws -> GFTokenizer {
         try await GFTokenizer.load(forModelDirectory: modelDirectory)
+    }
+
+    /// Cache-domain identity mirrors `ServerModelSession` but hashes the
+    /// hand-rolled template identity constant (`applyChatTemplate` output
+    /// depends only on it) instead of a jinja file the app path never reads.
+    private static func promptCacheDomain(
+        for model: Model,
+        runtimeConfiguration: RuntimeConfiguration,
+        maxContext: Int
+    ) -> AppPromptCacheDomain {
+        let runtimeIdentity = [
+            String(runtimeConfiguration.expertCacheSlots),
+            runtimeConfiguration.expertCachePolicy.rawValue,
+            runtimeConfiguration.rdadvisePolicy.rawValue,
+            runtimeConfiguration.prefillPolicy.rawValue,
+            String(runtimeConfiguration.prefillChunkTokens),
+            runtimeConfiguration.headPath.rawValue,
+        ].joined(separator: ":")
+        let runtimeDigest = SHA256.hash(data: Data(runtimeIdentity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let templateDigest = SHA256.hash(data: Data(GFTokenizer.chatTemplateIdentity.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return AppPromptCacheDomain(
+            modelID: model.modelID,
+            sourceSnapshotHash: model.sourceSnapshotHash,
+            runtimeProfileHash: runtimeDigest,
+            maximumContext: maxContext,
+            kvStorage: PrefillKVStorageMode.fp16.rawValue,
+            fp16RingEnabled: runtimeConfiguration.fp16RingEnabled,
+            templateSHA256: templateDigest)
     }
 
     static func forceLogitsHead(for request: AppGenerationRequest) -> Bool {
@@ -258,6 +300,8 @@ actor RealInferenceSession {
         tokenizer = nil
         tokenizerDirectoryCache.clear()
         loadedKey = nil
+        promptCache.invalidate()
+        promptCacheDomain = nil
     }
 
     func run(request: AppGenerationRequest,
@@ -265,6 +309,16 @@ actor RealInferenceSession {
              continuation: AsyncThrowingStream<AppInferenceEvent, Error>.Continuation) async {
         let prefillConfig = request.runtimeOptions.prefillConfig
         let progress = ProgressState()
+        var completed = false
+        // Any non-completed exit leaves the KV cache in an unknown state (a
+        // sampled stop token was never committed, chunk prefill may be dirty).
+        // Poison it and force a full reset next turn.
+        defer {
+            if !completed {
+                promptCache.invalidate()
+                runner?.reset()
+            }
+        }
         do {
             try request.validate()
             let executedPrefillMode: PrefillExecutedMode =
@@ -283,15 +337,35 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let renderedPrompt = try tokenizer.applyChatTemplate([
-                GFTokenizer.Message(role: .user, content: request.prompt)
-            ])
+            let renderedPrompt = try tokenizer.applyChatTemplate(
+                request.messages.map(GFTokenizer.Message.init))
             let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
             progress.promptTokenCount = promptIds.count
             guard promptIds.count < runner.maxContext else {
-                throw AppInferenceError.contextOverflow(prompt: promptIds.count,
-                                                        maxNew: request.maxNewTokens,
-                                                        maxContext: runner.maxContext)
+                throw AppInferenceError.conversationOverflow(prompt: promptIds.count,
+                                                             maxContext: runner.maxContext)
+            }
+            let completionStart: RawCompletionStart
+            var effectivePromptIDs = promptIds
+            if let domain = promptCacheDomain {
+                switch promptCache.match(
+                    domain: domain,
+                    messages: request.messages,
+                    renderedPromptIDs: promptIds,
+                    tokenizer: tokenizer) {
+                case .miss:
+                    promptCache.invalidate()
+                    completionStart = .reset
+                case .hit(let effective, let cached):
+                    effectivePromptIDs = effective
+                    completionStart = .resume(cachedPromptTokens: cached)
+                }
+            } else {
+                completionStart = .reset
+            }
+            guard effectivePromptIDs.count < runner.maxContext else {
+                throw AppInferenceError.conversationOverflow(prompt: effectivePromptIDs.count,
+                                                             maxContext: runner.maxContext)
             }
             memorySampler.resetPeak()
             _ = memorySampler.sample()
@@ -299,15 +373,14 @@ actor RealInferenceSession {
                 for: request,
                 maxNewTokens: Self.effectiveMaxNewTokens(
                     requested: request.maxNewTokens,
-                    promptTokenCount: promptIds.count,
+                    promptTokenCount: effectivePromptIDs.count,
                     maxContext: runner.maxContext))
-            runner.reset()
             progress.prefillStart = Date()
 
             let result = try await runRawCompletion(
-                producer: runner, tokenizer: tokenizer, promptIds: promptIds,
+                producer: runner, tokenizer: tokenizer, promptIds: effectivePromptIDs,
                 config: config, context: ctx, scratch: scratch,
-                prefillConfig: prefillConfig) { event in
+                prefillConfig: prefillConfig, start: completionStart) { event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {
@@ -318,12 +391,18 @@ actor RealInferenceSession {
                 case .token(let index, _, let delta):
                     if progress.firstTokenDate == nil { progress.firstTokenDate = Date() }
                     progress.generated = index + 1
+                    progress.assistantText += delta
                     if index % 8 == 0 { _ = memorySampler.sample() }
                     continuation.yield(.token(AppTokenEvent(
                         index: index,
                         textDelta: delta,
                         elapsedDecodeSeconds: progress.elapsedDecodeSeconds)))
                 case .tail(let text):
+                    // Tail carries the detokenizer flush at the stop boundary.
+                    // Appended verbatim: the bridge cache compares assistant
+                    // text byte-for-byte, so any normalization silently
+                    // degrades prefix reuse to a full re-prefill.
+                    progress.assistantText += text
                     continuation.yield(.token(AppTokenEvent(
                         index: max(progress.generated - 1, 0),
                         textDelta: text,
@@ -331,6 +410,14 @@ actor RealInferenceSession {
                 }
             }
 
+            if let domain = promptCacheDomain {
+                promptCache.publish(
+                    domain: domain,
+                    messages: request.messages,
+                    content: progress.assistantText,
+                    result: result)
+            }
+            completed = true
             let diagnostics = makeDiagnostics(request: request,
                                               memorySampler: memorySampler,
                                               progress: progress,
@@ -338,6 +425,7 @@ actor RealInferenceSession {
                                               prefillSeconds: result.prefillSeconds,
                                               decodeSeconds: result.decodeSeconds,
                                               generated: result.newTokens,
+                                              cachedPromptTokens: result.cachedPromptTokens,
                                               prefill: prefillDiagnostics)
             continuation.yield(.finished(diagnostics))
             continuation.finish()
@@ -401,6 +489,7 @@ actor RealInferenceSession {
                                  prefillSeconds: Double? = nil,
                                  decodeSeconds: Double,
                                  generated: Int,
+                                 cachedPromptTokens: Int? = nil,
                                  prefill: PrefillExecutionDiagnostics? = nil) -> AppDiagnostics {
         _ = memorySampler.sample()
         let ttft: Double?
@@ -413,6 +502,7 @@ actor RealInferenceSession {
             generatedTokens: generated,
             stopReason: stopReason,
             promptTokenCount: progress.promptTokenCount,
+            cachedPromptTokens: cachedPromptTokens,
             prefillSeconds: prefillSeconds,
             timeToFirstTokenSeconds: ttft,
             decodeSeconds: decodeSeconds,
@@ -475,6 +565,7 @@ private final class ProgressState: @unchecked Sendable {
     var decodeStart: Date?
     var firstTokenDate: Date?
     var countersAtDecodeStart: RunnerCounterSnapshot?
+    var assistantText = ""
 
     var elapsedDecodeSeconds: Double {
         guard let decodeStart else { return 0 }

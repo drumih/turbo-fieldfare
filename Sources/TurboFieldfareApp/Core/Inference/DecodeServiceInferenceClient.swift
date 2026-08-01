@@ -72,7 +72,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     let generationID = UUID()
                     generationTranscriptMailbox.reset()
                     let command = DecodeGenerationRequest(
-                        prompt: request.prompt, maxNewTokens: request.maxNewTokens,
+                        messages: request.messages, maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
@@ -130,8 +130,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                             continuation.yield(.cancelled(diagnostics))
                             continuation.finish()
                         case .failed:
-                            let error = AppInferenceError.unknown(
-                                event.error ?? "decode service failed")
+                            let error = Self.failure(
+                                event, maxContextTokens: request.maxContextTokens)
                             continuation.yield(.failed(error, partial: diagnostics))
                             continuation.finish(throwing: error)
                         default:
@@ -259,6 +259,17 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         }.value
     }
 
+    /// A `.failed` event only carries text; `errorCode` is what lets the UI tell
+    /// a context overflow apart from a generic inference failure.
+    static func failure(_ event: DecodeServiceEvent,
+                        maxContextTokens: Int) -> AppInferenceError {
+        if event.errorCode == "conversation-overflow" {
+            return .conversationOverflow(prompt: event.promptTokenCount ?? 0,
+                                         maxContext: maxContextTokens)
+        }
+        return .unknown(event.error ?? "decode service failed")
+    }
+
     private static func diagnostics(_ event: DecodeServiceEvent,
                                     options: AppRuntimeOptions) -> AppDiagnostics {
         let stop = AppStopReason(rawValue: event.stopReason ?? "")
@@ -269,6 +280,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             generatedTokens: event.tokenCount,
             stopReason: stop,
             promptTokenCount: event.promptTokenCount,
+            cachedPromptTokens: event.cachedPromptTokens,
             prefillSeconds: event.prefillSeconds,
             timeToFirstTokenSeconds: event.timeToFirstTokenSeconds,
             decodeSeconds: event.decodeSeconds,

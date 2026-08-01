@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfareDecodeProtocol
 import TurboFieldfareRepackCore
 import Observation
 
@@ -12,8 +13,16 @@ public final class AppModel {
 
     public var modelPathText: String
     public var promptText: String = ""
+    /// The in-flight exchange. Committed turns live in `activeConversation`;
+    /// these two hold the turn being generated right now, so the transcript's
+    /// committed prefix stays immutable while tokens stream in.
     public private(set) var outputPromptText: String = ""
     public var outputText: String = ""
+    public private(set) var conversations: [Conversation] = []
+    public private(set) var activeConversationID: UUID?
+    /// Set when a send was refused because the conversation no longer leaves
+    /// room for a reply. Distinct from `error`, which means a run actually failed.
+    public private(set) var isContextOverflowNoticeVisible = false
     public var runState: RunState = .idle
     public var runtimeOptions = AppRuntimeOptions()
     public var maxNewTokensOverride: Int?
@@ -55,6 +64,7 @@ public final class AppModel {
     private var hasHandledTerminalEvent = false
     private let memorySampler: AppMemorySampler
     private let settingsPersistenceEnabled: Bool
+    private let conversationsPersistenceEnabled: Bool
     private let installETAClock: SuspendingClock
     private let installETAOrigin: SuspendingClock.Instant
     private var installETAEstimator = DownloadETAEstimator()
@@ -63,7 +73,8 @@ public final class AppModel {
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
-                settingsPersistenceEnabled: Bool = false) {
+                settingsPersistenceEnabled: Bool = false,
+                conversationsPersistenceEnabled: Bool = false) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
@@ -84,9 +95,11 @@ public final class AppModel {
         self.installer = installer
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
+        self.conversationsPersistenceEnabled = conversationsPersistenceEnabled
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
+        loadConversations(forModelDirectory: directory)
     }
 
     public var isRunning: Bool { runState == .running }
@@ -202,7 +215,7 @@ public final class AppModel {
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
     public var hasOutputTranscript: Bool {
-        !outputPromptText.isEmpty || !outputText.isEmpty
+        !committedTurns.isEmpty || !outputPromptText.isEmpty || !outputText.isEmpty
     }
 
     public var outputResponsePlainText: String {
@@ -210,17 +223,90 @@ public final class AppModel {
     }
 
     public var outputConversationPlainText: String {
-        let response = outputResponsePlainText
-        switch (outputPromptText.isEmpty, response.isEmpty) {
-        case (true, true):
-            return ""
-        case (false, true):
-            return "You:\n\(outputPromptText)"
-        case (true, false):
-            return "Answer:\n\(response)"
-        case (false, false):
-            return "You:\n\(outputPromptText)\n\nAnswer:\n\(response)"
+        var sections: [String] = []
+        for turn in committedTurns {
+            sections.append(turn.role == .user
+                ? "You:\n\(turn.content)"
+                : "Answer:\n\(turn.content)")
         }
+        if !outputPromptText.isEmpty { sections.append("You:\n\(outputPromptText)") }
+        let response = outputResponsePlainText
+        if !response.isEmpty { sections.append("Answer:\n\(response)") }
+        return sections.joined(separator: "\n\n")
+    }
+
+    // MARK: - Conversations
+
+    public var activeConversation: Conversation? {
+        guard let activeConversationID else { return nil }
+        return conversations.first { $0.id == activeConversationID }
+    }
+
+    /// Turns already committed to the active conversation. Immutable, and the
+    /// stable prefix the transcript renderer appends to.
+    public var committedTurns: [ChatTurn] { activeConversation?.turns ?? [] }
+
+    /// Newest first, so the sidebar shows recent chats at the top.
+    public var conversationsByRecency: [Conversation] {
+        conversations.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// A reply needs room too: blocking exactly at the context limit would
+    /// permit sends that can only produce a truncated answer, because
+    /// `effectiveMaxNewTokens` clamps the response to whatever is left.
+    public static let responseHeadroomTokens = 256
+
+    /// Character-based, deliberately conservative. Real Gemma ratios run about
+    /// 4 chars/token for prose and 3 for code, so 3.5 errs toward over-counting:
+    /// blocking slightly early is recoverable by raising the context length,
+    /// while under-counting fails mid-send inside the decode service.
+    static func estimateTokens(_ text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        return max(1, Int((Double(text.count) / 3.5).rounded(.up)))
+    }
+
+    /// Anchored on the exact prompt count the service reported for the previous
+    /// generation, so only the turns added since then are estimated.
+    public var estimatedNextPromptTokens: Int {
+        let pending = Self.estimateTokens(
+            promptText.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let conversation = activeConversation else { return pending }
+        guard let anchor = conversation.lastPromptTokenCount else {
+            return conversation.turns.reduce(0) {
+                $0 + Self.estimateTokens($1.content)
+            } + pending
+        }
+        let sinceAnchor = conversation.turns
+            .last(where: { $0.role == .assistant })
+            .map { Self.estimateTokens($0.content) } ?? 0
+        return anchor + sinceAnchor + pending
+    }
+
+    public var contextCapacityTokens: Int { maxContextTokens }
+
+    /// What the meter shows: the conversation as it stands, excluding whatever
+    /// is still being typed.
+    public var contextUsedTokens: Int {
+        guard let conversation = activeConversation else { return 0 }
+        guard let anchor = conversation.lastPromptTokenCount else {
+            return conversation.turns.reduce(0) {
+                $0 + Self.estimateTokens($1.content)
+            }
+        }
+        let sinceAnchor = conversation.turns
+            .last(where: { $0.role == .assistant })
+            .map { Self.estimateTokens($0.content) } ?? 0
+        return anchor + sinceAnchor
+    }
+
+    /// True when the context count is a guess rather than a service-reported
+    /// figure, so the UI can mark it.
+    public var isContextUsageEstimated: Bool {
+        activeConversation?.lastPromptTokenCount == nil
+    }
+
+    public var isConversationOverflowing: Bool {
+        estimatedNextPromptTokens + Self.responseHeadroomTokens > maxContextTokens
     }
 
     public var liveTokensPerSecond: Double {
@@ -274,6 +360,10 @@ public final class AppModel {
         modelPathText = path
         applyPersistedSettings(
             forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
+        // Conversations are stored per model directory, like settings.
+        loadConversations(
+            forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
+        resetLiveTurn()
         loadGeneration &+= 1
         loadTask?.cancel()
         loadTask = nil
@@ -679,17 +769,132 @@ public final class AppModel {
         }
     }
 
+    /// Kept for the existing "clear" affordances: starting a fresh chat is the
+    /// least surprising reading of clearing the transcript now that history
+    /// persists.
     public func clearOutput() {
+        newConversation()
+    }
+
+    public func newConversation() {
         guard !isRunning else { return }
+        // Never accumulate empty chats: reuse the active one if it is untouched.
+        if let active = activeConversation, active.isEmpty {
+            resetLiveTurn()
+            return
+        }
+        let conversation = Conversation()
+        conversations.append(conversation)
+        activeConversationID = conversation.id
+        resetLiveTurn()
+        persistConversations()
+    }
+
+    public func selectConversation(_ id: UUID) {
+        guard !isRunning, id != activeConversationID,
+              conversations.contains(where: { $0.id == id }) else { return }
+        activeConversationID = id
+        resetLiveTurn()
+    }
+
+    public func deleteConversation(_ id: UUID) {
+        guard !isRunning, let index = conversations.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        conversations.remove(at: index)
+        if activeConversationID == id {
+            activeConversationID = conversationsByRecency.first?.id
+            resetLiveTurn()
+        }
+        if conversations.isEmpty {
+            let conversation = Conversation()
+            conversations.append(conversation)
+            activeConversationID = conversation.id
+        }
+        persistConversations()
+    }
+
+    public func renameConversation(_ id: UUID, to title: String) {
+        guard let index = conversations.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            // Clearing a custom title hands naming back to the first user turn.
+            conversations[index].titleIsCustom = false
+            conversations[index].retitleIfNeeded()
+        } else {
+            conversations[index].title = trimmed
+            conversations[index].titleIsCustom = true
+        }
+        persistConversations()
+    }
+
+    private func resetLiveTurn() {
         outputPromptText = ""
         outputText = ""
         generationTranscriptMailbox?.reset()
         diagnostics = nil
         error = nil
+        isContextOverflowNoticeVisible = false
+    }
+
+    public func dismissContextOverflowNotice() {
+        isContextOverflowNoticeVisible = false
+    }
+
+    private func loadConversations(forModelDirectory modelDirectory: URL) {
+        let store = conversationsPersistenceEnabled
+            ? ConversationFileStore.load(forModelDirectory: modelDirectory)
+            : ConversationStoreFile()
+        conversations = store.conversations
+        if conversations.isEmpty {
+            conversations = [Conversation()]
+        }
+        activeConversationID = conversationsByRecency.first?.id
+    }
+
+    private func persistConversations() {
+        guard conversationsPersistenceEnabled else { return }
+        let store = ConversationStoreFile(conversations: conversations)
+        let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
+        try? ConversationFileStore.save(store, forModelDirectory: modelDirectory)
+    }
+
+    /// Commits the finished exchange. Both turns land together so the committed
+    /// list is never half-written, and only here does the store get touched —
+    /// writing per token would thrash the disk at decode speed.
+    private func commitLiveTurn() {
+        guard let index = conversations.firstIndex(where: { $0.id == activeConversationID })
+        else { return }
+        let response = outputResponsePlainText
+        guard !outputPromptText.isEmpty || !response.isEmpty else { return }
+        let now = Date()
+        if !outputPromptText.isEmpty {
+            conversations[index].turns.append(
+                ChatTurn(role: .user, content: outputPromptText, timestamp: now))
+        }
+        if !response.isEmpty {
+            conversations[index].turns.append(
+                ChatTurn(role: .assistant, content: response, timestamp: now))
+        }
+        conversations[index].lastPromptTokenCount = diagnostics?.promptTokenCount
+        conversations[index].updatedAt = now
+        conversations[index].retitleIfNeeded()
+        outputPromptText = ""
+        outputText = ""
+        generationTranscriptMailbox?.reset()
+        persistConversations()
     }
 
     public func run() {
         guard canRun else { return }
+        // Refuse before the request crosses the IPC boundary: the decode service
+        // would reject it anyway, and blocking here keeps an oversized prompt
+        // from being framed at all.
+        guard !isConversationOverflowing else {
+            isContextOverflowNoticeVisible = true
+            return
+        }
+        isContextOverflowNoticeVisible = false
         let request: AppGenerationRequest
         do {
             request = try makeRequest()
@@ -704,7 +909,7 @@ public final class AppModel {
         persistSettings()
 
         generationTranscriptMailbox?.reset()
-        outputPromptText = request.prompt
+        outputPromptText = request.latestUserContent ?? ""
         outputText = ""
         diagnostics = nil
         error = nil
@@ -746,7 +951,8 @@ public final class AppModel {
     public func makeRequest() throws -> AppGenerationRequest {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
-            prompt: promptText,
+            messages: committedTurns.map(\.decodeMessage)
+                + [DecodeChatMessage(role: .user, content: promptText)],
             maxNewTokens: maxNewTokensOverride ?? maxContextTokens,
             maxContextTokens: maxContextTokens,
             temperature: Float(temperature),
@@ -792,6 +998,11 @@ public final class AppModel {
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
         self.diagnostics = diagnostics
+        // Only a completed exchange is committed. A cancelled or failed run
+        // stays in the live turn: it is still on screen, but it never becomes
+        // history the model is asked to continue from, and the next run clears
+        // it, so the transcript and the conversation never disagree.
+        commitLiveTurn()
         finishTerminalRun()
     }
 

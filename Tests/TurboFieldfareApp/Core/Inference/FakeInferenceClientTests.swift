@@ -23,8 +23,8 @@ import Testing
     try await waitForFakeClient { model.diagnostics != nil && !model.isRunning }
 
     #expect(model.isModelInstalled)
-    #expect(model.outputText.contains("Simulated response"))
-    #expect(model.outputText.contains("Hello from the test"))
+    #expect(model.outputConversationPlainText.contains("Simulated response"))
+    #expect(model.outputConversationPlainText.contains("Hello from the test"))
     #expect(model.diagnostics?.generatedTokens ?? 0 > 0)
   }
 
@@ -32,7 +32,7 @@ import Testing
     let client = FakeInferenceClient(eventDelay: .milliseconds(5))
     let request = AppGenerationRequest(
       modelDirectory: URL(fileURLWithPath: "/missing/fake-model"),
-      prompt: "Cancel this simulated response")
+      messages: [.init(role: .user, content: "Cancel this simulated response")])
     try await client.ensureLoaded(
       modelDirectory: request.modelDirectory,
       maxContextTokens: request.maxContextTokens,
@@ -59,7 +59,7 @@ import Testing
     let client = FakeInferenceClient(eventDelay: .milliseconds(20))
     let request = AppGenerationRequest(
       modelDirectory: URL(fileURLWithPath: "/missing/fake-model"),
-      prompt: "First")
+      messages: [.init(role: .user, content: "First")])
     try await client.ensureLoaded(
       modelDirectory: request.modelDirectory,
       maxContextTokens: request.maxContextTokens,

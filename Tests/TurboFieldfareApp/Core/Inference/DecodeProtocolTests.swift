@@ -115,7 +115,9 @@ import TurboFieldfareDecodeProtocol
 
     @Test func oversizedPayloadIsRejectedBeforeEncoding() {
         let request = DecodeGenerationRequest(
-            prompt: String(repeating: "x", count: DecodeFrameCodec.maximumPayloadBytes + 1),
+            messages: [.init(
+                role: .user,
+                content: String(repeating: "x", count: DecodeFrameCodec.maximumPayloadBytes + 1))],
             maxNewTokens: 1,
             maxContextTokens: 4_096,
             temperature: 0)

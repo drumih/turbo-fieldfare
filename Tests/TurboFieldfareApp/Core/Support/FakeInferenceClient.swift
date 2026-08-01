@@ -108,7 +108,7 @@ final class FakeInferenceClient: AppModelLifecycleClient, Sendable {
             }
             prefillEnd = Date()
 
-            let response = "Simulated response. Your prompt was: \(request.prompt)"
+            let response = "Simulated response. Your prompt was: \(request.latestUserContent ?? "")"
             let words = response.split(whereSeparator: \.isWhitespace)
             let pieces = words.enumerated().map { index, word in
                 index == 0 ? String(word) : " " + word
@@ -130,7 +130,7 @@ final class FakeInferenceClient: AppModelLifecycleClient, Sendable {
             continuation.yield(.finished(AppDiagnostics(
                 generatedTokens: generated,
                 stopReason: generated >= request.maxNewTokens ? .maxTokens : .eos,
-                promptTokenCount: max(1, request.prompt.split(whereSeparator: \.isWhitespace).count),
+                promptTokenCount: max(1, (request.latestUserContent ?? "").split(whereSeparator: \.isWhitespace).count),
                 prefillSeconds: prefillEnd.timeIntervalSince(start),
                 timeToFirstTokenSeconds: firstTokenDate.map { $0.timeIntervalSince(prefillEnd) },
                 decodeSeconds: decodeSeconds,
@@ -144,7 +144,7 @@ final class FakeInferenceClient: AppModelLifecycleClient, Sendable {
             continuation.yield(.cancelled(AppDiagnostics(
                 generatedTokens: generated,
                 stopReason: .cancelled,
-                promptTokenCount: max(1, request.prompt.split(whereSeparator: \.isWhitespace).count),
+                promptTokenCount: max(1, (request.latestUserContent ?? "").split(whereSeparator: \.isWhitespace).count),
                 prefillSeconds: prefillEnd.timeIntervalSince(start),
                 timeToFirstTokenSeconds: firstTokenDate.map { $0.timeIntervalSince(prefillEnd) },
                 decodeSeconds: decodeSeconds,

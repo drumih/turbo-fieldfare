@@ -82,6 +82,7 @@ struct InspectorView: View {
                 .labelsHidden()
                 .fixedSize()
             }
+            ContextMeterView(model: model)
             LabeledContent("Slots") {
                 Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {
                     ForEach(AppRuntimeOptions.allowedSlotCounts, id: \.self) { slots in

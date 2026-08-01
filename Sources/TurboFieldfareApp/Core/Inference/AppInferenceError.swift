@@ -5,12 +5,21 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
     case modelNotFound(String)
     case modelLoadFailed(String)
     case tokenizerUnavailable(String)
-    case contextOverflow(prompt: Int, maxNew: Int, maxContext: Int)
+    case conversationOverflow(prompt: Int, maxContext: Int)
     case generationInFlight
     case modelNotLoaded
     case reloadRequired
     case cancelled
     case unknown(String)
+
+    /// Stable wire code for the decode-service IPC. Only overflow carries one
+    /// today; the UI maps it back to this enum case via `DecodeServiceEvent.errorCode`.
+    public var code: String? {
+        switch self {
+        case .conversationOverflow: return "conversation-overflow"
+        default: return nil
+        }
+    }
 
     public var description: String { userMessage }
 
@@ -24,8 +33,8 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
             return "Model load failed: \(message)"
         case .tokenizerUnavailable(let message):
             return "Tokenizer unavailable: \(message)"
-        case .contextOverflow(let prompt, let maxNew, let maxContext):
-            return "Prompt (\(prompt) tokens) plus max response (\(maxNew)) exceeds the \(maxContext)-token context."
+        case .conversationOverflow(let prompt, let maxContext):
+            return "This conversation has filled the context (\(prompt) of \(maxContext) tokens). Start a new chat or raise the context length."
         case .generationInFlight:
             return "A generation is already running."
         case .modelNotLoaded:

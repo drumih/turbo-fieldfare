@@ -135,7 +135,7 @@ import Testing
         }
 
         #expect(!model.isRunning)
-        #expect(model.outputText.contains("alpha beta"))
+        #expect(model.outputConversationPlainText.contains("alpha beta"))
         #expect(model.diagnostics != nil)
         #expect(model.error == nil)
     }
@@ -156,11 +156,59 @@ import Testing
         model.promptText = "edited prompt"
         await waitForIdle(model)
 
-        #expect(model.outputPromptText == "original prompt")
-        #expect(model.outputResponsePlainText == "answer")
+        // A completed exchange moves from the live turn into committed history.
+        #expect(model.outputPromptText.isEmpty)
+        #expect(model.committedTurns.map(\.content) == ["original prompt", "answer"])
         #expect(model.outputConversationPlainText
             == "You:\noriginal prompt\n\nAnswer:\nanswer")
         #expect(!model.outputConversationPlainText.contains("edited prompt"))
+    }
+
+    @MainActor
+    @Test func successiveRunsAccumulateTurnsAndSendTheWholeConversation() async throws {
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 1
+
+        model.promptText = "first"
+        model.run()
+        await waitForIdle(model)
+
+        model.promptText = "second"
+        let request = try model.makeRequest()
+        #expect(request.messages.map(\.content) == ["first", "answer", "second"])
+        #expect(request.messages.map(\.role) == [.user, .assistant, .user])
+
+        model.run()
+        await waitForIdle(model)
+
+        #expect(model.committedTurns.map(\.content)
+            == ["first", "answer", "second", "answer"])
+        #expect(model.activeConversation?.title == "first")
+    }
+
+    @MainActor
+    @Test func overflowingConversationRefusesToSendAndExplains() async throws {
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxContextTokens = 4_096
+        model.promptText = String(repeating: "x", count: 4_096 * 4)
+
+        #expect(model.isConversationOverflowing)
+        #expect(model.canRun)
+        model.run()
+
+        #expect(!model.isRunning)
+        #expect(model.isContextOverflowNoticeVisible)
+        #expect(model.committedTurns.isEmpty)
+
+        model.promptText = "short"
+        #expect(!model.isConversationOverflowing)
+        model.run()
+        await waitForIdle(model)
+        #expect(!model.isContextOverflowNoticeVisible)
+        #expect(model.committedTurns.map(\.role) == [.user, .assistant])
+        #expect(model.committedTurns.first?.content == "short")
     }
 
     @MainActor
