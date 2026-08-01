@@ -14,6 +14,19 @@ struct ChatTranscriptView: View {
     private let renderer = ResponseMarkdownRenderer()
 
     var body: some View {
+        Group {
+            if isRunning {
+                TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                    transcriptContent(response: effectiveOutput)
+                }
+            } else {
+                transcriptContent(response: effectiveOutput)
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    private func transcriptContent(response: String) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 26) {
@@ -23,8 +36,8 @@ struct ChatTranscriptView: View {
                         userMessage(prompt)
                     }
 
-                    if isRunning || !effectiveOutput.isEmpty {
-                        assistantMessage(effectiveOutput)
+                    if isRunning || !response.isEmpty {
+                        assistantMessage(response)
                             .id("active-response")
                     }
 
@@ -41,14 +54,13 @@ struct ChatTranscriptView: View {
             .onChange(of: messages) { _, _ in
                 scrollToBottom(proxy)
             }
-            .onChange(of: effectiveOutput) { _, _ in
+            .onChange(of: response) { _, _ in
                 scrollToBottom(proxy)
             }
             .onAppear {
                 scrollToBottom(proxy, animated: false)
             }
         }
-        .textSelection(.enabled)
     }
 
     @ViewBuilder
