@@ -98,7 +98,7 @@ import TurboFieldfareDecodeProtocol
                 do {
                     let options = try appRuntimeOptions(request.runtimeOptions)
                     let generation = AppGenerationRequest(
-                        modelDirectory: modelDirectory, prompt: request.prompt,
+                        modelDirectory: modelDirectory, messages: request.messages,
                         maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,

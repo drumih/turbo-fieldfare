@@ -5,11 +5,22 @@ import SwiftUI
 struct RootView: View {
     let model: AppModel
     @State private var conversationChromeHeight: CGFloat = 0
+    @AppStorage("sidebarVisible") private var isSidebarVisible = true
 
     var body: some View {
         HStack(spacing: 0) {
+            // Hidden during installation: the install screen has no chats to list.
+            if isSidebarVisible && !model.requiresModelInstallation {
+                ConversationSidebarView(model: model)
+                    .frame(width: 240)
+                    .frame(maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+
+                Divider()
+            }
+
             primaryContent
-                .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 
@@ -30,6 +41,10 @@ struct RootView: View {
                 endPoint: .bottom)
         }
         .tint(TurboFieldfareMacTheme.accentColor)
+        .onReceive(NotificationCenter.default.publisher(
+            for: .turboFieldfareToggleSidebar)) { _ in
+            isSidebarVisible.toggle()
+        }
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
         .animation(.smooth(duration: 0.25), value: model.error)
         .transaction { transaction in
@@ -89,6 +104,7 @@ struct RootView: View {
 
     private var conversationChrome: some View {
         VStack(spacing: 10) {
+            ContextOverflowBanner(model: model)
             ErrorBanner(model: model)
             if model.promptText.isEmpty {
                 PromptExamplesView { preset in

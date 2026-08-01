@@ -43,7 +43,8 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             state.terminal = terminal(.cancelled, diagnostics: diagnostics)
         case .failed(let error, let diagnostics):
             state.terminal = terminal(
-                .failed, diagnostics: diagnostics, error: error.userMessage)
+                .failed, diagnostics: diagnostics, error: error.userMessage,
+                errorCode: error.code)
         }
         if state.terminal != nil { condition.signal() }
         condition.unlock()
@@ -116,7 +117,8 @@ final class DecodeServiceOutbox: @unchecked Sendable {
 
     private func terminal(_ kind: DecodeServiceEventKind,
                           diagnostics: AppDiagnostics?,
-                          error: String? = nil) -> DecodeServiceEvent {
+                          error: String? = nil,
+                          errorCode: String? = nil) -> DecodeServiceEvent {
         DecodeServiceEvent(
             kind: kind, generationID: generationID,
             tokenCount: diagnostics?.generatedTokens ?? 0,
@@ -127,6 +129,8 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             tokensPerSecond: diagnostics?.tokensPerSecond ?? 0,
             stopReason: diagnostics?.stopReason.rawValue,
             error: error,
+            errorCode: errorCode,
+            cachedPromptTokens: diagnostics?.cachedPromptTokens,
             currentMemoryBytes: memorySampler.sample(),
             peakMemoryBytes: memorySampler.peakBytes,
             prefill: diagnostics?.prefill.map(Self.prefillDiagnostics),

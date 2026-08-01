@@ -60,6 +60,10 @@ struct OutputPaneView: View {
 
     private var transcript: some View {
         IncrementalTranscriptView(
+            committed: model.committedTurns.map {
+                TranscriptTurn(role: $0.role == .user ? .user : .assistant,
+                               content: $0.content)
+            },
             prompt: model.outputPromptText,
             output: model.outputText,
             mailbox: model.generationTranscriptMailbox,
@@ -256,6 +260,7 @@ private struct LoadingModelText: View {
 }
 
 private struct IncrementalTranscriptView: NSViewRepresentable {
+    var committed: [TranscriptTurn] = []
     var prompt: String
     var output: String
     var mailbox: GenerationTranscriptMailbox?
@@ -267,6 +272,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         weak var scrollView: NSScrollView?
         weak var textView: NSTextView?
         var mailbox: GenerationTranscriptMailbox?
+        var committed: [TranscriptTurn] = []
         var prompt = ""
         var isTerminal = false
         var showsPrefillPlaceholder = false
@@ -287,6 +293,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         func synchronize(
+            committed: [TranscriptTurn],
             prompt: String,
             output: String,
             mailbox: GenerationTranscriptMailbox?,
@@ -294,11 +301,13 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             showsPrefillPlaceholder: Bool
         ) {
             self.mailbox = mailbox
+            self.committed = committed
             self.prompt = prompt
             self.isTerminal = isTerminal
             self.showsPrefillPlaceholder = showsPrefillPlaceholder
             let response = mailbox?.drain().completeText ?? output
             apply(
+                committed: committed,
                 prompt: prompt,
                 response: response,
                 isTerminal: isTerminal,
@@ -312,7 +321,8 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
                     || snapshot.completeText != documentController.response else {
                 return
             }
-            apply(prompt: prompt,
+            apply(committed: committed,
+                  prompt: prompt,
                   response: snapshot.completeText,
                   isTerminal: isTerminal,
                   showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -372,6 +382,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         private func apply(
+            committed: [TranscriptTurn],
             prompt: String,
             response: String,
             isTerminal: Bool,
@@ -384,6 +395,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             storage.beginEditing()
             let update = documentController.synchronize(
                 storage: storage,
+                committed: committed,
                 prompt: prompt,
                 response: response,
                 isTerminal: isTerminal,
@@ -448,6 +460,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.synchronize(
+            committed: committed,
             prompt: prompt,
             output: output,
             mailbox: mailbox,

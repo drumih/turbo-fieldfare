@@ -1,8 +1,9 @@
 import Foundation
+import TurboFieldfareDecodeProtocol
 
 public struct AppGenerationRequest: Equatable, Sendable {
     public var modelDirectory: URL
-    public var prompt: String
+    public var messages: [DecodeChatMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -11,8 +12,14 @@ public struct AppGenerationRequest: Equatable, Sendable {
     public var repetitionPenalty: Float
     public var runtimeOptions: AppRuntimeOptions
 
+    /// The new user turn, for UI display. The request is a conversation: prior
+    /// turns plus this latest user message.
+    public var latestUserContent: String? {
+        messages.last(where: { $0.role == .user })?.content
+    }
+
     public init(modelDirectory: URL,
-                prompt: String,
+                messages: [DecodeChatMessage],
                 maxNewTokens: Int = 4_096,
                 maxContextTokens: Int = 4096,
                 temperature: Float = 0.2,
@@ -21,7 +28,7 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 runtimeOptions: AppRuntimeOptions = AppRuntimeOptions()) {
         self.modelDirectory = modelDirectory
-        self.prompt = prompt
+        self.messages = messages
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
@@ -37,8 +44,9 @@ public struct AppGenerationRequest: Equatable, Sendable {
 
     public func validate(fileManager: FileManager = .default,
                          requireModelDirectory: Bool = true) throws {
-        guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw AppInferenceError.invalidRequest("Prompt cannot be empty.")
+        guard let last = messages.last, last.role == .user,
+              !last.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AppInferenceError.invalidRequest("The latest message must be a non-empty user message.")
         }
         guard maxNewTokens > 0 else {
             throw AppInferenceError.invalidRequest("Max response length must be greater than zero.")

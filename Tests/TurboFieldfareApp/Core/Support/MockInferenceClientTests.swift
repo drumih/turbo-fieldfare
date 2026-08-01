@@ -5,7 +5,7 @@ import Testing
 @Suite struct MockInferenceClientTests {
     @Test func streamsTokensAndFinishesWithDiagnostics() async throws {
         let client = MockInferenceClient(response: "one two three", tokenDelayNanos: 1_000_000)
-        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, prompt: "go", maxNewTokens: 8)
+        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, messages: [.init(role: .user, content: "go")], maxNewTokens: 8)
         var text = ""
         var diagnostics: AppDiagnostics?
         var prefillEvents: [(Int, Int)] = []
@@ -46,7 +46,7 @@ import Testing
 
     @Test func cancellationEmitsCancelledDiagnostics() async throws {
         let client = MockInferenceClient(response: "one two three four five", tokenDelayNanos: 5_000_000)
-        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, prompt: "go", maxNewTokens: 10)
+        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, messages: [.init(role: .user, content: "go")], maxNewTokens: 10)
         var sawToken = false
         var sawCancel = false
         var cancelledDiagnostics: AppDiagnostics?
@@ -75,7 +75,7 @@ import Testing
 
     @Test func concurrentGenerationRejected() async throws {
         let client = MockInferenceClient(response: "one two three", tokenDelayNanos: 20_000_000)
-        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, prompt: "go", maxNewTokens: 3)
+        let request = AppGenerationRequest(modelDirectory: FileManager.default.temporaryDirectory, messages: [.init(role: .user, content: "go")], maxNewTokens: 3)
         let first = client.generate(request)
         let second = client.generate(request)
 

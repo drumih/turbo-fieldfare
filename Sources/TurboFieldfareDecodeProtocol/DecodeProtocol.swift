@@ -42,8 +42,25 @@ public struct DecodeLoadRequest: Codable, Sendable {
     }
 }
 
+/// Text-only chat message carried over the decode-service IPC. Role raw values
+/// mirror `GFTokenizer.Role`; the app path never sends tools, developer, or
+/// system messages.
+public struct DecodeChatMessage: Codable, Sendable, Equatable {
+    public enum Role: String, Codable, Sendable {
+        case system, developer, user, assistant, tool
+    }
+
+    public var role: Role
+    public var content: String
+
+    public init(role: Role, content: String) {
+        self.role = role
+        self.content = content
+    }
+}
+
 public struct DecodeGenerationRequest: Codable, Sendable {
-    public var prompt: String
+    public var messages: [DecodeChatMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -51,11 +68,11 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
 
-    public init(prompt: String, maxNewTokens: Int, maxContextTokens: Int,
+    public init(messages: [DecodeChatMessage], maxNewTokens: Int, maxContextTokens: Int,
                 temperature: Float, repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
                 generationID: UUID = UUID()) {
-        self.prompt = prompt
+        self.messages = messages
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
@@ -149,6 +166,8 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public var tokensPerSecond: Double
     public var stopReason: String?
     public var error: String?
+    public var errorCode: String?
+    public var cachedPromptTokens: Int?
     public var currentMemoryBytes: UInt64?
     public var peakMemoryBytes: UInt64?
     public var prefill: DecodePrefillDiagnostics?
@@ -162,6 +181,8 @@ public struct DecodeServiceEvent: Codable, Sendable {
                 timeToFirstTokenSeconds: Double? = nil,
                 decodeSeconds: Double = 0, tokensPerSecond: Double = 0,
                 stopReason: String? = nil, error: String? = nil,
+                errorCode: String? = nil,
+                cachedPromptTokens: Int? = nil,
                 currentMemoryBytes: UInt64? = nil, peakMemoryBytes: UInt64? = nil,
                 prefill: DecodePrefillDiagnostics? = nil,
                 runner: DecodeRunnerDiagnostics? = nil) {
@@ -179,6 +200,8 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.tokensPerSecond = tokensPerSecond
         self.stopReason = stopReason
         self.error = error
+        self.errorCode = errorCode
+        self.cachedPromptTokens = cachedPromptTokens
         self.currentMemoryBytes = currentMemoryBytes
         self.peakMemoryBytes = peakMemoryBytes
         self.prefill = prefill

@@ -31,7 +31,8 @@ struct TurboFieldfareMacApp: App {
     init() {
         _model = State(initialValue: AppModel(
             client: DecodeServiceInferenceClient(),
-            settingsPersistenceEnabled: true))
+            settingsPersistenceEnabled: true,
+            conversationsPersistenceEnabled: true))
     }
 
     var body: some Scene {
@@ -43,6 +44,18 @@ struct TurboFieldfareMacApp: App {
         .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Chat", action: model.newConversation)
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.isRunning)
+            }
+            CommandGroup(after: .toolbar) {
+                Button("Toggle Sidebar") {
+                    NotificationCenter.default.post(
+                        name: .turboFieldfareToggleSidebar, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+            }
             CommandMenu("Generation") {
                 Button("Cancel Generation") { model.cancel() }
                     .keyboardShortcut(".", modifiers: .command)
@@ -60,4 +73,12 @@ struct TurboFieldfareMacApp: App {
             }
         }
     }
+}
+
+extension Notification.Name {
+    /// The sidebar toggle lives in the menu bar, but the visibility state
+    /// belongs to the window's root view; a notification avoids threading a
+    /// binding through the Scene.
+    static let turboFieldfareToggleSidebar = Notification.Name(
+        "com.turbofieldfare.toggleSidebar")
 }

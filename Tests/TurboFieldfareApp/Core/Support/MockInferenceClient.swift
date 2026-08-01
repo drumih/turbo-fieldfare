@@ -150,7 +150,7 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
     }
 
     private func responsePieces(for request: AppGenerationRequest) -> [String] {
-        let trimmed = request.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = (request.latestUserContent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let text = trimmed.isEmpty ? response : "\(response) Prompt received: \(trimmed)"
         let words = text.split(separator: " ", omittingEmptySubsequences: false)
         guard !words.isEmpty else { return [""] }
@@ -171,7 +171,7 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
         return AppDiagnostics(
             generatedTokens: generated,
             stopReason: stopReason,
-            promptTokenCount: mockPromptTokenCount(request.prompt),
+            promptTokenCount: mockPromptTokenCount(request.latestUserContent ?? ""),
             prefillSeconds: prefillEnd.map { max($0.timeIntervalSince(start), 0) },
             timeToFirstTokenSeconds: firstToken.map { max($0.timeIntervalSince(decodeStart), 0) },
             decodeSeconds: decodeElapsed,
