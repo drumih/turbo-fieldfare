@@ -254,7 +254,12 @@ public struct ValidatedChatRequest: Sendable {
 public enum OpenAIRequestValidator {
     public static func validate(_ request: OpenAIChatRequest,
                                 modelID: String) throws -> ValidatedChatRequest {
-        guard request.model == modelID else { throw ServerRequestError.unknownModel }
+        // Accept ollama-style "name:tag" ids so drop-in clients keep working
+        // (e.g. "gemma4-26b-th:latest" matches model-id "gemma4-26b-th").
+        let requestedModel = request.model.split(separator: ":").first.map(String.init) ?? request.model
+        guard requestedModel == modelID || request.model == modelID else {
+            throw ServerRequestError.unknownModel
+        }
         guard request.n == nil || request.n == 1 else {
             throw invalid("only n=1 is supported", "n", "unsupported_value")
         }
