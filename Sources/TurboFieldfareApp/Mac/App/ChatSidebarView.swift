@@ -217,10 +217,7 @@ struct ChatSidebarView: View {
                         .font(.callout.weight(isSelected ? .semibold : .regular))
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(chat.updatedAt, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    ChatRelativeTime(date: chat.updatedAt)
                 }
                 Text(chat.preview.isEmpty ? "Empty chat" : chat.preview)
                     .font(.caption2)
@@ -256,5 +253,35 @@ struct ChatSidebarView: View {
             set: { isPresented in
                 if !isPresented { chatToRename = nil }
             })
+    }
+}
+
+private struct ChatRelativeTime: View {
+    let date: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            Text(label(for: date, relativeTo: context.date))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .monospacedDigit()
+        }
+        .accessibilityLabel("Last updated")
+        .accessibilityValue(label(for: date, relativeTo: Date()))
+    }
+
+    private func label(for date: Date, relativeTo now: Date) -> String {
+        let elapsed = max(0, now.timeIntervalSince(date))
+        switch elapsed {
+        case ..<60:
+            return "now"
+        case ..<3_600:
+            return "\(Int(elapsed / 60))m"
+        case ..<86_400:
+            return "\(Int(elapsed / 3_600))h"
+        default:
+            return "\(Int(elapsed / 86_400))d"
+        }
     }
 }
