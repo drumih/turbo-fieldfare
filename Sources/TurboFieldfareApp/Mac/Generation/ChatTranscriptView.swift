@@ -9,19 +9,38 @@ struct ChatTranscriptView: View {
     let prompt: String
     let messages: [AppChatMessage]
     let output: String
-    let mailbox: GenerationTranscriptMailbox?
     let isRunning: Bool
     let canRegenerate: Bool
     let onRegenerate: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isFollowingLatest = true
     @State private var hasUnseenContent = false
     @State private var hoveredAssistantID: String?
     @State private var copiedAssistantID: String?
+    @State private var responseBuffer = StreamingResponseBuffer()
+    @State private var responseRevealTask: Task<Void, Never>?
+    @State private var responseRevealGeneration: UInt = 0
 
     var body: some View {
-        transcriptContent(response: effectiveOutput)
-        .textSelection(.enabled)
+        transcriptContent(response: responseBuffer.displayedText)
+            .textSelection(.enabled)
+            .onAppear(perform: synchronizeInitialResponse)
+            .onChange(of: output) { _, source in
+                synchronizeResponse(source)
+            }
+            .onChange(of: isRunning) { _, isRunning in
+                if isRunning {
+                    beginStreamingResponse()
+                } else {
+                    finishStreamingResponse()
+                }
+            }
+            .onChange(of: messages) { _, _ in
+                guard !isRunning else { return }
+                showFinishedResponse()
+            }
+            .onDisappear(perform: cancelResponseReveal)
     }
 
     private func transcriptContent(response: String) -> some View {
@@ -177,7 +196,8 @@ struct ChatTranscriptView: View {
                     .padding(.leading, 32)
                     .padding(.top, 2)
             } else if !content.isEmpty {
-                MarkdownMessageText(content: content)
+                MarkdownMessageText(content: content, isStreaming: streams)
+                    .equatable()
                     .font(.body)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -252,11 +272,6 @@ struct ChatTranscriptView: View {
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var effectiveOutput: String {
-        let mailboxText = mailbox?.completeText ?? ""
-        return mailboxText.isEmpty ? output : mailboxText
-    }
-
     private func followNewContent(using proxy: ScrollViewProxy) {
         guard isFollowingLatest else {
             hasUnseenContent = true
@@ -290,19 +305,110 @@ struct ChatTranscriptView: View {
             if copiedAssistantID == id { copiedAssistantID = nil }
         }
     }
+
+    private func synchronizeInitialResponse() {
+        if isRunning {
+            beginStreamingResponse()
+        } else {
+            showFinishedResponse()
+        }
+    }
+
+    private func synchronizeResponse(_ source: String) {
+        if isRunning {
+            responseBuffer.receive(source)
+            scheduleResponseRevealIfNeeded()
+        } else {
+            showFinishedResponse()
+        }
+    }
+
+    private func beginStreamingResponse() {
+        cancelResponseReveal()
+        responseBuffer.begin(with: output)
+        scheduleResponseRevealIfNeeded()
+    }
+
+    private func finishStreamingResponse() {
+        cancelResponseReveal()
+        responseBuffer.receive(output)
+        responseBuffer.finish()
+    }
+
+    private func showFinishedResponse() {
+        cancelResponseReveal()
+        responseBuffer.begin(with: output)
+        responseBuffer.finish()
+    }
+
+    private func scheduleResponseRevealIfNeeded() {
+        guard responseBuffer.hasPendingText else { return }
+        revealResponseBatch()
+        guard responseBuffer.hasPendingText, responseRevealTask == nil else { return }
+
+        let generation = responseRevealGeneration
+        responseRevealTask = Task { @MainActor in
+            defer {
+                if generation == responseRevealGeneration {
+                    responseRevealTask = nil
+                    // A source snapshot can arrive in the narrow interval
+                    // after this task observes an empty buffer and before its
+                    // deferred cleanup runs. Start the successor here so that
+                    // batch never waits for another model token.
+                    if responseBuffer.hasPendingText {
+                        scheduleResponseRevealIfNeeded()
+                    }
+                }
+            }
+
+            while !Task.isCancelled, generation == responseRevealGeneration {
+                guard responseBuffer.hasPendingText else { return }
+                do {
+                    try await Task.sleep(for: .milliseconds(45))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, generation == responseRevealGeneration else {
+                    return
+                }
+                revealResponseBatch()
+            }
+        }
+    }
+
+    private func revealResponseBatch() {
+        let pending = responseBuffer.pendingCharacterCount
+        guard pending > 0 else { return }
+        let count = reduceMotion
+            ? pending
+            : StreamingResponseBuffer.recommendedBatchSize(for: pending)
+        _ = responseBuffer.revealNext(maximumCharacterCount: count)
+    }
+
+    private func cancelResponseReveal() {
+        responseRevealGeneration &+= 1
+        responseRevealTask?.cancel()
+        responseRevealTask = nil
+    }
 }
 
-private struct MarkdownMessageText: View {
+private struct MarkdownMessageText: View, Equatable {
     let content: String
+    let isStreaming: Bool
 
     private let renderer = ResponseMarkdownRenderer()
 
     var body: some View {
-        // Render in the same update that supplies the new token batch. An
-        // asynchronous task briefly showed a stale/plain fallback on every
-        // token, which caused visible flicker and could make streaming appear
-        // stuck until generation completed.
-        Text(AttributedString(renderer.render(content).attributedString))
+        if isStreaming {
+            Text(renderer.streamingText(content))
+                .lineSpacing(3)
+        } else {
+            Text(AttributedString(renderer.render(content).attributedString))
+        }
+    }
+
+    nonisolated static func == (lhs: MarkdownMessageText, rhs: MarkdownMessageText) -> Bool {
+        lhs.content == rhs.content && lhs.isStreaming == rhs.isStreaming
     }
 }
 

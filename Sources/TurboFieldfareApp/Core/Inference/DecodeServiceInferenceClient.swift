@@ -101,8 +101,6 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     try send(.generate(command), to: handles.input)
 
                     var expectedSequence: UInt64 = 1
-                    var lastMetricYield = Date.distantPast
-                    var hasYieldedVisibleText = false
                     while true {
                         let event = try await handles.responses.next(matching: generationID)
                         inferenceMemory.withLock { $0 = event.currentMemoryBytes }
@@ -123,18 +121,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         }
                         if event.kind == .snapshot {
                             generationTranscriptMailbox.append(event.textDelta)
-                            let now = Date()
-                            let beginsVisibleText = !hasYieldedVisibleText
-                                && event.textDelta.contains { !$0.isWhitespace }
-                            if beginsVisibleText
-                                || now.timeIntervalSince(lastMetricYield) >= 0.5 {
-                                lastMetricYield = now
-                                hasYieldedVisibleText = hasYieldedVisibleText || beginsVisibleText
-                                continuation.yield(.token(AppTokenEvent(
-                                    index: max(0, event.tokenCount - 1),
-                                    textDelta: beginsVisibleText ? event.textDelta : "",
-                                    elapsedDecodeSeconds: event.decodeSeconds)))
-                            }
+                            // The decode service already batches snapshots at
+                            // a modest cadence. Forward each delta so the
+                            // observable app model can drive the transcript;
+                            // keeping later text only in the mailbox leaves
+                            // SwiftUI with nothing to invalidate.
+                            continuation.yield(.token(AppTokenEvent(
+                                index: max(0, event.tokenCount - 1),
+                                textDelta: event.textDelta,
+                                elapsedDecodeSeconds: event.decodeSeconds)))
                             continue
                         }
 

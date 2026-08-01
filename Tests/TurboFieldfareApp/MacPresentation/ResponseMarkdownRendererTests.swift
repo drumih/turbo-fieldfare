@@ -85,6 +85,19 @@ import Testing
         #expect(result.attributedString.string.contains("bold response still arriving"))
     }
 
+    @Test func streamingTextHidesPartialMarkdownDelimiters() {
+        let text = ResponseMarkdownRenderer().streamingText(
+            "## **Heading**\n\n* `let bird = \"fieldfare\"`\n\n```swift\nlet flight = true\n")
+
+        #expect(!text.contains("**"))
+        #expect(!text.contains("```"))
+        #expect(!text.contains("##"))
+        #expect(!text.contains("`"))
+        #expect(text.contains("Heading"))
+        #expect(text.contains("let bird"))
+        #expect(text.contains("• let bird"))
+    }
+
     @Test func unsupportedHTMLAndImageStayReadableWithoutMarkdownMarkers() {
         let renderer = ResponseMarkdownRenderer()
 

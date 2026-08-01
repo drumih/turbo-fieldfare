@@ -57,7 +57,6 @@ struct OutputPaneView: View {
             prompt: model.outputPromptText,
             messages: model.outputMessages,
             output: model.outputText,
-            mailbox: model.generationTranscriptMailbox,
             isRunning: model.isRunning,
             canRegenerate: model.canRegenerate,
             onRegenerate: { model.regenerateLastResponse() })

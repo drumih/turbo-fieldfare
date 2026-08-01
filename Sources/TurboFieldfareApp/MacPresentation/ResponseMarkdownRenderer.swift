@@ -108,6 +108,14 @@ public struct ResponseMarkdownRenderer {
         render(source).attributedString.string
     }
 
+    /// A lightweight, marker-free representation for a response that is
+    /// still arriving. It deliberately avoids reparsing and reflowing the
+    /// whole growing Markdown document on every transport snapshot; full
+    /// Markdown rendering happens when the response is terminal.
+    public func streamingText(_ source: String) -> String {
+        fallback(normalizeTables(in: source)).attributedString.string
+    }
+
     private func requiresRawFallback(_ source: String) -> Bool {
         let fenceCount = source.components(separatedBy: "```").count - 1
         if !fenceCount.isMultiple(of: 2) { return true }
@@ -430,9 +438,22 @@ public struct ResponseMarkdownRenderer {
                 of: #"\[([^\]]+)\]\([^\)]*\)"#,
                 with: "$1",
                 options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^[ \t]{0,3}#{1,6}[ \t]+"#,
+                with: "",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^([ \t]*)[-+*][ \t]+"#,
+                with: "$1• ",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^[ \t]*>[ \t]?"#,
+                with: "",
+                options: .regularExpression)
             .replacingOccurrences(of: "**", with: "")
             .replacingOccurrences(of: "__", with: "")
             .replacingOccurrences(of: "~~", with: "")
+            .replacingOccurrences(of: "`", with: "")
         return Result(
             attributedString: NSAttributedString(
                 string: readable,
