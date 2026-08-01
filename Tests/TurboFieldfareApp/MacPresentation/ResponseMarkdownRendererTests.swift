@@ -60,27 +60,41 @@ import Testing
             .strikethroughStyle, at: strikeRange.location, effectiveRange: nil) != nil)
     }
 
-    @Test func unfinishedFenceFallsBackToExactRawText() {
+    @Test func unfinishedFenceStaysReadableWithoutMarkdownDelimiters() {
         let source = "Before\n\n```python\nprint('unfinished')"
         let result = ResponseMarkdownRenderer().render(source)
 
         #expect(result.usedFallback)
-        #expect(result.attributedString.string == source)
+        #expect(result.attributedString.string == "Before\n\nprint('unfinished')")
     }
 
-    @Test func unsupportedHTMLTableAndImageStayReadableAsRawText() {
-        let renderer = ResponseMarkdownRenderer()
-        let samples = [
-            "<div>Never execute this</div>",
-            "| A | B |\n|---|---|\n| 1 | 2 |",
-            "![remote](https://example.com/image.png)",
-        ]
+    @Test func tableRowsRenderWithoutExposingMarkdownMarkers() {
+        let source = "| **Feature** | **Value** |\n|---|---|\n| **Action** | **Splitting** |"
+        let result = ResponseMarkdownRenderer().render(source)
 
-        for source in samples {
-            let result = renderer.render(source)
-            #expect(result.usedFallback)
-            #expect(result.attributedString.string == source)
-        }
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string.contains("Feature: Action"))
+        #expect(result.attributedString.string.contains("Value: Splitting"))
+        #expect(!result.attributedString.string.contains("**"))
+    }
+
+    @Test func unfinishedEmphasisStaysReadableDuringStreaming() {
+        let result = ResponseMarkdownRenderer().render("A **bold response still arriving")
+
+        #expect(!result.attributedString.string.contains("**"))
+        #expect(result.attributedString.string.contains("bold response still arriving"))
+    }
+
+    @Test func unsupportedHTMLAndImageStayReadableWithoutMarkdownMarkers() {
+        let renderer = ResponseMarkdownRenderer()
+
+        let html = renderer.render("<div>Never **execute** this</div>")
+        #expect(html.usedFallback)
+        #expect(!html.attributedString.string.contains("**"))
+
+        let image = renderer.render("![remote](https://example.com/image.png)")
+        #expect(image.usedFallback)
+        #expect(image.attributedString.string == "remote")
     }
 
     @Test func latexRemainsReadableText() {
