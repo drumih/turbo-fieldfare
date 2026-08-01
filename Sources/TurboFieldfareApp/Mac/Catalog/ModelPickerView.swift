@@ -7,11 +7,18 @@ struct ModelPickerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Models").font(.headline)
-                Spacer()
-                Button("Add Custom Model…") { isAddingCustomModel = true }
-                    .controlSize(.small)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Text("Models").font(.headline)
+                    Spacer(minLength: 8)
+                    Button("Add Custom Model…") { isAddingCustomModel = true }
+                        .controlSize(.small)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Models").font(.headline)
+                    Button("Add Custom Model…") { isAddingCustomModel = true }
+                        .controlSize(.small)
+                }
             }
             ForEach(model.catalog.entries) { entry in
                 ModelPickerRow(
@@ -45,27 +52,40 @@ private struct ModelPickerRow: View {
     let onLoad: () -> Void
     let onDelete: () -> Void
 
+    /// Laid out vertically on purpose. This row also lives in the inspector
+    /// sidebar, which is far too narrow for a name, a badge, and two buttons on
+    /// one line — a horizontal layout there compresses the title column until
+    /// it wraps one character per line.
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(entry.displayName).font(.body.weight(.medium))
-                    TrustBadge(tier: entry.trustTier)
-                    if isLoaded {
-                        Text("Loaded")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(entry.displayName)
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                TrustBadge(tier: entry.trustTier)
+                if isLoaded {
+                    Text("Loaded")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
                 }
-                Text(entry.repoID)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                statusLine
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 8)
-            actions
+            Text(entry.repoID)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(entry.repoID)
+            statusLine
+            HStack(spacing: 8) {
+                Spacer(minLength: 0)
+                actions
+            }
+            .padding(.top, 2)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
         .background(isSelected ? Color.accentColor.opacity(0.06) : .clear)
     }
@@ -73,27 +93,29 @@ private struct ModelPickerRow: View {
     @ViewBuilder private var statusLine: some View {
         switch installState {
         case .idle, .cancelled:
-            Text("Not installed \u{00B7} \(formattedBytes(entry.approximateDownloadBytes)) download")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            statusText("Not installed \u{00B7} \(formattedBytes(entry.approximateDownloadBytes)) download")
         case .installed:
-            Text("Installed \u{00B7} \(formattedBytes(entry.installedBytes)) on disk")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            statusText("Installed \u{00B7} \(formattedBytes(entry.installedBytes)) on disk")
         case .failed(let message):
-            Text(message).font(.caption).foregroundStyle(.red).lineLimit(2)
+            statusText(message, tint: .red)
         case .recoverable(let message):
-            Text("Interrupted \u{00B7} \(message)")
-                .font(.caption)
-                .foregroundStyle(.orange)
-                .lineLimit(2)
+            statusText("Interrupted \u{00B7} \(message)", tint: .orange)
         case .copyingPayload(let reused, let downloaded, let total):
             ProgressView(value: Double(reused + downloaded), total: Double(max(total, 1)))
                 .controlSize(.small)
-                .frame(maxWidth: 220)
+                .frame(maxWidth: .infinity)
         default:
             ProgressView().controlSize(.small)
         }
+    }
+
+    private func statusText(_ text: String, tint: Color = .secondary) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(tint)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder private var actions: some View {
@@ -124,6 +146,9 @@ private struct TrustBadge: View {
     var body: some View {
         Text(tier == .curated ? "Verified" : "Unverified")
             .font(.caption2.weight(.semibold))
+            // Without this the capsule is squeezed to a single glyph column in
+            // a narrow sidebar and the label reads vertically.
+            .fixedSize()
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(tier == .curated
