@@ -89,21 +89,6 @@ struct OutputPaneView: View {
                     .foregroundStyle(model.presentation.severity == .error ? .red : .secondary)
                     .multilineTextAlignment(.center)
             }
-            if model.canLoadModel {
-                Button(model.loadState.isFailed ? "Retry Load" : "Load Model",
-                       action: model.loadModel)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-            } else if isLoadingModel {
-                Button("Load Model", action: {})
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .hidden()
-                    .accessibilityHidden(true)
-            } else if model.canReloadModel {
-                Button("Reload Model", action: model.reloadModel)
-                    .buttonStyle(.borderedProminent)
-            }
         }
         .frame(maxWidth: .infinity)
     }

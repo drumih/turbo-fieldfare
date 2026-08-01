@@ -99,6 +99,7 @@ struct RootView: View {
 
     private var conversationChrome: some View {
         VStack(spacing: 10) {
+            ModelReadinessPromptView(model: model)
             ErrorBanner(model: model)
             if model.promptText.isEmpty
                 && model.showPromptExamples
