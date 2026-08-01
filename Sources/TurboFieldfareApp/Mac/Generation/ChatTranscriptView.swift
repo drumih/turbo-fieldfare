@@ -20,15 +20,7 @@ struct ChatTranscriptView: View {
     @State private var copiedAssistantID: String?
 
     var body: some View {
-        Group {
-            if isRunning {
-                TimelineView(.periodic(from: .now, by: 0.1)) { _ in
-                    transcriptContent(response: effectiveOutput)
-                }
-            } else {
-                transcriptContent(response: effectiveOutput)
-            }
-        }
+        transcriptContent(response: effectiveOutput)
         .textSelection(.enabled)
     }
 
@@ -270,7 +262,10 @@ struct ChatTranscriptView: View {
             hasUnseenContent = true
             return
         }
-        scrollToBottom(proxy)
+        // A new token arrives frequently while decoding. Animating every
+        // scroll update makes the transcript shimmer and fight the user's
+        // scroll position, so content-following stays immediate.
+        scrollToBottom(proxy, animated: false)
     }
 
     private func scrollToBottom(
@@ -300,43 +295,23 @@ struct ChatTranscriptView: View {
 private struct MarkdownMessageText: View {
     let content: String
 
-    @State private var renderedContent = ""
-    @State private var rendered = AttributedString()
     private let renderer = ResponseMarkdownRenderer()
 
     var body: some View {
-        Text(renderedContent == content ? rendered : AttributedString(readableFallback))
-            .task(id: content) {
-                rendered = AttributedString(renderer.render(content).attributedString)
-                renderedContent = content
-            }
-    }
-
-    private var readableFallback: String {
-        content
-            .replacingOccurrences(of: "**", with: "")
-            .replacingOccurrences(of: "__", with: "")
-            .replacingOccurrences(of: "~~", with: "")
+        // Render in the same update that supplies the new token batch. An
+        // asynchronous task briefly showed a stale/plain fallback on every
+        // token, which caused visible flicker and could make streaming appear
+        // stuck until generation completed.
+        Text(AttributedString(renderer.render(content).attributedString))
     }
 }
 
 private struct StreamingStatusLabel: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         HStack(spacing: 5) {
-            if reduceMotion {
-                Circle()
-                    .fill(TurboFieldfareMacTheme.accentColor)
-                    .frame(width: 5, height: 5)
-            } else {
-                TimelineView(.periodic(from: .now, by: 0.5)) { context in
-                    Circle()
-                        .fill(TurboFieldfareMacTheme.accentColor)
-                        .frame(width: 5, height: 5)
-                        .opacity(Int(context.date.timeIntervalSinceReferenceDate * 2).isMultiple(of: 2) ? 1 : 0.35)
-                }
-            }
+            Circle()
+                .fill(TurboFieldfareMacTheme.accentColor)
+                .frame(width: 5, height: 5)
             Text("Generating")
         }
         .font(.system(size: 9, weight: .semibold, design: .rounded))

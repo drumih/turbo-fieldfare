@@ -90,10 +90,7 @@ let package = Package(
         .executableTarget(
             name: "TurboFieldfareMac",
             dependencies: ["TurboFieldfareAppCore", "TurboFieldfareMacPresentation"],
-            path: "Sources/TurboFieldfareApp/Mac",
-            resources: [
-                .copy("Resources/turbofieldfare-app-icon.png"),
-            ]
+            path: "Sources/TurboFieldfareApp/Mac"
         ),
         .target(
             name: "TurboFieldfareValidationSupport",

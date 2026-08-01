@@ -36,7 +36,6 @@ struct ChatSidebarView: View {
 
     private var collapsedContent: some View {
         VStack(spacing: 14) {
-            sidebarMark
             sidebarToggle
 
             Button(action: model.newChat) {
@@ -61,8 +60,6 @@ struct ChatSidebarView: View {
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
-                sidebarMark
-
                 VStack(alignment: .leading, spacing: 1) {
                     Text("TurboFieldfare")
                         .font(.headline.weight(.semibold))
@@ -118,19 +115,6 @@ struct ChatSidebarView: View {
         .padding(.top, 14)
         .padding(.bottom, 12)
         .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    private var sidebarMark: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(TurboFieldfareMacTheme.accentGradient)
-            Image(systemName: "sparkles")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.white)
-        }
-        .frame(width: 30, height: 30)
-        .shadow(color: TurboFieldfareMacTheme.accentColor.opacity(0.2), radius: 6, y: 2)
-        .accessibilityHidden(true)
     }
 
     private var sidebarToggle: some View {

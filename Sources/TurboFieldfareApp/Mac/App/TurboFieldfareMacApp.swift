@@ -3,18 +3,11 @@ import TurboFieldfareAppCore
 import SwiftUI
 
 // Run as a regular foreground app even when launched as a bare SwiftPM
-// executable (no .app bundle): Dock icon, click-to-activate, full main menu
-// with Quit (Cmd+Q).
+// executable (no .app bundle): foreground activation, click-to-activate, and
+// the full main menu with Quit (Cmd+Q).
 private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        if let iconURL = Bundle.module.url(
-            forResource: "turbofieldfare-app-icon",
-            withExtension: "png"
-        ), let icon = NSImage(contentsOf: iconURL) {
-            NSApp.applicationIconImage = icon
-            NSApp.dockTile.display()
-        }
         NSApp.activate()
     }
 
