@@ -5,7 +5,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     static let currentVersion = 1
 
     var version: Int = currentVersion
-    var contextTokens: Int = AppContextLengthOption.fourK.tokens
+    var contextTokens: Int = AppContextLengthOption.defaultTokens
     var expertCacheSlots: Int = 16
     var temperature: Double = 0.2
     var topKEnabled: Bool = true
@@ -16,7 +16,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
 
     func isValid() -> Bool {
         version == Self.currentVersion
-            && AppContextLengthOption.allCases.contains { $0.tokens == contextTokens }
+            && AppContextLengthOption.candidateTokens.contains(contextTokens)
             && AppRuntimeOptions.allowedSlotCounts.contains(expertCacheSlots)
             && temperature.isFinite && (0...2).contains(temperature)
             && (1...256).contains(topK)

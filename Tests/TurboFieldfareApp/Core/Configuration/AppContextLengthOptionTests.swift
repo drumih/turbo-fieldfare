@@ -1,23 +1,28 @@
 import Testing
+import TurboFieldfare
+
 @testable import TurboFieldfareAppCore
 
 @Suite struct AppContextLengthOptionTests {
-    @Test func optionsUseSupportedContextLengthsInAscendingOrder() {
-        #expect(AppContextLengthOption.allCases.map(\.tokens)
-            == [4_096, 8_192, 16_384, 32_768, 65_536])
+    @Test func candidatesUseSupportedContextLengthsInAscendingOrder() {
+        #expect(AppContextLengthOption.candidateTokens
+            == [4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144])
     }
 
     @Test func optionsReportProductionFP16KVAllocation() {
-        let mebibytes = AppContextLengthOption.allCases.map {
-            $0.fp16KVBytes / 1_048_576
+        let mebibytes = [4_096, 8_192, 16_384, 32_768, 65_536].map {
+            AppContextLengthOption.fp16KVBytes(architecture: .gemma4_26B_A4B, tokens: $0)
+                / 1_048_576
         }
         #expect(mebibytes == [305, 385, 545, 865, 1_505])
-        #expect(AppContextLengthOption.allCases.map(\.menuLabel) == [
-            "4K, Default",
-            "8K, +85 MB",
-            "16K, +250 MB",
-            "32K, +590 MB",
-            "64K, +1.26 GB",
-        ])
+    }
+
+    @Test func labelsCarryTheContextLengthAndItsCost() {
+        let options = AppContextLengthOption.availableOptions(
+            architecture: .gemma4_26B_A4B,
+            residentWeightBytes: 0,
+            installedRAMBytes: 32 * 1_073_741_824)
+        #expect(options.first { $0.tokens == 4_096 }?.label == "4K, 305 MB")
+        #expect(options.first { $0.tokens == 65_536 }?.label == "64K, 1.47 GB")
     }
 }

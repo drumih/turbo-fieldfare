@@ -70,12 +70,24 @@ struct InspectorView: View {
         .disabled(model.isRunning || model.isInstallingModel)
     }
 
+    private var contextOptions: [AppContextOption] {
+        AppContextLengthOption.availableOptions(
+            architecture: .gemma4_26B_A4B,
+            residentWeightBytes: AppMemoryBudget.residentWeightEstimateBytes,
+            installedRAMBytes: AppMemoryBudget.installedRAMBytes)
+    }
+
     private var memorySection: some View {
         Section("Memory") {
             LabeledContent("Context") {
                 Picker("Context", selection: $model.maxContextTokens) {
-                    ForEach(AppContextLengthOption.allCases) { option in
-                        Text(option.menuLabel).tag(option.tokens)
+                    // Lengths the budget cannot hold stay listed but disabled,
+                    // so the user can see what more RAM would buy.
+                    ForEach(contextOptions) { option in
+                        Text(option.label)
+                            .help(option.disabledReason ?? "")
+                            .tag(option.tokens)
+                            .disabled(!option.isEnabled)
                     }
                 }
                 .pickerStyle(.menu)

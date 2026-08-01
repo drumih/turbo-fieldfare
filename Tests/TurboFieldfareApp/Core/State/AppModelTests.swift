@@ -94,7 +94,7 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(!model.hasStaleLoadedRuntime)
-        model.maxContextTokens = AppContextLengthOption.eightK.tokens
+        model.maxContextTokens = 8_192
         #expect(model.hasStaleLoadedRuntime)
     }
 
@@ -103,9 +103,9 @@ import Testing
         let model = AppModel()
         model.modelPathText = FileManager.default.temporaryDirectory.path
         model.promptText = "go"
-        model.maxContextTokens = AppContextLengthOption.sixtyFourK.tokens
+        model.maxContextTokens = 65_536
 
-        #expect(try model.makeRequest().maxNewTokens == AppContextLengthOption.sixtyFourK.tokens)
+        #expect(try model.makeRequest().maxNewTokens == 65_536)
     }
 
     @MainActor

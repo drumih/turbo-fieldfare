@@ -55,12 +55,21 @@ struct ContextOverflowBanner: View {
         "This chat has filled the \(shortLabel(model.contextCapacityTokens)) context — not enough room left for a reply."
     }
 
-    private var nextContextOption: AppContextLengthOption? {
-        AppContextLengthOption.allCases
-            .first { $0.tokens > model.maxContextTokens }
+    private var contextOptions: [AppContextOption] {
+        AppContextLengthOption.availableOptions(
+            architecture: .gemma4_26B_A4B,
+            residentWeightBytes: AppMemoryBudget.residentWeightEstimateBytes,
+            installedRAMBytes: AppMemoryBudget.installedRAMBytes)
+    }
+
+    /// Only offers a length the machine's budget can actually hold — suggesting
+    /// one that would be greyed out in the inspector would send the user to a
+    /// control they cannot use.
+    private var nextContextOption: AppContextOption? {
+        contextOptions.first { $0.tokens > model.maxContextTokens && $0.isEnabled }
     }
 
     private func shortLabel(_ tokens: Int) -> String {
-        AppContextLengthOption(rawValue: tokens)?.shortLabel ?? "\(tokens)"
+        contextOptions.first { $0.tokens == tokens }?.shortLabel ?? "\(tokens)"
     }
 }

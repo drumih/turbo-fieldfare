@@ -48,3 +48,6 @@ tmp/
 __pycache__/
 *.pyc
 .venv/
+
+# Agent worktrees
+.claude/worktrees/
