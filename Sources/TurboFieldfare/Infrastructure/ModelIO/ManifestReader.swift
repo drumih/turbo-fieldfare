@@ -5,28 +5,30 @@ public struct ManifestFileEntry: Decodable, Equatable, Sendable {
     public let sha256: String
 }
 
+/// Fields are `var` so a candidate architecture can be built and perturbed
+/// without decoding a manifest; see `ManifestArch.init(from:)`.
 public struct ManifestArch: Decodable, Equatable, Sendable {
-    public let hiddenSize: Int
-    public let ffnIntermediate: Int
-    public let moeIntermediateSize: Int
-    public let numHeads: Int
-    public let numKVHeads: Int
-    public let numFullKVHeads: Int
-    public let headDim: Int
-    public let fullHeadDim: Int
-    public let vocabSize: Int
-    public let slidingWindow: Int
-    public let finalLogitSoftcap: Double
-    public let ropeTheta: Double
-    public let fullRopeTheta: Double
-    public let partialRotaryFactor: Double
-    public let numLayers: Int
-    public let numExperts: Int
-    public let topKExperts: Int
-    public let tieWordEmbeddings: Bool
-    public let attentionKEqV: Bool
-    public let hiddenActivation: String
-    public let fullAttentionLayerMask: [Int]
+    public var hiddenSize: Int
+    public var ffnIntermediate: Int
+    public var moeIntermediateSize: Int
+    public var numHeads: Int
+    public var numKVHeads: Int
+    public var numFullKVHeads: Int
+    public var headDim: Int
+    public var fullHeadDim: Int
+    public var vocabSize: Int
+    public var slidingWindow: Int
+    public var finalLogitSoftcap: Double
+    public var ropeTheta: Double
+    public var fullRopeTheta: Double
+    public var partialRotaryFactor: Double
+    public var numLayers: Int
+    public var numExperts: Int
+    public var topKExperts: Int
+    public var tieWordEmbeddings: Bool
+    public var attentionKEqV: Bool
+    public var hiddenActivation: String
+    public var fullAttentionLayerMask: [Int]
 }
 
 public struct ManifestQuantSlot: Decodable, Equatable, Sendable {
@@ -128,7 +130,12 @@ public enum ManifestReader {
             throw ModelError.indexCorrupt(
                 detail: "manifest requests removed TurboQuant KV runtime support")
         }
-        try validateArch(m.arch, expected: expected)
+        // Any architecture this build ships kernels for is acceptable; the
+        // caller's `expected` baseline is the reason-reporting path, so a
+        // near-miss still names the field that differs.
+        if Self.matchArch(m.arch, against: ArchConfig.supported) == nil {
+            try validateArch(m.arch, expected: expected)
+        }
         if let quant = m.quant {
             try validateQuant(quant)
         } else if expected.numLayers == ArchConfig.gemma4_26B_A4B.numLayers,
@@ -168,6 +175,16 @@ public enum ManifestReader {
                   slot.groupSize == Quantization.groupSize else {
                 throw ModelError.indexCorrupt(detail: "unsupported quantization for \(name)")
             }
+        }
+    }
+
+    /// Returns the first supported architecture that matches the manifest, or
+    /// nil. Callers that need a field-level reason fall through to
+    /// `validateArch`, which throws `archMismatch` naming the first difference.
+    static func matchArch(_ manifestArch: ManifestArch,
+                          against candidates: [ArchConfig]) -> ArchConfig? {
+        candidates.first { candidate in
+            (try? validateArch(manifestArch, expected: candidate)) != nil
         }
     }
 

@@ -99,10 +99,45 @@ public struct ArchConfig: Sendable, Equatable {
         hiddenActivation: "gelu_pytorch_tanh"
     )
 
+    /// Every architecture this build can execute. An entry here without the
+    /// matching Metal kernels would let a model install and then trap at the
+    /// first attention dispatch, so entries are added only alongside kernels.
+    public static let supported: [ArchConfig] = [gemma4_26B_A4B]
+
     private static func gemma4LayerMask() -> [UInt8] {
         var mask = [UInt8](repeating: 0, count: 30)
         for i in stride(from: 5, to: 30, by: 6) { mask[i] = 1 }
         return mask
+    }
+}
+
+extension ManifestArch {
+    /// The manifest shape a given baseline would produce. Copies every field
+    /// `ManifestReader.validateArch` compares, so a round trip through this
+    /// initialiser is by construction a match.
+    public init(from config: ArchConfig) {
+        self.init(
+            hiddenSize: config.hiddenSize,
+            ffnIntermediate: config.intermediateSize,
+            moeIntermediateSize: config.moeIntermediateSize,
+            numHeads: config.numHeads,
+            numKVHeads: config.numKVHeads,
+            numFullKVHeads: config.numFullKVHeads,
+            headDim: config.headDim,
+            fullHeadDim: config.fullHeadDim,
+            vocabSize: config.vocabSize,
+            slidingWindow: config.slidingWindow,
+            finalLogitSoftcap: config.finalLogitSoftcap,
+            ropeTheta: config.ropeTheta,
+            fullRopeTheta: config.fullRopeTheta,
+            partialRotaryFactor: config.partialRotaryFactor,
+            numLayers: config.numLayers,
+            numExperts: config.numExperts,
+            topKExperts: config.topKExperts,
+            tieWordEmbeddings: config.tieWordEmbeddings,
+            attentionKEqV: config.attentionKEqV,
+            hiddenActivation: config.hiddenActivation,
+            fullAttentionLayerMask: config.fullAttentionLayerMask.map { Int($0) })
     }
 }
 
