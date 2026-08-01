@@ -14,15 +14,21 @@ public struct ChatTurn: Codable, Equatable, Sendable, Identifiable {
     public var role: ChatRole
     public var content: String
     public var timestamp: Date
+    /// Repository ID of the model that produced this turn. Optional so stores
+    /// written before model tagging still decode, and because a user turn can
+    /// be recorded with no model loaded.
+    public var modelID: String?
 
     public init(id: UUID = UUID(),
                 role: ChatRole,
                 content: String,
-                timestamp: Date = Date()) {
+                timestamp: Date = Date(),
+                modelID: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
+        self.modelID = modelID
     }
 
     var decodeMessage: DecodeChatMessage {
