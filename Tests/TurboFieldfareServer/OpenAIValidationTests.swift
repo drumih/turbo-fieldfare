@@ -198,6 +198,96 @@ struct OpenAIValidationTests {
         #expect(parsed.arguments.objectValue?["file-path"] == .string("/tmp/x"))
     }
 
+    @Test func nullableToolSchemasAdaptWithoutChangingConstraints() throws {
+        let typeArray = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "name":{"type":["null","string"],"minLength":2}
+          }
+        }
+        """#.utf8))
+        let adapted = try GemmaToolSchema.adapted(typeArray, toolName: "lookup")
+        let name = adapted.objectValue?["properties"]?.objectValue?["name"]?.objectValue
+        #expect(name?["type"] == .string("string"))
+        #expect(name?["nullable"] == .bool(true))
+        #expect(name?["minLength"] == .integer(2))
+        #expect(try GemmaToolSchema.adapted(adapted, toolName: "lookup") == adapted)
+
+        let anyOf = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "limit":{"description":"limit","anyOf":[
+              {"type":"integer","minimum":1},
+              {"type":"null"}
+            ]}
+          }
+        }
+        """#.utf8))
+        let anyOfAdapted = try GemmaToolSchema.adapted(anyOf, toolName: "lookup")
+        let limit = anyOfAdapted.objectValue?["properties"]?.objectValue?["limit"]?.objectValue
+        #expect(limit?["type"] == .string("integer"))
+        #expect(limit?["nullable"] == .bool(true))
+        #expect(limit?["minimum"] == .integer(1))
+        #expect(limit?["description"] == .string("limit"))
+        #expect(limit?["anyOf"] == nil)
+
+        let nestedOneOf = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "names":{"type":"array","items":{"oneOf":[
+              {"type":"null"},
+              {"type":"string","minLength":1}
+            ]}}
+          }
+        }
+        """#.utf8))
+        let nestedAdapted = try GemmaToolSchema.adapted(nestedOneOf, toolName: "lookup")
+        let item = nestedAdapted.objectValue?["properties"]?.objectValue?["names"]?
+            .objectValue?["items"]?.objectValue
+        #expect(item?["type"] == .string("string"))
+        #expect(item?["nullable"] == .bool(true))
+        #expect(item?["minLength"] == .integer(1))
+        #expect(item?["oneOf"] == nil)
+    }
+
+    @Test func unsupportedToolSchemaUnionsFailClosed() throws {
+        let schemas = [
+            #"{"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"object"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"allOf":[{"type":"string"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"description":"missing"}}}"#,
+            #"{"type":"object","properties":{"v":{"type":["string","number"]}}}"#,
+            #"{"type":"object","properties":{"v":{"type":["string","null"],"nullable":false}}}"#,
+            #"{"type":"object","properties":{"v":true}}"#,
+        ]
+        for encoded in schemas {
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
+            do {
+                _ = try GemmaToolSchema.adapted(schema, toolName: "unsafe")
+                Issue.record("unsupported schema was accepted: \(encoded)")
+            } catch let error as ServerRequestError {
+                #expect(error.envelope.error.code == "invalid_tool_schema")
+                #expect(error.envelope.error.param == "tools")
+            }
+        }
+    }
+
+    @Test func semanticsChangingNullableSchemasFailClosed() throws {
+        let schemas = [
+            #"{"type":["object","null"],"properties":{}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":["string","null"]},{"type":"null"}]}}}"#,
+        ]
+        for encoded in schemas {
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
+            #expect(throws: ServerRequestError.self) {
+                try GemmaToolSchema.adapted(schema, toolName: "unsafe")
+            }
+        }
+    }
+
     @Test func ambiguousParameterKeysFailValidation() throws {
         let data = Data(#"""
         {

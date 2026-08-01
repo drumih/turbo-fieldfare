@@ -11,9 +11,10 @@ public struct OpenAIErrorEnvelope: Codable, Equatable, Sendable {
 
     public let error: Detail
 
-    public init(message: String, param: String? = nil, code: String) {
+    public init(message: String, param: String? = nil, code: String,
+                type: String = "invalid_request_error") {
         error = Detail(message: message,
-                       type: "invalid_request_error",
+                       type: type,
                        param: param,
                        code: code)
     }
@@ -343,13 +344,15 @@ public enum OpenAIRequestValidator {
                           "tools", "invalid_tool_schema")
         }
         try validateSchemaKeys(tool.function.parameters)
-        guard (try? tool.function.parameters.jinjaSendableValue()) != nil else {
+        let parameters = try GemmaToolSchema.adapted(
+            tool.function.parameters, toolName: name)
+        guard (try? parameters.jinjaSendableValue()) != nil else {
             throw invalid("tool schema contains a number that cannot be represented exactly",
                           "tools", "invalid_tool_schema")
         }
         return GFTokenizer.FunctionDefinition(name: name,
                                               description: tool.function.description ?? "",
-                                              parameters: tool.function.parameters)
+                                              parameters: parameters)
     }
 
     private static func validateSchemaKeys(_ schema: JSONValue) throws {

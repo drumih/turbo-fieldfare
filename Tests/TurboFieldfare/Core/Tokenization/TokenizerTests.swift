@@ -97,6 +97,10 @@ struct TokenizerTests {
         "🦝🦝🦝",
         "mixed 漢 and 🦝",
         "Здравствуй мир",
+        "ห้ามใช้ในสัปดาห์นี้",
+        "नमस्ते दुनिया",
+        "مَرْحَبًا",
+        "\u{1F469}\u{200D}\u{1F4BB} works with \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}",
         "ends with emoji 🦝",
         "🦝 starts with emoji",
         "🦝 middle 漢 end",
@@ -116,6 +120,65 @@ struct TokenizerTests {
         }
         let tail = detok.flush()
         #expect(!tail.unicodeScalars.contains("\u{FFFD}"))
+    }
+
+    @Test("Streaming delta preserves graphemes extended by later scalars")
+    func streamingExtendedGraphemes() {
+        let cases = [
+            ("ห", "ห้าม", "้าม"),
+            ("e", "e\u{301}", "\u{301}"),
+            ("ا", "ا\u{64E}", "\u{64E}"),
+            ("ש", "ש\u{5B8}", "\u{5B8}"),
+            ("क", "क्ष", "्ष"),
+            ("\u{1100}", "\u{1100}\u{1161}", "\u{1161}"),
+            ("\u{263A}", "\u{263A}\u{FE0F}", "\u{FE0F}"),
+            ("\u{1F44D}", "\u{1F44D}\u{1F3FD}", "\u{1F3FD}"),
+            ("1", "1\u{FE0F}\u{20E3}", "\u{FE0F}\u{20E3}"),
+            ("\u{1F1EC}", "\u{1F1EC}\u{1F1E7}", "\u{1F1E7}"),
+            ("\u{1F469}", "\u{1F469}\u{200D}\u{1F4BB}", "\u{200D}\u{1F4BB}"),
+        ]
+        for (prefix, current, expectedDelta) in cases {
+            var detok = GFDetokenizer(tokenizer: tok)
+            #expect(detok.commitDelta(prefix) == prefix)
+            #expect(detok.commitDelta(current) == expectedDelta)
+        }
+    }
+
+    @Test("Streaming delta resynchronizes after a rewritten prefix")
+    func streamingPrefixResync() {
+        var detok = GFDetokenizer(tokenizer: tok)
+        #expect(detok.commitDelta("abc") == "abc")
+        #expect(detok.commitDelta("ax") == "")
+        #expect(detok.commitDelta("axy") == "y")
+    }
+
+    @Test("Streaming detokenizer matches full decode for complex Unicode", arguments: [
+        "English العَرَبِيَّةُ ١٢٣ ثم English",
+        "left \u{2067}العَرَبِيَّةُ ١٢٣\u{2069} right",
+        "English עברית מְנֻּקֶדֶת 42",
+        "فارسی می\u{200C}خواهم English",
+        "क्\u{200D}ष क्\u{200C}ष English",
+        "ພາສາລາວ English",
+        "ខ្ញុំសរសេរភាសាខ្មែរ English",
+        "မြန်မာစာ English",
+        "বাংলা ভাষা English",
+        "සිංහල භාෂාව English",
+        "བོད་ཡིག English",
+        "\u{1100}\u{1161}\u{11A8} 한글 English",
+        "a\u{301}\u{323}\u{304} e\u{308}\u{301}",
+        "\u{1F44D}\u{1F3FD} \u{263A}\u{FE0F} 1\u{FE0F}\u{20E3} \u{1F1EC}\u{1F1E7} \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}",
+    ])
+    func streamingComplexUnicode(_ text: String) {
+        let ids = tok.encode(text, addBOS: false)
+        let expected = tok.decode(ids)
+        var detok = GFDetokenizer(tokenizer: tok)
+        var assembled = ""
+        for id in ids {
+            assembled += detok.push(id)
+        }
+        assembled += detok.flush()
+        #expect(assembled == expected)
+        #expect(!assembled.unicodeScalars.contains("\u{FFFD}"))
     }
 
     @Test("Streaming detokenizer preserves long mixed output", arguments: [

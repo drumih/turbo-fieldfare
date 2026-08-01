@@ -24,9 +24,37 @@ public struct ServerCompletion: Equatable, Sendable {
     }
 }
 
+public struct ServerPreparedRequest: Sendable {
+    public let request: ValidatedChatRequest
+    fileprivate let promptIDs: [Int32]?
+
+    public var promptTokenCount: Int? { promptIDs?.count }
+
+    init(request: ValidatedChatRequest, promptIDs: [Int32]? = nil) {
+        self.request = request
+        self.promptIDs = promptIDs
+    }
+}
+
 public protocol ServerInferenceBackend: Sendable {
+    func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest
     func generate(_ request: ValidatedChatRequest,
                   onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void) async throws -> ServerCompletion
+    func generate(_ prepared: ServerPreparedRequest,
+                  onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void) async throws -> ServerCompletion
+}
+
+public extension ServerInferenceBackend {
+    func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest {
+        ServerPreparedRequest(request: request)
+    }
+
+    func generate(
+        _ prepared: ServerPreparedRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        try await generate(prepared.request, onEvent: onEvent)
+    }
 }
 
 public actor ServerCoordinator {
@@ -36,6 +64,7 @@ public actor ServerCoordinator {
     }
 
     private let queueLimit: Int
+    private var admittedCount = 0
     private var active = false
     private var waiters: [Waiter] = []
     private var shuttingDown = false
@@ -48,9 +77,28 @@ public actor ServerCoordinator {
         onQueued: @escaping @Sendable () -> Void = {},
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
+        try await runPreparing(
+            onQueued: onQueued,
+            prepare: { () },
+            operation: { _ in try await operation() })
+    }
+
+    func runPreparing<Prepared: Sendable, T: Sendable>(
+        onQueued: @escaping @Sendable () -> Void = {},
+        prepare: @escaping @Sendable () async throws -> Prepared,
+        operation: @escaping @Sendable (Prepared) async throws -> T
+    ) async throws -> T {
+        try Task.checkCancellation()
+        guard !shuttingDown else { throw CancellationError() }
+        guard admittedCount <= queueLimit else { throw ServerRequestError.queueFull }
+        admittedCount += 1
+        defer { admittedCount -= 1 }
+
+        let prepared = try await prepare()
+        try Task.checkCancellation()
         try await acquire(onQueued: onQueued)
         defer { release() }
-        return try await operation()
+        return try await operation(prepared)
     }
 
     private func acquire(onQueued: @escaping @Sendable () -> Void) async throws {
@@ -197,6 +245,19 @@ public actor ServerModelSession: ServerInferenceBackend {
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion {
+        let prepared = try await prepare(request)
+        return try await generate(prepared, onEvent: onEvent)
+    }
+
+    public func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest {
+        ServerPreparedRequest(request: request, promptIDs: try renderPrompt(request))
+    }
+
+    public func generate(
+        _ prepared: ServerPreparedRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        let request = prepared.request
         var completed = false
         defer {
             if !completed {
@@ -204,23 +265,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                 runner.reset()
             }
         }
-        let needsToolTemplate = !request.tools.isEmpty
-            || request.messages.contains {
-                $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
-            }
-        let promptIDs: [Int32]
-        if needsToolTemplate {
-            promptIDs = try tokenizer.encodeToolChat(messages: request.messages, tools: request.tools)
-        } else {
-            let rendered = try tokenizer.applyChatTemplate(request.messages)
-            promptIDs = tokenizer.encode(rendered, addBOS: false)
-        }
-        guard promptIDs.count < maxContext else {
-            throw ServerRequestError.invalid(
-                message: "prompt exceeds the configured context",
-                param: "messages",
-                code: "context_length_exceeded")
-        }
+        let needsToolTemplate = usesToolTemplate(request)
+        let promptIDs = try prepared.promptIDs ?? renderPrompt(request)
 
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
@@ -350,5 +396,30 @@ public actor ServerModelSession: ServerInferenceBackend {
                                completionTokens: result.newTokens,
                                totalTokens: result.prefillTokens + result.newTokens,
                                cachedTokens: result.cachedPromptTokens))
+    }
+
+    private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {
+        let promptIDs: [Int32]
+        if usesToolTemplate(request) {
+            promptIDs = try tokenizer.encodeToolChat(
+                messages: request.messages,
+                tools: request.tools)
+        } else {
+            let rendered = try tokenizer.applyChatTemplate(request.messages)
+            promptIDs = tokenizer.encode(rendered, addBOS: false)
+        }
+        guard promptIDs.count < maxContext else {
+            throw ServerRequestError.invalid(
+                message: "prompt exceeds the configured context",
+                param: "messages",
+                code: "context_length_exceeded")
+        }
+        return promptIDs
+    }
+
+    private func usesToolTemplate(_ request: ValidatedChatRequest) -> Bool {
+        !request.tools.isEmpty || request.messages.contains {
+            $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
+        }
     }
 }
