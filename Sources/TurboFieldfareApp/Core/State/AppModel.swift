@@ -261,7 +261,9 @@ public final class AppModel {
     }
 
     public var outputResponsePlainText: String {
-        generationTranscriptMailbox?.completeText ?? outputText
+        guard let mailbox = generationTranscriptMailbox else { return outputText }
+        let canonicalText = mailbox.completeText
+        return canonicalText.isEmpty ? outputText : canonicalText
     }
 
     public var outputConversationPlainText: String {
@@ -958,7 +960,10 @@ public final class AppModel {
 
     private func materializeServiceTranscript() {
         guard let reporter = client as? any AppInferenceTranscriptReporting else { return }
-        outputText = reporter.generationTranscriptMailbox.completeText
+        let canonicalText = reporter.generationTranscriptMailbox.completeText
+        if !canonicalText.isEmpty || outputText.isEmpty {
+            outputText = canonicalText
+        }
     }
 
     private func finishWithError(_ appError: AppInferenceError) {

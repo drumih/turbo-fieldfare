@@ -258,7 +258,8 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             self.messages = messages
             self.isTerminal = isTerminal
             self.showsPrefillPlaceholder = showsPrefillPlaceholder
-            let response = mailbox?.drain().completeText ?? output
+            let mailboxResponse = mailbox?.drain().completeText ?? ""
+            let response = mailboxResponse.isEmpty ? output : mailboxResponse
             apply(
                 prompt: prompt,
                 messages: messages,
@@ -271,7 +272,8 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             guard let mailbox else { return }
             let snapshot = mailbox.drain()
             guard !snapshot.pendingText.isEmpty
-                    || snapshot.completeText != documentController.response else {
+                    || (!snapshot.completeText.isEmpty
+                        && snapshot.completeText != documentController.response) else {
                 return
             }
             apply(prompt: prompt,
