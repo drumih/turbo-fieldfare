@@ -17,12 +17,18 @@ struct PromptComposerView: View {
         .padding(14)
         .background {
             RoundedRectangle(cornerRadius: 22)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareMacTheme.elevatedSurface.opacity(0.92))
                 .overlay {
                     RoundedRectangle(cornerRadius: 22)
-                        .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                        .stroke(
+                            promptFocused
+                                ? TurboFieldfareMacTheme.accentColor.opacity(0.6)
+                                : TurboFieldfareMacTheme.border,
+                            lineWidth: promptFocused ? 1 : 0.5)
                 }
         }
+        .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
+        .animation(.easeOut(duration: 0.16), value: promptFocused)
     }
 
     private var editor: some View {
@@ -62,7 +68,7 @@ struct PromptComposerView: View {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
                     // padding, no vertical inset.
-                    Text("Prompt")
+                    Text("Message Gemma…")
                         .font(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
@@ -90,6 +96,9 @@ struct PromptComposerView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Text("⌘↵ to send")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             clearAction
             GenerateControl(model: model)
         }

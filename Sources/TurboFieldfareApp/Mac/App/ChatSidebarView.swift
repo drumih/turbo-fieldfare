@@ -18,7 +18,7 @@ struct ChatSidebarView: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(TurboFieldfareMacTheme.sidebarBackground.opacity(0.82))
         .alert("Rename chat", isPresented: renameAlertIsPresented) {
             TextField("Chat title", text: $renameText)
             Button("Cancel", role: .cancel) {
@@ -34,17 +34,20 @@ struct ChatSidebarView: View {
     }
 
     private var collapsedContent: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
+            sidebarMark
             sidebarToggle
 
             Button(action: model.newChat) {
-                Label("New chat", systemImage: "square.and.pencil")
+                Label("New chat", systemImage: "plus")
                     .labelStyle(.iconOnly)
-                    .frame(width: 32, height: 32)
+                    .font(.headline.weight(.medium))
+                    .frame(width: 34, height: 34)
                     .contentShape(RoundedRectangle(cornerRadius: 8))
             }
-            .buttonStyle(.borderedProminent)
-            .tint(TurboFieldfareMacTheme.accentColor)
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(TurboFieldfareMacTheme.accentColor, in: RoundedRectangle(cornerRadius: 10))
             .disabled(!model.canManageChats)
             .help("New chat")
 
@@ -55,26 +58,52 @@ struct ChatSidebarView: View {
     }
 
     private var expandedContent: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                sidebarToggle
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                sidebarMark
 
-                Text("Chats")
-                    .font(.headline)
-                Spacer()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("TurboFieldfare")
+                        .font(.headline.weight(.semibold))
+                    Text("LOCAL AI WORKSPACE")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .tracking(1.1)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+                sidebarToggle
             }
+            .padding(.bottom, 20)
 
             Button(action: model.newChat) {
-                Label("New chat", systemImage: "square.and.pencil")
+                Label("New chat", systemImage: "plus")
+                    .font(.callout.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 10)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(TurboFieldfareMacTheme.accentColor)
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .background(TurboFieldfareMacTheme.accentColor, in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(.white.opacity(0.15), lineWidth: 0.5)
+            }
             .disabled(!model.canManageChats)
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
-            Divider()
+            HStack {
+                Text("Recent chats")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(model.chats.count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.top, 22)
+            .padding(.bottom, 8)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 3) {
@@ -84,8 +113,30 @@ struct ChatSidebarView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var sidebarMark: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            TurboFieldfareMacTheme.accentColor,
+                            TurboFieldfareMacTheme.accentColor.opacity(0.64),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing))
+            Image(systemName: "sparkles")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 30, height: 30)
+        .shadow(color: TurboFieldfareMacTheme.accentColor.opacity(0.2), radius: 6, y: 2)
+        .accessibilityHidden(true)
     }
 
     private var sidebarToggle: some View {
@@ -107,27 +158,53 @@ struct ChatSidebarView: View {
         Button {
             model.selectChat(chat.id)
         } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(chat.title)
-                    .font(.callout.weight(
-                        chat.id == model.selectedChatID ? .semibold : .regular))
-                    .lineLimit(1)
-                if !chat.preview.isEmpty {
-                    Text(chat.preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: chat.id == model.selectedChatID
+                      ? "bubble.left.and.bubble.right.fill"
+                      : "bubble.left.and.bubble.right")
+                    .font(.caption)
+                    .foregroundStyle(chat.id == model.selectedChatID
+                                     ? TurboFieldfareMacTheme.accentColor
+                                     : .secondary)
+                    .frame(width: 17)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(chat.title)
+                        .font(.callout.weight(
+                            chat.id == model.selectedChatID ? .semibold : .regular))
                         .lineLimit(1)
+                    HStack(spacing: 5) {
+                        if !chat.preview.isEmpty {
+                            Text(chat.preview)
+                                .lineLimit(1)
+                        }
+                        if !chat.preview.isEmpty {
+                            Text("·")
+                        }
+                        Text(chat.updatedAt, style: .relative)
+                            .lineLimit(1)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .background(
                 chat.id == model.selectedChatID
-                    ? TurboFieldfareMacTheme.accentColor.opacity(0.14)
+                    ? TurboFieldfareMacTheme.accentSurface
                     : .clear,
                 in: RoundedRectangle(cornerRadius: 8))
+            .overlay(alignment: .leading) {
+                if chat.id == model.selectedChatID {
+                    Capsule()
+                        .fill(TurboFieldfareMacTheme.accentColor)
+                        .frame(width: 3, height: 24)
+                        .offset(x: 1)
+                }
+            }
         }
         .buttonStyle(.plain)
         .disabled(!model.canManageChats)

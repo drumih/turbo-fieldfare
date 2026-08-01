@@ -47,8 +47,8 @@ struct ChatTranscriptView: View {
                 }
                 .frame(maxWidth: 820)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 24)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 28)
             }
             .scrollIndicators(.automatic)
             .onChange(of: messages) { _, _ in
@@ -85,11 +85,15 @@ struct ChatTranscriptView: View {
                 .foregroundStyle(.primary)
                 .lineSpacing(3)
                 .textSelection(.enabled)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
+                .padding(.horizontal, 17)
+                .padding(.vertical, 12)
                 .background(
-                    Color(nsColor: .controlBackgroundColor),
+                    TurboFieldfareMacTheme.accentSurface,
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(TurboFieldfareMacTheme.accentColor.opacity(0.14), lineWidth: 0.5)
+                }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .combine)
@@ -98,16 +102,40 @@ struct ChatTranscriptView: View {
 
     private func assistantMessage(_ content: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(TurboFieldfareMacTheme.accentSurface)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TurboFieldfareMacTheme.accentColor)
+                }
+                .frame(width: 24, height: 24)
+
+                Text("Gemma 4 26B")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                if isRunning && content == effectiveOutput {
+                    Text("GENERATING")
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
+                        .tracking(0.8)
+                        .foregroundStyle(TurboFieldfareMacTheme.accentColor)
+                }
+            }
+
             if content.isEmpty && isRunning {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.secondary)
-                    .padding(.top, 3)
+                    .tint(TurboFieldfareMacTheme.accentColor)
+                    .padding(.leading, 32)
+                    .padding(.top, 2)
             } else if !content.isEmpty {
                 Text(AttributedString(renderer.render(content).attributedString))
                     .font(.body)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 32)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

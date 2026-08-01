@@ -18,21 +18,22 @@ struct GenerateControl: View {
         Button {
             model.run()
         } label: {
-            Label("Generate", systemImage: "arrow.up")
-                .font(.callout.weight(.semibold))
-                .padding(.horizontal, 24)
-                .frame(minWidth: 124, minHeight: controlHeight)
-                .contentShape(Capsule())
+            Image(systemName: "arrow.up")
+                .font(.callout.weight(.bold))
+                .frame(width: controlHeight, height: controlHeight)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .background(TurboFieldfareMacTheme.accentColor, in: .capsule)
+        .background(TurboFieldfareMacTheme.accentColor, in: Circle())
         .overlay {
-            Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5)
+            Circle().stroke(.white.opacity(0.18), lineWidth: 0.5)
         }
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!model.canRun)
         .opacity(model.canRun ? 1 : 0.62)
+        .accessibilityLabel("Generate")
+        .help("Generate response (⌘↵)")
     }
 
     private var runningPill: some View {
@@ -59,9 +60,9 @@ struct GenerateControl: View {
                     .font(.callout)
                     .frame(width: 28, height: 28)
             }
-            .padding(.leading, 18)
+            .padding(.leading, 15)
             .padding(.trailing, 4)
-            .frame(minWidth: 140, minHeight: controlHeight)
+            .frame(minWidth: 132, minHeight: controlHeight)
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

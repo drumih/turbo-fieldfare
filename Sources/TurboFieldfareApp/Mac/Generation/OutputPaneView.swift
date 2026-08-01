@@ -60,8 +60,7 @@ struct OutputPaneView: View {
             mailbox: model.generationTranscriptMailbox,
             isRunning: model.isRunning)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.vertical, 8)
     }
 
     private var emptyPlaceholderContent: some View {
@@ -126,10 +125,20 @@ private struct EmptyPlaceholderIcon: View {
     let systemName: String
 
     var body: some View {
-        Image(systemName: systemName)
-            .font(.title2)
-            .foregroundStyle(.quaternary)
-            .accessibilityHidden(true)
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(TurboFieldfareMacTheme.accentSurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(TurboFieldfareMacTheme.accentColor.opacity(0.16), lineWidth: 0.5)
+                }
+            Image(systemName: systemName)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(TurboFieldfareMacTheme.accentColor.opacity(0.78))
+        }
+        .frame(width: 58, height: 58)
+        .shadow(color: TurboFieldfareMacTheme.accentColor.opacity(0.12), radius: 12, y: 5)
+        .accessibilityHidden(true)
     }
 }
 

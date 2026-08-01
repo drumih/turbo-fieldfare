@@ -1,3 +1,4 @@
+import AppKit
 import TurboFieldfareAppCore
 import TurboFieldfareMacPresentation
 import SwiftUI
@@ -12,30 +13,22 @@ struct RootView: View {
             ChatSidebarView(
                 model: model,
                 isCollapsed: $isChatSidebarCollapsed)
-                .frame(width: isChatSidebarCollapsed ? 56 : 240)
+                .frame(width: isChatSidebarCollapsed ? 58 : 258)
 
-            Divider()
+            paneDivider
 
             primaryContent
                 .frame(minWidth: 600, maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
+            paneDivider
 
             InspectorView(model: model)
-                .frame(width: 320)
+                .frame(width: 316)
                 .frame(maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(TurboFieldfareMacTheme.sidebarBackground.opacity(0.5))
         }
         .containerBackground(for: .window) {
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(nsColor: .windowBackgroundColor).mix(
-                        with: TurboFieldfareMacTheme.accentColor,
-                        by: 0.04),
-                ],
-                startPoint: .top,
-                endPoint: .bottom)
+            TurboFieldfareMacTheme.appBackground
         }
         .tint(TurboFieldfareMacTheme.accentColor)
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
@@ -47,6 +40,13 @@ struct RootView: View {
                 transaction.animation = nil
             }
         }
+    }
+
+    private var paneDivider: some View {
+        Rectangle()
+            .fill(TurboFieldfareMacTheme.border)
+            .frame(width: 1)
+            .ignoresSafeArea()
     }
 
     private var primaryContent: some View {
@@ -95,6 +95,9 @@ struct RootView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ConversationHeaderView(model: model)
+        }
     }
 
     private var conversationChrome: some View {
@@ -112,7 +115,7 @@ struct RootView: View {
             PromptComposerView(model: model)
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 16)
+        .padding(.bottom, 18)
         .animation(
             .smooth(duration: 0.2),
             value: model.promptText.isEmpty
@@ -120,6 +123,79 @@ struct RootView: View {
                 && !model.hasOutputTranscript)
     }
 
+}
+
+private struct ConversationHeaderView: View {
+    let model: AppModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.selectedChatTitle)
+                    .font(.headline.weight(.semibold))
+                    .lineLimit(1)
+                HStack(spacing: 7) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("Local conversation")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 16)
+
+            if model.hasSystemPrompt {
+                Label("Instructions", systemImage: "slider.horizontal.3")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(TurboFieldfareMacTheme.accentColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(TurboFieldfareMacTheme.accentSurface, in: Capsule())
+            }
+
+            if model.completedTurnCount > 0 {
+                Text("\(model.completedTurnCount) "
+                     + (model.completedTurnCount == 1 ? "turn" : "turns"))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Menu {
+                Button("Copy conversation") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        model.outputConversationPlainText,
+                        forType: .string)
+                }
+                .disabled(model.outputConversationPlainText.isEmpty)
+
+                Button("Regenerate response", action: model.regenerateLastResponse)
+                    .disabled(!model.canRegenerate)
+
+                Divider()
+
+                Button("New chat", action: model.newChat)
+                    .disabled(!model.canManageChats)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.headline.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Circle())
+            }
+            .menuStyle(.borderlessButton)
+            .foregroundStyle(.secondary)
+            .help("Conversation actions")
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 11)
+        .background(TurboFieldfareMacTheme.appBackground.opacity(0.96))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(TurboFieldfareMacTheme.border)
+                .frame(height: 1)
+        }
+    }
 }
 
 private struct ConversationChromeHeightKey: PreferenceKey {

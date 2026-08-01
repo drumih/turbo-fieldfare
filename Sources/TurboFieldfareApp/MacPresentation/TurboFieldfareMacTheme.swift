@@ -9,4 +9,34 @@ public enum TurboFieldfareMacTheme {
         alpha: 1)
 
     public static let accentColor = Color(nsColor: accentNSColor)
+
+    /// A small set of semantic surfaces keeps the app visually coherent while
+    /// still respecting the user's macOS appearance and accessibility settings.
+    public static var appBackground: Color {
+        Color(nsColor: .windowBackgroundColor)
+    }
+
+    public static var sidebarBackground: Color {
+        Color(nsColor: .underPageBackgroundColor)
+    }
+
+    public static var surface: Color {
+        Color(nsColor: .controlBackgroundColor)
+    }
+
+    public static var elevatedSurface: Color {
+        Color(nsColor: .textBackgroundColor)
+    }
+
+    public static var mutedSurface: Color {
+        Color(nsColor: .underPageBackgroundColor)
+    }
+
+    public static var accentSurface: Color {
+        accentColor.opacity(0.12)
+    }
+
+    public static var border: Color {
+        Color.primary.opacity(0.10)
+    }
 }
