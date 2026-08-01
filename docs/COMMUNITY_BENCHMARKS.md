@@ -43,7 +43,7 @@ mkdir -p benchmark-results/system benchmark-results/warmup benchmark-results/mea
   swift --version
   system_profiler SPHardwareDataType |
     awk -F': ' '/Model Name|Model Identifier|Chip|Total Number of Cores|Memory/ { print $1 ": " $2 }'
-  shasum -a 256 scratch/gemma4.gturbo/manifest.json
+  shasum -a 256 scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo/manifest.json
   shasum -a 256 docs/benchmark-prompts/real-generation-v1/*.json
 } 2>&1 | tee benchmark-results/system/system.txt
 ```
@@ -63,7 +63,7 @@ for case_seed in \
   case_id="${case_seed%%:*}"
   seed="${case_seed##*:}"
   .build/release/TurboFieldfareCLI \
-    --model scratch/gemma4.gturbo \
+    --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
     --messages-file "docs/benchmark-prompts/real-generation-v1/${case_id}.json" \
     --max-new 1024 \
     --max-context 4096 \
@@ -86,7 +86,7 @@ for case_seed in \
   case_id="${case_seed%%:*}"
   seed="${case_seed##*:}"
   .build/release/TurboFieldfareCLI \
-    --model scratch/gemma4.gturbo \
+    --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
     --messages-file "docs/benchmark-prompts/real-generation-v1/${case_id}.json" \
     --max-new 1024 \
     --max-context 4096 \

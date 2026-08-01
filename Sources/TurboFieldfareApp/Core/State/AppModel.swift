@@ -87,7 +87,18 @@ public final class AppModel {
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 settingsPersistenceEnabled: Bool = false,
-                conversationsPersistenceEnabled: Bool = false) {
+                conversationsPersistenceEnabled: Bool = false,
+                migratesLegacyInstall: Bool = false) {
+        // Adopt a pre-multi-model install before probing, so an existing model
+        // is found at the new slug path instead of appearing missing.
+        //
+        // Off by default and opted into only by the real app: this moves a
+        // multi-gigabyte directory on the user's disk, and a test run that
+        // constructs an AppModel must never do that.
+        if migratesLegacyInstall, modelDirectory == nil,
+           let curated = ModelCatalog.curated.first {
+            AppModelLocation.migrateLegacyInstallIfNeeded(repoID: curated.repoID)
+        }
         let directory = (modelDirectory ?? AppModelLocation.curatedDefaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled

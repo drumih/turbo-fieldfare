@@ -133,7 +133,7 @@ swift build -c release
 
 Build the complete package so the app and its sibling decode service are both
 available. When launched from this checkout, the app stores the model in
-`scratch/gemma4.gturbo`.
+`scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo`.
 
 #### Install the model
 
@@ -168,12 +168,12 @@ and defaults.
 ### Command-line interface
 
 The CLI uses an existing `.gturbo` installation. If you installed the model
-through the Mac app, it is already available at `scratch/gemma4.gturbo`.
+through the Mac app, it is already available at `scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo`.
 Otherwise, install it from the command line:
 
 ```bash
 swift run -c release TurboFieldfareRepack \
-  --output scratch/gemma4.gturbo \
+  --output scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
   --overwrite
 ```
 
@@ -181,7 +181,7 @@ Continue a cancelled or interrupted download:
 
 ```bash
 swift run -c release TurboFieldfareRepack \
-  --output scratch/gemma4.gturbo \
+  --output scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
   --overwrite \
   --resume
 ```
@@ -191,7 +191,7 @@ Remove saved download state:
 ```bash
 swift run -c release TurboFieldfareRepack \
   --discard-partial \
-  --output scratch/gemma4.gturbo
+  --output scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo
 ```
 
 The runtime accepts only a completed `.gturbo` directory with a final
@@ -202,7 +202,7 @@ Verify an existing installation without loading the model:
 ```bash
 swift run -c release TurboFieldfareRepack \
   --verify-install \
-  --input-gturbo scratch/gemma4.gturbo
+  --input-gturbo scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo
 ```
 
 #### Instruction chat
@@ -217,7 +217,7 @@ Put chat messages in a JSON array and pass it with `--messages-file`:
 
 ```bash
 swift run -c release TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
+  --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
   --messages-file messages.json
 ```
 
@@ -233,7 +233,7 @@ passes the text directly to the model without chat formatting. Use
 
 ```bash
 swift run -c release TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
+  --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
   --prompt "The capital of France is" \
   --max-new 64 \
   --temperature 0
@@ -260,7 +260,7 @@ Build the server and point it at an installed model:
 ```bash
 swift build -c release --product TurboFieldfareServer
 .build/release/TurboFieldfareServer \
-  --model scratch/gemma4.gturbo
+  --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo
 ```
 
 It listens on `http://127.0.0.1:8080/v1` and supports Chat Completions,

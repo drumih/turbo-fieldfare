@@ -32,7 +32,8 @@ struct TurboFieldfareMacApp: App {
         _model = State(initialValue: AppModel(
             client: DecodeServiceInferenceClient(),
             settingsPersistenceEnabled: true,
-            conversationsPersistenceEnabled: true))
+            conversationsPersistenceEnabled: true,
+            migratesLegacyInstall: true))
     }
 
     var body: some Scene {

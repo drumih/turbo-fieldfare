@@ -18,7 +18,7 @@ If the command prints a match, do not start the server.
 ```bash
 swift build -c release --product TurboFieldfareServer
 .build/release/TurboFieldfareServer \
-  --model scratch/gemma4.gturbo \
+  --model scratch/models/mlx-community--gemma-4-26b-a4b-it-4bit/model.gturbo \
   --port 8080 \
   --max-context 16384
 ```
