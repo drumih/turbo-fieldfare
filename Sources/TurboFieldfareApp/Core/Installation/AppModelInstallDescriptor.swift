@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfare
 import TurboFieldfareRepackCore
 
 public struct AppModelInstallDescriptor: Equatable, Sendable {
@@ -42,6 +43,43 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         installedBytes: 14_291_921_884,
         rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
         reserveBytes: 1_073_741_824)
+
+    public static let qwen36 = AppModelInstallDescriptor(
+        displayName: "Qwen3.6 35B-A3B 4-bit",
+        repoID: "mlx-community/Qwen3.6-35B-A3B-4bit",
+        revision: "38740b847e4cb78f352aba30aa41c76e08e6eb46",
+        sourceIndexSHA256: "0b28df60e33753a14e816d3b31577ae2c93884c58430a4a6de6ae9ea483842ea",
+        approximateDownloadBytes: 19_529_025_048,
+        installedBytes: 19_546_491_213,
+        rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
+        reserveBytes: 1_073_741_824)
+
+    /// The shipped descriptor for a model family, if one exists.
+    public static func descriptor(for family: ModelFamily) -> AppModelInstallDescriptor? {
+        switch family {
+        case .gemma4: return .default
+        case .qwen36: return .qwen36
+        }
+    }
+
+    /// Basename of the installed `.gturbo` directory for this descriptor.
+    public var installDirectoryName: String {
+        self == .qwen36 ? "qwen36.gturbo" : "gemma4.gturbo"
+    }
+
+    /// The descriptor the app products select at launch. Defaults to Gemma 4.
+    /// `TURBO_FIELDFARE_MODEL=qwen36` in the environment wins; otherwise the
+    /// persisted preference (`defaults write TurboFieldfare model qwen36`)
+    /// applies, so GUI launches without an environment also select Qwen.
+    public static var selected: AppModelInstallDescriptor {
+        let environmentValue = ProcessInfo.processInfo.environment["TURBO_FIELDFARE_MODEL"]
+        let preferenceValue = UserDefaults(suiteName: "TurboFieldfare")?
+            .string(forKey: "model")
+        switch environmentValue ?? preferenceValue {
+        case "qwen36": return .qwen36
+        default: return .default
+        }
+    }
 }
 
 public struct AppModelInstallRequirement: Equatable, Sendable {

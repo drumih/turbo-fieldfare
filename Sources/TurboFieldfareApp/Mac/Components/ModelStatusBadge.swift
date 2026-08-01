@@ -7,7 +7,7 @@ struct ModelStatusBadge: View {
     var body: some View {
         HStack(spacing: 6) {
             statusDot
-            Text("Gemma 4 26B")
+            Text(model.installDescriptor.displayName)
                 .font(.callout.weight(.semibold))
                 .lineLimit(1)
                 .help(model.installDescriptor.repoID)

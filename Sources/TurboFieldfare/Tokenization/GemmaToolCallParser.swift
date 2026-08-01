@@ -17,11 +17,13 @@ public struct ParsedToolCall: Equatable, Sendable {
     }
 }
 
-public enum GemmaToolCallParserError: Error, Equatable {
+public enum ToolCallParserError: Error, Equatable {
     case malformed
     case unknownTool(String)
     case oversized
 }
+
+public typealias GemmaToolCallParserError = ToolCallParserError
 
 public struct GemmaToolCallParser: Sendable {
     public static let maximumBytes = 256 * 1024
@@ -38,17 +40,17 @@ public struct GemmaToolCallParser: Sendable {
                       allowedTools: Set<String>,
                       id: String) throws -> ParsedToolCall {
         guard text.utf8.count <= Self.maximumBytes else {
-            throw GemmaToolCallParserError.oversized
+            throw ToolCallParserError.oversized
         }
         var parser = Parser(text)
         try parser.consume("call:")
         let name = try parser.identifier()
         guard allowedTools.contains(name) else {
-            throw GemmaToolCallParserError.unknownTool(name)
+            throw ToolCallParserError.unknownTool(name)
         }
         let arguments = try parser.object()
         parser.skipWhitespace()
-        guard parser.isAtEnd else { throw GemmaToolCallParserError.malformed }
+        guard parser.isAtEnd else { throw ToolCallParserError.malformed }
         return ParsedToolCall(id: id,
                               name: name,
                               arguments: arguments,
@@ -75,7 +77,7 @@ private struct Parser {
         let value = Array(literal)
         guard index + value.count <= characters.count,
               Array(characters[index..<(index + value.count)]) == value else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         index += value.count
     }
@@ -88,7 +90,7 @@ private struct Parser {
             guard character.isLetter || character.isNumber || character == "_" else { break }
             index += 1
         }
-        guard index > start else { throw GemmaToolCallParserError.malformed }
+        guard index > start else { throw ToolCallParserError.malformed }
         return String(characters[start..<index])
     }
 
@@ -131,7 +133,7 @@ private struct Parser {
             }
             index += 1
         }
-        guard index > start else { throw GemmaToolCallParserError.malformed }
+        guard index > start else { throw ToolCallParserError.malformed }
         return String(characters[start..<index])
     }
 
@@ -164,7 +166,7 @@ private struct Parser {
                 index += 1
             }
         }
-        throw GemmaToolCallParserError.malformed
+        throw ToolCallParserError.malformed
     }
 
     mutating func jsonString() throws -> String {
@@ -179,11 +181,11 @@ private struct Parser {
                 index += 1
             }
         }
-        throw GemmaToolCallParserError.malformed
+        throw ToolCallParserError.malformed
     }
 
     mutating func escapedFragment() throws -> String {
-        guard index < characters.count else { throw GemmaToolCallParserError.malformed }
+        guard index < characters.count else { throw ToolCallParserError.malformed }
         let escape = characters[index]
         index += 1
         switch escape {
@@ -202,38 +204,38 @@ private struct Parser {
                 guard index + 2 <= characters.count,
                       characters[index] == "\\",
                       characters[index + 1] == "u" else {
-                    throw GemmaToolCallParserError.malformed
+                    throw ToolCallParserError.malformed
                 }
                 index += 2
                 let second = try unicodeCodeUnit()
                 guard (0xDC00...0xDFFF).contains(second) else {
-                    throw GemmaToolCallParserError.malformed
+                    throw ToolCallParserError.malformed
                 }
                 scalar = 0x10000
                     + (UInt32(first - 0xD800) << 10)
                     + UInt32(second - 0xDC00)
             } else {
                 guard !(0xDC00...0xDFFF).contains(first) else {
-                    throw GemmaToolCallParserError.malformed
+                    throw ToolCallParserError.malformed
                 }
                 scalar = UInt32(first)
             }
             guard let unicode = UnicodeScalar(scalar) else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return String(unicode)
-        default: throw GemmaToolCallParserError.malformed
+        default: throw ToolCallParserError.malformed
         }
     }
 
     mutating func unicodeCodeUnit() throws -> UInt16 {
         guard index + 4 <= characters.count else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         var value: UInt16 = 0
         for _ in 0..<4 {
             guard let digit = characters[index].hexDigitValue else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             value = value * 16 + UInt16(digit)
             index += 1
@@ -248,13 +250,13 @@ private struct Parser {
             index += 1
         }
         guard index > start else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         let literal = String(characters[start..<index])
         guard literal.range(
             of: #"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"#,
             options: .regularExpression) != nil else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         if !literal.contains(where: { ".eE".contains($0) }) {
             if let value = Int64(literal) { return .integer(value) }
@@ -264,7 +266,7 @@ private struct Parser {
             string: literal,
             locale: Locale(identifier: "en_US_POSIX")),
               !value.isNaN else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         return .decimal(value)
     }

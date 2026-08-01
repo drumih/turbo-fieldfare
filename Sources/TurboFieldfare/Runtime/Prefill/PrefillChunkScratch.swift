@@ -9,6 +9,19 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
     let routedIntermediate: Int
     let topK: Int
     let routedPairMicrobatchRows: Int
+    /// Rows of the widest per-token projection written into `q`: the packed
+    /// [query ; gate] q_proj when `attnOutputGate`, and the gated-DeltaNet
+    /// `in_proj_qkv` rows on architectures with linear-attention layers.
+    let qProjElementsPerToken: Int
+    /// Non-zero when the architecture gates attention output (Qwen): sizes
+    /// the split q / gate buffers.
+    let attnGateElementsPerToken: Int
+    /// Gated-DeltaNet dims (all zero when the mask has no linear layers).
+    let gdnQKVDim: Int
+    let gdnValueDim: Int
+    let gdnVHeads: Int
+    /// Non-zero when the shared expert output is scalar-gated (Qwen).
+    let sharedScalarGateElements: Int
 
     init(config: ArchConfig,
                 chunkTokens: Int,
@@ -22,6 +35,15 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
         self.routedIntermediate = config.moeIntermediateSize
         self.topK = config.topKExperts
         self.routedPairMicrobatchRows = max(1, min(routedPairMicrobatchRows, 128))
+        let qDim = config.numHeads * max(config.headDim, config.fullHeadDim)
+        let hasLinear = config.hasLinearAttentionLayers
+        self.qProjElementsPerToken = max(config.attnOutputGate ? 2 * qDim : qDim,
+                                         hasLinear ? config.linearAttention.qkvDim : 0)
+        self.attnGateElementsPerToken = config.attnOutputGate ? qDim : 0
+        self.gdnQKVDim = hasLinear ? config.linearAttention.qkvDim : 0
+        self.gdnValueDim = hasLinear ? config.linearAttention.valueDim : 0
+        self.gdnVHeads = hasLinear ? config.linearAttention.numVHeads : 0
+        self.sharedScalarGateElements = config.sharedExpertGated ? 1 : 0
     }
 
     init(config: ArchConfig, runtime: PrefillRuntimeConfig) {
@@ -31,10 +53,19 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
 
     var hiddenElements: Int { chunkTokens * hiddenSize }
     var normedElements: Int { hiddenElements }
-    var qElements: Int { chunkTokens * maxQElementsPerToken }
+    var qElements: Int { chunkTokens * qProjElementsPerToken }
+    var attnElements: Int { chunkTokens * maxQElementsPerToken }
+    var attnQElements: Int { chunkTokens * attnGateElementsPerToken }
+    var attnGateElements: Int { attnQElements }
+    var gdnConvOutElements: Int { chunkTokens * gdnQKVDim }
+    var gdnZElements: Int { chunkTokens * gdnValueDim }
+    var gdnAElements: Int { chunkTokens * gdnVHeads }
+    var gdnBElements: Int { gdnAElements }
+    var gdnYElements: Int { gdnZElements }
+    var sharedScalarGateBufferElements: Int { chunkTokens * sharedScalarGateElements }
     var kStageElements: Int { chunkTokens * maxKVElementsPerToken }
     var vStageElements: Int { kStageElements }
-    var attentionOutputElements: Int { qElements }
+    var attentionOutputElements: Int { attnElements }
     var denseXElements: Int { hiddenElements }
     var routedXElements: Int { hiddenElements }
     var routerXElements: Int { hiddenElements }
@@ -63,6 +94,14 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
             + 3 * sharedExpertScratchElements
             + routedGateUpActElements
             + routedDownOutputElements
+            + attnQElements
+            + attnGateElements
+            + gdnConvOutElements
+            + gdnZElements
+            + gdnAElements
+            + gdnBElements
+            + gdnYElements
+            + sharedScalarGateBufferElements
         return fp16Elements * MemoryLayout<Float16>.stride
     }
 
@@ -97,6 +136,16 @@ struct PrefillChunkScratchBuffers {
     let sharedActScratch: MTLBuffer
     let routedGateUpActScratch: MTLBuffer
     let routedDownScratch: MTLBuffer
+    // Qwen 3.6 additions. Placeholder-sized (1 element) when the arch does
+    // not use them, so the struct stays non-optional.
+    let attnQ: MTLBuffer
+    let attnGate: MTLBuffer
+    let gdnConvOut: MTLBuffer
+    let gdnZ: MTLBuffer
+    let gdnA: MTLBuffer
+    let gdnB: MTLBuffer
+    let gdnY: MTLBuffer
+    let sharedScalarGate: MTLBuffer
 
     static func allocate(device: MTLDevice,
                          layout: PrefillChunkScratchLayout) throws -> PrefillChunkScratchBuffers {
@@ -147,6 +196,15 @@ struct PrefillChunkScratchBuffers {
             routedGateUpActScratch: try privateBuffer(layout.routedGateUpActElements,
                                                       label: "prefill.routedGateUpActScratch"),
             routedDownScratch: try privateBuffer(layout.routedDownOutputElements,
-                                                 label: "prefill.routedDownScratch"))
+                                                 label: "prefill.routedDownScratch"),
+            attnQ: try privateBuffer(layout.attnQElements, label: "prefill.attnQ"),
+            attnGate: try privateBuffer(layout.attnGateElements, label: "prefill.attnGate"),
+            gdnConvOut: try privateBuffer(layout.gdnConvOutElements, label: "prefill.gdnConvOut"),
+            gdnZ: try privateBuffer(layout.gdnZElements, label: "prefill.gdnZ"),
+            gdnA: try privateBuffer(layout.gdnAElements, label: "prefill.gdnA"),
+            gdnB: try privateBuffer(layout.gdnBElements, label: "prefill.gdnB"),
+            gdnY: try privateBuffer(layout.gdnYElements, label: "prefill.gdnY"),
+            sharedScalarGate: try privateBuffer(layout.sharedScalarGateBufferElements,
+                                                label: "prefill.sharedScalarGate"))
     }
 }

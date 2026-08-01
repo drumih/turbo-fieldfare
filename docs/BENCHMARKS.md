@@ -16,6 +16,7 @@ Decode rate excludes model installation, model loading, and prompt prefill.
 | 8 GB M2, TurboFieldfare | 5.10-6.30 tok/s | ~1.9-2.1 GB footprint |
 | 24 GB M5 Pro, TurboFieldfare | 31-35 tok/s | ~2.1 GB footprint |
 | 24 GB M5 Pro, mlx-lm | 76.33-82.07 tok/s | 8.3-9.8 GB RSS; 14.7-15.3 GB GPU allocation |
+| M5, TurboFieldfare, Qwen 3.6 35B-A3B | 18.8-23.1 tok/s | ~1.45 GB footprint |
 
 ## M2 measured decode
 
@@ -71,6 +72,52 @@ loop.
 | 61 / 256 | 5,096 / 5,668 ms | 35.17 tok/s | 1,834 / 2,126 MiB |
 | 430 / 256 | 6,762 / 7,325 ms | 34.72 tok/s | 1,851 / 2,142 MiB |
 | 3,015 / 256 | 23,038 / 23,610 ms | 31.01 tok/s | 1,835 / 2,126 MiB |
+
+## Qwen 3.6 35B-A3B measured decode
+
+These rows ran on 2026-07-31 on an M5 with 24 GB of memory, macOS 26.5, and
+Swift 6.2, against the experimental
+[Qwen 3.6 35B-A3B](../docs/QWEN36_PERFORMANCE.md) path. They follow the
+[community benchmark protocol](COMMUNITY_BENCHMARKS.md): the three frozen
+`real-generation-v1` prompts with their fixed seeds, app sampling defaults
+(temperature `0.2`, Top-K `64`, Top-P `0.95`), 4K context, 16 expert-cache
+slots, one discarded warmup, then one measured run per case in a fresh
+process. Every measured footer reported `stop=endOfTurn`.
+
+| Case | Prompt / generated tokens | Prefill | Decode | Peak RSS / footprint |
+| --- | --- | ---: | ---: | ---: |
+| short-explanation | 62 / 493 | 7.74 s | 23.05 tok/s | 1,139 / 1,447 MiB |
+| medium-review | 426 / 697 | 12.71 s | 21.20 tok/s | 1,142 / 1,448 MiB |
+| long-synthesis | 2,940 / 700 | 59.16 s | 18.84 tok/s | 1,093 / 1,464 MiB |
+
+Qwen 3.6 decodes slower than Gemma 4 on the same host while using about
+0.7 GB less memory. The gap is expert-streaming I/O, not compute: Qwen's
+18.1 GB expert pool does not fit the page cache, and its 16 slots cover 6.2%
+of a layer's 256 experts against Gemma's 12.5% of 128. The
+[performance notes](QWEN36_PERFORMANCE.md) break the token down phase by
+phase.
+
+### Under an 8 GB working set
+
+The same host was constrained by pinning 16 GB resident in a separate process,
+leaving about 8 GB for the OS, page cache, and the model. All three cases were
+rerun unchanged, in fresh processes, with the same seeds:
+
+| Case | Decode, 24 GB | Decode, ~8 GB | Footprint, 24 GB | Footprint, ~8 GB | Output |
+| --- | ---: | ---: | ---: | ---: | --- |
+| short-explanation | 23.05 tok/s | 22.95 tok/s | 1,447 MiB | 1,464 MiB | byte-identical |
+| medium-review | 21.20 tok/s | 21.35 tok/s | 1,448 MiB | 1,448 MiB | byte-identical |
+| long-synthesis | 18.84 tok/s | 18.62 tok/s | 1,464 MiB | 1,388 MiB | byte-identical |
+
+Every case still reported `stop=endOfTurn`, and each generated file matched its
+unconstrained counterpart byte for byte. Throughput and footprint are unchanged
+within run-to-run noise, because the 18.1 GB expert pool does not fit the page
+cache on either configuration — decode is already streaming from SSD, so
+shrinking available memory does not change what the runtime reads.
+
+This is emulated pressure on M5 hardware, not a measurement on a physical 8 GB
+Mac; a real 8 GB machine has a slower SSD and GPU and should be expected to
+decode more slowly, as the M2 rows above show for Gemma 4.
 
 ## Same-host MLX comparison
 

@@ -27,6 +27,22 @@ public struct ManifestArch: Decodable, Equatable, Sendable {
     public let attentionKEqV: Bool
     public let hiddenActivation: String
     public let fullAttentionLayerMask: [Int]
+
+    // Family extensions. Optional so legacy Gemma manifests decode unchanged;
+    // absent values validate against the Gemma defaults in `ArchConfig`.
+    public let family: String?
+    public let attnOutputGate: Bool?
+    public let attentionScale: Double?
+    public let embeddingScaledBySqrtHidden: Bool?
+    public let routerScaled: Bool?
+    public let ffnSandwichNorms: Bool?
+    public let sharedExpertGated: Bool?
+    public let ropeNeoxSubdim: Bool?
+    public let linearNumKHeads: Int?
+    public let linearNumVHeads: Int?
+    public let linearKeyHeadDim: Int?
+    public let linearValueHeadDim: Int?
+    public let linearConvKernelSize: Int?
 }
 
 public struct ManifestQuantSlot: Decodable, Equatable, Sendable {
@@ -131,8 +147,7 @@ public enum ManifestReader {
         try validateArch(m.arch, expected: expected)
         if let quant = m.quant {
             try validateQuant(quant)
-        } else if expected.numLayers == ArchConfig.gemma4_26B_A4B.numLayers,
-                  expected.hiddenSize == ArchConfig.gemma4_26B_A4B.hiddenSize {
+        } else if isProductionArch(expected) {
             throw ModelError.indexCorrupt(detail: "manifest.quant is required for the production architecture")
         }
         let pageSize = UInt64(getpagesize())
@@ -150,6 +165,18 @@ public enum ManifestReader {
                 throw ModelError.missingFile(name: padded)
             }
         }
+    }
+
+    /// A manifest matching one of the shipped production baselines must carry
+    /// quantization metadata; toy/synthetic manifests may omit it.
+    private static func isProductionArch(_ expected: ArchConfig) -> Bool {
+        for baseline in ArchConfig.knownArchitectures.values {
+            if expected.numLayers == baseline.numLayers,
+               expected.hiddenSize == baseline.hiddenSize {
+                return true
+            }
+        }
+        return false
     }
 
     private static func validateQuant(_ quant: ManifestQuant) throws {
@@ -205,5 +232,69 @@ public enum ManifestReader {
         try check("fullAttentionLayerMask",
                   actualMask.description,
                   e.fullAttentionLayerMask.description)
+
+        // Family extensions: absent fields mean the Gemma defaults.
+        let gemmaDefaults = ArchConfig.gemma4_26B_A4B
+        try check("family",
+                  a.family ?? ModelFamily.gemma4.rawValue,
+                  e.family.rawValue)
+        try check("attnOutputGate",
+                  a.attnOutputGate ?? gemmaDefaults.attnOutputGate,
+                  e.attnOutputGate)
+        try check("attentionScale",
+                  a.attentionScale ?? gemmaDefaults.attentionScale,
+                  e.attentionScale)
+        try check("embeddingScaledBySqrtHidden",
+                  a.embeddingScaledBySqrtHidden ?? gemmaDefaults.embeddingScaledBySqrtHidden,
+                  e.embeddingScaledBySqrtHidden)
+        try check("routerScaled",
+                  a.routerScaled ?? gemmaDefaults.routerScaled,
+                  e.routerScaled)
+        try check("ffnSandwichNorms",
+                  a.ffnSandwichNorms ?? gemmaDefaults.ffnSandwichNorms,
+                  e.ffnSandwichNorms)
+        try check("sharedExpertGated",
+                  a.sharedExpertGated ?? gemmaDefaults.sharedExpertGated,
+                  e.sharedExpertGated)
+        try check("ropeNeoxSubdim",
+                  a.ropeNeoxSubdim ?? gemmaDefaults.ropeNeoxSubdim,
+                  e.ropeNeoxSubdim)
+        try check("linearNumKHeads",
+                  a.linearNumKHeads ?? 0, e.linearAttention.numKHeads)
+        try check("linearNumVHeads",
+                  a.linearNumVHeads ?? 0, e.linearAttention.numVHeads)
+        try check("linearKeyHeadDim",
+                  a.linearKeyHeadDim ?? 0, e.linearAttention.keyHeadDim)
+        try check("linearValueHeadDim",
+                  a.linearValueHeadDim ?? 0, e.linearAttention.valueHeadDim)
+        try check("linearConvKernelSize",
+                  a.linearConvKernelSize ?? 0, e.linearAttention.convKernelSize)
+    }
+
+    /// Decode just enough of `manifest.json` to identify the model family,
+    /// without arch validation. Used by `Model.load` auto-detection.
+    public static func peekFamily(directoryURL: URL,
+                                  maxBytes: UInt64 = defaultMaxBytes) throws -> ModelFamily {
+        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            throw ModelError.partialInstall(path: directoryURL.path)
+        }
+        let size = try metadataFileSize(manifestURL, fileName: "manifest.json")
+        guard size <= maxBytes else {
+            throw ModelError.indexCorrupt(
+                detail: "manifest.json size \(size) exceeds metadata cap \(maxBytes)")
+        }
+        let data = try Data(contentsOf: manifestURL)
+        let manifest: Manifest
+        do {
+            manifest = try JSONDecoder().decode(Manifest.self, from: data)
+        } catch {
+            throw ModelError.indexCorrupt(detail: "manifest.json: \(error)")
+        }
+        guard let raw = manifest.arch.family else { return .gemma4 }
+        guard let family = ModelFamily(rawValue: raw) else {
+            throw ModelError.indexCorrupt(detail: "unknown arch.family \"\(raw)\"")
+        }
+        return family
     }
 }

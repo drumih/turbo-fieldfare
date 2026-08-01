@@ -57,12 +57,12 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
             return value
         case .integer(let value):
             guard let value = Int(exactly: value) else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return value
         case .unsignedInteger(let value):
             guard let value = Int(exactly: value) else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return value
         case .decimal(let value):
@@ -73,7 +73,7 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
                     string: String(double),
                     locale: Locale(identifier: "en_US_POSIX")),
                   roundTrip == value else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return double
         case .number(let value):
@@ -98,11 +98,11 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
 
     public func gemmaToolArgumentBody() throws -> String {
         guard case .object(let value) = self else {
-            throw GemmaToolCallParserError.malformed
+            throw ToolCallParserError.malformed
         }
         return try value.keys.sorted().map { key in
             guard GemmaToolCallParser.isRepresentableObjectKey(key) else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return "\(key):\(try value[key]!.gemmaToolValue())"
         }.joined(separator: ",")
@@ -126,7 +126,7 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
             return NSDecimalNumber(decimal: value).stringValue
         case .number(let value):
             guard value.isFinite else {
-                throw GemmaToolCallParserError.malformed
+                throw ToolCallParserError.malformed
             }
             return String(value)
         case .bool(let value):

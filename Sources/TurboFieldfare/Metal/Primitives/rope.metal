@@ -72,6 +72,35 @@ kernel void rope_default_neox(
                     float(position), theta);
 }
 
+// Qwen-style partial RoPE: rotation confined to the first `rotary_dim`
+// elements of each head, NeoX pairing (i, rotary_dim/2 + i) inside that
+// window, frequency divisor = rotary_dim. Elements >= rotary_dim pass
+// through untouched. (Gemma's proportional variant instead pairs across the
+// full head and divides frequencies by head_dim — a different element set.)
+kernel void rope_neox_subdim(
+    device half* data [[buffer(0)]],
+    constant uint& position [[buffer(1)]],
+    constant uint& head_dim [[buffer(2)]],
+    constant uint& num_heads [[buffer(3)]],
+    constant float& theta [[buffer(4)]],
+    constant uint& rotary_dim [[buffer(5)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    const uint pair = gid.x;
+    const uint head_index = gid.y;
+    const uint token_index = gid.z;
+    const uint dimension = rope_head_dim(head_dim);
+    const uint heads = rope_num_heads(num_heads);
+    const uint half_rotary = rotary_dim / 2u;
+    if (pair >= half_rotary || head_index >= heads) return;
+
+    device half* head = data
+        + token_index * heads * dimension
+        + head_index * dimension;
+    apply_neox_pair(head, pair, half_rotary, rotary_dim,
+                    float(position), theta);
+}
+
 kernel void rope_proportional_neox(
     device half* data [[buffer(0)]],
     constant uint& position [[buffer(1)]],

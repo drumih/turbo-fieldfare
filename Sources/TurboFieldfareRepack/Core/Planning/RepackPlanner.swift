@@ -104,10 +104,11 @@ enum RepackPlanner {
         case unknown
     }
 
-    static func classify(_ name: String, numLayers: Int) -> Bucket {
+    static func classify(_ name: String, numLayers: Int,
+                         family: RepackModelFamily) -> Bucket {
         if name.hasPrefix("language_model.") {
             // Routed expert?
-            if let role = routedExpertRole(in: name),
+            if let role = routedExpertRole(in: name, family: family),
                let layer = layerIndex(in: name),
                layer >= 0 && layer < numLayers {
                 return .routedExpert(role: role, layer: layer)
@@ -120,8 +121,14 @@ enum RepackPlanner {
         return .unknown
     }
 
-    private static func routedExpertRole(in name: String) -> String? {
-        guard name.contains(".experts.switch_glu.") else { return nil }
+    private static func routedExpertRole(in name: String,
+                                         family: RepackModelFamily) -> String? {
+        let routedContainer: String
+        switch family {
+        case .gemma4: routedContainer = ".experts.switch_glu."
+        case .qwen36: routedContainer = ".mlp.switch_mlp."
+        }
+        guard name.contains(routedContainer) else { return nil }
         if name.contains(".gate_proj.") { return "gate" }
         if name.contains(".up_proj.")   { return "up" }
         if name.contains(".down_proj.") { return "down" }
@@ -163,7 +170,7 @@ enum RepackPlanner {
                 excludedMultimodalNames.append(name)
             }
             if name.hasSuffix(".scales") || name.hasSuffix(".biases") { continue }
-            let b = classify(name, numLayers: arch.numLayers)
+            let b = classify(name, numLayers: arch.numLayers, family: arch.family)
             switch b {
             case .lmResident:                   lmResidentBases.append(name)
             case .routedExpert(let role, let layer):
@@ -180,7 +187,7 @@ enum RepackPlanner {
         }
 
         // Sort deterministically. The LM order follows a fixed template.
-        lmResidentBases.sort(by: lmResidentOrdering())
+        lmResidentBases.sort(by: lmResidentOrdering(family: arch.family))
         excludedMultimodalNames.sort()
 
         let residentPath = (outputDir as NSString).appendingPathComponent("model_weights.bin")
@@ -431,14 +438,21 @@ enum RepackPlanner {
     }
 
     /// Stable order for the resident LM tensor list. Embedding first, then
-    /// per-layer groups in layer index order, then the final norm.
-    private static func lmResidentOrdering() -> (String, String) -> Bool {
+    /// per-layer groups in layer index order, then the final norm (and, for
+    /// families with an untied head, `lm_head` last).
+    private static func lmResidentOrdering(family: RepackModelFamily)
+        -> (String, String) -> Bool {
         // Compute a sort key per name; we order by (group rank, layer, slot rank, name).
         func key(_ n: String) -> (Int, Int, Int, String) {
             if n == "language_model.model.embed_tokens.weight" { return (0, 0, 0, n) }
             if n == "language_model.model.norm.weight"          { return (3, 0, 0, n) }
+            if n == "language_model.lm_head.weight"             { return (4, 0, 0, n) }
             if let li = layerIndex(in: n) {
-                let slot = slotRank(in: n)
+                let slot: Int
+                switch family {
+                case .gemma4: slot = slotRank(in: n)
+                case .qwen36: slot = qwenSlotRank(in: n)
+                }
                 return (1, li, slot, n)
             }
             return (2, 0, 0, n)
@@ -450,6 +464,35 @@ enum RepackPlanner {
             if ka.2 != kb.2 { return ka.2 < kb.2 }
             return ka.3 < kb.3
         }
+    }
+
+    /// Within-layer slot order for the Qwen 3.6 family: full-attention
+    /// projections/norms, then the gated-DeltaNet linear-attention bundle,
+    /// then router, shared-expert gate and MLP, then the two layer norms.
+    private static func qwenSlotRank(in n: String) -> Int {
+        if n.contains(".self_attn.q_proj.weight")   { return 0 }
+        if n.contains(".self_attn.k_proj.weight")   { return 1 }
+        if n.contains(".self_attn.v_proj.weight")   { return 2 }
+        if n.contains(".self_attn.o_proj.weight")   { return 3 }
+        if n.contains(".self_attn.q_norm.weight")   { return 4 }
+        if n.contains(".self_attn.k_norm.weight")   { return 5 }
+        if n.contains(".linear_attn.in_proj_qkv.weight") { return 6 }
+        if n.contains(".linear_attn.in_proj_z.weight")   { return 7 }
+        if n.contains(".linear_attn.in_proj_a.weight")   { return 8 }
+        if n.contains(".linear_attn.in_proj_b.weight")   { return 9 }
+        if n.contains(".linear_attn.conv1d.weight")      { return 10 }
+        if n.hasSuffix(".linear_attn.A_log")             { return 11 }
+        if n.hasSuffix(".linear_attn.dt_bias")           { return 12 }
+        if n.contains(".linear_attn.norm.weight")        { return 13 }
+        if n.contains(".linear_attn.out_proj.weight")    { return 14 }
+        if n.contains(".mlp.gate.weight")                { return 15 }
+        if n.contains(".mlp.shared_expert_gate.weight")  { return 16 }
+        if n.contains(".mlp.shared_expert.gate_proj.weight") { return 17 }
+        if n.contains(".mlp.shared_expert.up_proj.weight")   { return 18 }
+        if n.contains(".mlp.shared_expert.down_proj.weight") { return 19 }
+        if n.hasSuffix(".input_layernorm.weight")        { return 20 }
+        if n.hasSuffix(".post_attention_layernorm.weight") { return 21 }
+        return 100
     }
 
     /// Within-layer slot order. Mirrors the per-layer description in the

@@ -40,6 +40,9 @@ constant constexpr float kSampleTopMaxK     = 256.0f;  // cap for top-k mask sca
 // ----------------------------------------------------------------------------
 
 inline float softcap_value(float z, float softcap) {
+    // softcap <= 0 disables capping (architectures without a final logit
+    // softcap, e.g. Qwen 3.6).
+    if (softcap <= 0.0f) return z;
     // tanh saturates well before |z/softcap|=10, so values like +1e3 collapse
     // cleanly to softcap=30 without exp overflow downstream.
     return softcap * precise::tanh(z / softcap);

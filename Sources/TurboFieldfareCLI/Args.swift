@@ -11,6 +11,8 @@ public struct Args: Equatable, Sendable {
     public var seed: UInt64?
     public var stops: [String]
     public var quiet: Bool
+    public var expertCacheSlots: Int
+    public var rdadvise: String
 
     public init(model: String,
                 prompt: String? = nil,
@@ -23,7 +25,9 @@ public struct Args: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stops: [String] = [],
-                quiet: Bool = false) {
+                quiet: Bool = false,
+                expertCacheSlots: Int = 16,
+                rdadvise: String = "off") {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -33,6 +37,8 @@ public struct Args: Equatable, Sendable {
         self.topK = topK
         self.topP = topP
         self.repetitionPenalty = repetitionPenalty
+        self.expertCacheSlots = expertCacheSlots
+        self.rdadvise = rdadvise
         self.seed = seed
         self.stops = stops
         self.quiet = quiet
@@ -63,7 +69,7 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
 
 extension Args {
     public static let usage = """
-    TurboFieldfareCLI — Gemma 4 26B-A4B text generation
+    TurboFieldfareCLI — Gemma 4 26B-A4B / Qwen3.6 35B-A3B text generation
 
     usage: TurboFieldfareCLI --model <dir> (--prompt <string> | --messages-file <path>) [options]
 
@@ -81,6 +87,11 @@ extension Args {
       --repetition-penalty <f>  Repetition penalty (default 1.0).
       --seed <uint64>           Deterministic sampling seed (default off).
       --stop <string>           Stop substring (repeatable).
+      --rdadvise <mode>         Expert read-ahead advice: off, default,
+                                bounded, or adaptive (default off).
+      --expert-cache-slots <n>  Routed-expert cache slots per layer: 8, 16,
+                                24, or 32 (default 16). More slots raise the
+                                hit rate but use more memory.
       --quiet                   Suppress the timing footer.
       --help                    Show this message.
     """
@@ -98,6 +109,8 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var quiet = false
+        var expertCacheSlots = 16
+        var rdadvise = "off"
 
         var index = 0
         while index < argv.count {
@@ -156,6 +169,19 @@ extension Args {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
                 seed = parsed
+            case "--expert-cache-slots":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value),
+                      [8, 16, 24, 32].contains(parsed) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                expertCacheSlots = parsed
+            case "--rdadvise":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard ["off", "default", "bounded", "adaptive"].contains(value) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                rdadvise = value
             case "--stop":
                 stops.append(try takeValue(argv, &index, flag: flag))
             default:
@@ -184,7 +210,9 @@ extension Args {
                     repetitionPenalty: repetitionPenalty,
                     seed: seed,
                     stops: stops,
-                    quiet: quiet)
+                    quiet: quiet,
+                    expertCacheSlots: expertCacheSlots,
+                    rdadvise: rdadvise)
     }
 
     private static func takeValue(_ argv: [String],

@@ -54,6 +54,8 @@ public func run(args: Args,
             stopStrings: args.stops,
             extraStopTokens: [])
         let runtime = RuntimeConfiguration(
+            expertCacheSlots: args.expertCacheSlots,
+            rdadvisePolicy: RDAdvicePolicyMode.parse(args.rdadvise),
             forceLogitsHead: !config.isPureGreedy)
 
         guard MTLCreateSystemDefaultDevice() != nil else {
@@ -72,7 +74,8 @@ public func run(args: Args,
             maxContext: args.maxContext,
             runtimeConfiguration: runtime)
         let scratch = try RawCompletionScratch(context: context,
-                                               vocab: model.config.vocabSize)
+                                               vocab: model.config.vocabSize,
+                                               logitSoftcap: Float(model.config.finalLogitSoftcap))
         let stats = try await runRawCompletion(
             producer: runner,
             tokenizer: tokenizer,
@@ -91,11 +94,25 @@ public func run(args: Args,
                 }
             }
 
+        if ProcessInfo.processInfo.environment["TURBO_FIELDFARE_PHASES"] == "1" {
+            let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }
+            let total = stats.decodeSeconds * 1000
+            let accounted = Double(runner.totalCb1Nanos + runner.totalIoNanos
+                                   + runner.totalCb2Nanos) / 1e6
+            var lines = "\n[phases over \(stats.newTokens) tokens, decode "
+            lines += String(format: "%.0f", total) + " ms]\n"
+            lines += "  cb1 encode+commit: " + ms(runner.totalCb1Nanos) + " ms\n"
+            lines += "  expert io await:   " + ms(runner.totalIoNanos) + " ms\n"
+            lines += "  cb2 encode+commit: " + ms(runner.totalCb2Nanos) + " ms\n"
+            lines += "  unaccounted (GPU waits): "
+            lines += String(format: "%.1f", total - accounted) + " ms\n"
+            stderr.write(Data(lines.utf8))
+        }
         if !args.quiet {
             let tokensPerSecond = stats.decodeSeconds > 0
                 ? Double(stats.newTokens) / stats.decodeSeconds
                 : 0
-            let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))]\n"
+            let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok/\(String(format: "%.2f", stats.prefillSeconds))s new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))]\n"
             stderr.write(Data(footer.utf8))
         }
         return RunResult(exitCode: 0)

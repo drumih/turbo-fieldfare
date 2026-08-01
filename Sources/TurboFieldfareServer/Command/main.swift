@@ -20,12 +20,14 @@ do {
         modelDirectory: modelURL,
         maxContext: arguments.maxContext,
         promptCacheMode: arguments.promptCacheMode)
+    let modelID = arguments.modelIDOverride ?? backend.defaultModelID
     let server = TurboFieldfareHTTPServer(
-        modelID: arguments.modelID,
+        modelID: modelID,
         queueLimit: arguments.queueLimit,
-        backend: backend)
+        backend: backend,
+        chatDialect: backend.chatDialect)
     _ = try await server.start(port: arguments.port)
-    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
+    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
 
     _ = await signals.wait()
     try await server.shutdown()

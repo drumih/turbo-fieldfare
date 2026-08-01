@@ -27,12 +27,15 @@ final class DequantInt8GEMV {
         Shape(m: 2816, n: 2112),    // shared expert down
     ]
 
-    init(context: MetalContext) throws {
+    init(context: MetalContext,
+         additionalShapes: [(m: Int, n: Int)] = []) throws {
         let kernelName = "dequant_int8_gemv_simd"
         self.pso = try context.pipeline(kernelName)
 
+        let shapes = Self.realDecodeShapes
+            + additionalShapes.map { Shape(m: UInt32($0.m), n: UInt32($0.n)) }
         var variants: [Shape: MTLComputePipelineState] = [:]
-        for shape in Self.realDecodeShapes {
+        for shape in shapes {
             variants[shape] = try context.pipeline(
                 kernelName,
                 constants: [

@@ -6,13 +6,12 @@ final class LMHeadChainInt4 {
     static let rowsPerThreadgroup = 8
 
     private static let rowSummaryStride = 2
-    private static let realDecodeD: UInt32 = 2816
-    private static let realDecodeVocab: UInt32 = 262144
-    private static let realDecodeHeadConstants: [MetalFunctionConstant] = [
-        MetalFunctionConstant(index: 10, value: .uint32(realDecodeD)),
-        MetalFunctionConstant(index: 11, value: .uint32(realDecodeVocab)),
-        MetalFunctionConstant(index: 13, value: .bool(true)),
-    ]
+
+    /// Shape this instance compiles a specialized head pipeline for. Taken
+    /// from the loaded model so both Gemma 4 (2816/262144) and Qwen 3.6
+    /// (2048/248320) get constant-folded loop bounds.
+    private let specializedD: UInt32
+    private let specializedVocab: UInt32
 
     private let rms: RMSNorm
     private let rowGreedy: MTLComputePipelineState
@@ -28,9 +27,15 @@ final class LMHeadChainInt4 {
          maxVocab: Int = 262144) throws {
         self.rms = try RMSNorm(context: context)
         self.rowGreedy = try context.pipeline("lm_head_greedy_int4_rows_chunk_raw")
+        self.specializedD = UInt32(maxD)
+        self.specializedVocab = UInt32(maxVocab)
         self.rowGreedySpecialized = try context.pipeline(
             "lm_head_greedy_int4_rows_chunk_raw",
-            constants: Self.realDecodeHeadConstants)
+            constants: [
+                MetalFunctionConstant(index: 10, value: .uint32(UInt32(maxD))),
+                MetalFunctionConstant(index: 11, value: .uint32(UInt32(maxVocab))),
+                MetalFunctionConstant(index: 13, value: .bool(true)),
+            ])
         self.rowReducer = try context.pipeline("lm_head_greedy_int4_rows_reduce")
         self.maxD = maxD
         self.maxVocab = maxVocab
@@ -86,7 +91,7 @@ final class LMHeadChainInt4 {
                         eps: rmsEps)
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            let specialized = d == Self.realDecodeD && vocab == Self.realDecodeVocab
+            let specialized = d == specializedD && vocab == specializedVocab
             encoder.setComputePipelineState(specialized ? rowGreedySpecialized : rowGreedy)
             encoder.setBuffer(xNormedBuffer, offset: 0, index: 0)
             encoder.setBuffer(weights, offset: weightsOffset, index: 1)

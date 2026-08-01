@@ -19,6 +19,8 @@ constant uint FC_INT8_M [[function_constant(70)]];
 constant uint FC_INT8_N [[function_constant(71)]];
 constant bool FC_INT8_USE_FC [[function_constant(72)]];
 constant uint FC_SHARED_INT8_ROWS_PER_TG [[function_constant(73)]];
+// Unset/false = gelu_pytorch_tanh (Gemma), true = silu (Qwen 3.6 SwiGLU).
+constant bool FC_SHARED_INT8_ACT_SILU [[function_constant(74)]];
 constant constexpr float kInt8GeluSqrt2OverPi = 0.7978845608028654f;
 constant constexpr float kInt8GeluCubicCoeff  = 0.044715f;
 
@@ -44,6 +46,14 @@ inline float int8_gelu_pytorch_tanh(float x) {
     float inner = kInt8GeluSqrt2OverPi * (x + kInt8GeluCubicCoeff * x3);
     inner = clamp(inner, -20.0f, 20.0f);
     return 0.5f * x * (1.0f + tanh(inner));
+}
+
+inline float int8_hidden_activation(float x) {
+    if (is_function_constant_defined(FC_SHARED_INT8_ACT_SILU) &&
+        FC_SHARED_INT8_ACT_SILU) {
+        return x / (1.0f + exp(-x));
+    }
+    return int8_gelu_pytorch_tanh(x);
 }
 
 // y[m] = sum_{n} W[m, n] * x[n]. One-SIMD-per-row variant: 32 threads
@@ -149,6 +159,6 @@ kernel void shared_int8_gate_up_act_simd(
     if (lane == 0) {
         float gate_half = float(half(gate_acc));
         float up_half = float(half(up_acc));
-        act[row] = half(int8_gelu_pytorch_tanh(gate_half) * up_half);
+        act[row] = half(int8_hidden_activation(gate_half) * up_half);
     }
 }

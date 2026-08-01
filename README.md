@@ -64,14 +64,15 @@ your prompt, and press **Generate**.
 
 | Metric          | Value                                                                                                                    |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Model           | Gemma 4 26B-A4B IT, 26B total parameters, about 3.88B active per token                                                   |
+| Models          | Gemma 4 26B-A4B IT (26B total, ~3.88B active per token) and Qwen 3.6 35B-A3B (35B total, ~3B active per token)           |
 | Weights         | MLX affine 4-bit, group 64; 8-bit router; 4-bit shared and routed experts                                                |
-| Memory          | ~2 GB of weights and 4K KV cache                                                                                         |
-| Storage         | About 14.3 GB for the installed text-only model                                                                          |
+| Memory          | ~2 GB of weights and 4K KV cache for Gemma 4; ~1.45 GB for Qwen 3.6                                                      |
+| Storage         | About 14.3 GB installed for Gemma 4; about 19.6 GB for Qwen 3.6                                                          |
 | Hardware        | Apple Silicon Mac; 8 GB of RAM                                                                                            |
 | Platform        | macOS 26, Metal 4, Swift 6.2                                                                                             |
 | M2 measured decode | [5.1-6.3 tok/s](docs/BENCHMARKS.md#m2-measured-decode) on an 8 GB M2 MacBook Air |
 | M5 measured decode | [31-35 tok/s](docs/BENCHMARKS.md#m5-measured-decode) on a 24 GB M5 Pro |
+| M5 measured decode, Qwen 3.6 | [18.8-23.1 tok/s](docs/BENCHMARKS.md#qwen-36-35b-a3b-measured-decode) at ~1.45 GB footprint |
 
 The measured result is a reference point, not a performance ceiling. Prompt
 length, generated length, page-cache state, and hardware all affect throughput.
@@ -101,7 +102,8 @@ The Swift package exposes six products:
 - An Apple Silicon Mac; the validated target is an 8 GB M2 MacBook Air
 - macOS 26 with Metal 4
 - Xcode 26 and Swift 6.2 or newer
-- Enough free storage for the ~14.3 GB model installation
+- Enough free storage for the model installation: ~14.3 GB for Gemma 4,
+  ~19.6 GB for Qwen 3.6
 - An internet connection for the first model install
 
 The package is arm64-only. Older macOS and Metal versions are not supported.
@@ -328,6 +330,47 @@ TurboFieldfare currently includes:
 
 Current scope is text-only inference from the pinned Gemma 4 26B-A4B
 instruction checkpoint on Apple Silicon Macs with at least 8 GB of RAM.
+
+### Qwen 3.6 35B-A3B
+
+TurboFieldfare also runs
+[Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) from the pinned
+`mlx-community/Qwen3.6-35B-A3B-4bit` checkpoint: a 40-layer hybrid of 30
+gated-DeltaNet linear-attention layers and 10 gated full-attention layers,
+with 256 routed experts (top-8) plus a sigmoid-gated shared expert. Linear
+layers keep a fixed ~2 MiB recurrent state per layer instead of per-token KV,
+so only the 10 full-attention layers grow with context. The text-only install
+is about 19.5 GB; the vision tower is omitted.
+
+```bash
+swift run -c release TurboFieldfareRepack \
+  --model qwen36 \
+  --output scratch/qwen36.gturbo \
+  --overwrite
+swift run -c release TurboFieldfareCLI \
+  --model scratch/qwen36.gturbo \
+  --messages-file messages.json
+```
+
+The Mac app selects Qwen with `TURBO_FIELDFARE_MODEL=qwen36` in the
+environment; the server auto-detects the installed model and serves it as
+`qwen3.6-35b-a3b` with the ChatML template and Qwen tool-call format.
+
+Measured on an M5 following the
+[community benchmark protocol](docs/COMMUNITY_BENCHMARKS.md) — the three frozen
+prompts, fixed seeds, one warmup then one measured run per case in a fresh
+process, every footer reporting `stop=endOfTurn`:
+
+| Case | Prompt / generated | Decode | Peak footprint |
+| --- | --- | ---: | ---: |
+| short-explanation | 62 / 493 | 23.05 tok/s | 1,447 MiB |
+| medium-review | 426 / 697 | 21.20 tok/s | 1,448 MiB |
+| long-synthesis | 2,940 / 700 | 18.84 tok/s | 1,464 MiB |
+
+Rerunning all three with 16 GB pinned elsewhere — leaving an ~8 GB working set
+— gave 22.95, 21.35, and 18.62 tok/s at 1,388-1,464 MiB with byte-identical
+output, so Qwen 3.6 holds the same bounded-memory contract as Gemma 4 while
+using about 0.7 GB less. Its install needs about 19.6 GB of disk.
 
 ### Future work
 

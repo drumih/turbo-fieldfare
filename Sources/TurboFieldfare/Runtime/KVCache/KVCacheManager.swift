@@ -4,8 +4,11 @@ import Metal
 
 /// Which attention variant a layer runs. Gemma 4 interleaves 25 sliding-window
 /// layers with 5 full-attention layers (the latter carry the K=V shared-tensor
-/// quirk). Sourced from `ArchConfig.fullAttentionLayerMask`.
-public enum LayerKind: Sendable { case swa, full }
+/// quirk). Qwen 3.6 interleaves 30 gated-DeltaNet linear-attention layers with
+/// 10 full-attention layers; linear layers keep a fixed-size recurrent state
+/// (owned by `GDNStateManager`) instead of per-token K/V rows. Sourced from
+/// `ArchConfig.fullAttentionLayerMask` (0 = swa, 1 = full, 2 = linear).
+public enum LayerKind: Sendable { case swa, full, linear }
 
 /// A read view the attention kernels bind. `offset` stays 0; ring-enabled SWA
 /// layers expose the physical start slot for diagnostics while kernels map
@@ -93,8 +96,33 @@ public final class KVCacheManager {
         kd.reserveCapacity(config.numLayers)
         caps.reserveCapacity(config.numLayers)
 
+        // Linear-attention layers keep no per-token K/V rows; they share one
+        // page-sized placeholder so the parallel arrays stay non-optional.
+        var linearPlaceholder: MTLBuffer? = nil
+
         for layer in 0..<config.numLayers {
-            let isFull = config.fullAttentionLayerMask[layer] != 0
+            let maskValue = config.fullAttentionLayerMask[layer]
+            if maskValue == 2 {
+                let placeholder: MTLBuffer
+                if let existing = linearPlaceholder {
+                    placeholder = existing
+                } else {
+                    guard let made = device.makeBuffer(length: Int(getpagesize()),
+                                                       options: .storageModeShared) else {
+                        throw ModelError.residentBufferWrapFailed
+                    }
+                    made.label = "kv.linear-placeholder"
+                    linearPlaceholder = made
+                    placeholder = made
+                }
+                ks.append(placeholder)
+                vs.append(placeholder)
+                st.append(0)
+                kd.append(.linear)
+                caps.append(0)
+                continue
+            }
+            let isFull = maskValue != 0
             let stride = isFull ? fullStride : swaStride
             let capacity = ringEnabled && !isFull ? swaCapacity : maxContext
             let length = capacity * stride
@@ -144,6 +172,7 @@ public final class KVCacheManager {
 
     /// Write target for this layer's K projection at `position`.
     public func kSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
+        precondition(kinds[layer] != .linear, "linear layers have no KV slots")
         validateRange(start: position, count: 1)
         return (kBuffers[layer], physicalSlot(layer: layer, position: position) * strides[layer])
     }
@@ -152,6 +181,7 @@ public final class KVCacheManager {
     /// distinct from `kSlot` — full layers no longer alias K and V (Gemma 4
     /// applies different per-head norms + RoPE to K vs V; gemma4-block.md §2.2).
     public func vSlot(layer: Int, position: Int) -> (buffer: MTLBuffer, offset: Int) {
+        precondition(kinds[layer] != .linear, "linear layers have no KV slots")
         validateRange(start: position, count: 1)
         return (vBuffers[layer], physicalSlot(layer: layer, position: position) * strides[layer])
     }
@@ -237,7 +267,8 @@ public final class KVCacheManager {
     }
 
     private func physicalSlot(layer: Int, position: Int) -> Int {
-        position % capacityTokens[layer]
+        precondition(capacityTokens[layer] > 0, "layer has no KV storage")
+        return position % capacityTokens[layer]
     }
 
     private func ringStartSlot(layer: Int, validTokenCount: Int) -> Int {

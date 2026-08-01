@@ -1,9 +1,10 @@
 import Metal
 
-/// NeoX RoPE variants used by Gemma 4 attention.
+/// NeoX RoPE variants used by Gemma 4 and Qwen 3.6 attention.
 final class RoPE {
     private let defaultNeox: MTLComputePipelineState
     private let proportionalNeox: MTLComputePipelineState
+    private let neoxSubdim: MTLComputePipelineState
     private let defaultNeoxSWAQ: MTLComputePipelineState
     private let defaultNeoxSWAK: MTLComputePipelineState
     private let proportionalNeoxFullQ: MTLComputePipelineState
@@ -12,6 +13,7 @@ final class RoPE {
     init(context: MetalContext) throws {
         self.defaultNeox = try context.pipeline("rope_default_neox")
         self.proportionalNeox = try context.pipeline("rope_proportional_neox")
+        self.neoxSubdim = try context.pipeline("rope_neox_subdim")
         self.defaultNeoxSWAQ = try Self.specializedPipeline(
             context, "rope_default_neox", headDim: 256, numHeads: 16)
         self.defaultNeoxSWAK = try Self.specializedPipeline(
@@ -22,6 +24,40 @@ final class RoPE {
         self.proportionalNeoxFullK = try Self.specializedPipeline(
             context, "rope_proportional_neox",
             headDim: 512, numHeads: 2, rotatedPairs: 64)
+    }
+
+    /// Qwen-style partial RoPE: rotation confined to the first `rotaryDim`
+    /// elements of each head, frequency divisor = rotaryDim.
+    func encodeNeoxSubdim(commandBuffer: MTLCommandBuffer,
+                          data: MTLBuffer,
+                          dataOffset: Int = 0,
+                          position: UInt32,
+                          headDim: UInt32,
+                          numHeads: UInt32,
+                          rotaryDim: UInt32,
+                          numTokens: UInt32 = 1,
+                          theta: Float) {
+        precondition(rotaryDim.isMultiple(of: 2), "rotary_dim must be even")
+        precondition(rotaryDim <= headDim, "rotary_dim must not exceed head_dim")
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        encoder.setComputePipelineState(neoxSubdim)
+        encoder.setBuffer(data, offset: dataOffset, index: 0)
+        var positionValue = position
+        var headDimValue = headDim
+        var numHeadsValue = numHeads
+        var thetaValue = theta
+        var rotaryDimValue = rotaryDim
+        encoder.setBytes(&positionValue, length: MemoryLayout<UInt32>.size, index: 1)
+        encoder.setBytes(&headDimValue, length: MemoryLayout<UInt32>.size, index: 2)
+        encoder.setBytes(&numHeadsValue, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.size, index: 4)
+        encoder.setBytes(&rotaryDimValue, length: MemoryLayout<UInt32>.size, index: 5)
+        dispatch(encoder: encoder,
+                 pipeline: neoxSubdim,
+                 pairs: Int(rotaryDim) / 2,
+                 heads: Int(numHeads),
+                 tokens: Int(numTokens))
+        encoder.endEncoding()
     }
 
     func encodeDefaultNeox(commandBuffer: MTLCommandBuffer,

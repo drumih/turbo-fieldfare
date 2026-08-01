@@ -21,14 +21,20 @@ final class DequantInt4GEMV {
     private let pipeline: MTLComputePipelineState
     private let specializedPipelines: [Shape: MTLComputePipelineState]
 
-    init(context: MetalContext) throws {
+    /// `additionalShapes` compiles extra constant-folded variants for a
+    /// non-Gemma model's decode shapes. Measured: an unspecialized
+    /// 4096x2048 GEMV runs at 102 GB/s, the specialized one at 141 GB/s.
+    init(context: MetalContext,
+         additionalShapes: [(m: Int, n: Int)] = []) throws {
         self.pipeline = try context.pipeline(
             "dequant_int4_gemv_simd",
             constants: [],
             maxTotalThreadsPerThreadgroup: 512)
 
+        let shapes = Self.realDecodeShapes
+            + additionalShapes.map { Shape(m: UInt32($0.m), n: UInt32($0.n)) }
         var specializedPipelines: [Shape: MTLComputePipelineState] = [:]
-        for shape in Self.realDecodeShapes {
+        for shape in shapes {
             specializedPipelines[shape] = try context.pipeline(
                 "dequant_int4_gemv_simd",
                 constants: [

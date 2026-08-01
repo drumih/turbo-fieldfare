@@ -358,8 +358,13 @@ final class PrefillGroupedRoutedMoE {
         return PrefillStreamedTileArgumentBuffer(buffer: buffer)
     }
 
-    init(context: MetalContext) throws {
-        self.batchedPhase1PSO = try context.pipeline("prefill_grouped_routed_moe_batched_phase1")
+    init(context: MetalContext, siluActivation: Bool = false) throws {
+        let activationConstants: [MetalFunctionConstant] = siluActivation
+            ? [MetalFunctionConstant(index: 77, value: .bool(true))]
+            : []
+        self.batchedPhase1PSO = try context.pipeline(
+            "prefill_grouped_routed_moe_batched_phase1",
+            constants: activationConstants)
         self.batchedDownPSO = try context.pipeline("prefill_grouped_routed_moe_batched_down")
         guard let streamedFn = context.library.makeFunction(name: "prefill_grouped_routed_moe_batched_phase1") else {
             throw MetalError.missingFunction("prefill_grouped_routed_moe_batched_phase1")

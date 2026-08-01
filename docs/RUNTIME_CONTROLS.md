@@ -24,11 +24,17 @@ benchmark protocol.
 
 ## Runtime settings
 
-| Control | Values | Production default | Effect |
-| --- | --- | --- | --- |
-| Expert-cache slots | 8, 16, 24, 32 | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. |
-| Prompt prefill | On, off | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
-| RDADVISE | Off, Default, Bounded, Adaptive | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
+| Control | Values | CLI flag | Production default | Effect |
+| --- | --- | --- | --- | --- |
+| Expert-cache slots | 8, 16, 24, 32 | `--expert-cache-slots` | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. |
+| Prompt prefill | On, off | — | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
+| RDADVISE | Off, Default, Bounded, Adaptive | `--rdadvise` | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
+
+The CLI applies these settings when it loads the model, so each run uses the
+values passed on its command line. Setting `TURBO_FIELDFARE_PHASES=1` makes the
+CLI print the decode phase split (`cb1`, expert I/O await, `cb2`, and GPU
+waits) after the timing footer; it is a diagnostic and does not change
+behavior.
 
 Changing context length, expert-cache slots, or RDADVISE requires a reload.
 Some sampling changes also require a reload because greedy and sampled

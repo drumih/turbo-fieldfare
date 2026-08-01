@@ -31,7 +31,7 @@ enum GTurboJSON {
                                       expertStride: UInt64,
                                       bitWidths: QuantBitWidths) throws -> Data {
         let arch = plan.arch
-        let archDict: [String: Any] = [
+        var archDict: [String: Any] = [
             "hiddenSize": arch.hiddenSize,
             "ffnIntermediate": arch.intermediateSize,
             "moeIntermediateSize": arch.moeIntermediateSize,
@@ -54,6 +54,24 @@ enum GTurboJSON {
             "hiddenActivation": arch.hiddenActivation,
             "fullAttentionLayerMask": arch.fullAttentionLayerMask.map { Int($0) }
         ]
+        // Family extension fields. Gemma manifests omit them (byte-identical
+        // to the pre-family format); the reader treats absence as the Gemma
+        // defaults.
+        if arch.family != .gemma4 {
+            archDict["family"] = arch.family.rawValue
+            archDict["attnOutputGate"] = arch.attnOutputGate
+            archDict["attentionScale"] = arch.attentionScale
+            archDict["embeddingScaledBySqrtHidden"] = arch.embeddingScaledBySqrtHidden
+            archDict["routerScaled"] = arch.routerScaled
+            archDict["ffnSandwichNorms"] = arch.ffnSandwichNorms
+            archDict["sharedExpertGated"] = arch.sharedExpertGated
+            archDict["ropeNeoxSubdim"] = arch.ropeNeoxSubdim
+            archDict["linearNumKHeads"] = arch.linearNumKHeads
+            archDict["linearNumVHeads"] = arch.linearNumVHeads
+            archDict["linearKeyHeadDim"] = arch.linearKeyHeadDim
+            archDict["linearValueHeadDim"] = arch.linearValueHeadDim
+            archDict["linearConvKernelSize"] = arch.linearConvKernelSize
+        }
         let quantBits = [
             "embedding": bitWidths.embedding,
             "attention": bitWidths.attention,

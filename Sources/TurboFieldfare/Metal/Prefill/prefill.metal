@@ -16,12 +16,22 @@ constant constexpr uint kPrefillMaxTileExperts = 16;
 constant constexpr float kPrefillGeluSqrt2OverPi = 0.7978845608028654f;
 constant constexpr float kPrefillGeluCubicCoeff = 0.044715f;
 constant uint FC_PREFILL_KV_RING_CAP [[function_constant(76)]];
+// Unset/false = gelu_pytorch_tanh (Gemma), true = silu (Qwen 3.6 SwiGLU).
+constant bool FC_PREFILL_ACT_SILU [[function_constant(77)]];
 
 static inline float prefill_gelu_pytorch_tanh(float x) {
     const float x3 = x * x * x;
     float inner = kPrefillGeluSqrt2OverPi * (x + kPrefillGeluCubicCoeff * x3);
     inner = clamp(inner, -20.0f, 20.0f);
     return 0.5f * x * (1.0f + tanh(inner));
+}
+
+static inline float prefill_hidden_activation(float x) {
+    if (is_function_constant_defined(FC_PREFILL_ACT_SILU) &&
+        FC_PREFILL_ACT_SILU) {
+        return x / (1.0f + exp(-x));
+    }
+    return prefill_gelu_pytorch_tanh(x);
 }
 kernel void prefill_embed_lookup_int4_block(
     device const uint8_t* table     [[buffer(0)]],
@@ -633,7 +643,7 @@ kernel void prefill_grouped_routed_moe_batched_phase1(
     gate_up_act_scratch[index] = half(gate);
     gate_up_act_scratch[row_elements + index] = half(up);
     gate_up_act_scratch[2u * row_elements + index] =
-        half(prefill_gelu_pytorch_tanh(gate) * up);
+        half(prefill_hidden_activation(gate) * up);
 }
 
 kernel void prefill_grouped_routed_moe_batched_down(
@@ -770,6 +780,31 @@ kernel void prefill_rope_proportional_neox_block(
     const uint half_dim = head_dim / 2u;
     device half* head_ptr = data + t * token_stride_elems + h * head_dim;
     prefill_rope_apply_neox_pair(head_ptr, i, half_dim, head_dim,
+                                 float(start_position + t), theta_base);
+}
+
+// Qwen-style partial RoPE: rotation confined to the first `rotary_dim`
+// elements per head, pairing (i, rotary_dim/2 + i), frequency divisor =
+// rotary_dim; the remaining elements pass through untouched.
+kernel void prefill_rope_neox_subdim_block(
+    device half*   data                [[buffer(0)]],
+    constant uint& start_position      [[buffer(1)]],
+    constant uint& head_dim            [[buffer(2)]],
+    constant uint& num_heads           [[buffer(3)]],
+    constant uint& token_stride_elems  [[buffer(4)]],
+    constant float& theta_base         [[buffer(5)]],
+    constant uint& rotary_dim          [[buffer(6)]],
+    uint3          gid                 [[thread_position_in_grid]]
+) {
+    const uint i = gid.x;
+    const uint h = gid.y;
+    const uint t = gid.z;
+    const uint half_rotary = rotary_dim / 2u;
+    if (i >= half_rotary) return;
+    if (h >= num_heads) return;
+
+    device half* head_ptr = data + t * token_stride_elems + h * head_dim;
+    prefill_rope_apply_neox_pair(head_ptr, i, half_rotary, rotary_dim,
                                  float(start_position + t), theta_base);
 }
 

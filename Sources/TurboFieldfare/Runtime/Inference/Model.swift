@@ -85,9 +85,13 @@ public struct Model {
         try! resident(name: "language_model.model.embed_tokens.weight")
     }
 
-    /// Gemma 4 ties lm_head to the embedding. The transpose for the lm_head
-    /// GEMV path is the kernel's job, not the loader's.
-    public var lmHead: TensorView { embedding }
+    /// Gemma 4 ties lm_head to the embedding; Qwen 3.6 carries a separate
+    /// `lm_head` tensor. The transpose for the lm_head GEMV path is the
+    /// kernel's job, not the loader's.
+    public var lmHead: TensorView {
+        if config.tieWordEmbeddings { return embedding }
+        return try! resident(name: "language_model.lm_head.weight")
+    }
 
     public func qProj(layer L: Int) throws -> TensorView {
         try resident(name: "language_model.model.layers.\(L).self_attn.q_proj.weight")
@@ -101,20 +105,40 @@ public struct Model {
     public func oProj(layer L: Int) throws -> TensorView {
         try resident(name: "language_model.model.layers.\(L).self_attn.o_proj.weight")
     }
-    /// Writer emits `.router.proj.weight` (no `.mlp.` segment).
+    /// Gemma's writer emits `.router.proj.weight` (no `.mlp.` segment);
+    /// Qwen's router is the source-named `.mlp.gate.weight`.
     public func router(layer L: Int) throws -> TensorView {
-        try resident(name: "language_model.model.layers.\(L).router.proj.weight")
+        switch config.family {
+        case .gemma4:
+            return try resident(name: "language_model.model.layers.\(L).router.proj.weight")
+        case .qwen36:
+            return try resident(name: "language_model.model.layers.\(L).mlp.gate.weight")
+        }
     }
-    /// Writer emits the shared-expert FFN as `.mlp.{gate,up,down}_proj.weight`
-    /// without a `.shared_expert.` segment.
+    /// Shared-expert FFN. Gemma emits `.mlp.{gate,up,down}_proj.weight`
+    /// without a `.shared_expert.` segment; Qwen keeps the source's
+    /// `.mlp.shared_expert.{gate,up,down}_proj.weight` names.
     public func sharedExpertGate(layer L: Int) throws -> TensorView {
-        try resident(name: "language_model.model.layers.\(L).mlp.gate_proj.weight")
+        try resident(name: sharedExpertName("gate_proj", layer: L))
     }
     public func sharedExpertUp(layer L: Int) throws -> TensorView {
-        try resident(name: "language_model.model.layers.\(L).mlp.up_proj.weight")
+        try resident(name: sharedExpertName("up_proj", layer: L))
     }
     public func sharedExpertDown(layer L: Int) throws -> TensorView {
-        try resident(name: "language_model.model.layers.\(L).mlp.down_proj.weight")
+        try resident(name: sharedExpertName("down_proj", layer: L))
+    }
+    private func sharedExpertName(_ proj: String, layer L: Int) -> String {
+        switch config.family {
+        case .gemma4:
+            return "language_model.model.layers.\(L).mlp.\(proj).weight"
+        case .qwen36:
+            return "language_model.model.layers.\(L).mlp.shared_expert.\(proj).weight"
+        }
+    }
+    /// Qwen-only scalar gate on the shared-expert branch: a `[1, hidden]`
+    /// 8-bit projection whose sigmoid multiplies the shared FFN output.
+    public func sharedExpertScalarGate(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).mlp.shared_expert_gate.weight")
     }
     public func inputNorm(layer L: Int) throws -> TensorView {
         try resident(name: "language_model.model.layers.\(L).input_layernorm.weight")
@@ -182,6 +206,44 @@ public struct Model {
     /// of the layer; shape `[1]`, BF16.
     public func layerScalar(layer L: Int) throws -> TensorView {
         try resident(name: "language_model.model.layers.\(L).layer_scalar")
+    }
+
+    // MARK: - Gated-DeltaNet linear attention (Qwen 3.6)
+    //
+    // Layers whose mask value is 2 replace full/sliding attention with the
+    // gated delta rule. Projections are 4-bit affine; the depthwise conv
+    // weight, A_log, dt_bias, and the gated output norm are BF16.
+
+    public func linearInProjQKV(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.in_proj_qkv.weight")
+    }
+    public func linearInProjZ(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.in_proj_z.weight")
+    }
+    public func linearInProjA(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.in_proj_a.weight")
+    }
+    public func linearInProjB(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.in_proj_b.weight")
+    }
+    public func linearOutProj(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.out_proj.weight")
+    }
+    /// Depthwise causal conv weight, source shape `[convDim, kernel, 1]`, BF16.
+    public func linearConv1d(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.conv1d.weight")
+    }
+    /// Per-value-head decay base, shape `[numVHeads]`, BF16.
+    public func linearALog(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.A_log")
+    }
+    /// Per-value-head dt bias, shape `[numVHeads]`, BF16.
+    public func linearDtBias(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.dt_bias")
+    }
+    /// Gated RMSNorm weight over the value head dim, shape `[valueHeadDim]`.
+    public func linearNorm(layer L: Int) throws -> TensorView {
+        try resident(name: "language_model.model.layers.\(L).linear_attn.norm.weight")
     }
 
     /// Resolve a tensor name to a `TensorView` against the resident buffer.
@@ -300,12 +362,33 @@ public struct Model {
 
 extension Model {
 
+    /// Open a `.gturbo/` directory with the architecture auto-detected from
+    /// `manifest.json -> arch.family` (absent means Gemma 4).
+    public static func load(directoryURL: URL,
+                            device: MTLDevice,
+                            streamingMode: ExpertStreamingMode = .pread(slotCount: 16),
+                            expertCachePolicy: ExpertCachePolicy = PreadExpertStreamer.cachePolicyDefault,
+                            integrityPolicy: ModelIntegrityPolicy? = nil,
+                            loadStats: UnsafeMutablePointer<ModelLoadStats>? = nil) throws -> Model {
+        let family = try ManifestReader.peekFamily(directoryURL: directoryURL)
+        guard let baseline = ArchConfig.knownArchitectures[family] else {
+            throw ModelError.indexCorrupt(detail: "no baseline for family \(family.rawValue)")
+        }
+        return try load(directoryURL: directoryURL,
+                        device: device,
+                        expecting: baseline,
+                        streamingMode: streamingMode,
+                        expertCachePolicy: expertCachePolicy,
+                        integrityPolicy: integrityPolicy,
+                        loadStats: loadStats)
+    }
+
     /// Open a `.gturbo/` directory and return a typed handle. Eagerly verifies
     /// SHA-256 of `model_weights.bin` and `packed_experts/layout.json`; layer
     /// files are verified lazily on first `routedExpert(...)` touch.
     public static func load(directoryURL: URL,
                             device: MTLDevice,
-                            expecting: ArchConfig = .gemma4_26B_A4B,
+                            expecting: ArchConfig,
                             streamingMode: ExpertStreamingMode = .pread(slotCount: 16),
                             expertCachePolicy: ExpertCachePolicy = PreadExpertStreamer.cachePolicyDefault,
                             integrityPolicy: ModelIntegrityPolicy? = nil,

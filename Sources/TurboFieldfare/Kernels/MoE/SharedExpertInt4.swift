@@ -22,9 +22,10 @@ public final class SharedExpertInt4 {
     private let int4: DequantInt4GEMV
     private let geluMulPSO: MTLComputePipelineState
 
-    public init(context: MetalContext) throws {
+    public init(context: MetalContext, siluActivation: Bool = false) throws {
         self.int4 = try DequantInt4GEMV(context: context)
-        self.geluMulPSO = try context.pipeline("gelu_mul_fp16")
+        self.geluMulPSO = try context.pipeline(
+            siluActivation ? "silu_mul_fp16" : "gelu_mul_fp16")
     }
 
     public func encode(commandBuffer cb: MTLCommandBuffer,
@@ -103,11 +104,14 @@ public final class SharedExpertRuntime {
     private let implementation: Implementation
     public let weightBits: Int
 
-    public init(context: MetalContext, weightBits: Int) throws {
+    public init(context: MetalContext, weightBits: Int,
+                siluActivation: Bool = false) throws {
         self.weightBits = weightBits
         switch weightBits {
-        case 4: self.implementation = .int4(try SharedExpertInt4(context: context))
-        case 8: self.implementation = .int8(try SharedExpertInt8(context: context))
+        case 4: self.implementation = .int4(try SharedExpertInt4(
+            context: context, siluActivation: siluActivation))
+        case 8: self.implementation = .int8(try SharedExpertInt8(
+            context: context, siluActivation: siluActivation))
         default: throw SharedExpertError.unsupportedWeightBits(weightBits)
         }
     }

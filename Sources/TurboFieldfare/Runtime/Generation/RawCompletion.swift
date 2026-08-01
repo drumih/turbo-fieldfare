@@ -42,7 +42,7 @@ public struct RawCompletionScratch: @unchecked Sendable {
     let outToken: MTLBuffer
     let sampler: Sampler
 
-    public init(context: MetalContext, vocab: Int) throws {
+    public init(context: MetalContext, vocab: Int, logitSoftcap: Float = 30.0) throws {
         guard let logits = context.device.makeBuffer(length: vocab * MemoryLayout<Float16>.size,
                                                      options: .storageModeShared),
               let probs = context.device.makeBuffer(length: vocab * MemoryLayout<Float16>.size,
@@ -55,7 +55,8 @@ public struct RawCompletionScratch: @unchecked Sendable {
         self.logits = logits
         self.probs = probs
         self.outToken = outToken
-        self.sampler = try Sampler(context: context, vocab: vocab)
+        self.sampler = try Sampler(context: context, vocab: vocab,
+                                   logitSoftcap: logitSoftcap)
     }
 }
 

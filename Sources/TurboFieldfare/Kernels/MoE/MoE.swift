@@ -31,22 +31,10 @@ public struct MoEExpertOffsets {
 final class MoE {
     static let maxStreamedExperts = 8
 
-    private static let realDecodeD: UInt32 = 2816
-    private static let realDecodeF: UInt32 = 704
+    private let realDecodeD: UInt32
+    private let realDecodeF: UInt32
     private static let realDecodeTopK: UInt32 = 8
-    private static let realDecodeNumExperts: UInt32 = 128
-    private static let realDecodeMoEConstants: [MetalFunctionConstant] = [
-        MetalFunctionConstant(index: 0, value: .uint32(realDecodeD)),
-        MetalFunctionConstant(index: 1, value: .uint32(realDecodeF)),
-        MetalFunctionConstant(index: 2, value: .uint32(realDecodeTopK)),
-        MetalFunctionConstant(index: 3, value: .bool(true)),
-    ]
-    private static let realDecodeRouterConstants: [MetalFunctionConstant] = [
-        MetalFunctionConstant(index: 40, value: .uint32(realDecodeNumExperts)),
-        MetalFunctionConstant(index: 41, value: .uint32(realDecodeD)),
-        MetalFunctionConstant(index: 42, value: .uint32(realDecodeTopK)),
-        MetalFunctionConstant(index: 43, value: .bool(true)),
-    ]
+    private let realDecodeNumExperts: UInt32
 
     private let routerGemvPSO: MTLComputePipelineState
     private let routerGemvSpecializedPSO: MTLComputePipelineState
@@ -62,7 +50,33 @@ final class MoE {
     private let routedArgEncoder: MTLArgumentEncoder
     private let reusableRoutedArgBuffer: MTLBuffer
 
-    init(context: MetalContext) throws {
+    /// `specializedD`/`specializedF`/`specializedNumExperts` describe the
+    /// production shape this instance specializes for (Gemma 4 by default;
+    /// Qwen 3.6 passes 2048/512/256). `siluActivation` selects the expert
+    /// FFN activation (false = gelu_pytorch_tanh, true = silu).
+    init(context: MetalContext,
+         siluActivation: Bool = false,
+         specializedD: UInt32 = 2816,
+         specializedF: UInt32 = 704,
+         specializedNumExperts: UInt32 = 128) throws {
+        self.realDecodeD = specializedD
+        self.realDecodeF = specializedF
+        self.realDecodeNumExperts = specializedNumExperts
+        let activationConstants: [MetalFunctionConstant] = siluActivation
+            ? [MetalFunctionConstant(index: 4, value: .bool(true))]
+            : []
+        let moeConstants: [MetalFunctionConstant] = [
+            MetalFunctionConstant(index: 0, value: .uint32(specializedD)),
+            MetalFunctionConstant(index: 1, value: .uint32(specializedF)),
+            MetalFunctionConstant(index: 2, value: .uint32(Self.realDecodeTopK)),
+            MetalFunctionConstant(index: 3, value: .bool(true)),
+        ] + activationConstants
+        let routerConstants: [MetalFunctionConstant] = [
+            MetalFunctionConstant(index: 40, value: .uint32(specializedNumExperts)),
+            MetalFunctionConstant(index: 41, value: .uint32(specializedD)),
+            MetalFunctionConstant(index: 42, value: .uint32(Self.realDecodeTopK)),
+            MetalFunctionConstant(index: 43, value: .bool(true)),
+        ]
         let routerName = "router_gemv_gemma4_r4"
         self.routerGemvPSO = try context.pipeline(
             routerName,
@@ -70,24 +84,26 @@ final class MoE {
             maxTotalThreadsPerThreadgroup: 512)
         self.routerGemvSpecializedPSO = try context.pipeline(
             routerName,
-            constants: Self.realDecodeRouterConstants,
+            constants: routerConstants,
             maxTotalThreadsPerThreadgroup: 512)
         self.routerSelectK8PSO = try context.pipeline("router_topk_select_k8")
         self.routerSelectK8SpecializedPSO = try context.pipeline(
             "router_topk_select_k8",
-            constants: Self.realDecodeRouterConstants)
-        self.phase1U16PSO = try context.pipeline("moe_phase1_gate_up_act_u16load")
+            constants: routerConstants)
+        self.phase1U16PSO = try context.pipeline(
+            "moe_phase1_gate_up_act_u16load", constants: activationConstants)
         self.phase1U16SpecializedPSO = try context.pipeline(
             "moe_phase1_gate_up_act_u16load",
-            constants: Self.realDecodeMoEConstants)
-        self.phase1SubsetU16PSO = try context.pipeline("moe_phase1_gate_up_act_subset_u16load")
+            constants: moeConstants)
+        self.phase1SubsetU16PSO = try context.pipeline(
+            "moe_phase1_gate_up_act_subset_u16load", constants: activationConstants)
         self.phase1SubsetU16SpecializedPSO = try context.pipeline(
             "moe_phase1_gate_up_act_subset_u16load",
-            constants: Self.realDecodeMoEConstants)
+            constants: moeConstants)
         self.phase2ReduceK8PSO = try context.pipeline("moe_phase2_down_reduce_k8")
         self.phase2ReduceK8SpecializedPSO = try context.pipeline(
             "moe_phase2_down_reduce_k8",
-            constants: Self.realDecodeMoEConstants)
+            constants: moeConstants)
 
         guard let logits = context.device.makeBuffer(
             length: 256 * MemoryLayout<Float>.stride,
@@ -124,8 +140,8 @@ final class MoE {
 
         var expertCount = numExperts
         var dimension = d
-        let useSpecialized = numExperts == Self.realDecodeNumExperts
-            && d == Self.realDecodeD
+        let useSpecialized = numExperts == realDecodeNumExperts
+            && d == realDecodeD
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             encoder.setComputePipelineState(
                 useSpecialized ? routerGemvSpecializedPSO : routerGemvPSO)
@@ -308,6 +324,6 @@ final class MoE {
     }
 
     private func useRealDecodeConstants(d: UInt32, f: UInt32) -> Bool {
-        d == Self.realDecodeD && f == Self.realDecodeF
+        d == realDecodeD && f == realDecodeF
     }
 }

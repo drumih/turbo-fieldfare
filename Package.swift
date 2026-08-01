@@ -103,7 +103,8 @@ let package = Package(
         .testTarget(
             name: "TurboFieldfareTestsCore",
             dependencies: ["TurboFieldfare", "TurboFieldfareValidationSupport", "TurboFieldfareRepackCore", "TurboFieldfareCLICore"],
-            path: "Tests/TurboFieldfare/Core"
+            path: "Tests/TurboFieldfare/Core",
+            resources: [.copy("Tokenization/Fixtures")]
         ),
         .testTarget(
             name: "TurboFieldfareRepackTests",

@@ -1,7 +1,9 @@
 import Foundation
 
 enum AppModelLocation {
-    static func defaultURL() -> URL {
+    static func defaultURL(
+        descriptor: AppModelInstallDescriptor = .selected
+    ) -> URL {
         let fileManager = FileManager.default
         let applicationSupport = (try? fileManager.url(
             for: .applicationSupportDirectory,
@@ -14,30 +16,32 @@ enum AppModelLocation {
             currentDirectoryURL: URL(fileURLWithPath: fileManager.currentDirectoryPath,
                                      isDirectory: true),
             applicationSupportURL: applicationSupport,
-            fileExists: fileManager.fileExists(atPath:))
+            fileExists: fileManager.fileExists(atPath:),
+            installDirectoryName: descriptor.installDirectoryName)
     }
 
     static func resolve(explicitURL: URL?,
                         executableURL: URL?,
                         currentDirectoryURL: URL,
                         applicationSupportURL: URL,
-                        fileExists: (String) -> Bool) -> URL {
+                        fileExists: (String) -> Bool,
+                        installDirectoryName: String = "gemma4.gturbo") -> URL {
         if let explicitURL {
             return absoluteURL(explicitURL, relativeTo: currentDirectoryURL)
         }
         if let executableURL,
            let root = packageRoot(startingAt: executableURL.deletingLastPathComponent(),
                                   fileExists: fileExists) {
-            return root.appendingPathComponent("scratch/gemma4.gturbo", isDirectory: true)
+            return root.appendingPathComponent("scratch/\(installDirectoryName)", isDirectory: true)
                 .standardizedFileURL
         }
         if let root = packageRoot(startingAt: currentDirectoryURL, fileExists: fileExists) {
-            return root.appendingPathComponent("scratch/gemma4.gturbo", isDirectory: true)
+            return root.appendingPathComponent("scratch/\(installDirectoryName)", isDirectory: true)
                 .standardizedFileURL
         }
         return applicationSupportURL
             .appendingPathComponent("TurboFieldfare", isDirectory: true)
-            .appendingPathComponent("gemma4.gturbo", isDirectory: true)
+            .appendingPathComponent(installDirectoryName, isDirectory: true)
             .standardizedFileURL
     }
 
