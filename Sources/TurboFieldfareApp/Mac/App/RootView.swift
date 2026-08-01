@@ -91,7 +91,9 @@ struct RootView: View {
     private var conversationChrome: some View {
         VStack(spacing: 10) {
             ErrorBanner(model: model)
-            if model.promptText.isEmpty && model.showPromptExamples {
+            if model.promptText.isEmpty
+                && model.showPromptExamples
+                && !model.hasOutputTranscript {
                 PromptExamplesView { preset in
                     model.promptText = preset.prompt
                 }
@@ -101,8 +103,11 @@ struct RootView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
-        .animation(.smooth(duration: 0.2), value: model.promptText.isEmpty)
-        .animation(.smooth(duration: 0.2), value: model.showPromptExamples)
+        .animation(
+            .smooth(duration: 0.2),
+            value: model.promptText.isEmpty
+                && model.showPromptExamples
+                && !model.hasOutputTranscript)
     }
 
 }

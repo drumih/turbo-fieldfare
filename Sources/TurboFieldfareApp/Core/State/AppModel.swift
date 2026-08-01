@@ -751,6 +751,9 @@ public final class AppModel {
         }
         persistSettings()
 
+        // The request retains the submitted prompt; clear the composer so the
+        // user can prepare the next turn while this response streams.
+        promptText = ""
         generationTranscriptMailbox?.reset()
         outputMessages = conversation + [AppChatMessage(role: .user, content: request.prompt)]
         outputPromptText = request.prompt

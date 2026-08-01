@@ -164,6 +164,7 @@ import Testing
         #expect(model.outputText.contains("alpha beta"))
         #expect(model.diagnostics != nil)
         #expect(model.error == nil)
+        #expect(model.promptText.isEmpty)
     }
 
     @MainActor

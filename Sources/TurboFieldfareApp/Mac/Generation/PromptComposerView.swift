@@ -48,6 +48,16 @@ struct PromptComposerView: View {
                 }
             }
             .frame(height: editorHeight)
+            .onKeyPress { press in
+                guard press.key == .return,
+                      !press.modifiers.contains(.shift) else {
+                    return .ignored
+                }
+                guard model.canRun else { return .handled }
+                model.run()
+                promptFocused = true
+                return .handled
+            }
             .overlay(alignment: .topLeading) {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
