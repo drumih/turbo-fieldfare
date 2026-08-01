@@ -20,10 +20,12 @@ import Testing
     }
     """.utf8)
 
+    /// Verbatim from Qwen/Qwen3.6-35B-A3B's published config.json — the model
+    /// type really is `qwen3_5_moe`, not a `3_6` variant.
     private let qwen36Config = Data("""
     {
-      "model_type": "qwen3_6_moe",
-      "architectures": ["Qwen36MoeForConditionalGeneration"],
+      "model_type": "qwen3_5_moe",
+      "architectures": ["Qwen3_5MoeForConditionalGeneration"],
       "num_hidden_layers": 40
     }
     """.utf8)
@@ -39,7 +41,7 @@ import Testing
 
     @Test func rejectsQwen36() throws {
         #expect(try ArchPreflight.evaluate(configJSON: qwen36Config)
-            == .unsupported(modelType: "qwen3_6_moe"))
+            == .unsupported(modelType: "qwen3_5_moe"))
     }
 
     @Test func fallsBackToArchitecturesWhenModelTypeIsAbsent() throws {
