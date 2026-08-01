@@ -28,7 +28,7 @@ enum GemmaToolSchema {
             throw invalid(toolName, path, "allOf is not representable by the Gemma template")
         }
         if object["anyOf"] != nil || object["oneOf"] != nil {
-            object = try adaptNullableUnion(object, toolName: toolName, path: path)
+            object = try adaptUnion(object, toolName: toolName, path: path)
         }
 
         let type: String
@@ -96,6 +96,57 @@ enum GemmaToolSchema {
         object["type"] = .string(type)
         object["nullable"] = .bool(true)
         return type
+    }
+
+    private static func adaptUnion(
+        _ source: [String: JSONValue],
+        toolName: String,
+        path: String
+    ) throws -> [String: JSONValue] {
+        if let result = try adaptStringConstantUnion(
+            source, toolName: toolName, path: path) {
+            return result
+        }
+        return try adaptNullableUnion(source, toolName: toolName, path: path)
+    }
+
+    private static func adaptStringConstantUnion(
+        _ source: [String: JSONValue],
+        toolName: String,
+        path: String
+    ) throws -> [String: JSONValue]? {
+        guard !(source["anyOf"] != nil && source["oneOf"] != nil) else { return nil }
+        let keyword = source["anyOf"] != nil ? "anyOf" : "oneOf"
+        guard case .array(let branches)? = source[keyword], branches.count >= 2 else {
+            return nil
+        }
+
+        var values: [JSONValue] = []
+        for branch in branches {
+            guard case .object(let object) = branch,
+                  Set(object.keys).isSubset(of: ["const", "type"]),
+                  object["type"] == .string("string"),
+                  case .string = object["const"] else {
+                return nil
+            }
+            let value = object["const"]!
+            if keyword == "oneOf", values.contains(value) {
+                throw invalid(toolName, path, "oneOf constant branches overlap")
+            }
+            if !values.contains(value) { values.append(value) }
+        }
+
+        let allowedSiblings = annotations.union([keyword])
+        guard Set(source.keys).isSubset(of: allowedSiblings) else {
+            throw invalid(
+                toolName, path,
+                "constant union conflicts with sibling schema keywords")
+        }
+        var result = source
+        result[keyword] = nil
+        result["type"] = .string("string")
+        result["enum"] = .array(values)
+        return result
     }
 
     private static func adaptNullableUnion(

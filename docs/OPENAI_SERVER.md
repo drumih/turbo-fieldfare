@@ -156,7 +156,8 @@ to allow calls. Set it to `none` to disable them. The server does not support
 Tool schemas need a non-null object at the top level and explicit JSON Schema
 types. Nested properties and items may use nullable forms with one concrete
 type plus `null`, including equivalent two-branch `anyOf` and disjoint `oneOf`
-forms. Overlapping `oneOf`, other unions, and `allOf` return HTTP 400 with
+forms. Unions of string constants are also supported. Overlapping `oneOf`,
+mixed-type unions such as `string | object`, and `allOf` return HTTP 400 with
 `invalid_tool_schema`; the server does not guess which branch the model should
 use.
 

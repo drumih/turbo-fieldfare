@@ -198,6 +198,51 @@ struct OpenAIValidationTests {
         #expect(parsed.arguments.objectValue?["file-path"] == .string("/tmp/x"))
     }
 
+    @Test func stringConstantUnionAdaptsToEnumAndRenders() async throws {
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[{"role":"user","content":"search"}],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"vcc_recall",
+              "description":"",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "scope":{
+                    "anyOf":[
+                      {"type":"string","const":"lineage"},
+                      {"type":"string","const":"all"}
+                    ],
+                    "description":""
+                  }
+                }
+              }
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tool = try #require(validated.tools.first)
+        let properties = try #require(tool.parameters.objectValue?["properties"]?.objectValue)
+        let scope = try #require(properties["scope"]?.objectValue)
+        #expect(scope["type"] == .string("string"))
+        #expect(scope["enum"] == .array([.string("lineage"), .string("all")]))
+        #expect(scope["anyOf"] == nil)
+
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = tokenizer.decode(
+            try tokenizer.encodeToolChat(
+                messages: validated.messages,
+                tools: validated.tools),
+            skipSpecialTokens: false)
+        #expect(rendered.contains("lineage"))
+        #expect(rendered.contains("all"))
+    }
+
     @Test func nullableToolSchemasAdaptWithoutChangingConstraints() throws {
         let typeArray = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
         {
@@ -256,6 +301,7 @@ struct OpenAIValidationTests {
     @Test func unsupportedToolSchemaUnionsFailClosed() throws {
         let schemas = [
             #"{"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"object"}]}}}"#,
+            #"{"type":"object","properties":{"args":{"anyOf":[{"type":"string"},{"type":"object","properties":{},"additionalProperties":true}]}}}"#,
             #"{"type":"object","properties":{"v":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}"#,
             #"{"type":"object","properties":{"v":{"allOf":[{"type":"string"}]}}}"#,
             #"{"type":"object","properties":{"v":{"description":"missing"}}}"#,
@@ -279,6 +325,7 @@ struct OpenAIValidationTests {
         let schemas = [
             #"{"type":["object","null"],"properties":{}}"#,
             #"{"type":"object","properties":{"v":{"oneOf":[{"type":["string","null"]},{"type":"null"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":"string","const":"same"},{"type":"string","const":"same"}]}}}"#,
         ]
         for encoded in schemas {
             let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
