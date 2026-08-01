@@ -85,10 +85,14 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
                         generationID: generationID,
-                        messages: request.messages.map {
-                            DecodeChatMessage(
-                                role: $0.role == .user ? .user : .assistant,
-                                content: $0.content)
+                        messages: request.messages.map { message in
+                            let role: DecodeChatRole
+                            switch message.role {
+                            case .system: role = .system
+                            case .user: role = .user
+                            case .assistant: role = .assistant
+                            }
+                            return DecodeChatMessage(role: role, content: message.content)
                         })
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
                         DecodeServiceCommand.generate(command)))

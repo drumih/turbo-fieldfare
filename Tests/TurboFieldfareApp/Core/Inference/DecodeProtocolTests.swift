@@ -132,6 +132,7 @@ import TurboFieldfareDecodeProtocol
             maxContextTokens: 4_096,
             temperature: 0.2,
             messages: [
+                DecodeChatMessage(role: .system, content: "Be concise."),
                 DecodeChatMessage(role: .user, content: "first question"),
                 DecodeChatMessage(role: .assistant, content: "first answer"),
                 DecodeChatMessage(role: .user, content: "follow-up"),
@@ -143,8 +144,10 @@ import TurboFieldfareDecodeProtocol
         let decoded = try DecodeFrameCodec.read(
             DecodeGenerationRequest.self,
             from: pipe.fileHandleForReading)
-        #expect(decoded.messages.map(\.content) == ["first question", "first answer", "follow-up"])
-        #expect(decoded.messages.map(\.role) == [.user, .assistant, .user])
+        #expect(decoded.messages.map(\.content) == [
+            "Be concise.", "first question", "first answer", "follow-up",
+        ])
+        #expect(decoded.messages.map(\.role) == [.system, .user, .assistant, .user])
     }
 
     @Test func oversizedFrameIsRejectedBeforePayloadRead() throws {

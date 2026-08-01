@@ -104,10 +104,14 @@ import TurboFieldfareDecodeProtocol
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: options,
-                        messages: request.messages.map {
-                            AppChatMessage(
-                                role: $0.role == .user ? .user : .assistant,
-                                content: $0.content)
+                        messages: request.messages.map { message in
+                            let role: AppChatRole
+                            switch message.role {
+                            case .system: role = .system
+                            case .user: role = .user
+                            case .assistant: role = .assistant
+                            }
+                            return AppChatMessage(role: role, content: message.content)
                         })
                     for try await event in client.generate(generation) {
                         outbox.publish(event)

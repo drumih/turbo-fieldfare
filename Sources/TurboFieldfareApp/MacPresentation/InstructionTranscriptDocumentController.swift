@@ -157,12 +157,16 @@ public final class InstructionTranscriptDocumentController {
                 attributes: Self.promptAttributes()))
         } else {
             for message in messages {
-                let label = message.role == .user ? "You\n" : "Answer\n"
+                let label: String = switch message.role {
+                case .system: "Instructions\n"
+                case .user: "You\n"
+                case .assistant: "Answer\n"
+                }
                 document.append(NSAttributedString(
                     string: label,
-                    attributes: message.role == .user
-                        ? Self.userLabelAttributes()
-                        : Self.assistantLabelAttributes()))
+                    attributes: message.role == .assistant
+                        ? Self.assistantLabelAttributes()
+                        : Self.userLabelAttributes()))
                 if message.role == .assistant {
                     document.append(renderer.render(message.content).attributedString)
                 } else {

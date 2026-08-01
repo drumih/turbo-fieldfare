@@ -12,6 +12,8 @@ public final class AppModel {
 
     public var modelPathText: String
     public var promptText: String = ""
+    /// Optional guidance that is prepended to each request in the current chat.
+    public var systemPromptText: String = ""
     /// Completed turns in the current in-memory chat.
     public private(set) var conversation: [AppChatMessage] = []
     /// The conversation snapshot currently being generated or displayed.
@@ -209,6 +211,23 @@ public final class AppModel {
 
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
+    public var completedTurnCount: Int {
+        conversation.reduce(into: 0) { count, message in
+            if message.role == .user { count += 1 }
+        }
+    }
+
+    public var hasSystemPrompt: Bool {
+        !systemPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var canRegenerate: Bool {
+        !isRunning && isModelAvailable && !loadState.isLoading && !hasStaleLoadedRuntime
+            && conversation.count >= 2
+            && conversation[conversation.count - 2].role == .user
+            && conversation.last?.role == .assistant
+    }
+
     public var hasOutputTranscript: Bool {
         !outputMessages.isEmpty || !outputText.isEmpty
     }
@@ -224,7 +243,11 @@ public final class AppModel {
             messages.append(AppChatMessage(role: .assistant, content: response))
         }
         return messages.map { message in
-            let label = message.role == .user ? "You" : "Answer"
+            let label: String = switch message.role {
+            case .system: "Instructions"
+            case .user: "You"
+            case .assistant: "Answer"
+            }
             return "\(label):\n\(message.content)"
         }.joined(separator: "\n\n")
     }
@@ -705,6 +728,7 @@ public final class AppModel {
         guard !isRunning else { return }
         conversation = []
         outputMessages = []
+        systemPromptText = ""
         outputPromptText = ""
         outputText = ""
         generationTranscriptMailbox?.reset()
@@ -728,7 +752,7 @@ public final class AppModel {
         persistSettings()
 
         generationTranscriptMailbox?.reset()
-        outputMessages = request.messages
+        outputMessages = conversation + [AppChatMessage(role: .user, content: request.prompt)]
         outputPromptText = request.prompt
         outputText = ""
         diagnostics = nil
@@ -769,6 +793,12 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
+        var messages: [AppChatMessage] = []
+        if hasSystemPrompt {
+            messages.append(AppChatMessage(role: .system, content: systemPromptText))
+        }
+        messages.append(contentsOf: conversation)
+        messages.append(AppChatMessage(role: .user, content: promptText))
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             prompt: promptText,
@@ -779,9 +809,18 @@ public final class AppModel {
             topP: topKEnabled && topPEnabled ? Float(topP) : nil,
             repetitionPenalty: 1.0,
             runtimeOptions: runtimeOptions,
-            messages: conversation + [AppChatMessage(role: .user, content: promptText)])
+            messages: messages)
         try request.validate(requireModelDirectory: true)
         return request
+    }
+
+    public func regenerateLastResponse() {
+        guard canRegenerate,
+              conversation.count >= 2 else { return }
+        let userMessage = conversation[conversation.count - 2]
+        conversation.removeLast(2)
+        promptText = userMessage.content
+        run()
     }
 
     func apply(_ event: AppInferenceEvent) {

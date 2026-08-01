@@ -216,6 +216,40 @@ import Testing
     }
 
     @MainActor
+    @Test func systemInstructionsArePrependedWithoutAppearingInTheTranscript() throws {
+        let model = readyModel(client: MockInferenceClient())
+        model.systemPromptText = "Reply with exactly one sentence."
+        model.promptText = "What is the capital of France?"
+
+        let request = try model.makeRequest()
+        #expect(request.messages == [
+            AppChatMessage(role: .system, content: "Reply with exactly one sentence."),
+            AppChatMessage(role: .user, content: "What is the capital of France?"),
+        ])
+        #expect(!model.outputConversationPlainText.contains("exactly one sentence"))
+    }
+
+    @MainActor
+    @Test func regenerateRemovesThePreviousAssistantTurnBeforeRetrying() async throws {
+        let client = MockInferenceClient(response: "retry answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 8
+        model.promptText = "retry this"
+        model.run()
+        await waitForIdle(model)
+
+        #expect(model.canRegenerate)
+        model.regenerateLastResponse()
+        await waitForIdle(model)
+
+        let requests = client.requests()
+        #expect(requests.count == 2)
+        #expect(requests[1].messages == [
+            AppChatMessage(role: .user, content: "retry this"),
+        ])
+    }
+
+    @MainActor
     @Test func staleReadySessionDisablesGenerationUntilReload() throws {
         let client = MockLifecycleInferenceClient()
         let directory = try makeCompleteModelInstall("stale-runtime")

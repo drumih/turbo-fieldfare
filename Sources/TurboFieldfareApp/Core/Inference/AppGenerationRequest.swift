@@ -1,6 +1,7 @@
 import Foundation
 
 public enum AppChatRole: String, Codable, Equatable, Sendable {
+    case system
     case user
     case assistant
 }
@@ -61,6 +62,9 @@ public struct AppGenerationRequest: Equatable, Sendable {
         }
         guard !messages.isEmpty, messages.last?.role == .user else {
             throw AppInferenceError.invalidRequest("Conversation must end with a user message.")
+        }
+        guard !messages.dropFirst().contains(where: { $0.role == .system }) else {
+            throw AppInferenceError.invalidRequest("System instructions must be the first message.")
         }
         guard messages.allSatisfy({ !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw AppInferenceError.invalidRequest("Conversation messages cannot be empty.")

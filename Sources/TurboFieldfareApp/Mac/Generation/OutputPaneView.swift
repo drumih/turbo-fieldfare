@@ -41,6 +41,9 @@ struct OutputPaneView: View {
 
             Divider()
 
+            Button("Regenerate response") { model.regenerateLastResponse() }
+                .disabled(!model.canRegenerate)
+
             Button("New Chat") { model.clearOutput() }
                 .disabled(model.isRunning || !model.hasOutputTranscript)
         }
@@ -74,6 +77,10 @@ struct OutputPaneView: View {
                         Button("New Chat") { model.clearOutput() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
+                        Button("Regenerate", action: model.regenerateLastResponse)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(!model.canRegenerate)
                         if !model.outputResponsePlainText.isEmpty {
                             copyResponseButton
                         }

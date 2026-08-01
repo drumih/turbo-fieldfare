@@ -31,6 +31,29 @@ import Testing
         #expect(request.messages == messages)
     }
 
+    @Test func systemInstructionsMustPrecedeTheConversation() throws {
+        let valid = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "Follow-up question",
+            messages: [
+                AppChatMessage(role: .system, content: "Be concise."),
+                AppChatMessage(role: .user, content: "Follow-up question"),
+            ])
+        try valid.validate()
+
+        let invalid = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "Follow-up question",
+            messages: [
+                AppChatMessage(role: .user, content: "First question"),
+                AppChatMessage(role: .system, content: "Be concise."),
+                AppChatMessage(role: .user, content: "Follow-up question"),
+            ])
+        #expect(throws: AppInferenceError.self) {
+            try invalid.validate()
+        }
+    }
+
     @Test func temperatureZeroRemainsPureGreedyWithTruncationDefaults() {
         let request = AppGenerationRequest(modelDirectory: existingDirectory,
                                            prompt: "hello",

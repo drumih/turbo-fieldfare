@@ -69,6 +69,7 @@ public struct DecodeGenerationRequest: Codable, Sendable {
 }
 
 public enum DecodeChatRole: String, Codable, Equatable, Sendable {
+    case system
     case user
     case assistant
 }

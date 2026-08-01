@@ -7,6 +7,7 @@ struct PromptComposerView: View {
     @Bindable var model: AppModel
     @FocusState private var promptFocused: Bool
     @State private var showingPromptTips = false
+    @State private var showingChatInstructions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -71,6 +72,13 @@ struct PromptComposerView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             promptTips
+            chatInstructions
+            if model.completedTurnCount > 0 {
+                Text("\(model.completedTurnCount) "
+                     + (model.completedTurnCount == 1 ? "turn" : "turns"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             clearAction
             GenerateControl(model: model)
@@ -93,6 +101,41 @@ struct PromptComposerView: View {
                  attachmentAnchor: .point(.top),
                  arrowEdge: .top) {
             promptGuide
+        }
+    }
+
+    private var chatInstructions: some View {
+        Button {
+            showingChatInstructions.toggle()
+        } label: {
+            Label("Chat instructions", systemImage: "slider.horizontal.3")
+                .labelStyle(.iconOnly)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(model.hasSystemPrompt
+                         ? TurboFieldfareMacTheme.accentColor
+                         : .secondary)
+        .help(model.hasSystemPrompt ? "Chat instructions are active" : "Chat instructions")
+        .popover(isPresented: $showingChatInstructions,
+                 attachmentAnchor: .point(.top),
+                 arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Chat instructions")
+                    .font(.headline)
+                Text("Applied to every answer in this chat. Start a new chat to remove them.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $model.systemPromptText)
+                    .font(.body)
+                    .scrollContentBackground(.hidden)
+                    .padding(6)
+                    .frame(width: 360, height: 120)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("Chat instructions")
+            }
+            .padding(16)
         }
     }
 
@@ -133,13 +176,13 @@ struct PromptComposerView: View {
             Button {
                 model.clearOutput()
             } label: {
-                Label("Clear output", systemImage: "trash")
+                Label("New chat", systemImage: "plus.bubble")
                     .labelStyle(.iconOnly)
                     .frame(width: 28, height: 28)
                     .contentShape(Circle())
             }
             .buttonStyle(.borderless)
-            .help("Clear output")
+            .help("New chat")
         } else if !model.isRunning && !model.promptText.isEmpty {
             Button {
                 model.promptText = ""
