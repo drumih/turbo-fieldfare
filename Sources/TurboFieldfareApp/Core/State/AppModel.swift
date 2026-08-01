@@ -12,6 +12,10 @@ public final class AppModel {
 
     public var modelPathText: String
     public var promptText: String = ""
+    /// Completed turns in the current in-memory chat.
+    public private(set) var conversation: [AppChatMessage] = []
+    /// The conversation snapshot currently being generated or displayed.
+    public private(set) var outputMessages: [AppChatMessage] = []
     public private(set) var outputPromptText: String = ""
     public var outputText: String = ""
     public var runState: RunState = .idle
@@ -206,7 +210,7 @@ public final class AppModel {
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
     public var hasOutputTranscript: Bool {
-        !outputPromptText.isEmpty || !outputText.isEmpty
+        !outputMessages.isEmpty || !outputText.isEmpty
     }
 
     public var outputResponsePlainText: String {
@@ -214,17 +218,15 @@ public final class AppModel {
     }
 
     public var outputConversationPlainText: String {
+        var messages = outputMessages
         let response = outputResponsePlainText
-        switch (outputPromptText.isEmpty, response.isEmpty) {
-        case (true, true):
-            return ""
-        case (false, true):
-            return "You:\n\(outputPromptText)"
-        case (true, false):
-            return "Answer:\n\(response)"
-        case (false, false):
-            return "You:\n\(outputPromptText)\n\nAnswer:\n\(response)"
+        if !response.isEmpty {
+            messages.append(AppChatMessage(role: .assistant, content: response))
         }
+        return messages.map { message in
+            let label = message.role == .user ? "You" : "Answer"
+            return "\(label):\n\(message.content)"
+        }.joined(separator: "\n\n")
     }
 
     public var liveTokensPerSecond: Double {
@@ -701,6 +703,8 @@ public final class AppModel {
 
     public func clearOutput() {
         guard !isRunning else { return }
+        conversation = []
+        outputMessages = []
         outputPromptText = ""
         outputText = ""
         generationTranscriptMailbox?.reset()
@@ -724,6 +728,7 @@ public final class AppModel {
         persistSettings()
 
         generationTranscriptMailbox?.reset()
+        outputMessages = request.messages
         outputPromptText = request.prompt
         outputText = ""
         diagnostics = nil
@@ -773,7 +778,8 @@ public final class AppModel {
             topK: topKEnabled ? topK : nil,
             topP: topKEnabled && topPEnabled ? Float(topP) : nil,
             repetitionPenalty: 1.0,
-            runtimeOptions: runtimeOptions)
+            runtimeOptions: runtimeOptions,
+            messages: conversation + [AppChatMessage(role: .user, content: promptText)])
         try request.validate(requireModelDirectory: true)
         return request
     }
@@ -811,6 +817,10 @@ public final class AppModel {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
+        conversation = outputMessages
+        if !outputText.isEmpty {
+            conversation.append(AppChatMessage(role: .assistant, content: outputText))
+        }
         self.diagnostics = diagnostics
         finishTerminalRun()
     }

@@ -109,8 +109,9 @@ The package is arm64-only. Older macOS and Metal versions are not supported.
 ### Prompting the model
 
 The Mac app treats what you type as an instruction and handles Gemma's chat
-formatting automatically. Just describe the task and include any context the
-model needs.
+formatting automatically. Each completed exchange remains in the current chat,
+so your next prompt can refer to the earlier discussion. Choose **New Chat**
+from the transcript menu to clear the in-memory history.
 
 Generation defaults to temperature `0.2`, Top-K `64`, and Top-P `0.95`. Set
 temperature to `0` for deterministic greedy output. The model can still repeat
@@ -159,6 +160,8 @@ After installation:
 2. Enter a prompt in the composer.
 3. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use **Settings > Send Message With** to choose Return or Command-Return.
 4. Use the stop button or <kbd>Escape</kbd> to end generation early.
+5. Ask a follow-up in the same composer to continue the conversation; choose
+   **New Chat** from the transcript menu to start over.
 
 The status bar shows generation progress, decode speed, and memory use. Use the
 right pane to configure sampling, context length, expert-cache slots, and

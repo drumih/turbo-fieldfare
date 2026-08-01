@@ -103,7 +103,12 @@ import TurboFieldfareDecodeProtocol
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
-                        runtimeOptions: options)
+                        runtimeOptions: options,
+                        messages: request.messages.map {
+                            AppChatMessage(
+                                role: $0.role == .user ? .user : .assistant,
+                                content: $0.content)
+                        })
                     for try await event in client.generate(generation) {
                         outbox.publish(event)
                     }

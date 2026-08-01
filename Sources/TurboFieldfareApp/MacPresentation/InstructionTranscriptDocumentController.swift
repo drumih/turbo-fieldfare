@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import TurboFieldfareAppCore
 
 @MainActor
 public final class InstructionTranscriptDocumentController {
@@ -21,6 +22,7 @@ public final class InstructionTranscriptDocumentController {
     }
 
     public private(set) var prompt = ""
+    public private(set) var messages: [AppChatMessage] = []
     public private(set) var response = ""
     public private(set) var isFinalized = false
     public private(set) var showsPrefillPlaceholder = false
@@ -64,6 +66,7 @@ public final class InstructionTranscriptDocumentController {
     public func synchronize(
         storage: NSMutableAttributedString,
         prompt: String,
+        messages: [AppChatMessage] = [],
         response: String,
         isTerminal: Bool,
         showsPrefillPlaceholder: Bool = false
@@ -74,6 +77,7 @@ public final class InstructionTranscriptDocumentController {
             isTerminal: isTerminal,
             requested: showsPrefillPlaceholder)
         let needsRebuild = prompt != self.prompt
+            || messages != self.messages
             || !response.hasPrefix(self.response)
             || (isFinalized && !isTerminal)
             || displaysPrefillPlaceholder != self.showsPrefillPlaceholder
@@ -85,6 +89,7 @@ public final class InstructionTranscriptDocumentController {
             rebuild(
                 storage: storage,
                 prompt: prompt,
+                messages: messages,
                 response: response,
                 showsPrefillPlaceholder: displaysPrefillPlaceholder)
             mutation = .rebuilt
@@ -98,6 +103,7 @@ public final class InstructionTranscriptDocumentController {
         }
 
         self.prompt = prompt
+        self.messages = messages
         self.response = response
         self.showsPrefillPlaceholder = displaysPrefillPlaceholder
 
@@ -134,11 +140,12 @@ public final class InstructionTranscriptDocumentController {
     private func rebuild(
         storage: NSMutableAttributedString,
         prompt: String,
+        messages: [AppChatMessage],
         response: String,
         showsPrefillPlaceholder: Bool
     ) {
         let document = NSMutableAttributedString()
-        if !prompt.isEmpty {
+        if messages.isEmpty, !prompt.isEmpty {
             document.append(NSAttributedString(
                 string: "You\n",
                 attributes: Self.userLabelAttributes()))
@@ -148,6 +155,25 @@ public final class InstructionTranscriptDocumentController {
             document.append(NSAttributedString(
                 string: "\n\n",
                 attributes: Self.promptAttributes()))
+        } else {
+            for message in messages {
+                let label = message.role == .user ? "You\n" : "Answer\n"
+                document.append(NSAttributedString(
+                    string: label,
+                    attributes: message.role == .user
+                        ? Self.userLabelAttributes()
+                        : Self.assistantLabelAttributes()))
+                if message.role == .assistant {
+                    document.append(renderer.render(message.content).attributedString)
+                } else {
+                    document.append(NSAttributedString(
+                        string: message.content,
+                        attributes: Self.promptAttributes()))
+                }
+                document.append(NSAttributedString(
+                    string: "\n\n",
+                    attributes: Self.promptAttributes()))
+            }
         }
         document.append(NSAttributedString(
             string: "Answer\n",

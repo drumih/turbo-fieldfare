@@ -44,6 +44,7 @@ public struct DecodeLoadRequest: Codable, Sendable {
 
 public struct DecodeGenerationRequest: Codable, Sendable {
     public var prompt: String
+    public var messages: [DecodeChatMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -54,14 +55,31 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public init(prompt: String, maxNewTokens: Int, maxContextTokens: Int,
                 temperature: Float, repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
-                generationID: UUID = UUID()) {
+                generationID: UUID = UUID(),
+                messages: [DecodeChatMessage]? = nil) {
         self.prompt = prompt
+        self.messages = messages ?? [DecodeChatMessage(role: .user, content: prompt)]
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
         self.repetitionPenalty = repetitionPenalty
         self.runtimeOptions = runtimeOptions
         self.generationID = generationID
+    }
+}
+
+public enum DecodeChatRole: String, Codable, Equatable, Sendable {
+    case user
+    case assistant
+}
+
+public struct DecodeChatMessage: Codable, Equatable, Sendable {
+    public var role: DecodeChatRole
+    public var content: String
+
+    public init(role: DecodeChatRole, content: String) {
+        self.role = role
+        self.content = content
     }
 }
 

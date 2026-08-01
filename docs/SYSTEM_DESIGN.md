@@ -234,7 +234,9 @@ flowchart LR
 ## Instruction framing
 
 The Mac app and CLI `--messages-file` mode use the pinned text-only Gemma 4 chat
-format. The app wraps one user prompt. `--messages-file` accepts user and
+format. The app retains completed user and assistant turns for the current
+in-memory conversation and appends the new user prompt before each generation.
+`--messages-file` accepts user and
 assistant messages plus optional leading system guidance. Assistant messages
 render with Gemma's `model` role. The separate loopback server uses the pinned
 upstream Jinja template for developer messages, function declarations,

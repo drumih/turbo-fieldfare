@@ -125,6 +125,28 @@ import TurboFieldfareDecodeProtocol
         }
     }
 
+    @Test func generationRequestRoundTripPreservesConversationMessages() throws {
+        let request = DecodeGenerationRequest(
+            prompt: "follow-up",
+            maxNewTokens: 10,
+            maxContextTokens: 4_096,
+            temperature: 0.2,
+            messages: [
+                DecodeChatMessage(role: .user, content: "first question"),
+                DecodeChatMessage(role: .assistant, content: "first answer"),
+                DecodeChatMessage(role: .user, content: "follow-up"),
+            ])
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(contentsOf: DecodeFrameCodec.encode(request))
+        try pipe.fileHandleForWriting.close()
+
+        let decoded = try DecodeFrameCodec.read(
+            DecodeGenerationRequest.self,
+            from: pipe.fileHandleForReading)
+        #expect(decoded.messages.map(\.content) == ["first question", "first answer", "follow-up"])
+        #expect(decoded.messages.map(\.role) == [.user, .assistant, .user])
+    }
+
     @Test func oversizedFrameIsRejectedBeforePayloadRead() throws {
         let pipe = Pipe()
         var count = UInt32(DecodeFrameCodec.maximumPayloadBytes + 1).littleEndian

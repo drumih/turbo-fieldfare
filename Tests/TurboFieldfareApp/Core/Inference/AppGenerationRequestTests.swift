@@ -13,6 +13,22 @@ import Testing
         #expect(request.topP == 0.95)
         #expect(request.repetitionPenalty == 1)
         #expect(!request.isPureGreedy)
+        #expect(request.messages == [AppChatMessage(role: .user, content: "hello")])
+    }
+
+    @Test func requestPreservesConversationHistory() throws {
+        let messages = [
+            AppChatMessage(role: .user, content: "First question"),
+            AppChatMessage(role: .assistant, content: "First answer"),
+            AppChatMessage(role: .user, content: "Follow-up question"),
+        ]
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "Follow-up question",
+            messages: messages)
+
+        try request.validate()
+        #expect(request.messages == messages)
     }
 
     @Test func temperatureZeroRemainsPureGreedyWithTruncationDefaults() {

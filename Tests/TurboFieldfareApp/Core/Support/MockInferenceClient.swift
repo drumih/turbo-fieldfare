@@ -12,6 +12,7 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
     private let lock = NSLock()
     private var activeTask: Task<Void, Never>?
     private var activeGenerationID: UUID?
+    private var generatedRequests: [AppGenerationRequest] = []
     private let memorySampler: AppMemorySampler
 
     init(response: String = "This is a lightweight mock response streaming through the TurboFieldfare Mac shell.",
@@ -36,6 +37,7 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
             }
 
             lock.lock()
+            generatedRequests.append(request)
             if activeTask != nil {
                 lock.unlock()
                 continuation.yield(.failed(.generationInFlight, partial: nil))
@@ -56,6 +58,12 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
                 self?.cancel()
             }
         }
+    }
+
+    func requests() -> [AppGenerationRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return generatedRequests
     }
 
     func cancel() {

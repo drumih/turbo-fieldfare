@@ -190,6 +190,32 @@ import Testing
     }
 
     @MainActor
+    @Test func completedTurnIsIncludedInTheNextGenerationRequest() async throws {
+        let client = MockInferenceClient(response: "first answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 8
+        model.promptText = "first question"
+        model.run()
+        await waitForIdle(model)
+
+        model.promptText = "follow-up question"
+        model.run()
+        await waitForIdle(model)
+
+        let requests = client.requests()
+        #expect(requests.count == 2)
+        #expect(requests[1].messages == [
+            AppChatMessage(role: .user, content: "first question"),
+            AppChatMessage(
+                role: .assistant,
+                content: "first answer Prompt received: first question"),
+            AppChatMessage(role: .user, content: "follow-up question"),
+        ])
+        #expect(model.outputConversationPlainText.contains("first question"))
+        #expect(model.outputConversationPlainText.contains("follow-up question"))
+    }
+
+    @MainActor
     @Test func staleReadySessionDisablesGenerationUntilReload() throws {
         let client = MockLifecycleInferenceClient()
         let directory = try makeCompleteModelInstall("stale-runtime")

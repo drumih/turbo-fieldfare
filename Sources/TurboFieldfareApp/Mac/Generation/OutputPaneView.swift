@@ -41,7 +41,7 @@ struct OutputPaneView: View {
 
             Divider()
 
-            Button("Clear") { model.clearOutput() }
+            Button("New Chat") { model.clearOutput() }
                 .disabled(model.isRunning || !model.hasOutputTranscript)
         }
     }
@@ -61,6 +61,7 @@ struct OutputPaneView: View {
     private var transcript: some View {
         IncrementalTranscriptView(
             prompt: model.outputPromptText,
+            messages: model.outputMessages,
             output: model.outputText,
             mailbox: model.generationTranscriptMailbox,
             isTerminal: !model.isRunning,
@@ -68,9 +69,16 @@ struct OutputPaneView: View {
                 && model.outputResponsePlainText.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .topTrailing) {
-                if !model.isRunning && !model.outputResponsePlainText.isEmpty {
-                    copyResponseButton
-                        .padding(8)
+                if !model.isRunning {
+                    HStack(spacing: 6) {
+                        Button("New Chat") { model.clearOutput() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        if !model.outputResponsePlainText.isEmpty {
+                            copyResponseButton
+                        }
+                    }
+                    .padding(8)
                 }
             }
             .padding(.horizontal, 24)
@@ -257,6 +265,7 @@ private struct LoadingModelText: View {
 
 private struct IncrementalTranscriptView: NSViewRepresentable {
     var prompt: String
+    var messages: [AppChatMessage]
     var output: String
     var mailbox: GenerationTranscriptMailbox?
     var isTerminal: Bool
@@ -268,6 +277,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         weak var textView: NSTextView?
         var mailbox: GenerationTranscriptMailbox?
         var prompt = ""
+        var messages: [AppChatMessage] = []
         var isTerminal = false
         var showsPrefillPlaceholder = false
         var timer: Timer?
@@ -288,6 +298,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
         func synchronize(
             prompt: String,
+            messages: [AppChatMessage],
             output: String,
             mailbox: GenerationTranscriptMailbox?,
             isTerminal: Bool,
@@ -295,11 +306,13 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         ) {
             self.mailbox = mailbox
             self.prompt = prompt
+            self.messages = messages
             self.isTerminal = isTerminal
             self.showsPrefillPlaceholder = showsPrefillPlaceholder
             let response = mailbox?.drain().completeText ?? output
             apply(
                 prompt: prompt,
+                messages: messages,
                 response: response,
                 isTerminal: isTerminal,
                 showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -313,6 +326,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
                 return
             }
             apply(prompt: prompt,
+                  messages: messages,
                   response: snapshot.completeText,
                   isTerminal: isTerminal,
                   showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -373,6 +387,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
         private func apply(
             prompt: String,
+            messages: [AppChatMessage],
             response: String,
             isTerminal: Bool,
             showsPrefillPlaceholder: Bool
@@ -385,6 +400,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             let update = documentController.synchronize(
                 storage: storage,
                 prompt: prompt,
+                messages: messages,
                 response: response,
                 isTerminal: isTerminal,
                 showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -449,6 +465,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.synchronize(
             prompt: prompt,
+            messages: messages,
             output: output,
             mailbox: mailbox,
             isTerminal: isTerminal,
@@ -469,6 +486,7 @@ private struct TranscriptPreview: View {
     var body: some View {
         IncrementalTranscriptView(
             prompt: "Explain this clearly.",
+            messages: [],
             output: response,
             mailbox: nil,
             isTerminal: isTerminal,

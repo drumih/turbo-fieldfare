@@ -84,7 +84,12 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
-                        generationID: generationID)
+                        generationID: generationID,
+                        messages: request.messages.map {
+                            DecodeChatMessage(
+                                role: $0.role == .user ? .user : .assistant,
+                                content: $0.content)
+                        })
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
                         DecodeServiceCommand.generate(command)))
 

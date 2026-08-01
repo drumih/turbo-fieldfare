@@ -1,8 +1,25 @@
 import Foundation
 
+public enum AppChatRole: String, Codable, Equatable, Sendable {
+    case user
+    case assistant
+}
+
+public struct AppChatMessage: Codable, Equatable, Sendable {
+    public var role: AppChatRole
+    public var content: String
+
+    public init(role: AppChatRole, content: String) {
+        self.role = role
+        self.content = content
+    }
+}
+
 public struct AppGenerationRequest: Equatable, Sendable {
     public var modelDirectory: URL
     public var prompt: String
+    /// Complete conversation ending with the user message to answer.
+    public var messages: [AppChatMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -19,9 +36,11 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 topK: Int? = 64,
                 topP: Float? = 0.95,
                 repetitionPenalty: Float = 1.0,
-                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions()) {
+                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions(),
+                messages: [AppChatMessage]? = nil) {
         self.modelDirectory = modelDirectory
         self.prompt = prompt
+        self.messages = messages ?? [AppChatMessage(role: .user, content: prompt)]
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
@@ -39,6 +58,12 @@ public struct AppGenerationRequest: Equatable, Sendable {
                          requireModelDirectory: Bool = true) throws {
         guard !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AppInferenceError.invalidRequest("Prompt cannot be empty.")
+        }
+        guard !messages.isEmpty, messages.last?.role == .user else {
+            throw AppInferenceError.invalidRequest("Conversation must end with a user message.")
+        }
+        guard messages.allSatisfy({ !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw AppInferenceError.invalidRequest("Conversation messages cannot be empty.")
         }
         guard maxNewTokens > 0 else {
             throw AppInferenceError.invalidRequest("Max response length must be greater than zero.")

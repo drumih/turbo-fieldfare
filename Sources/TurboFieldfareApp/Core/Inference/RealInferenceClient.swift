@@ -283,9 +283,11 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let renderedPrompt = try tokenizer.applyChatTemplate([
-                GFTokenizer.Message(role: .user, content: request.prompt)
-            ])
+            let renderedPrompt = try tokenizer.applyChatTemplate(request.messages.map {
+                GFTokenizer.Message(
+                    role: $0.role == .user ? .user : .assistant,
+                    content: $0.content)
+            })
             let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
             progress.promptTokenCount = promptIds.count
             guard promptIds.count < runner.maxContext else {
