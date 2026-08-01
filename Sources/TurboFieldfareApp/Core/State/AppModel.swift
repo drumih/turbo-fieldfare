@@ -14,6 +14,9 @@ public final class AppModel {
     public var promptText: String = ""
     /// Optional guidance that is prepended to each request in the current chat.
     public var systemPromptText: String = ""
+    /// Locally saved conversations, ordered by most recently updated.
+    public private(set) var chats: [AppChatThread] = []
+    public private(set) var selectedChatID = UUID()
     /// Completed turns in the current in-memory chat.
     public private(set) var conversation: [AppChatMessage] = []
     /// The conversation snapshot currently being generated or displayed.
@@ -77,6 +80,12 @@ public final class AppModel {
         let settings = settingsPersistenceEnabled
             ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
             : MacAppSettings()
+        let chatHistory = settingsPersistenceEnabled
+            ? AppChatHistoryFileStore.load(forModelDirectory: directory)
+            : .fresh()
+        let selectedChat = chatHistory.chats.first(where: {
+            $0.id == chatHistory.selectedChatID
+        }) ?? chatHistory.chats[0]
         self.modelPathText = directory.path
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: settings.expertCacheSlots,
@@ -89,6 +98,18 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.chats = chatHistory.chats
+        self.selectedChatID = selectedChat.id
+        self.conversation = selectedChat.messages
+        self.systemPromptText = selectedChat.systemPrompt
+        if let response = selectedChat.messages.last, response.role == .assistant {
+            self.outputMessages = Array(selectedChat.messages.dropLast())
+            self.outputPromptText = selectedChat.messages.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            self.outputText = response.content
+        } else {
+            self.outputMessages = selectedChat.messages
+        }
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -211,6 +232,8 @@ public final class AppModel {
 
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
+    public var canManageChats: Bool { !isRunning }
+
     public var completedTurnCount: Int {
         conversation.reduce(into: 0) { count, message in
             if message.role == .user { count += 1 }
@@ -226,6 +249,10 @@ public final class AppModel {
             && conversation.count >= 2
             && conversation[conversation.count - 2].role == .user
             && conversation.last?.role == .assistant
+    }
+
+    public var selectedChatTitle: String {
+        chats.first(where: { $0.id == selectedChatID })?.title ?? "New chat"
     }
 
     public var hasOutputTranscript: Bool {
@@ -300,9 +327,11 @@ public final class AppModel {
         let path = url.standardizedFileURL.path
         guard path != modelPathText else { return }
 
+        saveActiveChat()
         modelPathText = path
         applyPersistedSettings(
             forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
+        loadChatHistory(forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
         loadGeneration &+= 1
         loadTask?.cancel()
         loadTask = nil
@@ -734,6 +763,53 @@ public final class AppModel {
         generationTranscriptMailbox?.reset()
         diagnostics = nil
         error = nil
+        saveActiveChat()
+    }
+
+    public func newChat() {
+        guard canManageChats else { return }
+        saveActiveChat()
+        let chat = AppChatThread()
+        chats.insert(chat, at: 0)
+        selectedChatID = chat.id
+        apply(chat: chat)
+        persistChatHistory()
+    }
+
+    public func selectChat(_ id: UUID) {
+        guard canManageChats, id != selectedChatID else { return }
+        saveActiveChat()
+        guard let chat = chats.first(where: { $0.id == id }) else { return }
+        selectedChatID = chat.id
+        apply(chat: chat)
+        persistChatHistory()
+    }
+
+    public func deleteChat(_ id: UUID) {
+        guard canManageChats,
+              let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        chats.remove(at: index)
+        if chats.isEmpty {
+            let chat = AppChatThread()
+            chats = [chat]
+        }
+        if selectedChatID == id {
+            let replacement = chats[0]
+            selectedChatID = replacement.id
+            apply(chat: replacement)
+        }
+        persistChatHistory()
+    }
+
+    public func renameChat(_ id: UUID, to title: String) {
+        guard canManageChats,
+              let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        chats[index].title = String(cleaned.prefix(80))
+        chats[index].updatedAt = Date()
+        orderChatsByRecency()
+        persistChatHistory()
     }
 
     public func run() {
@@ -750,6 +826,7 @@ public final class AppModel {
             return
         }
         persistSettings()
+        saveActiveChat(titleForFirstPrompt: request.prompt)
 
         // The request retains the submitted prompt; clear the composer so the
         // user can prepare the next turn while this response streams.
@@ -863,6 +940,7 @@ public final class AppModel {
         if !outputText.isEmpty {
             conversation.append(AppChatMessage(role: .assistant, content: outputText))
         }
+        saveActiveChat()
         self.diagnostics = diagnostics
         finishTerminalRun()
     }
@@ -899,6 +977,71 @@ public final class AppModel {
         isCancellationPending = false
         activeRunRuntimeKey = nil
         runTask = nil
+    }
+
+    private func apply(chat: AppChatThread) {
+        selectedChatID = chat.id
+        conversation = chat.messages
+        systemPromptText = chat.systemPrompt
+        promptText = ""
+        generationTranscriptMailbox?.reset()
+        diagnostics = nil
+        error = nil
+        if let response = chat.messages.last, response.role == .assistant {
+            outputMessages = Array(chat.messages.dropLast())
+            outputPromptText = chat.messages.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            outputText = response.content
+        } else {
+            outputMessages = chat.messages
+            outputPromptText = chat.messages.last(where: { $0.role == .user })?.content ?? ""
+            outputText = ""
+        }
+    }
+
+    private func loadChatHistory(forModelDirectory modelDirectory: URL) {
+        let history = settingsPersistenceEnabled
+            ? AppChatHistoryFileStore.load(forModelDirectory: modelDirectory)
+            : .fresh()
+        chats = history.chats
+        let chat = chats.first(where: { $0.id == history.selectedChatID }) ?? chats[0]
+        apply(chat: chat)
+    }
+
+    private func saveActiveChat(titleForFirstPrompt prompt: String? = nil) {
+        guard let index = chats.firstIndex(where: { $0.id == selectedChatID }) else { return }
+        chats[index].systemPrompt = systemPromptText
+        chats[index].messages = conversation
+        if chats[index].title == "New chat",
+           let prompt,
+           !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            chats[index].title = Self.chatTitle(for: prompt)
+        }
+        chats[index].updatedAt = Date()
+        orderChatsByRecency()
+        persistChatHistory()
+    }
+
+    private func persistChatHistory() {
+        guard settingsPersistenceEnabled else { return }
+        let history = AppChatHistoryDocument(selectedChatID: selectedChatID, chats: chats)
+        try? AppChatHistoryFileStore.save(
+            history,
+            forModelDirectory: URL(fileURLWithPath: modelPathText, isDirectory: true))
+    }
+
+    private func orderChatsByRecency() {
+        chats.sort { lhs, rhs in
+            if lhs.updatedAt == rhs.updatedAt { return lhs.createdAt > rhs.createdAt }
+            return lhs.updatedAt > rhs.updatedAt
+        }
+    }
+
+    private static func chatTitle(for prompt: String) -> String {
+        let title = prompt
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return title.isEmpty ? "New chat" : String(title.prefix(80))
     }
 
     private func clearLoadTask(generation: UInt64) {

@@ -217,6 +217,36 @@ import Testing
     }
 
     @MainActor
+    @Test func newChatKeepsThePreviousConversationAvailable() async throws {
+        let model = readyModel(client: MockInferenceClient(response: "first answer", tokenDelayNanos: 1))
+        model.maxNewTokensOverride = 8
+        model.promptText = "First question"
+        model.run()
+        await waitForIdle(model)
+
+        let firstChatID = model.selectedChatID
+        #expect(model.chats.count == 1)
+        #expect(model.chats[0].title == "First question")
+
+        model.newChat()
+
+        #expect(model.chats.count == 2)
+        #expect(model.selectedChatID != firstChatID)
+        #expect(model.conversation.isEmpty)
+        #expect(!model.hasOutputTranscript)
+
+        model.selectChat(firstChatID)
+
+        #expect(model.selectedChatID == firstChatID)
+        #expect(model.conversation == [
+            AppChatMessage(role: .user, content: "First question"),
+            AppChatMessage(
+                role: .assistant,
+                content: "first answer Prompt received: First question"),
+        ])
+    }
+
+    @MainActor
     @Test func systemInstructionsArePrependedWithoutAppearingInTheTranscript() throws {
         let model = readyModel(client: MockInferenceClient())
         model.systemPromptText = "Reply with exactly one sentence."

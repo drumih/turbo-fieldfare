@@ -44,7 +44,7 @@ struct OutputPaneView: View {
             Button("Regenerate response") { model.regenerateLastResponse() }
                 .disabled(!model.canRegenerate)
 
-            Button("New Chat") { model.clearOutput() }
+            Button("New Chat") { model.newChat() }
                 .disabled(model.isRunning || !model.hasOutputTranscript)
         }
     }
@@ -74,7 +74,7 @@ struct OutputPaneView: View {
             .overlay(alignment: .topTrailing) {
                 if !model.isRunning {
                     HStack(spacing: 6) {
-                        Button("New Chat") { model.clearOutput() }
+                        Button("New Chat") { model.newChat() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         Button("Regenerate", action: model.regenerateLastResponse)

@@ -184,7 +184,7 @@ struct PromptComposerView: View {
     private var clearAction: some View {
         if !model.isRunning && model.hasOutputTranscript {
             Button {
-                model.clearOutput()
+                model.newChat()
             } label: {
                 Label("New chat", systemImage: "plus.bubble")
                     .labelStyle(.iconOnly)

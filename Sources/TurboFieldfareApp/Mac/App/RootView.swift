@@ -8,8 +8,13 @@ struct RootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            ChatSidebarView(model: model)
+                .frame(width: 240)
+
+            Divider()
+
             primaryContent
-                .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 600, maxWidth: .infinity, maxHeight: .infinity)
 
             Divider()
 

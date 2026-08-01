@@ -37,10 +37,10 @@ struct TurboFieldfareMacApp: App {
     var body: some Scene {
         Window("TurboFieldfare", id: "main") {
             RootView(model: model)
-                .frame(minWidth: 1040, minHeight: 560)
+                .frame(minWidth: 1160, minHeight: 560)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1040, height: 720)
+        .defaultSize(width: 1280, height: 720)
         .windowResizability(.contentMinSize)
         .commands {
             CommandMenu("Generation") {
