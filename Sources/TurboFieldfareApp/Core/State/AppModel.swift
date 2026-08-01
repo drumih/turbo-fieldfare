@@ -1013,20 +1013,34 @@ public final class AppModel {
 
     private func saveActiveChat(titleForFirstPrompt prompt: String? = nil) {
         guard let index = chats.firstIndex(where: { $0.id == selectedChatID }) else { return }
+        let messages = messagesForPersistence()
         var didChange = chats[index].systemPrompt != systemPromptText
-            || chats[index].messages != conversation
+            || chats[index].messages != messages
         chats[index].systemPrompt = systemPromptText
-        chats[index].messages = conversation
+        chats[index].messages = messages
         if chats[index].title == "New chat",
            let prompt,
            !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             chats[index].title = Self.chatTitle(for: prompt)
             didChange = true
         }
-        guard didChange else { return }
-        chats[index].updatedAt = Date()
-        orderChatsByRecency()
+        if didChange {
+            chats[index].updatedAt = Date()
+            orderChatsByRecency()
+        }
         persistChatHistory()
+    }
+
+    /// Uses the displayed transcript while a generation is finishing so a
+    /// chat switch cannot lose the submitted turn or its latest response.
+    private func messagesForPersistence() -> [AppChatMessage] {
+        guard isRunning else { return conversation }
+        var messages = outputMessages
+        let response = outputResponsePlainText
+        if !response.isEmpty {
+            messages.append(AppChatMessage(role: .assistant, content: response))
+        }
+        return messages
     }
 
     private func persistChatHistory() {

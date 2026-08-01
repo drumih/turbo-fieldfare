@@ -224,6 +224,10 @@ import Testing
         model.run()
         await waitForIdle(model)
 
+        model.promptText = "Second question"
+        model.run()
+        await waitForIdle(model)
+
         let firstChatID = model.selectedChatID
         #expect(model.chats.count == 1)
         #expect(model.chats[0].title == "First question")
@@ -246,7 +250,45 @@ import Testing
             AppChatMessage(
                 role: .assistant,
                 content: "first answer Prompt received: First question"),
+            AppChatMessage(role: .user, content: "Second question"),
+            AppChatMessage(
+                role: .assistant,
+                content: "first answer Prompt received: Second question"),
         ])
+    }
+
+    @MainActor
+    @Test func savedConversationRestoresAcrossModelInstances() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppModelChatPersistence-\(UUID().uuidString)",
+                                    isDirectory: true)
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let model = AppModel(
+            modelDirectory: directory,
+            client: MockInferenceClient(response: "answer", tokenDelayNanos: 1),
+            settingsPersistenceEnabled: true)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
+        model.maxNewTokensOverride = 8
+        model.promptText = "Remember this"
+        model.run()
+        await waitForIdle(model)
+        model.promptText = "Follow up"
+        model.run()
+        await waitForIdle(model)
+
+        let restored = AppModel(
+            modelDirectory: directory,
+            client: MockInferenceClient(),
+            settingsPersistenceEnabled: true)
+
+        #expect(restored.conversation.count == 4)
+        #expect(restored.conversation[0] ==
+            AppChatMessage(role: .user, content: "Remember this"))
+        #expect(restored.conversation[2] ==
+            AppChatMessage(role: .user, content: "Follow up"))
     }
 
     @MainActor
