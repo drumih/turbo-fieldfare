@@ -78,6 +78,7 @@ public final class InstructionTranscriptDocumentController {
             requested: showsPrefillPlaceholder)
         let needsRebuild = prompt != self.prompt
             || messages != self.messages
+            || responseChanged
             || !response.hasPrefix(self.response)
             || (isFinalized && !isTerminal)
             || displaysPrefillPlaceholder != self.showsPrefillPlaceholder
@@ -108,9 +109,11 @@ public final class InstructionTranscriptDocumentController {
         self.showsPrefillPlaceholder = displaysPrefillPlaceholder
 
         if isTerminal && (!isFinalized || responseChanged) {
-            let rendered = renderer.render(response).attributedString
-            storage.replaceCharacters(in: assistantRange, with: rendered)
-            assistantRange.length = rendered.length
+            if mutation != .rebuilt {
+                let rendered = renderer.render(response).attributedString
+                storage.replaceCharacters(in: assistantRange, with: rendered)
+                assistantRange.length = rendered.length
+            }
             isFinalized = true
             mutation = .finalized
         } else if !isTerminal {
@@ -183,10 +186,9 @@ public final class InstructionTranscriptDocumentController {
             string: "Answer\n",
             attributes: Self.assistantLabelAttributes()))
         assistantRange = NSRange(location: document.length, length: 0)
-        document.append(NSAttributedString(
-            string: response,
-            attributes: Self.responseAttributes()))
-        assistantRange.length = (response as NSString).length
+        let renderedResponse = renderer.render(response).attributedString
+        document.append(renderedResponse)
+        assistantRange.length = renderedResponse.length
         prefillDotCount = 0
         prefillPlaceholderRange = nil
         if showsPrefillPlaceholder {

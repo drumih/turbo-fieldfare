@@ -5,11 +5,14 @@ import SwiftUI
 struct RootView: View {
     let model: AppModel
     @State private var conversationChromeHeight: CGFloat = 0
+    @AppStorage("chatSidebarCollapsed") private var isChatSidebarCollapsed = false
 
     var body: some View {
         HStack(spacing: 0) {
-            ChatSidebarView(model: model)
-                .frame(width: 240)
+            ChatSidebarView(
+                model: model,
+                isCollapsed: $isChatSidebarCollapsed)
+                .frame(width: isChatSidebarCollapsed ? 56 : 240)
 
             Divider()
 
@@ -38,6 +41,7 @@ struct RootView: View {
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
         .animation(.smooth(duration: 0.25), value: model.error)
         .animation(.smooth(duration: 0.2), value: model.presentation.conversationAction)
+        .animation(.smooth(duration: 0.22), value: isChatSidebarCollapsed)
         .transaction { transaction in
             if model.isRunning {
                 transaction.animation = nil

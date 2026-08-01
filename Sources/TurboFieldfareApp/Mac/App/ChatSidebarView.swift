@@ -5,37 +5,18 @@ import SwiftUI
 
 struct ChatSidebarView: View {
     let model: AppModel
+    @Binding var isCollapsed: Bool
     @State private var chatToRename: AppChatThread?
     @State private var renameText = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button(action: model.newChat) {
-                Label("New chat", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(TurboFieldfareMacTheme.accentColor)
-            .disabled(!model.canManageChats)
-
-            Divider()
-
-            Text("Chats")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 3) {
-                    ForEach(model.chats) { chat in
-                        chatRow(chat)
-                    }
-                }
+        Group {
+            if isCollapsed {
+                collapsedContent
+            } else {
+                expandedContent
             }
         }
-        .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))
         .alert("Rename chat", isPresented: renameAlertIsPresented) {
@@ -50,6 +31,76 @@ struct ChatSidebarView: View {
                 chatToRename = nil
             }
         }
+    }
+
+    private var collapsedContent: some View {
+        VStack(spacing: 12) {
+            sidebarToggle
+
+            Button(action: model.newChat) {
+                Label("New chat", systemImage: "square.and.pencil")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 32, height: 32)
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(TurboFieldfareMacTheme.accentColor)
+            .disabled(!model.canManageChats)
+            .help("New chat")
+
+            Spacer()
+        }
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var expandedContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                sidebarToggle
+
+                Text("Chats")
+                    .font(.headline)
+                Spacer()
+            }
+
+            Button(action: model.newChat) {
+                Label("New chat", systemImage: "square.and.pencil")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(TurboFieldfareMacTheme.accentColor)
+            .disabled(!model.canManageChats)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(model.chats) { chat in
+                        chatRow(chat)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var sidebarToggle: some View {
+        Button {
+            isCollapsed.toggle()
+        } label: {
+            Label(
+                isCollapsed ? "Expand chat sidebar" : "Collapse chat sidebar",
+                systemImage: "sidebar.left")
+                .labelStyle(.iconOnly)
+                .frame(width: 32, height: 32)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.borderless)
+        .help(isCollapsed ? "Expand sidebar" : "Collapse sidebar")
     }
 
     private func chatRow(_ chat: AppChatThread) -> some View {

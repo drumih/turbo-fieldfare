@@ -83,9 +83,10 @@ public final class AppModel {
         let chatHistory = settingsPersistenceEnabled
             ? AppChatHistoryFileStore.load(forModelDirectory: directory)
             : .fresh()
-        let selectedChat = chatHistory.chats.first(where: {
+        let orderedChats = chatHistory.chats.sorted(by: Self.isMoreRecent)
+        let selectedChat = orderedChats.first(where: {
             $0.id == chatHistory.selectedChatID
-        }) ?? chatHistory.chats[0]
+        }) ?? orderedChats[0]
         self.modelPathText = directory.path
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: settings.expertCacheSlots,
@@ -98,7 +99,7 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
-        self.chats = chatHistory.chats
+        self.chats = orderedChats
         self.selectedChatID = selectedChat.id
         self.conversation = selectedChat.messages
         self.systemPromptText = selectedChat.systemPrompt
@@ -770,7 +771,8 @@ public final class AppModel {
         guard canManageChats else { return }
         saveActiveChat()
         let chat = AppChatThread()
-        chats.insert(chat, at: 0)
+        chats.append(chat)
+        orderChatsByRecency()
         selectedChatID = chat.id
         apply(chat: chat)
         persistChatHistory()
@@ -1004,19 +1006,24 @@ public final class AppModel {
             ? AppChatHistoryFileStore.load(forModelDirectory: modelDirectory)
             : .fresh()
         chats = history.chats
+        orderChatsByRecency()
         let chat = chats.first(where: { $0.id == history.selectedChatID }) ?? chats[0]
         apply(chat: chat)
     }
 
     private func saveActiveChat(titleForFirstPrompt prompt: String? = nil) {
         guard let index = chats.firstIndex(where: { $0.id == selectedChatID }) else { return }
+        var didChange = chats[index].systemPrompt != systemPromptText
+            || chats[index].messages != conversation
         chats[index].systemPrompt = systemPromptText
         chats[index].messages = conversation
         if chats[index].title == "New chat",
            let prompt,
            !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             chats[index].title = Self.chatTitle(for: prompt)
+            didChange = true
         }
+        guard didChange else { return }
         chats[index].updatedAt = Date()
         orderChatsByRecency()
         persistChatHistory()
@@ -1031,10 +1038,12 @@ public final class AppModel {
     }
 
     private func orderChatsByRecency() {
-        chats.sort { lhs, rhs in
-            if lhs.updatedAt == rhs.updatedAt { return lhs.createdAt > rhs.createdAt }
-            return lhs.updatedAt > rhs.updatedAt
-        }
+        chats.sort(by: Self.isMoreRecent)
+    }
+
+    private static func isMoreRecent(_ lhs: AppChatThread, _ rhs: AppChatThread) -> Bool {
+        if lhs.updatedAt == rhs.updatedAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.updatedAt > rhs.updatedAt
     }
 
     private static func chatTitle(for prompt: String) -> String {

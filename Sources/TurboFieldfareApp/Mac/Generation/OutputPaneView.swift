@@ -5,7 +5,6 @@ import SwiftUI
 
 struct OutputPaneView: View {
     let model: AppModel
-    @State private var responseCopyFeedbackID: UUID?
 
     var body: some View {
         Group {
@@ -13,14 +12,6 @@ struct OutputPaneView: View {
                 transcript
             } else {
                 placeholder
-            }
-        }
-        .task(id: responseCopyFeedbackID) {
-            guard let feedbackID = responseCopyFeedbackID else { return }
-            try? await Task.sleep(for: .seconds(1.2))
-            guard !Task.isCancelled, responseCopyFeedbackID == feedbackID else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
-                responseCopyFeedbackID = nil
             }
         }
         .contextMenu {
@@ -71,54 +62,8 @@ struct OutputPaneView: View {
             showsPrefillPlaceholder: model.isRunning
                 && model.outputResponsePlainText.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topTrailing) {
-                if !model.isRunning {
-                    HStack(spacing: 6) {
-                        Button("New Chat") { model.newChat() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        Button("Regenerate", action: model.regenerateLastResponse)
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(!model.canRegenerate)
-                        if !model.outputResponsePlainText.isEmpty {
-                            copyResponseButton
-                        }
-                    }
-                    .padding(8)
-                }
-            }
             .padding(.horizontal, 24)
             .padding(.vertical, 20)
-    }
-
-    private var copyResponseButton: some View {
-        Button {
-            copyResponse()
-        } label: {
-            Image(systemName: responseCopyFeedbackID == nil
-                  ? "doc.on.doc"
-                  : "checkmark.circle.fill")
-                .font(.callout.weight(.medium))
-                .contentTransition(.symbolEffect(.replace))
-                .foregroundStyle(responseCopyFeedbackID == nil
-                                 ? Color.secondary
-                                 : TurboFieldfareMacTheme.accentColor)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle().stroke(.separator.opacity(0.5), lineWidth: 0.5)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(responseCopyFeedbackID == nil
-                            ? "Copy response"
-                            : "Response copied")
-        .accessibilityHint("Copies only the generated answer")
-        .help(responseCopyFeedbackID == nil
-              ? "Copy response"
-              : "Response copied")
     }
 
     private var emptyPlaceholderContent: some View {
@@ -191,9 +136,6 @@ struct OutputPaneView: View {
 
     private func copyResponse() {
         copy(model.outputResponsePlainText)
-        withAnimation(.easeIn(duration: 0.15)) {
-            responseCopyFeedbackID = UUID()
-        }
     }
 }
 

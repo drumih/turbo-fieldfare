@@ -232,12 +232,15 @@ import Testing
 
         #expect(model.chats.count == 2)
         #expect(model.selectedChatID != firstChatID)
+        let newChatID = model.selectedChatID
+        #expect(model.chats.first?.id == newChatID)
         #expect(model.conversation.isEmpty)
         #expect(!model.hasOutputTranscript)
 
         model.selectChat(firstChatID)
 
         #expect(model.selectedChatID == firstChatID)
+        #expect(model.chats.first?.id == newChatID)
         #expect(model.conversation == [
             AppChatMessage(role: .user, content: "First question"),
             AppChatMessage(

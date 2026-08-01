@@ -113,7 +113,7 @@ import Testing
         #expect(abs((color?.blueComponent ?? 0) - 113.0 / 255.0) < 0.000_001)
     }
 
-    @Test func rebuildsThenAppendsOnlyNewResponseSuffix() {
+    @Test func streamingUpdatesRebuildWithRenderedMarkdown() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()
 
@@ -129,7 +129,7 @@ import Testing
             isTerminal: false)
 
         #expect(first.mutation == .rebuilt)
-        #expect(second.mutation == .appended)
+        #expect(second.mutation == .rebuilt)
         #expect(storage.string == "You\nExplain this\n\nAnswer\nHello")
         #expect(storage.string.components(separatedBy: "Answer").count == 2)
         let answerRange = (storage.string as NSString).range(of: "Answer")
@@ -139,6 +139,22 @@ import Testing
             effectiveRange: nil) as? NSColor
         #expect(answerColor?.isEqual(TurboFieldfareMacTheme.accentNSColor) == true)
         #expect(controller.response == "Hello")
+    }
+
+    @Test func streamingResponseRendersMarkdownBeforeItFinishes() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        let update = controller.synchronize(
+            storage: storage,
+            prompt: "Question",
+            response: "**Bold answer**",
+            isTerminal: false)
+
+        #expect(update.mutation == .rebuilt)
+        #expect(storage.string == "You\nQuestion\n\nAnswer\nBold answer")
+        #expect((storage.string as NSString).substring(with: update.assistantRange)
+            == "Bold answer")
     }
 
     @Test func animatedPrefillPlaceholderIsPresentationOnlyAndFirstResponseRemovesIt() {
@@ -257,7 +273,7 @@ import Testing
             isTerminal: false)
         #expect(result.mutation == .rebuilt)
         #expect(!controller.isFinalized)
-        #expect(storage.string.hasSuffix("Partial **answer**"))
+        #expect(storage.string.hasSuffix("Partial answer"))
     }
 
     @Test func terminalResponseRendersAgainWhenClosingFenceArrivesLate() {
