@@ -157,7 +157,7 @@ After installation:
 
 1. Choose **Load Model**.
 2. Enter a prompt in the composer.
-3. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>.
+3. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use **Settings > Send Message With** to choose Return or Command-Return.
 4. Use the stop button or <kbd>Escape</kbd> to end generation early.
 
 The status bar shows generation progress, decode speed, and memory use. Use the

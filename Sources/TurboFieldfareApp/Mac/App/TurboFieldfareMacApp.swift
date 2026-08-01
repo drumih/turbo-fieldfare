@@ -58,6 +58,33 @@ struct TurboFieldfareMacApp: App {
                 Button("Unload Model", action: model.unloadModel)
                     .disabled(!model.canUnloadModel)
             }
+            CommandMenu("Settings") {
+                Picker("Send Message With", selection: newlineShortcutBinding) {
+                    ForEach(AppNewlineShortcut.sendMessageOptions) { shortcut in
+                        Text(shortcut.sendMessageLabel).tag(shortcut)
+                    }
+                }
+                Picker("Prompt Examples", selection: showPromptExamplesBinding) {
+                    Text("Show").tag(true)
+                    Text("Hide").tag(false)
+                }
+            }
+        }
+    }
+
+    private var newlineShortcutBinding: Binding<AppNewlineShortcut> {
+        Binding {
+            model.newlineShortcut
+        } set: { shortcut in
+            model.setNewlineShortcut(shortcut)
+        }
+    }
+
+    private var showPromptExamplesBinding: Binding<Bool> {
+        Binding {
+            model.showPromptExamples
+        } set: { show in
+            model.setShowPromptExamples(show)
         }
     }
 }

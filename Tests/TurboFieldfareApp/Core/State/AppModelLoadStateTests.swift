@@ -70,6 +70,7 @@ import Testing
         client.suspendUnloads = true
         let model = AppModel(modelDirectory: directory, client: client)
         model.outputText = "keep me"
+        model.promptText = "keep this draft"
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         model.unloadModel()
@@ -81,6 +82,28 @@ import Testing
         }
         #expect(model.loadState == .notLoaded)
         #expect(model.outputText == "keep me")
+        #expect(model.promptText == "keep this draft")
+    }
+
+    @MainActor
+    @Test func reloadPreservesTranscriptAndDraft() async throws {
+        let directory = try makeCompleteModelInstall("reload-preserves-conversation")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = MockLifecycleInferenceClient()
+        let model = AppModel(modelDirectory: directory, client: client)
+        model.outputText = "keep me"
+        model.promptText = "keep this draft"
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+        model.runtimeOptions.rdadvisePolicy = .bounded
+
+        model.reloadModel()
+        for _ in 0..<200 where !model.loadState.isReady {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(model.loadState.isReady)
+        #expect(model.outputText == "keep me")
+        #expect(model.promptText == "keep this draft")
     }
 
     @MainActor
@@ -91,6 +114,8 @@ import Testing
         client.suspendLoads = true
         client.suspendUnloads = true
         let model = AppModel(modelDirectory: directory, client: client)
+        model.outputText = "keep me"
+        model.promptText = "keep this draft"
 
         model.loadModel()
         await client.waitForLoadStart()
@@ -110,6 +135,8 @@ import Testing
             try? await Task.sleep(for: .milliseconds(5))
         }
         #expect(model.loadState == .notLoaded)
+        #expect(model.outputText == "keep me")
+        #expect(model.promptText == "keep this draft")
     }
 
     @MainActor
@@ -119,6 +146,8 @@ import Testing
         let client = MockLifecycleInferenceClient()
         client.suspendLoads = true
         let model = AppModel(modelDirectory: directory, client: client)
+        model.outputText = "keep me"
+        model.promptText = "keep this draft"
 
         model.loadModel()
         await client.waitForLoadStart()
@@ -128,6 +157,8 @@ import Testing
         }
         #expect(model.loadState == .failed(.modelLoadFailed("synthetic")))
         #expect(model.canLoadModel)
+        #expect(model.outputText == "keep me")
+        #expect(model.promptText == "keep this draft")
 
         client.suspendLoads = true
         model.loadModel()
@@ -142,6 +173,8 @@ import Testing
         }
         #expect(model.loadState.isReady)
         #expect(client.ensureLoadedCallCount() == 2)
+        #expect(model.outputText == "keep me")
+        #expect(model.promptText == "keep this draft")
     }
 
     @MainActor

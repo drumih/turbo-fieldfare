@@ -51,6 +51,29 @@ import Testing
         #expect(state.label == "Ready")
     }
 
+    @Test func conversationActionOnlyExposesIdleRecovery() {
+        var snapshot = Self.installedSnapshot(loadState: .notLoaded)
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == .load)
+
+        snapshot.loadState = .failed(.modelLoadFailed("synthetic"))
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == .retryLoad)
+
+        snapshot.loadState = .ready(
+            modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
+            loadSeconds: 1)
+        snapshot.hasStaleRuntime = true
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == .reload)
+
+        snapshot.hasStaleRuntime = false
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == nil)
+
+        snapshot.loadState = .loading(.tokenizer)
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == nil)
+
+        snapshot.loadState = .unloading
+        #expect(AppPresentationState.resolve(snapshot).conversationAction == nil)
+    }
+
     @Test func lifecyclePriorityTable() {
         let ready = AppModelLoadState.ready(
             modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"), loadSeconds: 1)
