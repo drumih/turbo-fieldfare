@@ -136,6 +136,7 @@ public struct OpenAIStreamOptions: Codable, Equatable, Sendable {
 }
 
 public struct OpenAIChatRequest: Codable, Equatable, Sendable {
+    public let customID: String?
     public let model: String
     public let messages: [OpenAIChatMessage]
     public let stream: Bool?
@@ -158,6 +159,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
+        case customID = "custom_id"
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -169,6 +171,13 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
     }
+}
+
+/// A small, local-only batch envelope. Requests are deliberately executed in
+/// order by the single model-owning server; this endpoint is not the hosted
+/// OpenAI Batch API.
+public struct OpenAIChatBatchRequest: Codable, Equatable, Sendable {
+    public let requests: [OpenAIChatRequest]
 }
 
 public struct OpenAIUsage: Codable, Equatable, Sendable {

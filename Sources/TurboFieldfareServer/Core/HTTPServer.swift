@@ -12,6 +12,7 @@ public actor TurboFieldfareHTTPServer {
     private let modelID: String
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
+    private let batches: BatchRegistry
     private let heartbeatInterval: TimeAmount
     private let childChannels = ChildChannelRegistry()
     private var channel: Channel?
@@ -21,11 +22,13 @@ public actor TurboFieldfareHTTPServer {
                 queueLimit: Int,
                 backend: any ServerInferenceBackend,
                 heartbeatInterval: TimeAmount = .seconds(5),
+                batchOutputDirectory: URL? = nil,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
         self.modelID = modelID
         self.backend = backend
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
+        self.batches = batchOutputDirectory.map(BatchRegistry.init(outputDirectory:)) ?? BatchRegistry()
         self.heartbeatInterval = heartbeatInterval
     }
 
@@ -33,6 +36,7 @@ public actor TurboFieldfareHTTPServer {
         let modelID = self.modelID
         let backend = self.backend
         let coordinator = self.coordinator
+        let batches = self.batches
         let heartbeatInterval = self.heartbeatInterval
         let childChannels = self.childChannels
         let bootstrap = ServerBootstrap(group: group)
@@ -48,6 +52,7 @@ public actor TurboFieldfareHTTPServer {
                         modelID: modelID,
                         backend: backend,
                         coordinator: coordinator,
+                        batches: batches,
                         heartbeatInterval: heartbeatInterval,
                         childChannels: childChannels))
                 }
@@ -116,6 +121,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let modelID: String
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
+    private let batches: BatchRegistry
     private let heartbeatInterval: TimeAmount
     private let childChannels: ChildChannelRegistry
     private var head: HTTPRequestHead?
@@ -126,11 +132,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     init(modelID: String,
          backend: any ServerInferenceBackend,
          coordinator: ServerCoordinator,
+         batches: BatchRegistry,
          heartbeatInterval: TimeAmount,
          childChannels: ChildChannelRegistry) {
         self.modelID = modelID
         self.backend = backend
         self.coordinator = coordinator
+        self.batches = batches
         self.heartbeatInterval = heartbeatInterval
         self.childChannels = childChannels
     }
@@ -192,7 +200,22 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 return
             }
             handleCompletion(body: body, context: context)
-        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"):
+        case (.POST, "/v1/batches"):
+            guard head.headers.first(name: "content-type")?
+                .lowercased().hasPrefix("application/json") == true else {
+                writeError(context, status: .unsupportedMediaType,
+                           OpenAIErrorEnvelope(message: "content-type must be application/json",
+                                               code: "unsupported_media_type"))
+                return
+            }
+            handleBatchJob(body: body, context: context)
+        case (.GET, "/v1/batches"):
+            handleBatchList(uri: head.uri, context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/batches/"):
+            handleBatchStatus(uri: uri, context: context)
+        case (.POST, let uri) where uri.hasPrefix("/v1/batches/") && uri.hasSuffix("/cancel"):
+            handleBatchCancel(uri: uri, context: context)
+        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/batches"):
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -201,6 +224,69 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                        OpenAIErrorEnvelope(message: "route not found",
                                            code: "not_found"))
         }
+    }
+
+    private func handleBatchJob(body: ByteBuffer, context: ChannelHandlerContext) {
+        do {
+            let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
+            let envelope = try JSONDecoder().decode(OpenAIChatBatchRequest.self, from: Data(bytes))
+            guard !envelope.requests.isEmpty else { throw ServerRequestError.invalid(message: "requests must not be empty", param: "requests", code: "invalid_value") }
+            let requests = try envelope.requests.enumerated().map { index, item -> BatchRequest in
+                guard item.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "requests.stream", code: "unsupported_value") }
+                return BatchRequest(customID: item.customID ?? "request-\(index)",
+                                    request: try OpenAIRequestValidator.validate(item, modelID: modelID))
+            }
+            let box = SendableContext(context)
+            activeTask = childChannels.startTask {
+                do {
+                    let snapshot = try await self.batches.create(requests: requests,
+                                                                 backend: self.backend,
+                                                                 coordinator: self.coordinator,
+                                                                 modelID: self.modelID)
+                    self.writeCodable(box.value, status: .ok, snapshot)
+                } catch {
+                    self.handleAsyncError(
+                        error,
+                        context: box.value,
+                        id: "batch-" + UUID().uuidString.lowercased(),
+                        phase: "creating batch",
+                        stream: false)
+                }
+            }
+        } catch let error as ServerRequestError { writeError(context, status: error == .unknownModel ? .notFound : .badRequest, error.envelope) }
+        catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")) }
+    }
+
+    private func handleBatchList(uri: String, context: ChannelHandlerContext) {
+        guard let components = URLComponents(string: "http://localhost\(uri)") else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid query", code: "invalid_value"))
+            return
+        }
+        let limit = components.queryItems?.first(where: { $0.name == "limit" })?.value
+            .flatMap { Int($0) } ?? 20
+        guard (1...100).contains(limit) else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "limit must be between 1 and 100", param: "limit", code: "invalid_value"))
+            return
+        }
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask {
+            self.writeCodable(box.value, status: .ok,
+                              await self.batches.list(
+                                limit: limit,
+                                after: components.queryItems?.first(where: { $0.name == "after" })?.value))
+        }
+    }
+
+    private func handleBatchStatus(uri: String, context: ChannelHandlerContext) {
+        let id = String(uri.dropFirst("/v1/batches/".count))
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let batch = await self.batches.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "batch not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, batch) }
+    }
+
+    private func handleBatchCancel(uri: String, context: ChannelHandlerContext) {
+        let id = String(uri.dropFirst("/v1/batches/".count).dropLast("/cancel".count))
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let batch = await self.batches.cancel(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "batch not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, batch) }
     }
 
     private func handleCompletion(body: ByteBuffer,
@@ -312,6 +398,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                  id: String,
                                  created: Int,
                                  completion: ServerCompletion) {
+        writeJSON(context, status: .ok,
+                  object: completionObject(id: id, created: created, completion: completion))
+    }
+
+    private func completionObject(id: String,
+                                  created: Int,
+                                  completion: ServerCompletion) -> [String: Any] {
         let encodedContent: Any =
             completion.content.isEmpty && !completion.toolCalls.isEmpty
                 ? NSNull()
@@ -335,7 +428,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             ]],
             "usage": usageObject(completion.usage),
         ]
-        writeJSON(context, status: .ok, object: object)
+        return object
     }
 
     private func beginStream(

@@ -258,6 +258,20 @@ remote authentication or TLS.
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.
 
+#### Local batch requests
+
+`POST /v1/batches` accepts `{ "requests": [...] }`, where every item is a
+normal non-streaming Chat Completions request. Items run in order through the
+same single-model queue as normal requests. An optional `custom_id` on an item
+is copied to its output record.
+
+`GET /v1/batches/{id}` retrieves its lifecycle status, `POST
+/v1/batches/{id}/cancel` stops unstarted work, and `GET /v1/batches?limit=20&after={id}`
+lists in-memory batches. Each batch exposes an `output_file_id`; the server
+writes one OpenAI-style response/error object per completed item as local JSONL.
+This is a loopback convenience API: input files, batch persistence across a
+server restart, and `/v1/files/{id}/content` are intentionally not implemented.
+
 ## Test and contribute
 
 Run the public test suite serially:
