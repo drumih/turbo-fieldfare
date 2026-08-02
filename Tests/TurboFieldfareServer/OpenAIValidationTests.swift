@@ -44,6 +44,33 @@ struct OpenAIValidationTests {
         }
     }
 
+    @Test func acceptsHyphenatedToolNames() throws {
+        let data = Data(#"""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+          "tools":[{"type":"function","function":{"name":"resolve-library-id",
+            "parameters":{"type":"object"}}}]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.tools.first?.function.name == "resolve-library-id")
+    }
+
+    @Test func rejectsToolNamesWithInvalidCharacters() throws {
+        for invalid in ["bad name", "bad.name", "bad@name"] {
+            let data = Data(#"""
+            {"model":"m","messages":[{"role":"user","content":"x"}],
+              "tools":[{"type":"function","function":{"name":"\#(invalid)",
+                "parameters":{"type":"object"}}}]
+            }
+            """#.utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            #expect(throws: ServerRequestError.self) {
+                try OpenAIRequestValidator.validate(request, modelID: "m")
+            }
+        }
+    }
+
     @Test func acceptsLeadingSystemAndDeveloperGuidance() throws {
         let data = Data(#"""
         {"model":"m","messages":[
