@@ -4,6 +4,7 @@ import TurboFieldfareAppCore
 struct ModelPickerView: View {
     @Bindable var model: AppModel
     @State private var isAddingCustomModel = false
+    @State private var entryPendingDeletion: ModelCatalogEntry?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -29,7 +30,7 @@ struct ModelPickerView: View {
                     onDownload: { model.startInstall(for: entry) },
                     onCancel: { model.cancelInstall() },
                     onLoad: { model.switchModel(to: entry) },
-                    onDelete: { model.deleteInstall(for: entry) })
+                    onDelete: { entryPendingDeletion = entry })
                 if entry.id != model.catalog.entries.last?.id {
                     Divider()
                 }
@@ -38,6 +39,26 @@ struct ModelPickerView: View {
         .padding()
         .sheet(isPresented: $isAddingCustomModel) {
             AddCustomModelSheet(model: model, isPresented: $isAddingCustomModel)
+        }
+        // Deleting is a multi-gigabyte, irreversible action whose button sits
+        // next to Load. It does not happen on a single click.
+        .confirmationDialog(
+            entryPendingDeletion.map { "Delete \($0.displayName)?" } ?? "Delete model?",
+            isPresented: Binding(
+                get: { entryPendingDeletion != nil },
+                set: { if !$0 { entryPendingDeletion = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Model", role: .destructive) {
+                if let entry = entryPendingDeletion { model.deleteInstall(for: entry) }
+                entryPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { entryPendingDeletion = nil }
+        } message: {
+            if let entry = entryPendingDeletion {
+                Text("This removes \(formattedBytes(entry.installedBytes)) of weights from "
+                    + "disk. Re-installing means downloading the model again.")
+            }
         }
     }
 }
@@ -134,10 +155,11 @@ private struct ModelPickerRow: View {
         }
     }
 
-    private func formattedBytes(_ bytes: UInt64) -> String {
-        let gigabytes = Double(bytes) / (1_024 * 1_024 * 1_024)
-        return String(format: "%.1f GB", gigabytes)
-    }
+}
+
+private func formattedBytes(_ bytes: UInt64) -> String {
+    let gigabytes = Double(bytes) / (1_024 * 1_024 * 1_024)
+    return String(format: "%.1f GB", gigabytes)
 }
 
 private struct TrustBadge: View {

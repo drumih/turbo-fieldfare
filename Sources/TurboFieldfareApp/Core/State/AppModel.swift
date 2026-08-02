@@ -582,6 +582,17 @@ public final class AppModel {
         catalog.entry(forRepoID: selectedRepoID)
     }
 
+    /// Descriptor for the model currently being installed or probed.
+    ///
+    /// Must not be `installer.descriptor`: that is the pinned curated model, so
+    /// validating a custom install against it compares the finished download's
+    /// snapshot hash to Gemma's fingerprint and rejects a perfectly good
+    /// install after the user has already waited for the whole transfer.
+    public var descriptorForSelection: AppModelInstallDescriptor {
+        guard let selectedEntry else { return installer.descriptor }
+        return AppModelInstallDescriptor(entry: selectedEntry)
+    }
+
     /// Resident bytes of the selected model, measured from its manifest when
     /// installed. Drives the context picker's memory maths.
     public var residentWeightBytes: UInt64 {
@@ -633,7 +644,9 @@ public final class AppModel {
         if loadState.isReady { unloadModel() }
         selectedRepoID = entry.repoID
         modelPathText = directory.standardizedFileURL.path
-        installationStatus = AppModelInstallationProbe.status(at: directory)
+        installationStatus = AppModelInstallationProbe.status(
+            at: directory,
+            descriptor: AppModelInstallDescriptor(entry: entry))
         if case .complete = installationStatus {
             installStates.setState(.installed(modelDirectory: directory), for: entry.repoID)
         }
@@ -658,11 +671,25 @@ public final class AppModel {
         }
         // Removes the slug directory, not just model.gturbo, so a partial
         // install's staging files go with it.
-        try? FileManager.default.removeItem(at: directory.deletingLastPathComponent())
+        // Only the weights directory. The slug directory also holds this
+        // model's settings and the install lock, and removing it wholesale
+        // destroyed unrelated state — and could fail partway on the held lock
+        // while having already deleted the weights.
+        do {
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            // Never silent: losing weights is the most expensive thing this app
+            // can do to a user, so a failure has to be visible.
+            self.error = .invalidRequest(
+                "Could not delete \(entry.displayName): \(error.localizedDescription)")
+            return
+        }
         installStates.setState(.idle, for: entry.repoID)
         if selectedRepoID == entry.repoID {
             installState = .idle
-            installationStatus = AppModelInstallationProbe.status(at: directory)
+            installationStatus = AppModelInstallationProbe.status(
+                at: directory,
+                descriptor: AppModelInstallDescriptor(entry: entry))
             refreshInstallReadiness()
         }
     }
@@ -728,7 +755,7 @@ public final class AppModel {
     private func refreshInstallReadiness(at outputDirectory: URL) {
         installationStatus = AppModelInstallationProbe.status(
             at: outputDirectory,
-            descriptor: installer.descriptor)
+            descriptor: descriptorForSelection)
         guard !isModelInstalled else { return }
         installReadiness = .checking
         do {
@@ -777,7 +804,7 @@ public final class AppModel {
             let directory = directory.standardizedFileURL
             installationStatus = AppModelInstallationProbe.status(
                 at: directory,
-                descriptor: installer.descriptor)
+                descriptor: descriptorForSelection)
             guard installationStatus == .complete else {
                 finishInstallFailure(
                     RepackError.configurationInvalid(detail: "completed install did not pass metadata validation"),
