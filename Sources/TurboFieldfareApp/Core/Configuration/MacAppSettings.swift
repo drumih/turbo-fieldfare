@@ -41,7 +41,15 @@ enum MacAppSettingsFileStore {
                 guard settings.isValid() else { throw InvalidSettings() }
                 return settings
             } catch {
-                try? fileManager.removeItem(at: fileURL)
+                // Renamed, not deleted: settings are cheap to recreate but the
+                // user did choose them, and nothing here justifies destroying
+                // a file behind their back.
+                let backup = fileURL.deletingLastPathComponent()
+                    .appendingPathComponent("mac-app-settings.corrupt.json", isDirectory: false)
+                try? fileManager.removeItem(at: backup)
+                if (try? fileManager.moveItem(at: fileURL, to: backup)) == nil {
+                    try? fileManager.removeItem(at: fileURL)
+                }
             }
         }
 

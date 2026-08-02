@@ -29,6 +29,17 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
         self.runInstall = { entry, outputDirectory, progress in
             let paths = try RemoteInstallPaths(outputDirectory: outputDirectory.path)
             let resume = FileManager.default.fileExists(atPath: paths.checkpointFile)
+            // Stop before a single byte is transferred if weights already sit
+            // at the destination. Completing the install would swap them out
+            // and delete them, and no download should ever cost the user a
+            // model they already have.
+            let manifest = outputDirectory
+                .appendingPathComponent("manifest.json", isDirectory: false)
+            if FileManager.default.fileExists(atPath: manifest.path) {
+                throw RepackError.configurationInvalid(detail:
+                    "\(entry.displayName) already has weights installed. "
+                        + "Delete it first if you want to reinstall.")
+            }
             let options = Self.repackOptions(
                 entry: entry,
                 outputDirectory: outputDirectory,
@@ -55,10 +66,16 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
     /// `requireKnownSource` is the gate that keeps a curated model pinned to the
     /// project's fingerprint, and getting it backwards would silently accept an
     /// unvetted upload in the verified tier.
+    /// `replacesExistingInstall` maps to the repacker's `overwrite`. With it
+    /// off, an existing install at the destination makes the repacker refuse
+    /// rather than swap the old weights out and delete them — so a download
+    /// started by accident cannot cost the user a model they already have.
     static func repackOptions(entry: ModelCatalogEntry,
                               outputDirectory: URL,
                               token: String?,
-                              resume: Bool) -> RemoteStreamingRepackOptions {
+                              resume: Bool,
+                              replacesExistingInstall: Bool = false)
+        -> RemoteStreamingRepackOptions {
         RemoteStreamingRepackOptions(
             repoID: entry.repoID,
             revision: entry.revision,
@@ -66,7 +83,7 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
             token: token,
             requireKnownSource: ModelTrustPolicy.requiresKnownSource(for: entry),
             minFreeReserveBytes: entry.reserveBytes,
-            overwrite: true,
+            overwrite: replacesExistingInstall,
             resume: resume)
     }
 

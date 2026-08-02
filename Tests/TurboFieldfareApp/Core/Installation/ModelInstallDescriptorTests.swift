@@ -100,6 +100,55 @@ import TurboFieldfareRepackCore
         #expect(options.requireKnownSource == false)
     }
 
+    /// Weights are never replaced unless the caller says so. With `overwrite`
+    /// on, the repacker swaps the new install over the old one and deletes it,
+    /// so defaulting to true means a stray Download destroys gigabytes the user
+    /// already has.
+    @Test func doesNotOverwriteExistingWeightsByDefault() {
+        let options = RepackModelInstallerClient.repackOptions(
+            entry: makeEntry(tier: .custom),
+            outputDirectory: outputDirectory,
+            token: nil,
+            resume: false)
+        #expect(options.overwrite == false)
+    }
+
+    @Test func overwritesOnlyWhenReplacementIsRequested() {
+        let options = RepackModelInstallerClient.repackOptions(
+            entry: makeEntry(tier: .custom),
+            outputDirectory: outputDirectory,
+            token: nil,
+            resume: false,
+            replacesExistingInstall: true)
+        #expect(options.overwrite)
+    }
+
+    /// The guard that makes "download" non-destructive. It must fire before any
+    /// network work, so an accidental Download on an installed model costs
+    /// nothing and destroys nothing.
+    @Test func refusesToInstallOverExistingWeights() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("existing-weights-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("{}".utf8).write(to: directory.appendingPathComponent("manifest.json"))
+
+        let client = RepackModelInstallerClient()
+        var thrown: Error?
+        do {
+            for try await _ in client.install(entry: makeEntry(tier: .custom),
+                                              outputDirectory: directory) {}
+        } catch {
+            thrown = error
+        }
+
+        #expect(thrown != nil)
+        #expect("\(thrown!)".contains("already has weights installed"))
+        // The weights it refused to replace are still there.
+        #expect(FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("manifest.json").path))
+    }
+
     @Test func optionsCarryTheEntrysRepositoryRevisionAndReserve() {
         let options = RepackModelInstallerClient.repackOptions(
             entry: makeEntry(tier: .custom),

@@ -41,10 +41,10 @@ public enum ConversationFileStore {
             guard store.isValid() else { throw InvalidStore() }
             return store
         } catch {
-            // A corrupt or future-version store is discarded rather than
-            // partially migrated; chat history is recreatable, a wedged app is
-            // not recoverable by the user.
-            try? fileManager.removeItem(at: url)
+            // A corrupt or future-version store must not wedge the app, but it
+            // is still the user's writing: renamed aside rather than deleted so
+            // it can be recovered by hand.
+            quarantine(url, fileManager: fileManager)
             return ConversationStoreFile()
         }
     }
@@ -84,7 +84,7 @@ public enum ConversationFileStore {
             guard store.isValid() else { throw InvalidStore() }
             return store
         } catch {
-            try? fileManager.removeItem(at: url)
+            quarantine(url, fileManager: fileManager)
             return ConversationStoreFile()
         }
     }
@@ -139,6 +139,21 @@ public enum ConversationFileStore {
                            fileManager: fileManager)
         }
         return imported
+    }
+
+    /// Renames a store that failed to decode, keeping the newest bad copy
+    /// beside the good one.
+    static func quarantine(_ url: URL, fileManager: FileManager) {
+        let backup = url.deletingLastPathComponent()
+            .appendingPathComponent("conversations.corrupt.json", isDirectory: false)
+        try? fileManager.removeItem(at: backup)
+        do {
+            try fileManager.moveItem(at: url, to: backup)
+        } catch {
+            // Only if the rename itself fails does the file go, and only
+            // because leaving it would make the app unopenable.
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     struct InvalidStore: Error {}
