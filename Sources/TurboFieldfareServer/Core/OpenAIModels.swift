@@ -334,8 +334,8 @@ public enum OpenAIRequestValidator {
             throw invalid("only function tools are supported", "tools", "unsupported_tool")
         }
         let name = tool.function.name
-        guard name.range(of: #"^[A-Za-z0-9_]{1,64}$"#, options: .regularExpression) != nil else {
-            throw invalid("tool name must match [A-Za-z0-9_]{1,64}",
+        guard name.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil else {
+            throw invalid("tool name '\(name)' must match [A-Za-z0-9_-]{1,64}",
                           "tools", "invalid_tool_name")
         }
         guard tool.function.parameters.objectValue != nil else {
