@@ -72,6 +72,7 @@ your prompt, and press **Generate**.
 | Platform        | macOS 26, Metal 4, Swift 6.2                                                                                             |
 | M2 measured decode | [5.1-6.3 tok/s](docs/BENCHMARKS.md#m2-measured-decode) on an 8 GB M2 MacBook Air |
 | M5 measured decode | [31-35 tok/s](docs/BENCHMARKS.md#m5-measured-decode) on a 24 GB M5 Pro |
+| Community Reports | [Here](docs/COMMUNITY_BENCHMARKS.md#community-results) |
 
 The measured result is a reference point, not a performance ceiling. Prompt
 length, generated length, page-cache state, and hardware all affect throughput.

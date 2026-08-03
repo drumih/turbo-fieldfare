@@ -132,6 +132,9 @@ all affect decode speed.
 
 | Source | Mac | Memory | Storage | Prompt / generated tokens | Decode | Measurement |
 | --- | --- | ---: | --- | ---: | ---: | --- |
+| [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 61 / 511 | 7.802 tok/s | One submitted run |
+| [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 430 / 669 | 7.173 tok/s | One submitted run |
+| [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 3,015 / 604 | 6.093 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 61 / 511 | 9.477 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 430 / 669 | 8.576 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 3,015 / 604 | 7.805 tok/s | One submitted run |
