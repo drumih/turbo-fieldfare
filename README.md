@@ -187,8 +187,8 @@ The sidebar on the left keeps a persistent history of past conversations. Each
 entry shows the title, a response preview, the relative update time, and the
 number of generated tokens. You can:
 
-- click an entry to reload its prompt and response,
-- search the history by title, prompt, or response,
+- click an entry to reload its history and continue the dialogue,
+- search the history by title or any turn text,
 - pin entries so they stay at the top of the list,
 - rename entries by double-clicking the title,
 - export or import the whole history as JSON,
@@ -197,8 +197,10 @@ number of generated tokens. You can:
 
 History is stored as JSON in Application Support (`TurboFieldfare/
 conversations.json`) and survives app restarts. A conversation is saved when a
-generation finishes or is stopped; regenerating the same prompt updates the
-same conversation instead of creating duplicates.
+generation finishes or is stopped. Loading a conversation clears the composer
+so you can continue it: the next message is sent with the full turn history,
+and regenerating the same prompt replaces the previous answer instead of
+duplicating it.
 
 #### Document attachments
 

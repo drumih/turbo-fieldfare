@@ -67,6 +67,8 @@ public final class AppModel {
     
     /// Conversation currently loaded from history
     public private(set) var activeConversationID: UUID?
+    /// Turns of the loaded conversation, used to continue the dialogue.
+    public private(set) var activeConversationTurns: [Turn] = []
 
     // MARK: - Cognitive mode
     
@@ -960,8 +962,16 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
-        // Append attached document text to the prompt when present
-        let effectivePrompt = hasAttachments ? promptWithAttachments : promptText
+        // Continue a loaded conversation, or compose the single-shot prompt
+        // (attached documents appended when present).
+        let effectivePrompt: String
+        if !activeConversationTurns.isEmpty && !promptText.isEmpty {
+            effectivePrompt = continuationPromptText
+        } else if hasAttachments {
+            effectivePrompt = promptWithAttachments
+        } else {
+            effectivePrompt = promptText
+        }
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             prompt: effectivePrompt,
@@ -1135,6 +1145,19 @@ public final class AppModel {
         return context
     }
     
+    /// Prompt that continues a loaded conversation: the full turn history,
+    /// then the new user message (with attached documents).
+    public var continuationPromptText: String {
+        var history = activeConversationTurns.map { turn in
+            turn.role == .user ? "User:\n\(turn.text)" : "Model:\n\(turn.text)"
+        }.joined(separator: "\n\n")
+        let userText = hasAttachments ? promptWithAttachments : promptText
+        if !history.isEmpty {
+            history += "\n\n"
+        }
+        return history + "User:\n" + userText
+    }
+    
     /// Total size of attached documents in bytes
     public var totalAttachmentBytes: UInt64 {
         attachments.reduce(0) { $0 + $1.fileSize }
@@ -1168,54 +1191,73 @@ public final class AppModel {
         guard !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         let now = Date()
-        // Regenerating the same prompt updates the active conversation instead
-        // of creating a duplicate entry; a different prompt starts a new one.
         let active = activeConversationID.flatMap { id in
             conversationStore.conversations.first { $0.id == id }
         }
         let savedResponse = response ?? outputText
         let conversation: Conversation
-        if let active, active.prompt == promptText {
+        if let active {
+            var turns = active.turns
+            // Regenerating the same prompt replaces the previous model answer;
+            // otherwise the new user message and answer extend the history.
+            let regenerating = turns.count >= 2
+                && turns[turns.count - 1].role == .model
+                && turns[turns.count - 2].role == .user
+                && turns[turns.count - 2].text == promptText
+            if regenerating {
+                turns[turns.count - 1] = Turn(role: .model, text: savedResponse,
+                                              createdAt: now)
+            } else if turns.last?.role == .user, turns.last?.text == promptText {
+                turns.append(Turn(role: .model, text: savedResponse, createdAt: now))
+            } else {
+                turns.append(Turn(role: .user, text: promptText, createdAt: now))
+                turns.append(Turn(role: .model, text: savedResponse, createdAt: now))
+            }
             conversation = Conversation(
                 id: active.id,
                 title: active.title,
-                prompt: promptText,
-                response: savedResponse,
+                turns: turns,
                 createdAt: active.createdAt,
                 updatedAt: now,
                 promptTokenCount: diagnostic?.promptTokenCount,
                 generatedTokenCount: diagnostic?.generatedTokens,
                 stopReason: diagnostic?.stopReason.rawValue,
                 attachments: attachments,
-                maxNewTokens: maxNewTokensOverride
+                isPinned: active.isPinned,
+                maxNewTokens: maxNewTokensOverride ?? active.maxNewTokens
             )
         } else {
             conversation = Conversation(
                 id: UUID(),
                 title: Conversation.title(from: promptText),
-                prompt: promptText,
-                response: savedResponse,
+                turns: [
+                    Turn(role: .user, text: promptText, createdAt: now),
+                    Turn(role: .model, text: savedResponse, createdAt: now),
+                ],
                 createdAt: now,
                 updatedAt: now,
                 promptTokenCount: diagnostic?.promptTokenCount,
                 generatedTokenCount: diagnostic?.generatedTokens,
                 stopReason: diagnostic?.stopReason.rawValue,
                 attachments: attachments,
+                isPinned: false,
                 maxNewTokens: maxNewTokensOverride
             )
         }
         
         conversationStore.upsert(conversation)
         activeConversationID = conversation.id
+        activeConversationTurns = conversation.turns
     }
     
     /// Loads an existing conversation from history
     public func loadConversation(_ conversation: Conversation) {
         guard !isRunning else { return }
         activeConversationID = conversation.id
-        promptText = conversation.prompt
-        outputPromptText = conversation.prompt
-        outputText = conversation.response
+        activeConversationTurns = conversation.turns
+        promptText = ""
+        outputPromptText = ""
+        outputText = conversation.displayTranscript
         // Restore attached documents so regenerating keeps the context
         attachments = conversation.attachments
         attachmentErrors = []
@@ -1231,6 +1273,7 @@ public final class AppModel {
     public func newConversation() {
         guard !isRunning else { return }
         activeConversationID = nil
+        activeConversationTurns = []
         promptText = ""
         outputPromptText = ""
         outputText = ""

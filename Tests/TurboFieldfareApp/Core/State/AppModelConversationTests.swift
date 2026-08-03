@@ -28,8 +28,8 @@ import Testing
         model.saveCurrentConversation(diagnostic: makeDiagnostics())
 
         let saved = model.conversationStore.conversations[0]
-        #expect(saved.prompt == "Explain Metal")
-        #expect(saved.response == "Metal is a GPU API.")
+        #expect(saved.firstPrompt == "Explain Metal")
+        #expect(saved.lastResponse == "Metal is a GPU API.")
         #expect(saved.promptTokenCount == 12)
         #expect(saved.generatedTokenCount == 34)
         #expect(saved.stopReason == "maxTokens")
@@ -63,23 +63,28 @@ import Testing
 
         #expect(model.activeConversationID == firstID)
         #expect(model.conversationStore.conversations.count == 1)
-        #expect(model.conversationStore.conversations[0].response == "second response")
+        #expect(model.conversationStore.conversations[0].lastResponse == "second response")
         #expect(model.conversationStore.conversations[0].createdAt == firstCreatedAt)
         #expect(model.conversationStore.conversations[0].updatedAt >= firstCreatedAt)
     }
 
     @Test
-    func differentPromptCreatesNewConversation() {
+    func differentPromptContinuesSameConversation() {
         let (model, _) = makeModel()
         model.promptText = "first prompt"
+        model.outputText = "first answer"
         model.saveCurrentConversation()
         let firstID = model.activeConversationID
 
+        // A new prompt on the active conversation extends its history.
         model.promptText = "second prompt"
+        model.outputText = "second answer"
         model.saveCurrentConversation()
 
-        #expect(model.activeConversationID != firstID)
-        #expect(model.conversationStore.conversations.count == 2)
+        #expect(model.activeConversationID == firstID)
+        #expect(model.conversationStore.conversations.count == 1)
+        #expect(model.conversationStore.conversations[0].turns.count == 4)
+        #expect(model.conversationStore.conversations[0].lastResponse == "second answer")
     }
 
     @Test
@@ -107,8 +112,11 @@ import Testing
         model.loadConversation(stored)
 
         #expect(model.activeConversationID == stored.id)
-        #expect(model.promptText == "original prompt")
-        #expect(model.outputText == "original response")
+        #expect(model.activeConversationTurns == stored.turns)
+        // The composer is empty so the user can continue the dialogue.
+        #expect(model.promptText.isEmpty)
+        #expect(model.outputText.contains("original prompt"))
+        #expect(model.outputText.contains("original response"))
         #expect(model.attachments == stored.attachments)
         #expect(model.diagnostics == nil)
         #expect(model.error == nil)
@@ -192,12 +200,14 @@ import Testing
         let reloaded = AppModel(conversationStore: reloadedStore)
         #expect(reloaded.conversationStore.conversations.count == 1)
         let restored = reloaded.conversationStore.conversations[0]
-        #expect(restored.prompt == "persisted prompt")
+        #expect(restored.firstPrompt == "persisted prompt")
         #expect(restored.attachments.count == 1)
 
         reloaded.loadConversation(restored)
-        #expect(reloaded.promptText == "persisted prompt")
+        // Composer is cleared for continuation; the turns carry the history.
+        #expect(reloaded.activeConversationTurns.count == 2)
         #expect(reloaded.attachments[0].filename == "report.txt")
+        #expect(reloaded.outputText.contains("persisted response"))
     }
 
     @Test
@@ -258,7 +268,7 @@ import Testing
         let count = try otherModel.importConversations(from: url)
 
         #expect(count == 1)
-        #expect(otherModel.conversationStore.conversations[0].prompt == "export me")
+        #expect(otherModel.conversationStore.conversations[0].firstPrompt == "export me")
     }
 
     /// Minimal diagnostics for token-count assertions.

@@ -57,8 +57,8 @@ import Testing
         #expect(model.conversationStore.conversations.count == 1)
         let saved = model.conversationStore.conversations[0]
         // History stores the final revision, not the whole cycle transcript.
-        #expect(!saved.response.contains("— Plan —"))
-        #expect(saved.response.contains("revision text"))
+        #expect(!saved.lastResponse.contains("— Plan —"))
+        #expect(saved.lastResponse.contains("revision text"))
     }
 
     @Test

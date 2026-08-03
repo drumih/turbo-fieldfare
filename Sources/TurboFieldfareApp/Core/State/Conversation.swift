@@ -1,21 +1,61 @@
 import Foundation
 import OSLog
 
+/// One turn of a multi-turn conversation.
+public struct Turn: Identifiable, Codable, Equatable, Sendable {
+    public enum Role: String, Codable, Sendable {
+        case user
+        case model
+    }
+
+    public let id: UUID
+    public var role: Role
+    public var text: String
+    public var createdAt: Date
+    /// Token count attributed to this turn, if known.
+    public var tokenCount: Int?
+
+    public init(id: UUID = UUID(),
+                role: Role,
+                text: String,
+                createdAt: Date = Date(),
+                tokenCount: Int? = nil) {
+        self.id = id
+        self.role = role
+        self.text = text
+        self.createdAt = createdAt
+        self.tokenCount = tokenCount
+    }
+}
+
 /// A past conversation between the user and the model.
 public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public let id: UUID
     public var title: String
-    public var prompt: String
-    public var response: String
+    /// Ordered turns of the conversation. Non-empty for loaded history.
+    public var turns: [Turn]
     public var createdAt: Date
     public var updatedAt: Date
+    /// Prompt token count of the last generated turn.
     public var promptTokenCount: Int?
+    /// Generated token count of the last generated turn.
     public var generatedTokenCount: Int?
+    /// Stop reason of the last generated turn.
     public var stopReason: String?
     public var attachments: [DocumentAttachment]
     public var isPinned: Bool
     /// Per-conversation max response length; nil means "use the global default".
     public var maxNewTokens: Int?
+
+    /// The first user turn, or an empty string when there is none.
+    public var firstPrompt: String {
+        turns.first { $0.role == .user }?.text ?? ""
+    }
+
+    /// The last model turn, or an empty string when there is none.
+    public var lastResponse: String {
+        turns.last { $0.role == .model }?.text ?? ""
+    }
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -31,8 +71,37 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 maxNewTokens: Int? = nil) {
         self.id = id
         self.title = title
-        self.prompt = prompt
-        self.response = response
+        self.turns = [
+            Turn(role: .user, text: prompt, createdAt: createdAt,
+                 tokenCount: promptTokenCount),
+            Turn(role: .model, text: response, createdAt: updatedAt,
+                 tokenCount: generatedTokenCount),
+        ].filter { !$0.text.isEmpty }
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.promptTokenCount = promptTokenCount
+        self.generatedTokenCount = generatedTokenCount
+        self.stopReason = stopReason
+        self.attachments = attachments
+        self.isPinned = isPinned
+        self.maxNewTokens = maxNewTokens
+    }
+
+    /// Creates a conversation with an explicit turn list (for multi-turn history).
+    public init(id: UUID = UUID(),
+                title: String,
+                turns: [Turn],
+                createdAt: Date = Date(),
+                updatedAt: Date = Date(),
+                promptTokenCount: Int? = nil,
+                generatedTokenCount: Int? = nil,
+                stopReason: String? = nil,
+                attachments: [DocumentAttachment] = [],
+                isPinned: Bool = false,
+                maxNewTokens: Int? = nil) {
+        self.id = id
+        self.title = title
+        self.turns = turns
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.promptTokenCount = promptTokenCount
@@ -45,69 +114,93 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
 
     /// Returns a copy with the given mutable fields replaced.
     public func replacing(title: String? = nil,
-                          response: String? = nil,
-                          attachments: [DocumentAttachment]? = nil,
+                          turns: [Turn]? = nil,
                           isPinned: Bool? = nil) -> Conversation {
         Conversation(id: id,
                      title: title ?? self.title,
-                     prompt: prompt,
-                     response: response ?? self.response,
+                     turns: turns ?? self.turns,
                      createdAt: createdAt,
                      updatedAt: updatedAt,
                      promptTokenCount: promptTokenCount,
                      generatedTokenCount: generatedTokenCount,
                      stopReason: stopReason,
-                     attachments: attachments ?? self.attachments,
+                     attachments: attachments,
                      isPinned: isPinned ?? self.isPinned,
                      maxNewTokens: maxNewTokens)
     }
 
-    /// Automatic title from the prompt when none is provided.
-    public static func title(from prompt: String, maxLength: Int = 60) -> String {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "New conversation" }
-        if trimmed.count <= maxLength { return trimmed }
-        let end = trimmed.index(trimmed.startIndex, offsetBy: maxLength)
-        return String(trimmed[..<end]) + "…"
+    /// Formats the full multi-turn history as a single prompt for generation.
+    /// Each turn is labelled; the model is expected to continue as model.
+    public func asPrompt() -> String {
+        turns.map { turn in
+            switch turn.role {
+            case .user: return "User:\n\(turn.text)"
+            case .model: return "Model:\n\(turn.text)"
+            }
+        }.joined(separator: "\n\n") + "\n\nModel:"
     }
 
-    /// Short response preview for list display.
+    /// Human-readable transcript for display and copy operations.
+    public var displayTranscript: String {
+        turns.map { turn in
+            switch turn.role {
+            case .user: return "You:\n\(turn.text)"
+            case .model: return "Answer:\n\(turn.text)"
+            }
+        }.joined(separator: "\n\n")
+    }
+
+    /// Short response preview for list display (last model turn).
     public var responsePreview: String {
-        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = lastResponse.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.count <= 100 { return trimmed }
         let end = trimmed.index(trimmed.startIndex, offsetBy: 100)
         return String(trimmed[..<end]) + "…"
     }
 
+    /// Total character count across all turns (for context estimates).
+    public var characterCount: Int {
+        turns.reduce(0) { $0 + $1.text.count }
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case id, title, prompt, response, createdAt, updatedAt
+        case id, title, createdAt, updatedAt
         case promptTokenCount, generatedTokenCount, stopReason
-        case attachments, isPinned, maxNewTokens
+        case attachments, isPinned, maxNewTokens, turns
+        // Legacy single-exchange keys, kept for backward decoding.
+        case prompt, response
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(UUID.self, forKey: .id)
         self.title = try container.decode(String.self, forKey: .title)
-        self.prompt = try container.decode(String.self, forKey: .prompt)
-        self.response = try container.decode(String.self, forKey: .response)
         self.createdAt = try container.decode(Date.self, forKey: .createdAt)
         self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         self.promptTokenCount = try container.decodeIfPresent(Int.self, forKey: .promptTokenCount)
         self.generatedTokenCount = try container.decodeIfPresent(Int.self, forKey: .generatedTokenCount)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
-        // Older history files predate document attachments and pinning.
         self.attachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .attachments) ?? []
         self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         self.maxNewTokens = try container.decodeIfPresent(Int.self, forKey: .maxNewTokens)
+        // Newer files carry turns; legacy files used prompt/response fields.
+        if let turns = try container.decodeIfPresent([Turn].self, forKey: .turns),
+           !turns.isEmpty {
+            self.turns = turns
+        } else {
+            let prompt = try container.decode(String.self, forKey: .prompt)
+            let response = try container.decode(String.self, forKey: .response)
+            self.turns = [
+                Turn(role: .user, text: prompt, createdAt: createdAt),
+                Turn(role: .model, text: response, createdAt: updatedAt),
+            ].filter { !$0.text.isEmpty }
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
-        try container.encode(prompt, forKey: .prompt)
-        try container.encode(response, forKey: .response)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(promptTokenCount, forKey: .promptTokenCount)
@@ -116,6 +209,16 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         try container.encode(attachments, forKey: .attachments)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(maxNewTokens, forKey: .maxNewTokens)
+        try container.encode(turns, forKey: .turns)
+    }
+
+    /// Placeholder title from the first user turn when no title exists.
+    public static func title(from prompt: String, maxLength: Int = 60) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "New conversation" }
+        if trimmed.count <= maxLength { return trimmed }
+        let end = trimmed.index(trimmed.startIndex, offsetBy: maxLength)
+        return String(trimmed[..<end]) + "…"
     }
 }
 

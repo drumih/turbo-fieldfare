@@ -21,8 +21,9 @@ struct ConversationSidebarView: View {
         let query = searchText.lowercased()
         return items.filter {
             $0.title.lowercased().contains(query)
-                || $0.prompt.lowercased().contains(query)
-                || $0.response.lowercased().contains(query)
+                || $0.turns.contains { turn in
+                    turn.text.lowercased().contains(query)
+                }
         }
     }
 

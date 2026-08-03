@@ -94,8 +94,8 @@ import Testing
 
         #expect(store.conversations.count == 1)
         #expect(store.conversations.first?.title == "second")
-        #expect(store.conversations.first?.prompt == "p2")
-        #expect(store.conversations.first?.response == "r2")
+        #expect(store.conversations.first?.firstPrompt == "p2")
+        #expect(store.conversations.first?.lastResponse == "r2")
     }
 
     @Test func deleteRemovesConversation() {
@@ -135,8 +135,8 @@ import Testing
         let restored = reloaded.conversations[0]
         #expect(restored.id == saved.id)
         #expect(restored.title == "persisted")
-        #expect(restored.prompt == "Prompt for persisted")
-        #expect(restored.response == "Response for persisted")
+        #expect(restored.firstPrompt == "Prompt for persisted")
+        #expect(restored.lastResponse == "Response for persisted")
         #expect(restored.promptTokenCount == 12)
         #expect(restored.generatedTokenCount == 34)
         #expect(restored.stopReason == "length")

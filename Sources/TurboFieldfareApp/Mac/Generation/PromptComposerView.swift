@@ -51,7 +51,9 @@ struct PromptComposerView: View {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
                     // padding, no vertical inset.
-                    Text("Prompt")
+                    Text(model.activeConversationTurns.isEmpty
+                         ? "Prompt"
+                         : "Continue the conversation…")
                         .font(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
