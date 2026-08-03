@@ -48,6 +48,10 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var maxNewTokens: Int?
     /// Id of the conversation this one was forked from, if any.
     public var parentConversationID: UUID?
+    /// Whether this conversation is a reusable template.
+    public var isTemplate: Bool
+    /// User-defined tags used for filtering (e.g. "#work").
+    public var tags: [String]
 
     /// The first user turn, or an empty string when there is none.
     public var firstPrompt: String {
@@ -71,7 +75,9 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 attachments: [DocumentAttachment] = [],
                 isPinned: Bool = false,
                 maxNewTokens: Int? = nil,
-                parentConversationID: UUID? = nil) {
+                parentConversationID: UUID? = nil,
+                isTemplate: Bool = false,
+                tags: [String] = []) {
         self.id = id
         self.title = title
         self.turns = [
@@ -89,6 +95,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.isPinned = isPinned
         self.maxNewTokens = maxNewTokens
         self.parentConversationID = parentConversationID
+        self.isTemplate = isTemplate
+        self.tags = tags
     }
 
     /// Creates a conversation with an explicit turn list (for multi-turn history).
@@ -103,7 +111,9 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 attachments: [DocumentAttachment] = [],
                 isPinned: Bool = false,
                 maxNewTokens: Int? = nil,
-                parentConversationID: UUID? = nil) {
+                parentConversationID: UUID? = nil,
+                isTemplate: Bool = false,
+                tags: [String] = []) {
         self.id = id
         self.title = title
         self.turns = turns
@@ -116,12 +126,16 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.isPinned = isPinned
         self.maxNewTokens = maxNewTokens
         self.parentConversationID = parentConversationID
+        self.isTemplate = isTemplate
+        self.tags = tags
     }
 
     /// Returns a copy with the given mutable fields replaced.
     public func replacing(title: String? = nil,
                           turns: [Turn]? = nil,
-                          isPinned: Bool? = nil) -> Conversation {
+                          isPinned: Bool? = nil,
+                          isTemplate: Bool? = nil,
+                          tags: [String]? = nil) -> Conversation {
         Conversation(id: id,
                      title: title ?? self.title,
                      turns: turns ?? self.turns,
@@ -133,7 +147,9 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                      attachments: attachments,
                      isPinned: isPinned ?? self.isPinned,
                      maxNewTokens: maxNewTokens,
-                     parentConversationID: parentConversationID)
+                     parentConversationID: parentConversationID,
+                     isTemplate: isTemplate ?? self.isTemplate,
+                     tags: tags ?? self.tags)
     }
 
     /// Formats the full multi-turn history as a single prompt for generation.
@@ -174,7 +190,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         case id, title, createdAt, updatedAt
         case promptTokenCount, generatedTokenCount, stopReason
         case attachments, isPinned, maxNewTokens, turns
-        case parentConversationID
+        case parentConversationID, isTemplate, tags
         // Legacy single-exchange keys, kept for backward decoding.
         case prompt, response
     }
@@ -192,6 +208,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         self.maxNewTokens = try container.decodeIfPresent(Int.self, forKey: .maxNewTokens)
         self.parentConversationID = try container.decodeIfPresent(UUID.self, forKey: .parentConversationID)
+        self.isTemplate = try container.decodeIfPresent(Bool.self, forKey: .isTemplate) ?? false
+        self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         // Newer files carry turns; legacy files used prompt/response fields.
         if let turns = try container.decodeIfPresent([Turn].self, forKey: .turns),
            !turns.isEmpty {
@@ -219,6 +237,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(maxNewTokens, forKey: .maxNewTokens)
         try container.encodeIfPresent(parentConversationID, forKey: .parentConversationID)
+        try container.encode(isTemplate, forKey: .isTemplate)
+        try container.encode(tags, forKey: .tags)
         try container.encode(turns, forKey: .turns)
     }
 

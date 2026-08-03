@@ -207,6 +207,53 @@ import Testing
         #expect(markdown.contains("## User\n\nhello"))
         #expect(markdown.contains("## Assistant\n\nhi"))
     }
+
+    // MARK: - Templates & tags
+
+    @Test
+    func setTemplateMarksConversation() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        let conversation = Conversation(title: "t", prompt: "p", response: "r")
+        model.conversationStore.upsert(conversation)
+
+        model.setTemplate(conversation, isTemplate: true)
+
+        #expect(model.conversationStore.conversations[0].isTemplate)
+
+        model.setTemplate(model.conversationStore.conversations[0], isTemplate: false)
+        #expect(!model.conversationStore.conversations[0].isTemplate)
+    }
+
+    @Test
+    func setTagsNormalizesAndDeduplicates() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        let conversation = Conversation(title: "t", prompt: "p", response: "r")
+        model.conversationStore.upsert(conversation)
+
+        model.setTags(conversation, tags: [" work ", "code", "work", "  "])
+
+        #expect(model.conversationStore.conversations[0].tags == ["work", "code"])
+    }
+
+    @Test
+    func savingActiveConversationPreservesTemplateAndTags() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        model.promptText = "prompt"
+        model.outputText = "answer"
+        model.saveCurrentConversation()
+        let saved = model.conversationStore.conversations[0]
+        model.setTemplate(saved, isTemplate: true)
+        model.setTags(saved, tags: ["meta"])
+
+        // Regenerate the same prompt: the flags must survive the upsert.
+        model.outputText = "answer two"
+        model.saveCurrentConversation()
+
+        let updated = model.conversationStore.conversations[0]
+        #expect(updated.isTemplate)
+        #expect(updated.tags == ["meta"])
+        #expect(updated.lastResponse == "answer two")
+    }
 }
 
 /// Test helper sharing the isolated-store model factory.

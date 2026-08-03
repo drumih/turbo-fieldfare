@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 
 /// Sidebar showing the conversation history.
 struct ConversationSidebarView: View {
@@ -17,11 +18,23 @@ struct ConversationSidebarView: View {
     @State private var markdownDocument: MarkdownExportDocument?
     @State private var showingMarkdownExporter = false
     @State private var markdownFilename = "conversation"
+    @State private var showingTemplatesOnly = false
+    @State private var editingTagsConversation: Conversation?
+    @State private var tagsDraft = ""
 
     private var filteredConversations: [Conversation] {
-        let items = model.conversationStore.conversations
+        var items = model.conversationStore.conversations
+        if showingTemplatesOnly {
+            items = items.filter(\.isTemplate)
+        }
         guard !searchText.isEmpty else { return items }
         let query = searchText.lowercased()
+        if query.hasPrefix("#") {
+            let tag = String(query.dropFirst())
+            return items.filter { conversation in
+                conversation.tags.contains { $0.lowercased().contains(tag) }
+            }
+        }
         return items.filter {
             $0.title.lowercased().contains(query)
                 || $0.turns.contains { turn in
@@ -46,6 +59,22 @@ struct ConversationSidebarView: View {
                     .keyboardShortcut("n", modifiers: .command)
 
                     Spacer()
+
+                    if model.conversationStore.conversations.contains(where: \.isTemplate) {
+                        Button {
+                            showingTemplatesOnly.toggle()
+                        } label: {
+                            Label("Templates", systemImage: "square.stack.3d.up")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(showingTemplatesOnly
+                                         ? TurboFieldfareMacTheme.accentColor
+                                         : Color.secondary)
+                        .help(showingTemplatesOnly
+                              ? "Show all conversations"
+                              : "Show templates only")
+                    }
 
                     if !model.conversationStore.conversations.isEmpty {
                         Menu {
@@ -99,6 +128,14 @@ struct ConversationSidebarView: View {
                             onRename: { model.renameConversation(conversation, title: $0) },
                             onTogglePin: { model.togglePin(conversation) },
                             onFork: { model.forkConversation(conversation) },
+                            onToggleTemplate: {
+                                model.setTemplate(conversation,
+                                                  isTemplate: !conversation.isTemplate)
+                            },
+                            onEditTags: {
+                                tagsDraft = conversation.tags.joined(separator: ", ")
+                                editingTagsConversation = conversation
+                            },
                             onExportMarkdown: {
                                 markdownFilename = Self.safeFilename(conversation.title)
                                 markdownDocument = MarkdownExportDocument(
@@ -138,6 +175,25 @@ struct ConversationSidebarView: View {
             }
         } message: {
             Text("This action cannot be undone.")
+        }
+        .alert("Edit tags", isPresented: .init(
+            get: { editingTagsConversation != nil },
+            set: { if !$0 { editingTagsConversation = nil } }
+        )) {
+            TextField("Tags (comma separated)", text: $tagsDraft)
+            Button("Save") {
+                if let conversation = editingTagsConversation {
+                    let tags = tagsDraft.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    model.setTags(conversation, tags: tags)
+                }
+                editingTagsConversation = nil
+            }
+            Button("Cancel", role: .cancel) {
+                editingTagsConversation = nil
+            }
+        } message: {
+            Text("Tags are used to filter the history (search #tag).")
         }
         .alert("Import failed", isPresented: .init(
             get: { importError != nil },
@@ -251,6 +307,8 @@ struct ConversationRowView: View {
     let onRename: (String) -> Void
     let onTogglePin: () -> Void
     let onFork: () -> Void
+    let onToggleTemplate: () -> Void
+    let onEditTags: () -> Void
     let onExportMarkdown: () -> Void
     @State private var isRenaming = false
     @State private var draftTitle = ""
@@ -299,6 +357,9 @@ struct ConversationRowView: View {
         .contextMenu {
             Button("Open", action: onSelect)
             Button(conversation.isPinned ? "Unpin" : "Pin", action: onTogglePin)
+            Button(conversation.isTemplate ? "Remove template" : "Save as template",
+                   action: onToggleTemplate)
+            Button("Edit Tags…", action: onEditTags)
             Button("Rename", action: beginRename)
             Button("Fork", action: onFork)
             Divider()

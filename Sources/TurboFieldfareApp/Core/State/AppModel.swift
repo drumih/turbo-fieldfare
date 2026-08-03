@@ -551,21 +551,47 @@ public final class AppModel {
         }
     }
 
+    /// Appends a dated line to the install journal for diagnostics.
+    private func appendInstallLog(_ message: String) {
+        let folder = ConversationStore.defaultStorageURL().deletingLastPathComponent()
+        let url = folder.appendingPathComponent("install.log")
+        let line = "[\(Self.installLogFormatter.string(from: Date()))] \(message)\n"
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? FileManager.default.createDirectory(
+                at: folder, withIntermediateDirectories: true)
+            try? Data(line.utf8).write(to: url, options: .atomic)
+        }
+    }
+
+    private static let installLogFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
     private func applyInstallEvent(_ event: AppModelInstallEvent, generation: UInt64) {
         guard generation == installGeneration else { return }
         switch event {
         case .checking:
             resetInstallETA()
             installState = .checking
+            appendInstallLog("install check")
         case .downloadingMetadata:
             resetInstallETA()
             installState = .downloadingMetadata
+            appendInstallLog("downloading metadata")
         case .planning:
             resetInstallETA()
             installState = .planning
+            appendInstallLog("planning")
         case .reservingOutput:
             resetInstallETA()
             installState = .reservingOutput
+            appendInstallLog("reserving output")
         case .copyingPayload(let reused, let downloadedThisRun, let total):
             installState = .copyingPayload(
                 reusedBytes: reused,
@@ -578,12 +604,15 @@ public final class AppModel {
         case .hashingOutput(let file):
             resetInstallETA()
             installState = .hashingOutput(file)
+            appendInstallLog("hashing output \((file as NSString).lastPathComponent)")
         case .finalizing:
             resetInstallETA()
             installState = .finalizing
+            appendInstallLog("finalizing")
         case .installed(let directory):
             resetInstallETA()
             let directory = directory.standardizedFileURL
+            appendInstallLog("installed at \(directory.path)")
             installationStatus = AppModelInstallationProbe.status(
                 at: directory,
                 descriptor: installer.descriptor)
@@ -698,6 +727,7 @@ public final class AppModel {
         guard generation == installGeneration else { return }
         installTask = nil
         resetInstallETA()
+        appendInstallLog("failed: \(error)")
         let hasSavedDownload = hasPartialModelDownload
         installState = hasSavedDownload ? .recoverable("\(error)") : .failed("\(error)")
         if let repackError = error as? RepackError,
@@ -1224,7 +1254,10 @@ public final class AppModel {
                 stopReason: diagnostic?.stopReason.rawValue,
                 attachments: attachments,
                 isPinned: active.isPinned,
-                maxNewTokens: maxNewTokensOverride ?? active.maxNewTokens
+                maxNewTokens: maxNewTokensOverride ?? active.maxNewTokens,
+                parentConversationID: active.parentConversationID,
+                isTemplate: active.isTemplate,
+                tags: active.tags
             )
         } else {
             conversation = Conversation(
@@ -1324,6 +1357,24 @@ public final class AppModel {
     /// Pins or unpins a conversation so it stays at the top of the list
     public func togglePin(_ conversation: Conversation) {
         conversationStore.upsert(conversation.replacing(isPinned: !conversation.isPinned))
+    }
+    
+    /// Marks or unmarks a conversation as a reusable template.
+    public func setTemplate(_ conversation: Conversation, isTemplate: Bool) {
+        guard let current = conversationStore.conversations
+            .first(where: { $0.id == conversation.id }) else { return }
+        conversationStore.upsert(current.replacing(isTemplate: isTemplate))
+    }
+    
+    /// Replaces the tags of a conversation.
+    public func setTags(_ conversation: Conversation, tags: [String]) {
+        guard let current = conversationStore.conversations
+            .first(where: { $0.id == conversation.id }) else { return }
+        let normalized = tags
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let unique = Array(NSOrderedSet(array: normalized)) as? [String] ?? normalized
+        conversationStore.upsert(current.replacing(tags: unique))
     }
     
     /// Exports all conversations to a JSON file
