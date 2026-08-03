@@ -1,4 +1,5 @@
 import AppKit
+import TurboFieldfare
 import TurboFieldfareAppCore
 import TurboFieldfareMacPresentation
 import SwiftUI
@@ -58,23 +59,31 @@ struct OutputPaneView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
     private var transcript: some View {
-        IncrementalTranscriptView(
-            prompt: model.outputPromptText,
-            output: model.outputText,
-            mailbox: model.generationTranscriptMailbox,
-            isTerminal: !model.isRunning,
-            showsPrefillPlaceholder: model.isRunning
-                && model.outputResponsePlainText.isEmpty)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topTrailing) {
-                if !model.isRunning && !model.outputResponsePlainText.isEmpty {
-                    copyResponseButton
-                        .padding(8)
+        if !model.cognitiveTranscript.isEmpty && !model.isRunning {
+            CognitiveTranscriptView(segments: model.cognitiveTranscript)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+        } else {
+            IncrementalTranscriptView(
+                prompt: model.outputPromptText,
+                output: model.outputText,
+                mailbox: model.generationTranscriptMailbox,
+                isTerminal: !model.isRunning,
+                showsPrefillPlaceholder: model.isRunning
+                    && model.outputResponsePlainText.isEmpty)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if !model.isRunning && !model.outputResponsePlainText.isEmpty {
+                        copyResponseButton
+                            .padding(8)
+                    }
                 }
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+        }
     }
 
     private var copyResponseButton: some View {
@@ -457,6 +466,53 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.invalidate()
+    }
+}
+
+/// Collapsible per-pass view of a completed cognitive cycle.
+private struct CognitiveTranscriptView: View {
+    let segments: [CognitivePassSegment]
+    @State private var expanded = Set<CognitiveStepKind>()
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(segments) { segment in
+                    DisclosureGroup(isExpanded: binding(for: segment.kind)) {
+                        Text(segment.text)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 4)
+                    } label: {
+                        Label(segment.kind.header, systemImage: icon(for: segment.kind))
+                            .font(.callout.weight(.semibold))
+                    }
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private func binding(for kind: CognitiveStepKind) -> Binding<Bool> {
+        Binding(
+            get: { expanded.contains(kind) },
+            set: { isExpanded in
+                if isExpanded {
+                    expanded.insert(kind)
+                } else {
+                    expanded.remove(kind)
+                }
+            })
+    }
+
+    private func icon(for kind: CognitiveStepKind) -> String {
+        switch kind {
+        case .plan: return "list.bullet"
+        case .draft: return "doc.text"
+        case .critique: return "exclamationmark.triangle"
+        case .final: return "checkmark.seal"
+        }
     }
 }
 

@@ -13,7 +13,7 @@ public struct CognitivePassSegment: Equatable, Sendable, Identifiable {
 }
 
 /// The four passes of the advanced cognitive cycle.
-public enum CognitiveStepKind: String, CaseIterable, Sendable, Equatable {
+public enum CognitiveStepKind: String, CaseIterable, Sendable, Equatable, Hashable {
     case plan
     case draft
     case critique
@@ -118,5 +118,24 @@ public struct CognitiveCycleEngine: Sendable, Equatable {
             \(outputs[.critique] ?? "")
             """
         }
+    }
+}
+
+/// Decides whether the final revision pass can be skipped because the
+/// critique found nothing actionable. Heuristic, prompt-format dependent.
+public enum CognitiveStopPolicy {
+    /// Returns true when the critique is empty or contains only positive
+    /// "nothing to fix" markers, so the draft can be kept as the answer.
+    public static func shouldSkipFinal(critique: String) -> Bool {
+        let trimmed = critique.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        let lowered = trimmed.lowercased()
+        let positiveMarkers = [
+            "no issues", "no errors", "no problems", "no changes",
+            "no improvements", "nothing to fix", "nothing to change",
+            "looks good", "no major issues",
+            "no actionable feedback", "no critical issues",
+        ]
+        return positiveMarkers.contains { lowered.contains($0) }
     }
 }

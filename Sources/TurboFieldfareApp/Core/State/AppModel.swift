@@ -867,11 +867,17 @@ public final class AppModel {
         runTask = Task.detached { [weak self, client, request] in
             guard let self else { return }
             var engine = CognitiveCycleEngine(userPrompt: request.prompt)
-            var finalText = ""
+            var draftText = ""
             var finalDiagnostics: AppDiagnostics?
             var cancelled = false
 
             while let step = engine.nextStep() {
+                // H.2: skip the final revision when the critique found nothing
+                // actionable; the draft then becomes the answer.
+                if step.kind == .final,
+                   CognitiveStopPolicy.shouldSkipFinal(critique: engine.outputs[.critique] ?? "") {
+                    break
+                }
                 var passRequest = request
                 passRequest.prompt = step.prompt
 
@@ -944,7 +950,9 @@ public final class AppModel {
 
                 engine.record(output: passText)
                 finalDiagnostics = passDiagnostics
-                finalText = passText
+                if step.kind == .draft {
+                    draftText = passText
+                }
                 await MainActor.run {
                     self.cognitiveTranscript.append(
                         CognitivePassSegment(kind: step.kind, text: passText))
@@ -954,7 +962,8 @@ public final class AppModel {
             if !cancelled {
                 let handled = await MainActor.run { self.hasHandledTerminalEvent }
                 if !handled {
-                    await self.finishCognitiveCycle(finalDiagnostics, response: finalText)
+                    let answer = engine.outputs[.final] ?? draftText
+                    await self.finishCognitiveCycle(finalDiagnostics, response: answer)
                 }
             }
         }

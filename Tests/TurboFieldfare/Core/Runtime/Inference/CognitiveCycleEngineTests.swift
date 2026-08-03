@@ -120,4 +120,24 @@ import Testing
 
         #expect(seen == [.plan, .draft, .critique, .final])
     }
+
+    // MARK: - Stop policy (H.2)
+
+    @Test func stopPolicySkipsEmptyCritique() {
+        #expect(CognitiveStopPolicy.shouldSkipFinal(critique: ""))
+        #expect(CognitiveStopPolicy.shouldSkipFinal(critique: "   \n "))
+    }
+
+    @Test func stopPolicySkipsPositiveCritique() {
+        #expect(CognitiveStopPolicy.shouldSkipFinal(critique: "The draft has no issues."))
+        #expect(CognitiveStopPolicy.shouldSkipFinal(critique: "No errors found, looks good."))
+        #expect(CognitiveStopPolicy.shouldSkipFinal(critique: "Nothing to fix in the draft."))
+    }
+
+    @Test func stopPolicyKeepsFinalForActionableCritique() {
+        #expect(!CognitiveStopPolicy.shouldSkipFinal(
+            critique: "The second paragraph is inaccurate and the example is outdated."))
+        #expect(!CognitiveStopPolicy.shouldSkipFinal(
+            critique: "Add a worked example and cite a source."))
+    }
 }
