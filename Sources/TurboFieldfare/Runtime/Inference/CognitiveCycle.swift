@@ -1,5 +1,17 @@
 import Foundation
 
+/// One completed pass of the cognitive cycle, in display order.
+public struct CognitivePassSegment: Equatable, Sendable, Identifiable {
+    public let id = UUID()
+    public let kind: CognitiveStepKind
+    public let text: String
+
+    public init(kind: CognitiveStepKind, text: String) {
+        self.kind = kind
+        self.text = text
+    }
+}
+
 /// The four passes of the advanced cognitive cycle.
 public enum CognitiveStepKind: String, CaseIterable, Sendable, Equatable {
     case plan

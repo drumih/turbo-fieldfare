@@ -13,6 +13,7 @@ struct ConversationSidebarView: View {
     @State private var importError: String?
     @State private var importedCount: Int?
     @FocusState private var searchFocused: Bool
+    @State private var showingCorruptionWarning = false
 
     private var filteredConversations: [Conversation] {
         let items = model.conversationStore.conversations
@@ -107,6 +108,16 @@ struct ConversationSidebarView: View {
                 .opacity(0)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
+        }
+        .onAppear {
+            if model.conversationStore.didLoadFromCorrupted {
+                showingCorruptionWarning = true
+            }
+        }
+        .alert("History file unreadable", isPresented: $showingCorruptionWarning) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The previous history file was corrupted and was moved aside; a fresh empty history was started. The unreadable file was renamed to conversations.json.corrupted.")
         }
         .alert("Clear all history?", isPresented: $showingClearConfirmation) {
             Button("Cancel", role: .cancel) {}

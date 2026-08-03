@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfare
 import TurboFieldfareRepackCore
 import Observation
 
@@ -55,6 +56,9 @@ public final class AppModel {
     public var attachmentErrors: [String] = []
     /// Whether an attachment extraction is in progress
     public private(set) var isExtractingAttachment: Bool = false
+    /// Segments of the completed cognitive cycle (plan/draft/critique/final),
+    /// in order. Empty for a single-pass generation.
+    public private(set) var cognitiveTranscript: [CognitivePassSegment] = []
 
     // MARK: - Conversation history
     
@@ -771,6 +775,7 @@ public final class AppModel {
         generationTranscriptMailbox?.reset()
         outputPromptText = request.prompt
         outputText = ""
+        cognitiveTranscript = []
         diagnostics = nil
         error = nil
         hasHandledTerminalEvent = false
@@ -809,6 +814,7 @@ public final class AppModel {
         generationTranscriptMailbox?.reset()
         outputPromptText = request.prompt
         outputText = ""
+        cognitiveTranscript = []
         diagnostics = nil
         error = nil
         hasHandledTerminalEvent = false
@@ -905,8 +911,12 @@ public final class AppModel {
                 if passFailed { return }
 
                 engine.record(output: passText)
-                finalText = passText
                 finalDiagnostics = passDiagnostics
+                finalText = passText
+                await MainActor.run {
+                    self.cognitiveTranscript.append(
+                        CognitivePassSegment(kind: step.kind, text: passText))
+                }
             }
 
             if !cancelled {
@@ -1103,6 +1113,17 @@ public final class AppModel {
         attachments.removeAll()
         attachmentErrors = []
     }
+
+    /// Clears the attachment error list (e.g. after user dismissal)
+    public func clearAttachmentErrors() {
+        attachmentErrors = []
+    }
+
+    /// Dismisses a single attachment error message
+    public func dismissAttachmentError(at index: Int) {
+        guard attachmentErrors.indices.contains(index) else { return }
+        attachmentErrors.remove(at: index)
+    }
     
     /// Full prompt text with attached document content injected
     public var promptWithAttachments: String {
@@ -1165,7 +1186,8 @@ public final class AppModel {
                 promptTokenCount: diagnostic?.promptTokenCount,
                 generatedTokenCount: diagnostic?.generatedTokens,
                 stopReason: diagnostic?.stopReason.rawValue,
-                attachments: attachments
+                attachments: attachments,
+                maxNewTokens: maxNewTokensOverride
             )
         } else {
             conversation = Conversation(
@@ -1178,7 +1200,8 @@ public final class AppModel {
                 promptTokenCount: diagnostic?.promptTokenCount,
                 generatedTokenCount: diagnostic?.generatedTokens,
                 stopReason: diagnostic?.stopReason.rawValue,
-                attachments: attachments
+                attachments: attachments,
+                maxNewTokens: maxNewTokensOverride
             )
         }
         
@@ -1196,6 +1219,8 @@ public final class AppModel {
         // Restore attached documents so regenerating keeps the context
         attachments = conversation.attachments
         attachmentErrors = []
+        // Restore per-conversation response limits
+        maxNewTokensOverride = conversation.maxNewTokens
         // Clear the previous generation state
         diagnostics = nil
         error = nil

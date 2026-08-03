@@ -14,6 +14,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var stopReason: String?
     public var attachments: [DocumentAttachment]
     public var isPinned: Bool
+    /// Per-conversation max response length; nil means "use the global default".
+    public var maxNewTokens: Int?
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -25,7 +27,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 generatedTokenCount: Int? = nil,
                 stopReason: String? = nil,
                 attachments: [DocumentAttachment] = [],
-                isPinned: Bool = false) {
+                isPinned: Bool = false,
+                maxNewTokens: Int? = nil) {
         self.id = id
         self.title = title
         self.prompt = prompt
@@ -37,6 +40,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.stopReason = stopReason
         self.attachments = attachments
         self.isPinned = isPinned
+        self.maxNewTokens = maxNewTokens
     }
 
     /// Returns a copy with the given mutable fields replaced.
@@ -54,7 +58,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                      generatedTokenCount: generatedTokenCount,
                      stopReason: stopReason,
                      attachments: attachments ?? self.attachments,
-                     isPinned: isPinned ?? self.isPinned)
+                     isPinned: isPinned ?? self.isPinned,
+                     maxNewTokens: maxNewTokens)
     }
 
     /// Automatic title from the prompt when none is provided.
@@ -77,7 +82,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, title, prompt, response, createdAt, updatedAt
         case promptTokenCount, generatedTokenCount, stopReason
-        case attachments, isPinned
+        case attachments, isPinned, maxNewTokens
     }
 
     public init(from decoder: Decoder) throws {
@@ -94,6 +99,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         // Older history files predate document attachments and pinning.
         self.attachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .attachments) ?? []
         self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
+        self.maxNewTokens = try container.decodeIfPresent(Int.self, forKey: .maxNewTokens)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -109,6 +115,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         try container.encodeIfPresent(stopReason, forKey: .stopReason)
         try container.encode(attachments, forKey: .attachments)
         try container.encode(isPinned, forKey: .isPinned)
+        try container.encodeIfPresent(maxNewTokens, forKey: .maxNewTokens)
     }
 }
 
@@ -121,6 +128,11 @@ public final class ConversationStore {
         category: "conversation-store")
 
     public private(set) var conversations: [Conversation] = []
+
+    /// Set to true when the stored history file was unreadable and had to be
+    /// reset. The existing file is preserved with a `.corrupted` suffix, so no
+    /// data is lost; the flag tells the UI a re-review may be worthwhile.
+    public private(set) var didLoadFromCorrupted: Bool = false
 
     private let storageURL: URL
     private let fileManager: FileManager
@@ -205,6 +217,10 @@ public final class ConversationStore {
             sortConversations()
         } catch {
             Self.logger.error("Failed to decode conversation history at \(self.storageURL.path): \(error)")
+            didLoadFromCorrupted = true
+            // Preserve the unreadable file for inspection, then start fresh.
+            let backupURL = storageURL.appendingPathExtension("corrupted")
+            try? fileManager.moveItem(at: storageURL, to: backupURL)
             conversations = []
         }
     }

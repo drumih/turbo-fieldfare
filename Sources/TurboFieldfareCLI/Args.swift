@@ -11,6 +11,7 @@ public struct Args: Equatable, Sendable {
     public var seed: UInt64?
     public var stops: [String]
     public var quiet: Bool
+    public var cognitiveMode: Bool
 
     public init(model: String,
                 prompt: String? = nil,
@@ -23,7 +24,8 @@ public struct Args: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stops: [String] = [],
-                quiet: Bool = false) {
+                quiet: Bool = false,
+                cognitiveMode: Bool = false) {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -36,6 +38,7 @@ public struct Args: Equatable, Sendable {
         self.seed = seed
         self.stops = stops
         self.quiet = quiet
+        self.cognitiveMode = cognitiveMode
     }
 }
 
@@ -82,6 +85,8 @@ extension Args {
       --seed <uint64>           Deterministic sampling seed (default off).
       --stop <string>           Stop substring (repeatable).
       --quiet                   Suppress the timing footer.
+      --cognitive-mode          Run the advanced cognitive cycle (plan, draft,
+                                critique, final revision) for each request.
       --help                    Show this message.
     """
 
@@ -98,6 +103,7 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var quiet = false
+        var cognitiveMode = false
 
         var index = 0
         while index < argv.count {
@@ -158,6 +164,9 @@ extension Args {
                 seed = parsed
             case "--stop":
                 stops.append(try takeValue(argv, &index, flag: flag))
+            case "--cognitive-mode":
+                cognitiveMode = true
+                index += 1
             default:
                 throw ArgsError.unknownFlag(flag)
             }
@@ -184,7 +193,8 @@ extension Args {
                     repetitionPenalty: repetitionPenalty,
                     seed: seed,
                     stops: stops,
-                    quiet: quiet)
+                    quiet: quiet,
+                    cognitiveMode: cognitiveMode)
     }
 
     private static func takeValue(_ argv: [String],

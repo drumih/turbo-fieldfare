@@ -79,15 +79,34 @@ struct DocumentAttachmentView: View {
             // Error messages
             if !model.attachmentErrors.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(model.attachmentErrors, id: \.self) { message in
+                    HStack {
+                        Label("Errors", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button("Clear errors") {
+                            model.clearAttachmentErrors()
+                        }
+                        .font(.caption2)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.attachmentErrors.indices, id: \.self) { index in
                         HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                            Text(message)
+                            Text(model.attachmentErrors[index])
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 4)
+                            Button {
+                                model.dismissAttachmentError(at: index)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.caption)
+                                    .symbolRenderingMode(.hierarchical)
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
                         }
                     }
                 }

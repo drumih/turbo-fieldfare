@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import TurboFieldfareAppCore
+@testable import TurboFieldfare
 
 @Suite struct CognitiveCycleEngineTests {
     @Test func nextStepReturnsPlanThenDraftThenCritiqueThenFinal() {

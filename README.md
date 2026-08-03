@@ -135,6 +135,22 @@ Build the complete package so the app and its sibling decode service are both
 available. When launched from this checkout, the app stores the model in
 `scratch/gemma4.gturbo`.
 
+#### Packaging the Mac app
+
+To build a self-contained app bundle:
+
+```bash
+Scripts/build-app.sh            # → .build/release/TurboFieldfare.app
+Scripts/build-app.sh --codesign # also sign with an ad-hoc signature
+Scripts/install-app.sh          # install to /Applications (block if existing)
+Scripts/install-app.sh --force  # replace an existing install
+```
+
+The bundle version is taken from the latest git tag (`--version` overrides it),
+with the build number set to the number of commits on the current branch. The
+launchd-spawned decode service lives in `Contents/MacOS/` next to the main
+executable.
+
 #### Install the model
 
 On first launch, the app checks the available storage and shows the download

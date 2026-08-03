@@ -18,6 +18,100 @@ public func run(args: Args,
     do {
         let modelURL = URL(fileURLWithPath: args.model)
         let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
+
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            return errored(stderr, "no Metal device", 1)
+        }
+        let context = try MetalContext()
+        let model = try Model.load(
+            directoryURL: modelURL,
+            device: context.device,
+            streamingMode: .pread(slotCount: RuntimeConfiguration().expertCacheSlots),
+            expertCachePolicy: RuntimeConfiguration().modelExpertCachePolicy,
+            integrityPolicy: .fullSha256)
+        let runner = try RealForwardRunner(
+            model: model,
+            context: context,
+            maxContext: args.maxContext,
+            runtimeConfiguration: RuntimeConfiguration())
+        let scratch = try RawCompletionScratch(context: context,
+                                               vocab: model.config.vocabSize)
+
+        if args.cognitiveMode {
+            let basePrompt: String
+            if let messagesFile = args.messagesFile {
+                let data = try Data(contentsOf: URL(fileURLWithPath: messagesFile),
+                                    options: [.mappedIfSafe])
+                let rows = try JSONDecoder().decode([MessageJSON].self, from: data)
+                let messages = try rows.map { row in
+                    guard let role = GFTokenizer.Role(rawValue: row.role) else {
+                        throw GFTokenizerError.invalidChatTemplate("unsupported role \(row.role)")
+                    }
+                    return GFTokenizer.Message(role: role, content: row.content)
+                }
+                basePrompt = try tokenizer.applyChatTemplate(messages)
+            } else {
+                guard let raw = args.prompt else {
+                    return errored(stderr, "missing prompt for cognitive mode", 2)
+                }
+                basePrompt = raw
+            }
+
+            var engine = CognitiveCycleEngine(userPrompt: basePrompt)
+            var totalNew = 0
+            var finalSeconds = 0.0
+
+            while let step = engine.nextStep() {
+                try Task.checkCancellation()
+                let ids = tokenizer.encode(step.prompt, addBOS: false)
+                stderr.write(Data("\n[cognitive pass: \(step.kind.header)]\n".utf8))
+
+                let config = GenerationConfig(
+                    maxNewTokens: min(args.maxNew, args.maxContext),
+                    temperature: args.temperature,
+                    topK: args.topK,
+                    topP: args.topP,
+                    repetitionPenalty: args.repetitionPenalty,
+                    seed: args.seed,
+                    stopStrings: args.stops,
+                    extraStopTokens: [])
+                let runtime = RuntimeConfiguration(
+                    forceLogitsHead: !config.isPureGreedy)
+
+                var passText = ""
+                let stats = try await runRawCompletion(
+                    producer: runner,
+                    tokenizer: tokenizer,
+                    promptIds: ids,
+                    config: config,
+                    context: context,
+                    scratch: scratch,
+                    prefillConfig: runtime.prefillConfig) { progress in
+                        switch progress {
+                        case .prefill:
+                            break
+                        case .token(_, _, let delta):
+                            passText += delta
+                            if !delta.isEmpty { stdout.write(Data(delta.utf8)) }
+                        case .tail(let tail):
+                            passText += tail
+                            stdout.write(Data(tail.utf8))
+                        }
+                    }
+                engine.record(output: passText)
+                totalNew += stats.newTokens
+                finalSeconds += stats.decodeSeconds
+            }
+
+            if !args.quiet {
+                let tokPerSec = finalSeconds > 0 ? Double(totalNew) / finalSeconds : 0
+                let footer = "\n[cognitive passes=4 new=\(totalNew)tok decode=\(String(format: "%.2f", finalSeconds))s tok/s=\(String(format: "%.3f", tokPerSec))]\n"
+                stderr.write(Data(footer.utf8))
+            }
+            return RunResult(exitCode: 0)
+        }
+
+        // Standard single-pass generation.
         let promptIds: [Int32]
         if let rawPrompt = args.prompt {
             promptIds = tokenizer.encode(rawPrompt, addBOS: true)
@@ -56,23 +150,6 @@ public func run(args: Args,
         let runtime = RuntimeConfiguration(
             forceLogitsHead: !config.isPureGreedy)
 
-        guard MTLCreateSystemDefaultDevice() != nil else {
-            return errored(stderr, "no Metal device", 1)
-        }
-        let context = try MetalContext()
-        let model = try Model.load(
-            directoryURL: modelURL,
-            device: context.device,
-            streamingMode: .pread(slotCount: runtime.expertCacheSlots),
-            expertCachePolicy: runtime.modelExpertCachePolicy,
-            integrityPolicy: .fullSha256)
-        let runner = try RealForwardRunner(
-            model: model,
-            context: context,
-            maxContext: args.maxContext,
-            runtimeConfiguration: runtime)
-        let scratch = try RawCompletionScratch(context: context,
-                                               vocab: model.config.vocabSize)
         let stats = try await runRawCompletion(
             producer: runner,
             tokenizer: tokenizer,
