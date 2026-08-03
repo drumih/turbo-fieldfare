@@ -64,6 +64,8 @@ public final class AppModel {
     
     /// Persistent store of past conversations
     public private(set) var conversationStore: ConversationStore
+    /// Persistent library of extracted documents
+    public private(set) var documentLibrary: DocumentLibrary
     
     /// Conversation currently loaded from history
     public private(set) var activeConversationID: UUID?
@@ -99,7 +101,8 @@ public final class AppModel {
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 settingsPersistenceEnabled: Bool = false,
-                conversationStore: ConversationStore? = nil) {
+                conversationStore: ConversationStore? = nil,
+                documentLibrary: DocumentLibrary? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
@@ -126,6 +129,7 @@ public final class AppModel {
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
         self.conversationStore = conversationStore ?? ConversationStore()
+        self.documentLibrary = documentLibrary ?? DocumentLibrary()
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
@@ -1148,6 +1152,10 @@ public final class AppModel {
                 self.isExtractingAttachment = false
                 self.attachments.append(contentsOf: newAttachments)
                 self.attachmentErrors = errors
+                // Cache extracted documents in the persistent library.
+                for attachment in newAttachments {
+                    self.documentLibrary.upsert(attachment)
+                }
             }
         }
     }
@@ -1174,14 +1182,27 @@ public final class AppModel {
         attachmentErrors.remove(at: index)
     }
     
-    /// Full prompt text with attached document content injected
+    /// Full prompt text with attached document content injected. When the
+    /// full documents would overflow the context window, only the chunks most
+    /// relevant to the prompt are kept (lightweight retrieval).
     public var promptWithAttachments: String {
         guard !attachments.isEmpty else { return promptText }
-        var context = promptText
-        for attachment in attachments {
-            context += attachment.promptContext()
+        let fullContext = attachments.map { $0.promptContext() }.joined()
+        let estimatedTokens = (promptText.count + fullContext.count + 3) / 4
+        guard estimatedTokens > maxContextTokens * 2 else {
+            return promptText + fullContext
         }
-        return context
+        let chunks = attachments.flatMap {
+            DocumentChunker.chunk($0.extractedText, documentID: $0.id)
+        }
+        let selected = TfIdfRetriever.topChunks(chunks, query: promptText, limit: 16)
+        guard !selected.isEmpty else { return promptText + fullContext }
+        var context = "\n\n[Selected document excerpts relevant to the request]\n"
+        for chunk in selected {
+            context += "\n" + chunk.text + "\n"
+        }
+        context += "\n[End of excerpts]\n"
+        return promptText + context
     }
     
     /// Prompt that continues a loaded conversation: the full turn history,
