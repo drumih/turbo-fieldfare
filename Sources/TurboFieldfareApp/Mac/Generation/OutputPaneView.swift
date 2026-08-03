@@ -66,21 +66,28 @@ struct OutputPaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
+        } else if !model.isRunning {
+            // Terminal state: render the answer as formatted Markdown.
+            MarkdownTranscriptView(
+                prompt: model.outputPromptText,
+                response: model.outputResponsePlainText)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    if !model.outputResponsePlainText.isEmpty {
+                        copyResponseButton
+                            .padding(8)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
         } else {
             IncrementalTranscriptView(
                 prompt: model.outputPromptText,
                 output: model.outputText,
                 mailbox: model.generationTranscriptMailbox,
-                isTerminal: !model.isRunning,
-                showsPrefillPlaceholder: model.isRunning
-                    && model.outputResponsePlainText.isEmpty)
+                isTerminal: false,
+                showsPrefillPlaceholder: model.outputResponsePlainText.isEmpty)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topTrailing) {
-                    if !model.isRunning && !model.outputResponsePlainText.isEmpty {
-                        copyResponseButton
-                            .padding(8)
-                    }
-                }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
         }
@@ -466,6 +473,47 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.invalidate()
+    }
+}
+
+/// Terminal transcript rendered as formatted Markdown: prompt above,
+/// generated answer below.
+private struct MarkdownTranscriptView: View {
+    let prompt: String
+    let response: String
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if !prompt.isEmpty {
+                    Text(prompt)
+                        .font(.callout)
+                        .italic()
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if !response.isEmpty {
+                    Text(rendered)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Parses Markdown leniently, falling back to plain text when the model
+    /// produced something the parser cannot handle.
+    private var rendered: AttributedString {
+        (try? AttributedString(
+            markdown: response,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible)))
+            ?? AttributedString(response)
     }
 }
 
