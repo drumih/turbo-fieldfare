@@ -1419,4 +1419,29 @@ public final class AppModel {
         }
         return markdown.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
+    
+    /// Other history entries that share the same first user turn, useful
+    /// for comparing runs of the same prompt. Ordered by update time.
+    public func conversationsSharingPrompt(with conversation: Conversation) -> [Conversation] {
+        conversationStore.conversations
+            .filter { $0.id != conversation.id && $0.firstPrompt == conversation.firstPrompt }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+    
+    /// Starts a new conversation that asks the model to summarize another
+    /// conversation, and launches the generation automatically.
+    public func beginSummary(of conversation: Conversation) {
+        guard !isRunning, !conversation.turns.isEmpty else { return }
+        newConversation()
+        let transcript = conversation.displayTranscript
+        promptText = """
+        Summarize the conversation below, keeping all key facts, decisions, and the user's constraints. Output only the summary.
+
+        Conversation:
+        \(transcript)
+        """
+        outputPromptText = promptText
+        outputText = transcript
+        run()
+    }
 }

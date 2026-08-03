@@ -254,6 +254,60 @@ import Testing
         #expect(updated.tags == ["meta"])
         #expect(updated.lastResponse == "answer two")
     }
+
+    // MARK: - Comparison (H.3)
+
+    @Test
+    func conversationsSharingPromptFiltersByFirstTurn() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        let first = Conversation(title: "a", prompt: "same", response: "r1")
+        let second = Conversation(title: "b", prompt: "same", response: "r2")
+        let different = Conversation(title: "c", prompt: "other", response: "r3")
+        model.conversationStore.upsert(first)
+        model.conversationStore.upsert(second)
+        model.conversationStore.upsert(different)
+
+        let candidates = model.conversationsSharingPrompt(with: first)
+
+        #expect(candidates.count == 1)
+        #expect(candidates[0].id == second.id)
+    }
+
+    // MARK: - Summary (H.1)
+
+    @Test
+    func beginSummaryLaunchesSummaryConversation() async throws {
+        let mock = MockInferenceClient(response: "concise summary",
+                                       tokenDelayNanos: 1_000_000)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("summary-\(UUID().uuidString).json")
+        let model = AppModel(client: mock,
+                             conversationStore: ConversationStore(storageURL: url))
+        model.modelPathText = FileManager.default.temporaryDirectory.path
+        model.loadState = .ready(modelDirectory: FileManager.default.temporaryDirectory,
+                                 loadSeconds: 1)
+        let source = Conversation(title: "s",
+                                  turns: [
+                                      Turn(role: .user, text: "hello"),
+                                      Turn(role: .model, text: "hi there"),
+                                  ])
+
+        model.beginSummary(of: source)
+        await waitUntilIdle(model)
+
+        #expect(model.conversationStore.conversations.count == 1)
+        let saved = model.conversationStore.conversations[0]
+        #expect(saved.firstPrompt.contains("Summarize the conversation"))
+        #expect(saved.lastResponse.contains("concise summary"))
+    }
+
+    private func waitUntilIdle(_ model: AppModel, timeoutMilliseconds: Int = 15_000) async {
+        var waited = 0
+        while model.runState == .running && waited < timeoutMilliseconds {
+            try? await Task.sleep(for: .milliseconds(20))
+            waited += 20
+        }
+    }
 }
 
 /// Test helper sharing the isolated-store model factory.

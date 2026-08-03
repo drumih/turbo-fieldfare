@@ -21,6 +21,7 @@ struct ConversationSidebarView: View {
     @State private var showingTemplatesOnly = false
     @State private var editingTagsConversation: Conversation?
     @State private var tagsDraft = ""
+    @State private var comparison: ComparisonPair?
 
     private var filteredConversations: [Conversation] {
         var items = model.conversationStore.conversations
@@ -136,6 +137,16 @@ struct ConversationSidebarView: View {
                                 tagsDraft = conversation.tags.joined(separator: ", ")
                                 editingTagsConversation = conversation
                             },
+                            onCompare: {
+                                guard let other = model
+                                    .conversationsSharingPrompt(with: conversation).first else {
+                                    return
+                                }
+                                comparison = ComparisonPair(a: conversation, b: other)
+                            },
+                            onSummarize: {
+                                model.beginSummary(of: conversation)
+                            },
                             onExportMarkdown: {
                                 markdownFilename = Self.safeFilename(conversation.title)
                                 markdownDocument = MarkdownExportDocument(
@@ -156,6 +167,9 @@ struct ConversationSidebarView: View {
                 .opacity(0)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
+        }
+        .sheet(item: $comparison) { pair in
+            ComparisonView(a: pair.a, b: pair.b)
         }
         .onAppear {
             if model.conversationStore.didLoadFromCorrupted {
@@ -309,6 +323,8 @@ struct ConversationRowView: View {
     let onFork: () -> Void
     let onToggleTemplate: () -> Void
     let onEditTags: () -> Void
+    let onCompare: () -> Void
+    let onSummarize: () -> Void
     let onExportMarkdown: () -> Void
     @State private var isRenaming = false
     @State private var draftTitle = ""
@@ -362,6 +378,8 @@ struct ConversationRowView: View {
             Button("Edit Tags…", action: onEditTags)
             Button("Rename", action: beginRename)
             Button("Fork", action: onFork)
+            Button("Compare with latest run", action: onCompare)
+            Button("Summarize", action: onSummarize)
             Divider()
             Button("Export Markdown…", action: onExportMarkdown)
             Divider()
@@ -382,6 +400,50 @@ struct ConversationRowView: View {
     private func commitRename() {
         isRenaming = false
         onRename(draftTitle)
+    }
+}
+
+/// A conversation pair backing the comparison sheet.
+struct ComparisonPair: Identifiable {
+    let a: Conversation
+    let b: Conversation
+    var id: UUID { a.id }
+}
+
+/// Side-by-side view of two runs of the same prompt.
+struct ComparisonView: View {
+    let a: Conversation
+    let b: Conversation
+
+    var body: some View {
+        HStack(spacing: 0) {
+            column(a)
+            Divider()
+            column(b)
+        }
+        .frame(width: 760, height: 460)
+    }
+
+    private func column(_ conversation: Conversation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(conversation.title)
+                .font(.headline)
+                .lineLimit(1)
+            Text(conversation.updatedAt, style: .relative)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(conversation.lastResponse)
+                .font(.caption)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: .topLeading)
+            if let tokens = conversation.generatedTokenCount {
+                Text("\(tokens) tokens")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(16)
     }
 }
 
