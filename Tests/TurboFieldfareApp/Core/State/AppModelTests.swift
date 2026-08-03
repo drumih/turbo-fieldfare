@@ -175,6 +175,7 @@ import Testing
         model.run()
 
         #expect(model.outputPromptText == "original prompt")
+        #expect(model.promptText == "original prompt")
         #expect(model.hasOutputTranscript)
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText == "You:\noriginal prompt")
@@ -187,6 +188,45 @@ import Testing
         #expect(model.outputConversationPlainText
             == "You:\noriginal prompt\n\nAnswer:\nanswer")
         #expect(!model.outputConversationPlainText.contains("edited prompt"))
+    }
+
+    @MainActor
+    @Test func clearAfterSendingPreservesTranscriptAndNextDraft() async throws {
+        let client = MockInferenceClient(
+            response: "answer",
+            tokenDelayNanos: 20_000_000)
+        let model = readyModel(client: client)
+        model.setSentPromptBehavior(.clear)
+        model.promptText = "original prompt"
+        model.maxNewTokensOverride = 1
+
+        model.run()
+
+        #expect(model.isRunning)
+        #expect(model.outputPromptText == "original prompt")
+        #expect(model.promptText.isEmpty)
+
+        model.promptText = "next draft"
+        await waitForIdle(model)
+
+        #expect(model.promptText == "next draft")
+        #expect(model.outputConversationPlainText.hasPrefix(
+            "You:\noriginal prompt\n\nAnswer:\n"))
+    }
+
+    @MainActor
+    @Test func failedValidationDoesNotClearPrompt() {
+        let model = readyModel(client: MockInferenceClient(response: "answer"))
+        model.setSentPromptBehavior(.clear)
+        model.promptText = "keep invalid prompt"
+        model.maxNewTokensOverride = 0
+
+        model.run()
+
+        #expect(!model.isRunning)
+        #expect(model.promptText == "keep invalid prompt")
+        #expect(model.outputPromptText.isEmpty)
+        #expect(model.error != nil)
     }
 
     @MainActor

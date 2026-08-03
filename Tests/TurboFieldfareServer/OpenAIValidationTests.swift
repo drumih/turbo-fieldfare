@@ -44,6 +44,57 @@ struct OpenAIValidationTests {
         }
     }
 
+    @Test func hyphenatedToolNamesValidateInDefinitionsAndHistory() throws {
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[
+            {"role":"user","content":"resolve it"},
+            {"role":"assistant","tool_calls":[{
+              "id":"call_0123456789abcdef01234567",
+              "type":"function",
+              "function":{"name":"resolve-library-id","arguments":"{\"name\":\"swift\"}"}
+            }]},
+            {"role":"tool","tool_call_id":"call_0123456789abcdef01234567","content":"42"}
+          ],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"resolve-library-id",
+              "parameters":{"type":"object","properties":{"name":{"type":"string"}}}
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.tools.first?.name == "resolve-library-id")
+        #expect(validated.messages[1].toolCalls.first?.name == "resolve-library-id")
+    }
+
+    @Test func invalidToolNameErrorIdentifiesTheName() throws {
+        for invalid in ["bad name", "bad.name", "bad@name"] {
+            let data = Data(#"""
+            {
+              "model":"m",
+              "messages":[{"role":"user","content":"x"}],
+              "tools":[{
+                "type":"function",
+                "function":{"name":"\#(invalid)","parameters":{"type":"object"}}
+              }]
+            }
+            """#.utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            do {
+                _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+                Issue.record("invalid tool name was accepted: \(invalid)")
+            } catch let error as ServerRequestError {
+                #expect(error.envelope.error.code == "invalid_tool_name")
+                #expect(error.envelope.error.message.contains(String(reflecting: invalid)))
+            }
+        }
+    }
+
     @Test func acceptsLeadingSystemAndDeveloperGuidance() throws {
         let data = Data(#"""
         {"model":"m","messages":[

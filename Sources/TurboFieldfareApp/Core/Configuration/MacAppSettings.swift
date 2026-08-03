@@ -15,6 +15,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var prefillEnabled: Bool = true
     var newlineShortcut: AppNewlineShortcut = .return
     var showPromptExamples: Bool = true
+    var sentPromptBehavior: AppSentPromptBehavior = .keep
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -28,6 +29,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case prefillEnabled
         case newlineShortcut
         case showPromptExamples
+        case sentPromptBehavior
     }
 
     init(version: Int = currentVersion,
@@ -40,7 +42,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
          topP: Double = 0.95,
          prefillEnabled: Bool = true,
          newlineShortcut: AppNewlineShortcut = .return,
-         showPromptExamples: Bool = true) {
+         showPromptExamples: Bool = true,
+         sentPromptBehavior: AppSentPromptBehavior = .keep) {
         self.version = version
         self.contextTokens = contextTokens
         self.expertCacheSlots = expertCacheSlots
@@ -52,6 +55,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         self.prefillEnabled = prefillEnabled
         self.newlineShortcut = newlineShortcut
         self.showPromptExamples = showPromptExamples
+        self.sentPromptBehavior = sentPromptBehavior
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +75,9 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         showPromptExamples = try container.decodeIfPresent(
             Bool.self,
             forKey: .showPromptExamples) ?? true
+        sentPromptBehavior = try container.decodeIfPresent(
+            AppSentPromptBehavior.self,
+            forKey: .sentPromptBehavior) ?? .keep
     }
 
     func isValid() -> Bool {

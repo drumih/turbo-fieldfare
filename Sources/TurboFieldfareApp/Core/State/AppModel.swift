@@ -25,6 +25,7 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
+    public private(set) var sentPromptBehavior: AppSentPromptBehavior = .keep
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -83,6 +84,7 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.sentPromptBehavior = settings.sentPromptBehavior
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -333,6 +335,12 @@ public final class AppModel {
     public func setShowPromptExamples(_ show: Bool) {
         guard showPromptExamples != show else { return }
         showPromptExamples = show
+        persistSettings()
+    }
+
+    public func setSentPromptBehavior(_ behavior: AppSentPromptBehavior) {
+        guard sentPromptBehavior != behavior else { return }
+        sentPromptBehavior = behavior
         persistSettings()
     }
 
@@ -629,6 +637,7 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
+        sentPromptBehavior = settings.sentPromptBehavior
     }
 
     private func persistSettings() {
@@ -643,7 +652,8 @@ public final class AppModel {
             topP: topP,
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
-            showPromptExamples: showPromptExamples)
+            showPromptExamples: showPromptExamples,
+            sentPromptBehavior: sentPromptBehavior)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,
@@ -742,6 +752,9 @@ public final class AppModel {
         liveMemoryBytes = nil
         phase = .prefill
         runState = .running
+        if sentPromptBehavior == .clear {
+            promptText = ""
+        }
 
         runTask = Task.detached { [weak self, client, request] in
             guard let self else { return }
