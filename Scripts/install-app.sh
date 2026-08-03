@@ -11,9 +11,8 @@
 set -euo pipefail
 
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-application_dir="/Applications"
 app_name="TurboFieldfare.app"
-destination="$application_dir/$app_name"
+destination="/Applications/$app_name"
 
 force=false
 no_codesign=false
@@ -48,24 +47,26 @@ fi
 
 source_bundle="$(cd -- "$script_directory/.." && pwd)/.build/release/$app_name"
 
-echo "▶ Building release bundle…"
-"$script_directory/build-app.sh" "${build_args[@]}"
+echo "Building release bundle..."
+"$script_directory/build-app.sh" "${build_args[@]:-}"
 
 if [[ -d "$destination" && "$force" == false ]]; then
   existing_id="$(plutil -extract CFBundleIdentifier raw "$destination/Contents/Info.plist" 2>/dev/null || echo "")"
-  echo "⛔ $destination already exists (bundle id: ${existing_id:-unknown})." >&2
+  echo "ERROR: $destination already exists (bundle id: ${existing_id:-unknown})." >&2
   echo "   Run with --force to replace it." >&2
   exit 1
 fi
 
 if pgrep -f "$app_name" >/dev/null; then
-  echo "⛔ $app_name is currently running; quit it before installing." >&2
+  echo "ERROR: $app_name is currently running; quit it before installing." >&2
   exit 1
 fi
 
-[[ "$force" == true ]] && echo "▶ Replacing existing app in $application_dir…"
+if [[ "$force" == true ]]; then
+  echo "Replacing existing app in /Applications..."
+fi
 rm -rf "$destination"
 cp -R "$source_bundle" "$destination"
 
 codesign --verify --deep "$destination"
-echo "✔ Installed to $destination"
+echo "Installed to $destination"
