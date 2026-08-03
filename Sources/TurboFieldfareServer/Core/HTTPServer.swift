@@ -122,6 +122,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private var body = ByteBuffer()
     private var oversized = false
     private var activeTask: Task<Void, Never>?
+    private var completionRequestCount = 0
+    private let startDate = Date()
 
     init(modelID: String,
          backend: any ServerInferenceBackend,
@@ -175,6 +177,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         switch (head.method, path) {
         case (.GET, "/health"):
             writeJSON(context, status: .ok, object: ["status": "ok"])
+        case (.GET, "/metrics"):
+            writeMetrics(context)
         case (.GET, "/v1/models"):
             let response = OpenAIModelList(
                 object: "list",
@@ -184,6 +188,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                              ownedBy: "turbofieldfare")])
             writeCodable(context, status: .ok, response)
         case (.POST, "/v1/chat/completions"):
+            completionRequestCount += 1
             guard head.headers.first(name: "content-type")?
                 .lowercased().hasPrefix("application/json") == true else {
                 writeError(context, status: .unsupportedMediaType,
@@ -192,7 +197,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 return
             }
             handleCompletion(body: body, context: context)
-        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"):
+        case (_, "/health"), (_, "/metrics"), (_, "/v1/models"), (_, "/v1/chat/completions"):
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -524,13 +529,38 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         writeData(context, status: status, data: data)
     }
 
+    private func writeMetrics(_ context: ChannelHandlerContext) {
+        let uptime = Int(Date().timeIntervalSince(startDate))
+        let metrics = """
+        # HELP turbofieldfare_requests_total Chat completions requests served.
+        # TYPE turbofieldfare_requests_total counter
+        turbofieldfare_requests_total \(completionRequestCount)
+        # HELP turbofieldfare_uptime_seconds Server uptime.
+        # TYPE turbofieldfare_uptime_seconds gauge
+        turbofieldfare_uptime_seconds \(uptime)
+        # HELP turbofieldfare_model_info Model identifier.
+        # TYPE turbofieldfare_model_info gauge
+        turbofieldfare_model_info{model="\(modelID)"} 1
+        """
+        writeText(context, status: .ok, text: metrics)
+    }
+
+    private func writeText(_ context: ChannelHandlerContext,
+                           status: HTTPResponseStatus,
+                           text: String,
+                           contentType: String = "text/plain; charset=utf-8") {
+        writeData(context, status: status, data: Data(text.utf8),
+                  contentType: contentType)
+    }
+
     private func writeData(_ context: ChannelHandlerContext,
                            status: HTTPResponseStatus,
-                           data: Data) {
+                           data: Data,
+                           contentType: String = "application/json") {
         let contextBox = SendableContext(context)
         context.eventLoop.execute {
             var headers = HTTPHeaders()
-            headers.add(name: "content-type", value: "application/json")
+            headers.add(name: "content-type", value: contentType)
             headers.add(name: "content-length", value: "\(data.count)")
             contextBox.value.write(self.wrapOutboundOut(.head(
                 HTTPResponseHead(version: .http1_1, status: status, headers: headers))),

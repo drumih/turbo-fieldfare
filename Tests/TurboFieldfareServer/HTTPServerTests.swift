@@ -875,7 +875,54 @@ private enum RawSocketError: Error {
     case timeout
 }
 
-private func connectedSocket(port: Int) throws -> Int32 {
+    @Test func metricsEndpointReportsServerState() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ContentAndToolBackend(),
+            heartbeatInterval: .seconds(10))
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        let data = try await URLSession.shared.data(
+            for: URLRequest(
+                url: URL(string: "http://127.0.0.1:\(port)/metrics")!)).0
+        let text = String(decoding: data, as: UTF8.self)
+
+        #expect(text.contains("turbofieldfare_requests_total 0"))
+        #expect(text.contains("turbofieldfare_uptime_seconds"))
+        #expect(text.contains("turbofieldfare_model_info{model=\"test-model\"} 1"))
+
+        try await server.shutdown()
+    }
+
+    @Test func metricsCounterGrowsWithCompletions() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ContentAndToolBackend(),
+            heartbeatInterval: .seconds(10))
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"{"model":"test-model","messages":[{"role":"user","content":"hi"}]}"#.utf8)
+        _ = try await URLSession.shared.data(for: request)
+
+        let data = try await URLSession.shared.data(
+            for: URLRequest(
+                url: URL(string: "http://127.0.0.1:\(port)/metrics")!)).0
+        let text = String(decoding: data, as: UTF8.self)
+
+        #expect(text.contains("turbofieldfare_requests_total 1"))
+
+        try await server.shutdown()
+    }
+
+    private func connectedSocket(port: Int) throws -> Int32 {
     let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
     guard descriptor >= 0 else {
         throw RawSocketError.systemCall("socket", errno)

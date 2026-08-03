@@ -12,6 +12,7 @@ public struct Args: Equatable, Sendable {
     public var stops: [String]
     public var quiet: Bool
     public var cognitiveMode: Bool
+    public var exportConversations: String?
 
     public init(model: String,
                 prompt: String? = nil,
@@ -25,7 +26,8 @@ public struct Args: Equatable, Sendable {
                 seed: UInt64? = nil,
                 stops: [String] = [],
                 quiet: Bool = false,
-                cognitiveMode: Bool = false) {
+                cognitiveMode: Bool = false,
+                exportConversations: String? = nil) {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -39,6 +41,7 @@ public struct Args: Equatable, Sendable {
         self.stops = stops
         self.quiet = quiet
         self.cognitiveMode = cognitiveMode
+        self.exportConversations = exportConversations
     }
 }
 
@@ -87,6 +90,8 @@ extension Args {
       --quiet                   Suppress the timing footer.
       --cognitive-mode          Run the advanced cognitive cycle (plan, draft,
                                 critique, final revision) for each request.
+      --export-conversations    Copy the app conversation history JSON to the
+                                given path and exit (no model needed).
       --help                    Show this message.
     """
 
@@ -104,6 +109,7 @@ extension Args {
         var stops: [String] = []
         var quiet = false
         var cognitiveMode = false
+        var exportConversations: String?
 
         var index = 0
         while index < argv.count {
@@ -167,11 +173,30 @@ extension Args {
             case "--cognitive-mode":
                 cognitiveMode = true
                 index += 1
+            case "--export-conversations":
+                exportConversations = try takeValue(argv, &index, flag: flag)
             default:
                 throw ArgsError.unknownFlag(flag)
             }
         }
 
+        // The export utility needs neither a model nor a generation mode.
+        if exportConversations != nil {
+            return Args(model: model ?? "",
+                        prompt: prompt,
+                        messagesFile: messagesFile,
+                        maxNew: maxNew,
+                        maxContext: maxContext,
+                        temperature: temperature,
+                        topK: topK,
+                        topP: topP,
+                        repetitionPenalty: repetitionPenalty,
+                        seed: seed,
+                        stops: stops,
+                        quiet: quiet,
+                        cognitiveMode: cognitiveMode,
+                        exportConversations: exportConversations)
+        }
         guard let model else { throw ArgsError.requiredMissing("--model") }
         if prompt != nil && messagesFile != nil {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
@@ -194,7 +219,8 @@ extension Args {
                     seed: seed,
                     stops: stops,
                     quiet: quiet,
-                    cognitiveMode: cognitiveMode)
+                    cognitiveMode: cognitiveMode,
+                    exportConversations: exportConversations)
     }
 
     private static func takeValue(_ argv: [String],

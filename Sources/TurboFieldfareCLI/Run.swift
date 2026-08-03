@@ -15,6 +15,27 @@ public struct RunResult: Equatable, Sendable {
 public func run(args: Args,
                 stdout: FileHandle = .standardOutput,
                 stderr: FileHandle = .standardError) async -> RunResult {
+    // Utility mode: export the app conversation history without a model.
+    if let outputPath = args.exportConversations {
+        do {
+            let source = conversationsFileURL()
+            guard FileManager.default.fileExists(atPath: source.path) else {
+                return errored(stderr,
+                               "no conversation history at \(source.path); run the app once first",
+                               2)
+            }
+            let data = try Data(contentsOf: source)
+            guard JSONSerialization.isValidJSONObject(
+                try JSONSerialization.jsonObject(with: data)) else {
+                return errored(stderr, "conversation history is not valid JSON", 2)
+            }
+            try data.write(to: URL(fileURLWithPath: outputPath), options: .atomic)
+            stdout.write(Data("exported conversation history to \(outputPath)\n".utf8))
+            return RunResult(exitCode: 0)
+        } catch {
+            return errored(stderr, "export failed: \(error)", 1)
+        }
+    }
     do {
         let modelURL = URL(fileURLWithPath: args.model)
         let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
@@ -187,4 +208,14 @@ public func run(args: Args,
 private func errored(_ stderr: FileHandle, _ message: String, _ code: Int32) -> RunResult {
     stderr.write(Data("error: \(message)\n".utf8))
     return RunResult(exitCode: code)
+}
+
+/// Location of the app's conversation history file.
+private func conversationsFileURL() -> URL {
+    let applicationSupport = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? URL(fileURLWithPath: NSHomeDirectory())
+    return applicationSupport
+        .appendingPathComponent("TurboFieldfare", isDirectory: true)
+        .appendingPathComponent("conversations.json")
 }
