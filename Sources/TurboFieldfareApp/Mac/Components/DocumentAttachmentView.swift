@@ -76,18 +76,23 @@ struct DocumentAttachmentView: View {
                 }
             }
             
-            // Error message
-            if let error = model.attachmentError {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                    Text(error.localizedDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            // Error messages
+            if !model.attachmentErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.attachmentErrors, id: \.self) { message in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .font(.caption)
+                            Text(message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
             }
         }
@@ -100,7 +105,7 @@ struct DocumentAttachmentView: View {
             case .success(let urls):
                 model.attachDocuments(from: urls)
             case .failure(let error):
-                model.attachmentError = .readFailed(error.localizedDescription)
+                model.attachmentErrors = [error.localizedDescription]
             }
         }
         .onDrop(of: DocumentExtractor.supportedTypes, isTargeted: $isHovering) { providers in

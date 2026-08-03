@@ -47,8 +47,8 @@ public final class AppModel {
     
     /// Documents attached to the current prompt
     public var attachments: [DocumentAttachment] = []
-    /// Attachment error for the current prompt
-    public var attachmentError: DocumentError?
+    /// Per-file extraction errors for the current prompt
+    public var attachmentErrors: [String] = []
     /// Whether an attachment extraction is in progress
     public private(set) var isExtractingAttachment: Bool = false
 
@@ -82,7 +82,8 @@ public final class AppModel {
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
-                settingsPersistenceEnabled: Bool = false) {
+                settingsPersistenceEnabled: Bool = false,
+                conversationStore: ConversationStore? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
@@ -105,7 +106,7 @@ public final class AppModel {
         self.installer = installer
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
-        self.conversationStore = ConversationStore()
+        self.conversationStore = conversationStore ?? ConversationStore()
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
@@ -891,7 +892,7 @@ public final class AppModel {
     public func attachDocuments(from urls: [URL]) {
         guard !urls.isEmpty else { return }
         isExtractingAttachment = true
-        attachmentError = nil
+        attachmentErrors = []
         
         Task.detached(priority: .userInitiated) { [weak self] in
             let extractor = DocumentExtractor()
@@ -921,13 +922,7 @@ public final class AppModel {
                 guard let self else { return }
                 self.isExtractingAttachment = false
                 self.attachments.append(contentsOf: newAttachments)
-                
-                if !errors.isEmpty {
-                    // Use the first error as the main error
-                    if let firstError = errors.first {
-                        self.attachmentError = .readFailed(firstError)
-                    }
-                }
+                self.attachmentErrors = errors
             }
         }
     }
@@ -940,7 +935,7 @@ public final class AppModel {
     /// Removes all attached documents
     public func clearAttachments() {
         attachments.removeAll()
-        attachmentError = nil
+        attachmentErrors = []
     }
     
     /// Full prompt text with attached document content injected
@@ -969,19 +964,40 @@ public final class AppModel {
     public func saveCurrentConversation(diagnostic: AppDiagnostics? = nil) {
         guard !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
-        let title = Conversation.title(from: promptText)
         let now = Date()
-        let conversation = Conversation(
-            id: activeConversationID ?? UUID(),
-            title: title,
-            prompt: promptText,
-            response: outputText,
-            createdAt: now,
-            updatedAt: now,
-            promptTokenCount: diagnostic?.promptTokenCount,
-            generatedTokenCount: diagnostic?.generatedTokens,
-            stopReason: diagnostic?.stopReason.rawValue
-        )
+        // Regenerating the same prompt updates the active conversation instead
+        // of creating a duplicate entry; a different prompt starts a new one.
+        let active = activeConversationID.flatMap { id in
+            conversationStore.conversations.first { $0.id == id }
+        }
+        let conversation: Conversation
+        if let active, active.prompt == promptText {
+            conversation = Conversation(
+                id: active.id,
+                title: active.title,
+                prompt: promptText,
+                response: outputText,
+                createdAt: active.createdAt,
+                updatedAt: now,
+                promptTokenCount: diagnostic?.promptTokenCount,
+                generatedTokenCount: diagnostic?.generatedTokens,
+                stopReason: diagnostic?.stopReason.rawValue,
+                attachments: attachments
+            )
+        } else {
+            conversation = Conversation(
+                id: UUID(),
+                title: Conversation.title(from: promptText),
+                prompt: promptText,
+                response: outputText,
+                createdAt: now,
+                updatedAt: now,
+                promptTokenCount: diagnostic?.promptTokenCount,
+                generatedTokenCount: diagnostic?.generatedTokens,
+                stopReason: diagnostic?.stopReason.rawValue,
+                attachments: attachments
+            )
+        }
         
         conversationStore.upsert(conversation)
         activeConversationID = conversation.id
@@ -994,6 +1010,9 @@ public final class AppModel {
         promptText = conversation.prompt
         outputPromptText = conversation.prompt
         outputText = conversation.response
+        // Restore attached documents so regenerating keeps the context
+        attachments = conversation.attachments
+        attachmentErrors = []
         // Clear the previous generation state
         diagnostics = nil
         error = nil

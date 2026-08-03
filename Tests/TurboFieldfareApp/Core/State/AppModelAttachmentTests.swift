@@ -29,7 +29,7 @@ import Testing
         #expect(model.attachments.count == 1)
         #expect(model.attachments[0].filename == "notes.txt")
         #expect(model.attachments[0].extractedText == "extracted via attach")
-        #expect(model.attachmentError == nil)
+        #expect(model.attachmentErrors.isEmpty)
     }
 
     
@@ -46,7 +46,8 @@ import Testing
         await waitForExtraction(model)
 
         #expect(model.attachments.isEmpty)
-        #expect(model.attachmentError != nil)
+        #expect(model.attachmentErrors.count == 1)
+        #expect(model.attachmentErrors[0].contains("notes.xyz"))
     }
 
     
@@ -114,15 +115,15 @@ import Testing
     }
 
     
-    @Test func clearAttachmentsClearsErrorToo() {
+    @Test func clearAttachmentsClearsErrorsToo() {
         let model = AppModel()
         model.attachments = [attachment()]
-        model.attachmentError = .readFailed("boom")
+        model.attachmentErrors = ["boom"]
 
         model.clearAttachments()
 
         #expect(model.attachments.isEmpty)
-        #expect(model.attachmentError == nil)
+        #expect(model.attachmentErrors.isEmpty)
     }
 
     /// Polls until the detached extraction task publishes its result.

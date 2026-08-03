@@ -104,6 +104,57 @@ import Testing
         #expect(store.conversations.isEmpty)
     }
 
+    @Test func decodesLegacyFileWithoutAttachments() throws {
+        // History files written before document attachments existed have no
+        // "attachments" key; they must still load with an empty list.
+        let legacyJSON = """
+        [
+          {
+            "id": "\(UUID().uuidString)",
+            "title": "legacy",
+            "prompt": "old prompt",
+            "response": "old response",
+            "createdAt": "2026-01-01T10:00:00Z",
+            "updatedAt": "2026-01-01T10:00:00Z"
+          }
+        ]
+        """.data(using: .utf8)!
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("legacy-\(UUID().uuidString).json")
+        try legacyJSON.write(to: url)
+
+        let store = ConversationStore(storageURL: url)
+
+        #expect(store.conversations.count == 1)
+        #expect(store.conversations[0].title == "legacy")
+        #expect(store.conversations[0].attachments.isEmpty)
+    }
+
+    @Test func persistsAttachmentsAcrossStoreInstances() {
+        let (store, url) = makeStore()
+        let attachment = DocumentAttachment(filename: "report.pdf",
+                                            type: .pdf,
+                                            fileSize: 2048,
+                                            extractedText: "report body",
+                                            pageCount: 3,
+                                            truncated: false,
+                                            originalLength: 11)
+        store.upsert(Conversation(title: "with docs",
+                                  prompt: "p",
+                                  response: "r",
+                                  attachments: [attachment]))
+
+        let reloaded = ConversationStore(storageURL: url)
+
+        #expect(reloaded.conversations.count == 1)
+        let restored = reloaded.conversations[0].attachments
+        #expect(restored.count == 1)
+        #expect(restored[0].filename == "report.pdf")
+        #expect(restored[0].type == .pdf)
+        #expect(restored[0].pageCount == 3)
+        #expect(restored[0].extractedText == "report body")
+    }
+
     @Test func titleFromEmptyPromptUsesPlaceholder() {
         #expect(Conversation.title(from: "   \n  ") == "New conversation")
     }

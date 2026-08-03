@@ -3,7 +3,7 @@ import PDFKit
 import UniformTypeIdentifiers
 
 /// Supported document types for text extraction
-public enum DocumentType: String, CaseIterable, Sendable {
+public enum DocumentType: String, CaseIterable, Sendable, Codable {
     case pdf
     case docx
     case txt
@@ -72,7 +72,7 @@ public enum DocumentError: Error, LocalizedError, Sendable {
 }
 
 /// Metadata for an attached document
-public struct DocumentAttachment: Identifiable, Sendable, Equatable {
+public struct DocumentAttachment: Identifiable, Sendable, Equatable, Codable {
     public let id: UUID
     public let filename: String
     public let type: DocumentType

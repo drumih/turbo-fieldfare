@@ -165,6 +165,37 @@ right pane to configure sampling, context length, expert-cache slots, and
 runtime options. See [Runtime controls](docs/RUNTIME_CONTROLS.md) for details
 and defaults.
 
+#### Conversation history
+
+The sidebar on the left keeps a persistent history of past conversations. Each
+entry shows the title, a response preview, the relative update time, and the
+number of generated tokens. You can:
+
+- click an entry to reload its prompt and response,
+- search the history by title, prompt, or response,
+- delete entries individually or clear the whole history,
+- start a fresh conversation with the **New** button.
+
+History is stored as JSON in Application Support (`TurboFieldfare/
+conversations.json`) and survives app restarts. A conversation is saved when a
+generation finishes or is stopped; regenerating the same prompt updates the
+same conversation instead of creating duplicates.
+
+#### Document attachments
+
+You can attach PDF, Word (DOCX), TXT, Markdown, and RTF files to a prompt,
+either through the file picker or by dragging them onto the composer. The app
+extracts the text (PDFs via PDFKit, Word via `NSAttributedString`) and injects
+it into the prompt inside `[Document: …]` markers, so the model can answer
+about the file's content.
+
+- Files up to 50 MB are accepted; extracted text is limited to 500,000
+  characters and is marked as truncated when the limit is hit.
+- Attachments show their size, page count (PDFs), character count, and a text
+  preview popover, and can be removed individually or all at once.
+- Attached documents are stored with the conversation, so reloading a
+  conversation from history restores its context.
+
 ### Command-line interface
 
 The CLI uses an existing `.gturbo` installation. If you installed the model
@@ -266,7 +297,9 @@ swift build -c release --product TurboFieldfareServer
 It listens on `http://127.0.0.1:8080/v1` and supports Chat Completions,
 streaming, function tools, and single-prefix prompt reuse. The client must
 authorize and run every tool call. Keep the server on loopback; it has no
-remote authentication or TLS.
+remote authentication or TLS. `--host` selects the bind address and
+`--allow-remote` explicitly permits a non-loopback host (see the
+[server guide](docs/OPENAI_SERVER.md#bind-address) for the warning).
 
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.
@@ -322,6 +355,9 @@ TurboFieldfare currently includes:
 - FP16 KV storage with bounded circular storage for 25 sliding-window layers
   and linear storage for 5 full-attention layers
 - Exact split-K/V decode attention with distinct normalized K and V paths
+- A persistent, searchable conversation history sidebar in the Mac app
+- PDF, DOCX, TXT, Markdown, and RTF document attachments whose text is
+  injected into the prompt
 - A Swift library, streaming installer, command-line interface, loopback
   OpenAI-compatible server, and native SwiftUI/AppKit Mac app with a one-shot
   local decode service

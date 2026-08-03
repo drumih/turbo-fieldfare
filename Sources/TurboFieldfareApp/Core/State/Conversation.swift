@@ -11,6 +11,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var promptTokenCount: Int?
     public var generatedTokenCount: Int?
     public var stopReason: String?
+    public var attachments: [DocumentAttachment]
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -20,7 +21,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 updatedAt: Date = Date(),
                 promptTokenCount: Int? = nil,
                 generatedTokenCount: Int? = nil,
-                stopReason: String? = nil) {
+                stopReason: String? = nil,
+                attachments: [DocumentAttachment] = []) {
         self.id = id
         self.title = title
         self.prompt = prompt
@@ -30,6 +32,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.promptTokenCount = promptTokenCount
         self.generatedTokenCount = generatedTokenCount
         self.stopReason = stopReason
+        self.attachments = attachments
     }
 
     /// Automatic title from the prompt when none is provided.
@@ -47,6 +50,40 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         if trimmed.count <= 100 { return trimmed }
         let end = trimmed.index(trimmed.startIndex, offsetBy: 100)
         return String(trimmed[..<end]) + "…"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, prompt, response, createdAt, updatedAt
+        case promptTokenCount, generatedTokenCount, stopReason, attachments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.title = try container.decode(String.self, forKey: .title)
+        self.prompt = try container.decode(String.self, forKey: .prompt)
+        self.response = try container.decode(String.self, forKey: .response)
+        self.createdAt = try container.decode(Date.self, forKey: .createdAt)
+        self.updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        self.promptTokenCount = try container.decodeIfPresent(Int.self, forKey: .promptTokenCount)
+        self.generatedTokenCount = try container.decodeIfPresent(Int.self, forKey: .generatedTokenCount)
+        self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        // Older history files predate document attachments.
+        self.attachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .attachments) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(response, forKey: .response)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+        try container.encodeIfPresent(promptTokenCount, forKey: .promptTokenCount)
+        try container.encodeIfPresent(generatedTokenCount, forKey: .generatedTokenCount)
+        try container.encodeIfPresent(stopReason, forKey: .stopReason)
+        try container.encode(attachments, forKey: .attachments)
     }
 }
 
