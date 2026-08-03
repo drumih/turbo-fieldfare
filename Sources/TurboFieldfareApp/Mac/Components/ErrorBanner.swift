@@ -30,7 +30,7 @@ struct ErrorBanner: View {
             .padding(.vertical, 8)
             .background {
                 Capsule()
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .fill(TurboFieldfareAppearance.surface)
                     .overlay {
                         Capsule().stroke(.red.opacity(0.55), lineWidth: 1)
                     }

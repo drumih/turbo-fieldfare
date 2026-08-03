@@ -29,7 +29,7 @@ struct StatusHUDView: View {
         .padding(.vertical, 10)
         .background {
             Capsule()
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareAppearance.surface)
                 .overlay {
                     Capsule().stroke(.separator.opacity(0.5), lineWidth: 0.5)
                 }

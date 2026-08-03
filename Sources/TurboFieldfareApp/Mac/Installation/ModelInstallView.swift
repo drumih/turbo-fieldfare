@@ -82,7 +82,7 @@ struct ModelInstallView: View {
         .padding(18)
         .background {
             RoundedRectangle(cornerRadius: 20)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareAppearance.surface)
                 .overlay {
                     RoundedRectangle(cornerRadius: 20)
                         .stroke(.separator.opacity(0.5), lineWidth: 0.5)
@@ -112,6 +112,7 @@ struct ModelInstallView: View {
                    let downloaded = model.installDownloadedBytes,
                    let total = model.installTotalBytes {
                     ProgressView(value: fraction)
+                        .tint(TurboFieldfareMacTheme.accentColor)
                         .accessibilityLabel("Model download")
                         .accessibilityValue(Text(accessibleProgressValue(fraction: fraction)))
                     HStack {

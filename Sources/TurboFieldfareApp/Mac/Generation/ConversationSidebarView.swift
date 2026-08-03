@@ -333,11 +333,18 @@ struct ConversationRowView: View {
         HStack(spacing: 6) {
             Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack {
+                    HStack(spacing: 4) {
                         if conversation.isPinned {
                             Image(systemName: "pin.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .font(.system(size: 9))
+                                .foregroundStyle(TurboFieldfareMacTheme.accentColor)
+                                .accessibilityHidden(true)
+                        }
+                        if conversation.isTemplate {
+                            Image(systemName: "square.stack.3d.up")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.orange)
+                                .accessibilityHidden(true)
                         }
                         if isRenaming {
                             TextField("Title", text: $draftTitle)
@@ -351,7 +358,7 @@ struct ConversationRowView: View {
                                 .lineLimit(1)
                                 .onTapGesture(count: 2) { beginRename() }
                         }
-                        Spacer()
+                        Spacer(minLength: 4)
                         Text(conversation.updatedAt, style: .relative)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
@@ -360,10 +367,14 @@ struct ConversationRowView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
-                    if let tokens = conversation.generatedTokenCount {
-                        Text("\(tokens) tokens")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                    HStack(spacing: 6) {
+                        if let tokens = conversation.generatedTokenCount {
+                            Text("\(tokens) tok")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        tagBadges
+                        Spacer(minLength: 0)
                     }
                 }
                 .padding(.vertical, 2)
@@ -400,6 +411,26 @@ struct ConversationRowView: View {
     private func commitRename() {
         isRenaming = false
         onRename(draftTitle)
+    }
+
+    /// Compact tag badges (first two + an overflow count).
+    @ViewBuilder
+    private var tagBadges: some View {
+        let visible = conversation.tags.prefix(2)
+        ForEach(Array(visible.enumerated()), id: \.offset) { _, tag in
+            Text("#\(tag)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(.quaternary.opacity(0.3), in: Capsule())
+                .lineLimit(1)
+        }
+        if conversation.tags.count > 2 {
+            Text("+\(conversation.tags.count - 2)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+        }
     }
 }
 

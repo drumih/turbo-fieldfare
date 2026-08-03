@@ -16,12 +16,16 @@ struct PromptComposerView: View {
         .padding(14)
         .background {
             RoundedRectangle(cornerRadius: 22)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareAppearance.surface)
                 .overlay {
                     RoundedRectangle(cornerRadius: 22)
-                        .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                        .stroke(promptFocused
+                                ? AnyShapeStyle(TurboFieldfareMacTheme.accentColor.opacity(0.7))
+                                : AnyShapeStyle(.separator.opacity(0.5)),
+                                lineWidth: promptFocused ? 1.2 : 0.5)
                 }
         }
+        .animation(.smooth(duration: 0.18), value: promptFocused)
     }
 
     private var editor: some View {
@@ -51,13 +55,19 @@ struct PromptComposerView: View {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
                     // padding, no vertical inset.
-                    Text(model.activeConversationTurns.isEmpty
-                         ? "Prompt"
-                         : "Continue the conversation…")
-                        .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .padding(.leading, 5)
-                        .allowsHitTesting(false)
+                    HStack(spacing: 8) {
+                        Image(systemName: model.activeConversationTurns.isEmpty
+                              ? "text.cursor"
+                              : "arrow.up.and.down.text.horizontal")
+                            .foregroundStyle(.tertiary)
+                        Text(model.activeConversationTurns.isEmpty
+                             ? "Prompt"
+                             : "Continue the conversation…")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.body)
+                    .padding(.leading, 5)
+                    .allowsHitTesting(false)
                 }
             }
     }

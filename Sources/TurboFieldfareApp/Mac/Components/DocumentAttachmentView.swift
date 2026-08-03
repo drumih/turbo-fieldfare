@@ -174,11 +174,16 @@ struct AttachmentRow: View {
     
     var body: some View {
         HStack(spacing: 10) {
-            // Document type icon
+            // Document type icon on a tinted tile
             Image(systemName: attachment.type.icon)
                 .font(.title3)
                 .foregroundStyle(TurboFieldfareMacTheme.accentColor)
-                .frame(width: 24)
+                .frame(width: 32, height: 32)
+                .background(
+                    TurboFieldfareMacTheme.accentColor.opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .accessibilityHidden(true)
             
             // File information
             VStack(alignment: .leading, spacing: 2) {
@@ -233,11 +238,14 @@ struct AttachmentRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background {
-            RoundedRectangle(cornerRadius: 10)
-                .fill(Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: 12)
+                .fill(TurboFieldfareAppearance.surface)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(isHovering ? Color.accentColor.opacity(0.3) : Color.clear, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isHovering
+                                ? AnyShapeStyle(TurboFieldfareMacTheme.accentColor.opacity(0.4))
+                                : AnyShapeStyle(.separator.opacity(0.35)),
+                                lineWidth: 1)
                 }
         }
         .onHover { hovering in

@@ -25,7 +25,7 @@ struct PromptExamplesView: View {
         .padding(14)
         .background {
             RoundedRectangle(cornerRadius: 18)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareAppearance.surface)
                 .overlay {
                     RoundedRectangle(cornerRadius: 18)
                         .stroke(.separator.opacity(0.5), lineWidth: 0.5)

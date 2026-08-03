@@ -15,15 +15,15 @@ struct RootView: View {
             InspectorView(model: model)
                 .frame(width: 320)
                 .frame(maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(TurboFieldfareAppearance.background)
         }
         .containerBackground(for: .window) {
             LinearGradient(
                 colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color(nsColor: .windowBackgroundColor).mix(
+                    TurboFieldfareAppearance.background,
+                    TurboFieldfareAppearance.background.mix(
                         with: TurboFieldfareMacTheme.accentColor,
-                        by: 0.04),
+                        by: 0.05),
                 ],
                 startPoint: .top,
                 endPoint: .bottom)

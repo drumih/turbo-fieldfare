@@ -16,7 +16,7 @@ struct InspectorView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(TurboFieldfareAppearance.background)
     }
 
     private var modelSection: some View {

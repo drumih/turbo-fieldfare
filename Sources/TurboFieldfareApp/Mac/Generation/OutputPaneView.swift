@@ -476,34 +476,69 @@ private struct CognitiveTranscriptView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 ForEach(segments) { segment in
-                    DisclosureGroup(isExpanded: binding(for: segment.kind)) {
-                        Text(segment.text)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.top, 4)
-                    } label: {
-                        Label(segment.kind.header, systemImage: icon(for: segment.kind))
-                            .font(.callout.weight(.semibold))
-                    }
+                    passCard(segment)
                 }
             }
             .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func binding(for kind: CognitiveStepKind) -> Binding<Bool> {
-        Binding(
-            get: { expanded.contains(kind) },
-            set: { isExpanded in
-                if isExpanded {
-                    expanded.insert(kind)
-                } else {
-                    expanded.remove(kind)
+    private func passCard(_ segment: CognitivePassSegment) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                toggle(segment.kind)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: icon(for: segment.kind))
+                        .font(.caption)
+                        .foregroundStyle(tint(for: segment.kind))
+                    Text(segment.kind.header)
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                    Image(systemName: expanded.contains(segment.kind)
+                          ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-            })
+            }
+            .buttonStyle(.plain)
+
+            if expanded.contains(segment.kind) {
+                Text(segment.text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(12)
+        .background {
+            RoundedRectangle(cornerRadius: TurboFieldfareAppearance.cornerRadius)
+                .fill(tint(for: segment.kind).opacity(0.07))
+                .overlay {
+                    RoundedRectangle(cornerRadius: TurboFieldfareAppearance.cornerRadius)
+                        .stroke(tint(for: segment.kind).opacity(0.25), lineWidth: 1)
+                }
+        }
+    }
+
+    private func toggle(_ kind: CognitiveStepKind) {
+        if expanded.contains(kind) {
+            expanded.remove(kind)
+        } else {
+            expanded.insert(kind)
+        }
+    }
+
+    private func tint(for kind: CognitiveStepKind) -> Color {
+        switch kind {
+        case .plan: return TurboFieldfareMacTheme.accentColor
+        case .draft: return .blue
+        case .critique: return .orange
+        case .final: return TurboFieldfareMacTheme.accentColor
+        }
     }
 
     private func icon(for kind: CognitiveStepKind) -> String {

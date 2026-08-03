@@ -25,7 +25,7 @@ struct ModelActionBanner: View {
             .padding(.vertical, 8)
             .background {
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .fill(TurboFieldfareAppearance.surface)
                     .overlay {
                         RoundedRectangle(cornerRadius: 14)
                             .stroke(iconColor(for: action).opacity(0.5), lineWidth: 1)
