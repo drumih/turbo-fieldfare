@@ -17,6 +17,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var showPromptExamples: Bool = true
     var maxAttachmentFileSize: UInt64 = DocumentExtractor.maximumFileSize
     var maxAttachmentTextLength: Int = DocumentExtractor.maximumTextLength
+    var cognitiveModeEnabled: Bool = false
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -32,6 +33,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case showPromptExamples
         case maxAttachmentFileSize
         case maxAttachmentTextLength
+        case cognitiveModeEnabled
     }
 
     init(version: Int = currentVersion,
@@ -46,7 +48,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
          newlineShortcut: AppNewlineShortcut = .return,
          showPromptExamples: Bool = true,
          maxAttachmentFileSize: UInt64 = DocumentExtractor.maximumFileSize,
-         maxAttachmentTextLength: Int = DocumentExtractor.maximumTextLength) {
+         maxAttachmentTextLength: Int = DocumentExtractor.maximumTextLength,
+         cognitiveModeEnabled: Bool = false) {
         self.version = version
         self.contextTokens = contextTokens
         self.expertCacheSlots = expertCacheSlots
@@ -60,6 +63,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         self.showPromptExamples = showPromptExamples
         self.maxAttachmentFileSize = maxAttachmentFileSize
         self.maxAttachmentTextLength = maxAttachmentTextLength
+        self.cognitiveModeEnabled = cognitiveModeEnabled
     }
 
     init(from decoder: Decoder) throws {
@@ -85,6 +89,9 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         maxAttachmentTextLength = try container.decodeIfPresent(
             Int.self,
             forKey: .maxAttachmentTextLength) ?? DocumentExtractor.maximumTextLength
+        cognitiveModeEnabled = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .cognitiveModeEnabled) ?? false
     }
 
     func isValid() -> Bool {

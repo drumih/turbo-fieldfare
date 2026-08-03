@@ -203,6 +203,15 @@ about the file's content.
 - Attached documents are stored with the conversation, so reloading a
   conversation from history restores its context.
 
+#### Cognitive mode
+
+The inspector's **Runtime** section offers a **Cognitive mode** toggle. When
+enabled, each generation runs four passes — plan, draft, critique, and final
+revision — and the model revises its own answer before it is stored in
+history. The output pane shows every pass under its own header. Each pass can
+generate up to the response limit, so cognitive runs are noticeably slower
+than single-pass generation.
+
 ### Command-line interface
 
 The CLI uses an existing `.gturbo` installation. If you installed the model

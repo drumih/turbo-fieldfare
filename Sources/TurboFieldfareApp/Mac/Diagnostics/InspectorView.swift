@@ -156,6 +156,11 @@ struct InspectorView: View {
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Cognitive mode", isOn: $model.cognitiveModeEnabled)
+                .toggleStyle(.switch)
+            Text("Runs four passes: plan, draft, critique, and final revision. Each pass generates up to the full response limit, so runs are slower.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if model.hasStaleLoadedRuntime {
                 Text("Reload required")
                     .font(.caption)

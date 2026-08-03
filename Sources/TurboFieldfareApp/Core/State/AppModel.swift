@@ -64,6 +64,12 @@ public final class AppModel {
     /// Conversation currently loaded from history
     public private(set) var activeConversationID: UUID?
 
+    // MARK: - Cognitive mode
+    
+    /// Whether generation runs the advanced cognitive cycle (plan, draft,
+    /// critique, final revision) instead of a single pass.
+    public var cognitiveModeEnabled = false
+
     private let client: any AppInferenceClient
     private let installer: any AppModelInstallerClient
     private var runTask: Task<Void, Never>?
@@ -107,6 +113,7 @@ public final class AppModel {
         self.showPromptExamples = settings.showPromptExamples
         self.maxAttachmentFileSize = settings.maxAttachmentFileSize
         self.maxAttachmentTextLength = settings.maxAttachmentTextLength
+        self.cognitiveModeEnabled = settings.cognitiveModeEnabled
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -656,6 +663,7 @@ public final class AppModel {
         showPromptExamples = settings.showPromptExamples
         maxAttachmentFileSize = settings.maxAttachmentFileSize
         maxAttachmentTextLength = settings.maxAttachmentTextLength
+        cognitiveModeEnabled = settings.cognitiveModeEnabled
     }
 
     private func persistSettings() {
@@ -672,7 +680,8 @@ public final class AppModel {
             newlineShortcut: newlineShortcut,
             showPromptExamples: showPromptExamples,
             maxAttachmentFileSize: maxAttachmentFileSize,
-            maxAttachmentTextLength: maxAttachmentTextLength)
+            maxAttachmentTextLength: maxAttachmentTextLength,
+            cognitiveModeEnabled: cognitiveModeEnabled)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,
@@ -751,7 +760,11 @@ public final class AppModel {
             return
         }
         persistSettings()
-        runStandardGeneration(request: request)
+        if cognitiveModeEnabled {
+            runCognitiveCycle(request: request)
+        } else {
+            runStandardGeneration(request: request)
+        }
     }
     
     private func runStandardGeneration(request: AppGenerationRequest) {
@@ -787,6 +800,147 @@ public final class AppModel {
                 await self.finishStreamFailure(.unknown("\(error)"))
             }
         }
+    }
+    
+    /// Runs the advanced cognitive cycle: plan, draft, critique, final
+    /// revision. Each pass streams into the output pane under its own
+    /// header; the conversation history stores the final revision.
+    private func runCognitiveCycle(request: AppGenerationRequest) {
+        generationTranscriptMailbox?.reset()
+        outputPromptText = request.prompt
+        outputText = ""
+        diagnostics = nil
+        error = nil
+        hasHandledTerminalEvent = false
+        activeRunRuntimeKey = AppLoadedRuntimeKey(
+            modelDirectory: request.modelDirectory,
+            maxContextTokens: request.maxContextTokens,
+            options: request.runtimeOptions,
+            forceLogitsHead: !request.isPureGreedy)
+        isCancellationPending = false
+        liveTokenCount = 0
+        liveElapsedDecodeSeconds = 0
+        livePrefillDone = 0
+        livePrefillTotal = 0
+        liveMemoryBytes = nil
+        phase = .prefill
+        runState = .running
+
+        runTask = Task.detached { [weak self, client, request] in
+            guard let self else { return }
+            var engine = CognitiveCycleEngine(userPrompt: request.prompt)
+            var finalText = ""
+            var finalDiagnostics: AppDiagnostics?
+            var cancelled = false
+
+            while let step = engine.nextStep() {
+                var passRequest = request
+                passRequest.prompt = step.prompt
+
+                // Reset the per-pass counters and open the pass in the output.
+                await MainActor.run {
+                    self.phase = .prefill
+                    self.liveTokenCount = 0
+                    self.liveElapsedDecodeSeconds = 0
+                    self.livePrefillDone = 0
+                    self.livePrefillTotal = 0
+                    if !self.outputText.isEmpty { self.outputText += "\n\n" }
+                    self.outputText += "— \(step.kind.header) —\n"
+                }
+
+                var passText = ""
+                var passDiagnostics: AppDiagnostics?
+                var passCancelled = false
+                var passFailed = false
+
+                do {
+                    for try await event in client.generate(passRequest) {
+                        switch event {
+                        case .prefillProgress(let done, let total):
+                            await MainActor.run {
+                                self.phase = .prefill
+                                self.livePrefillDone = done
+                                self.livePrefillTotal = total
+                            }
+                        case .token(let token):
+                            passText += token.textDelta
+                            await MainActor.run {
+                                self.phase = .decode
+                                self.liveTokenCount = token.index + 1
+                                self.liveElapsedDecodeSeconds = token.elapsedDecodeSeconds
+                                if let reporter = self.client as? any AppInferenceMemoryReporting {
+                                    self.liveMemoryBytes = reporter.currentInferenceMemoryBytes
+                                } else {
+                                    self.liveMemoryBytes = self.memorySampler.sample()
+                                }
+                                if !token.textDelta.isEmpty {
+                                    self.outputText += token.textDelta
+                                }
+                            }
+                        case .finished(let diagnostics):
+                            passDiagnostics = diagnostics
+                        case .cancelled(let diagnostics):
+                            passDiagnostics = diagnostics
+                            passCancelled = true
+                        case .failed(let appError, let partial):
+                            passDiagnostics = partial
+                            await self.finishCognitiveCycleFailure(appError, partial: partial)
+                            passFailed = true
+                        }
+                        if passCancelled || passFailed { break }
+                    }
+                } catch let appError as AppInferenceError {
+                    await self.finishCognitiveCycleFailure(appError, partial: passDiagnostics)
+                    passFailed = true
+                } catch {
+                    await self.finishCognitiveCycleFailure(.unknown("\(error)"), partial: passDiagnostics)
+                    passFailed = true
+                }
+
+                if passCancelled {
+                    cancelled = true
+                    await self.finishCognitiveCycleCancelled(passDiagnostics)
+                    break
+                }
+                if passFailed { return }
+
+                engine.record(output: passText)
+                finalText = passText
+                finalDiagnostics = passDiagnostics
+            }
+
+            if !cancelled {
+                let handled = await MainActor.run { self.hasHandledTerminalEvent }
+                if !handled {
+                    await self.finishCognitiveCycle(finalDiagnostics, response: finalText)
+                }
+            }
+        }
+    }
+    
+    private func finishCognitiveCycle(_ diagnostics: AppDiagnostics?, response: String) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        self.diagnostics = diagnostics
+        finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics, response: response)
+    }
+    
+    private func finishCognitiveCycleCancelled(_ diagnostics: AppDiagnostics?) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        self.diagnostics = diagnostics
+        error = .cancelled
+        finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)
+    }
+    
+    private func finishCognitiveCycleFailure(_ appError: AppInferenceError, partial: AppDiagnostics?) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        diagnostics = partial
+        error = appError
+        finishTerminalRun()
     }
 
     public func cancel() {
@@ -989,7 +1143,7 @@ public final class AppModel {
     // MARK: - Conversation history management
     
     /// Saves the current conversation to history
-    public func saveCurrentConversation(diagnostic: AppDiagnostics? = nil) {
+    public func saveCurrentConversation(diagnostic: AppDiagnostics? = nil, response: String? = nil) {
         guard !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         
         let now = Date()
@@ -998,13 +1152,14 @@ public final class AppModel {
         let active = activeConversationID.flatMap { id in
             conversationStore.conversations.first { $0.id == id }
         }
+        let savedResponse = response ?? outputText
         let conversation: Conversation
         if let active, active.prompt == promptText {
             conversation = Conversation(
                 id: active.id,
                 title: active.title,
                 prompt: promptText,
-                response: outputText,
+                response: savedResponse,
                 createdAt: active.createdAt,
                 updatedAt: now,
                 promptTokenCount: diagnostic?.promptTokenCount,
@@ -1017,7 +1172,7 @@ public final class AppModel {
                 id: UUID(),
                 title: Conversation.title(from: promptText),
                 prompt: promptText,
-                response: outputText,
+                response: savedResponse,
                 createdAt: now,
                 updatedAt: now,
                 promptTokenCount: diagnostic?.promptTokenCount,
