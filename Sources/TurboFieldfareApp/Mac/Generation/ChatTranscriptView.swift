@@ -11,16 +11,23 @@ struct ChatTranscriptView: View {
     let output: String
     let isRunning: Bool
     let canRegenerate: Bool
+    let canEditLastPrompt: Bool
+    let canSubmitEditedLastPrompt: Bool
     let onRegenerate: () -> Void
+    let onEditLastPrompt: (String) -> Bool
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isFollowingLatest = true
     @State private var hasUnseenContent = false
+    @State private var hoveredUserMessageIndex: Int?
     @State private var hoveredAssistantID: String?
     @State private var copiedAssistantID: String?
+    @State private var editingUserMessageIndex: Int?
+    @State private var editedPrompt = ""
     @State private var responseBuffer = StreamingResponseBuffer()
     @State private var responseRevealTask: Task<Void, Never>?
     @State private var responseRevealGeneration: UInt = 0
+    @FocusState private var editedPromptFocused: Bool
 
     var body: some View {
         transcriptContent(response: responseBuffer.displayedText)
@@ -31,16 +38,21 @@ struct ChatTranscriptView: View {
             }
             .onChange(of: isRunning) { _, isRunning in
                 if isRunning {
+                    cancelPromptEditing()
                     beginStreamingResponse()
                 } else {
                     finishStreamingResponse()
                 }
             }
             .onChange(of: messages) { _, _ in
+                cancelPromptEditing()
                 guard !isRunning else { return }
                 showFinishedResponse()
             }
-            .onDisappear(perform: cancelResponseReveal)
+            .onDisappear {
+                cancelPromptEditing()
+                cancelResponseReveal()
+            }
     }
 
     private func transcriptContent(response: String) -> some View {
@@ -50,7 +62,7 @@ struct ChatTranscriptView: View {
                     messageList
 
                     if messages.isEmpty, !prompt.isEmpty {
-                        userMessage(prompt)
+                        userMessage(prompt, index: nil, isEditable: false)
                     }
 
                     if isRunning || !response.isEmpty {
@@ -129,35 +141,136 @@ struct ChatTranscriptView: View {
             case .system:
                 systemMessage(message.content)
             case .user:
-                userMessage(message.content)
+                userMessage(
+                    message.content,
+                    index: index,
+                    isEditable: index == latestUserMessageIndex)
             case .assistant:
                 assistantMessage(message.content, id: "assistant-\(index)", isActive: false)
             }
         }
     }
 
-    private func userMessage(_ content: String) -> some View {
+    private var latestUserMessageIndex: Int? {
+        LatestPromptEditPolicy.editableUserMessageIndex(
+            in: messages,
+            canEditLastPrompt: canEditLastPrompt)
+    }
+
+    private func userMessage(
+        _ content: String,
+        index: Int?,
+        isEditable: Bool
+    ) -> some View {
         HStack {
             Spacer(minLength: 48)
-            Text(content)
-                .font(.body)
-                .foregroundStyle(.primary)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .frame(maxWidth: 620, alignment: .leading)
-                .padding(.horizontal, 17)
-                .padding(.vertical, 12)
-                .background(
-                    TurboFieldfareMacTheme.accentSurface,
-                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(TurboFieldfareMacTheme.accentColor.opacity(0.14), lineWidth: 0.5)
+            if let index, editingUserMessageIndex == index {
+                promptEditor(index: index)
+            } else {
+                VStack(alignment: .trailing, spacing: 5) {
+                    Text(content)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: 620, alignment: .leading)
+                        .padding(.horizontal, 17)
+                        .padding(.vertical, 12)
+                        .background(
+                            TurboFieldfareMacTheme.accentSurface,
+                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(
+                                    TurboFieldfareMacTheme.accentColor.opacity(0.14),
+                                    lineWidth: 0.5)
+                        }
+
+                    if let index, isEditable {
+                        Button {
+                            beginPromptEditing(content, index: index)
+                        } label: {
+                            Label("Edit latest prompt", systemImage: "pencil")
+                                .labelStyle(.iconOnly)
+                                .frame(width: 26, height: 24)
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .opacity(hoveredUserMessageIndex == index ? 1 : 0.68)
+                        .help("Edit latest prompt")
+                    }
                 }
+                .onHover { isHovering in
+                    guard let index else { return }
+                    if isHovering {
+                        hoveredUserMessageIndex = index
+                    } else if hoveredUserMessageIndex == index {
+                        hoveredUserMessageIndex = nil
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Your message")
+        .accessibilityElement(children: .contain)
+    }
+
+    private func promptEditor(index: Int) -> some View {
+        VStack(alignment: .trailing, spacing: 10) {
+            TextEditor(text: $editedPrompt)
+                .font(.body)
+                .lineSpacing(3)
+                .scrollContentBackground(.hidden)
+                .focused($editedPromptFocused)
+                .frame(minWidth: 360, maxWidth: 620, minHeight: editedPromptEditorHeight)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    TurboFieldfareMacTheme.elevatedSurface,
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(
+                            TurboFieldfareMacTheme.accentColor.opacity(0.55),
+                            lineWidth: 1)
+                }
+                .onKeyPress(.return, phases: [.down, .repeat]) { keyPress in
+                    guard !keyPress.modifiers.contains(.shift) else { return .ignored }
+                    guard !keyPress.phase.contains(.repeat) else { return .handled }
+                    guard (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() != true
+                    else { return .ignored }
+                    submitPromptEdit()
+                    return .handled
+                }
+                .accessibilityLabel("Edit latest prompt")
+
+            HStack(spacing: 8) {
+                Text(canSubmitEditedLastPrompt
+                     ? "Shift-Return for a new line"
+                     : "Load or reload the model to update")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                Spacer(minLength: 16)
+
+                Button("Cancel", action: cancelPromptEditing)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+
+                Button("Update", action: submitPromptEdit)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!canSubmitPromptEdit)
+                    .help(canSubmitEditedLastPrompt
+                          ? "Update prompt and regenerate"
+                          : "Load or reload the model first")
+            }
+        }
+        .frame(minWidth: 360, maxWidth: 620)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Editing latest prompt")
+        .id("prompt-editor-\(index)")
     }
 
     private func assistantMessage(
@@ -294,6 +407,41 @@ struct ChatTranscriptView: View {
         } else {
             proxy.scrollTo("transcript-bottom", anchor: .bottom)
         }
+    }
+
+    private var editedPromptEditorHeight: CGFloat {
+        let explicitLines = max(
+            1,
+            editedPrompt.split(separator: "\n", omittingEmptySubsequences: false).count)
+        let wrappedLines = max(explicitLines, max(1, (editedPrompt.count + 67) / 68))
+        return min(176, max(72, CGFloat(wrappedLines) * 22 + 28))
+    }
+
+    private var canSubmitPromptEdit: Bool {
+        canSubmitEditedLastPrompt
+            && !editedPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func beginPromptEditing(_ content: String, index: Int) {
+        guard canEditLastPrompt, index == latestUserMessageIndex else { return }
+        editedPrompt = content
+        editingUserMessageIndex = index
+        Task { @MainActor in
+            editedPromptFocused = true
+        }
+    }
+
+    private func cancelPromptEditing() {
+        editedPromptFocused = false
+        editingUserMessageIndex = nil
+        editedPrompt = ""
+    }
+
+    private func submitPromptEdit() {
+        guard canSubmitPromptEdit else { return }
+        let replacement = editedPrompt
+        guard onEditLastPrompt(replacement) else { return }
+        cancelPromptEditing()
     }
 
     private func copyAssistantMessage(_ content: String, id: String) {

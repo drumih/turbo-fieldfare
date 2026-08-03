@@ -342,6 +342,131 @@ import Testing
     }
 
     @MainActor
+    @Test func latestPromptEditReplacesOnlyTheNewestTurnAndPreservesContext() async throws {
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 8
+
+        model.promptText = "first question"
+        model.run()
+        await waitForIdle(model)
+        let firstAnswer = model.conversation[1]
+
+        model.promptText = "second question"
+        model.run()
+        await waitForIdle(model)
+
+        #expect(model.canEditLastPrompt)
+        #expect(model.submitEditedLastPrompt("edited second question"))
+        #expect(!model.canEditLastPrompt)
+        await waitForIdle(model)
+
+        let requests = client.requests()
+        #expect(requests.count == 3)
+        #expect(requests[2].messages == [
+            AppChatMessage(role: .user, content: "first question"),
+            firstAnswer,
+            AppChatMessage(role: .user, content: "edited second question"),
+        ])
+        #expect(model.conversation.count == 4)
+        #expect(model.conversation[0] ==
+            AppChatMessage(role: .user, content: "first question"))
+        #expect(model.conversation[1] == firstAnswer)
+        #expect(model.conversation[2] ==
+            AppChatMessage(role: .user, content: "edited second question"))
+        #expect(model.conversation[3].role == .assistant)
+        #expect(model.conversation[3].content.contains("edited second question"))
+        #expect(!model.conversation.contains(where: { $0.content == "second question" }))
+    }
+
+    @MainActor
+    @Test func latestPromptEditRequiresACompletedAnswerAndNonemptyReplacement() async throws {
+        let client = MockInferenceClient(
+            response: "answer",
+            tokenDelayNanos: 20_000_000)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 4
+
+        #expect(!model.canEditLastPrompt)
+        #expect(!model.submitEditedLastPrompt("not sent"))
+
+        model.promptText = "original question"
+        model.run()
+        #expect(!model.canEditLastPrompt)
+        await waitForIdle(model)
+
+        let completedConversation = model.conversation
+        #expect(model.canEditLastPrompt)
+        #expect(model.canSubmitEditedLastPrompt)
+        #expect(!model.submitEditedLastPrompt("   \n"))
+        #expect(model.conversation == completedConversation)
+
+        model.loadState = .notLoaded
+        #expect(model.canEditLastPrompt)
+        #expect(!model.canSubmitEditedLastPrompt)
+        #expect(!model.submitEditedLastPrompt("edited while unloaded"))
+        #expect(model.conversation == completedConversation)
+        #expect(client.requests().count == 1)
+    }
+
+    @MainActor
+    @Test func failedLatestPromptEditRestoresTheOriginalPromptAndAnswer() async throws {
+        let client = MockInferenceClient(response: "original answer", tokenDelayNanos: 1)
+        let model = readyModel(client: client)
+        model.maxNewTokensOverride = 8
+        model.promptText = "original question"
+        model.run()
+        await waitForIdle(model)
+        let originalConversation = model.conversation
+
+        client.failureMessage = "edited answer failed"
+        #expect(model.submitEditedLastPrompt("edited question"))
+        await waitForIdle(model)
+
+        #expect(model.error?.userMessage == "edited answer failed")
+        #expect(model.conversation == originalConversation)
+        #expect(model.outputPromptText == "original question")
+        #expect(model.outputText == originalConversation.last?.content)
+    }
+
+    @MainActor
+    @Test func successfulLatestPromptEditPersistsAcrossRestoration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "AppModelEditedChat-\(UUID().uuidString)",
+                isDirectory: true)
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = AppModel(
+            modelDirectory: directory,
+            client: client,
+            settingsPersistenceEnabled: true)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
+        model.maxNewTokensOverride = 8
+        model.promptText = "original question"
+        model.run()
+        await waitForIdle(model)
+
+        #expect(model.submitEditedLastPrompt("edited question"))
+        await waitForIdle(model)
+
+        let restored = AppModel(
+            modelDirectory: directory,
+            client: MockInferenceClient(),
+            settingsPersistenceEnabled: true)
+        #expect(restored.conversation.count == 2)
+        #expect(restored.conversation[0] ==
+            AppChatMessage(role: .user, content: "edited question"))
+        #expect(restored.conversation[1].role == .assistant)
+        #expect(restored.conversation[1].content.contains("edited question"))
+    }
+
+    @MainActor
     @Test func staleReadySessionDisablesGenerationUntilReload() throws {
         let client = MockLifecycleInferenceClient()
         let directory = try makeCompleteModelInstall("stale-runtime")

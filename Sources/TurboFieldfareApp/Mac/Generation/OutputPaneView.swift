@@ -60,7 +60,10 @@ struct OutputPaneView: View {
             output: model.outputText,
             isRunning: model.isRunning,
             canRegenerate: model.canRegenerate,
-            onRegenerate: { model.regenerateLastResponse() })
+            canEditLastPrompt: model.canEditLastPrompt,
+            canSubmitEditedLastPrompt: model.canSubmitEditedLastPrompt,
+            onRegenerate: { model.regenerateLastResponse() },
+            onEditLastPrompt: { model.submitEditedLastPrompt($0) })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.vertical, 8)
     }

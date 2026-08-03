@@ -65,8 +65,9 @@ public final class AppModel {
     private var pendingExplicitLoadRuntimeKey: AppLoadedRuntimeKey?
     private var activeRunRuntimeKey: AppLoadedRuntimeKey?
     private var hasHandledTerminalEvent = false
-    /// The original completed turn while a regeneration is in progress. It is
-    /// kept both in memory and on disk until its replacement succeeds.
+    /// The original completed turn while its answer is being regenerated or
+    /// its prompt is being edited. It stays in memory and on disk until the
+    /// replacement succeeds.
     private var regenerationBackup: [AppChatMessage]?
     /// While a response is streaming, periodically checkpoint the displayed
     /// turn. This keeps a stopped or unexpectedly interrupted reply from
@@ -261,10 +262,18 @@ public final class AppModel {
 
     public var canRegenerate: Bool {
         !isRunning && isModelAvailable && !loadState.isLoading && !hasStaleLoadedRuntime
-            && conversation.count >= 2
-            && conversation[conversation.count - 2].role == .user
-            && conversation.last?.role == .assistant
+            && hasCompletedLatestTurn
     }
+
+    /// Editing is intentionally limited to the user message belonging to the
+    /// latest completed assistant response. Earlier context stays immutable.
+    public var canEditLastPrompt: Bool {
+        !isRunning && hasCompletedLatestTurn
+    }
+
+    /// A completed prompt remains editable while the model is unloaded, but
+    /// its replacement can only be submitted once generation is available.
+    public var canSubmitEditedLastPrompt: Bool { canRegenerate }
 
     public var selectedChatTitle: String {
         chats.first(where: { $0.id == selectedChatID })?.title ?? "New chat"
@@ -337,6 +346,12 @@ public final class AppModel {
 
     private var currentForceLogitsHead: Bool {
         temperature != 0
+    }
+
+    private var hasCompletedLatestTurn: Bool {
+        conversation.count >= 2
+            && conversation[conversation.count - 2].role == .user
+            && conversation.last?.role == .assistant
     }
 
     public func setModelURL(_ url: URL) {
@@ -959,17 +974,39 @@ public final class AppModel {
     }
 
     public func regenerateLastResponse() {
-        guard canRegenerate,
-              conversation.count >= 2 else { return }
+        guard canRegenerate, conversation.count >= 2 else { return }
+        _ = replaceLastCompletedTurn(
+            with: conversation[conversation.count - 2].content)
+    }
+
+    /// Replaces only the latest user prompt and regenerates its answer using
+    /// every earlier turn as context. The old prompt and answer remain the
+    /// persisted source of truth until the replacement finishes successfully.
+    @discardableResult
+    public func submitEditedLastPrompt(_ editedPrompt: String) -> Bool {
+        replaceLastCompletedTurn(with: editedPrompt)
+    }
+
+    @discardableResult
+    private func replaceLastCompletedTurn(with replacementPrompt: String) -> Bool {
+        guard canSubmitEditedLastPrompt,
+              conversation.count >= 2,
+              !replacementPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
         let previousConversation = conversation
-        let userMessage = conversation[conversation.count - 2]
         conversation.removeLast(2)
         regenerationBackup = previousConversation
-        promptText = userMessage.content
+        promptText = replacementPrompt
         run()
-        if !isRunning {
+
+        guard isRunning else {
+            promptText = ""
             restoreRegenerationBackupIfNeeded()
+            return false
         }
+        return true
     }
 
     func apply(_ event: AppInferenceEvent) {
