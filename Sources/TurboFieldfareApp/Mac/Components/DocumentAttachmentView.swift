@@ -98,12 +98,7 @@ struct DocumentAttachmentView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                // Enable secure access for sandboxed files
-                let accessibleURLs = urls.compactMap { url -> URL? in
-                    guard url.startAccessingSecurityScopedResource() else { return nil }
-                    return url
-                }
-                model.attachDocuments(from: accessibleURLs)
+                model.attachDocuments(from: urls)
             case .failure(let error):
                 model.attachmentError = .readFailed(error.localizedDescription)
             }

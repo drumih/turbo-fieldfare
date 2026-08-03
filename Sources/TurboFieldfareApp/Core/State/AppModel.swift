@@ -899,6 +899,14 @@ public final class AppModel {
             var errors: [String] = []
             
             for url in urls {
+                // Enable secure access for sandboxed files and always release
+                // it when extraction finishes, regardless of the outcome.
+                let isAccessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if isAccessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
                 do {
                     let attachment = try extractor.extract(from: url)
                     newAttachments.append(attachment)
