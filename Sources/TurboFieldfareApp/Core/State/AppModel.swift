@@ -42,6 +42,23 @@ public final class AppModel {
     public private(set) var livePrefillTotal: Int = 0
     public private(set) var liveMemoryBytes: UInt64?
     public private(set) var isCancellationPending: Bool = false
+    
+    // MARK: - Document attachments
+    
+    /// Documents attached to the current prompt
+    public var attachments: [DocumentAttachment] = []
+    /// Attachment error for the current prompt
+    public var attachmentError: DocumentError?
+    /// Whether an attachment extraction is in progress
+    public private(set) var isExtractingAttachment: Bool = false
+
+    // MARK: - Conversation history
+    
+    /// Persistent store of past conversations
+    public private(set) var conversationStore: ConversationStore
+    
+    /// Conversation currently loaded from history
+    public private(set) var activeConversationID: UUID?
 
     private let client: any AppInferenceClient
     private let installer: any AppModelInstallerClient
@@ -88,6 +105,7 @@ public final class AppModel {
         self.installer = installer
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
+        self.conversationStore = ConversationStore()
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
@@ -722,7 +740,10 @@ public final class AppModel {
             return
         }
         persistSettings()
-
+        runStandardGeneration(request: request)
+    }
+    
+    private func runStandardGeneration(request: AppGenerationRequest) {
         generationTranscriptMailbox?.reset()
         outputPromptText = request.prompt
         outputText = ""
@@ -764,9 +785,11 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
+        // Append attached document text to the prompt when present
+        let effectivePrompt = hasAttachments ? promptWithAttachments : promptText
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
-            prompt: promptText,
+            prompt: effectivePrompt,
             maxNewTokens: maxNewTokensOverride ?? maxContextTokens,
             maxContextTokens: maxContextTokens,
             temperature: Float(temperature),
@@ -813,6 +836,7 @@ public final class AppModel {
         materializeServiceTranscript()
         self.diagnostics = diagnostics
         finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)  // History
     }
 
     private func finishCancelled(_ diagnostics: AppDiagnostics) {
@@ -822,6 +846,7 @@ public final class AppModel {
         self.diagnostics = diagnostics
         error = .cancelled
         finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)  // History (stopped run)
     }
 
     private func materializeServiceTranscript() {
@@ -858,5 +883,130 @@ public final class AppModel {
     private func clearUnloadTask(generation: UInt64) {
         guard generation == unloadGeneration else { return }
         unloadTask = nil
+    }
+    
+    // MARK: - Document attachment management
+    
+    /// Attaches documents to the current prompt
+    public func attachDocuments(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        isExtractingAttachment = true
+        attachmentError = nil
+        
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let extractor = DocumentExtractor()
+            var newAttachments: [DocumentAttachment] = []
+            var errors: [String] = []
+            
+            for url in urls {
+                do {
+                    let attachment = try extractor.extract(from: url)
+                    newAttachments.append(attachment)
+                } catch let error as DocumentError {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                } catch {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isExtractingAttachment = false
+                self.attachments.append(contentsOf: newAttachments)
+                
+                if !errors.isEmpty {
+                    // Use the first error as the main error
+                    if let firstError = errors.first {
+                        self.attachmentError = .readFailed(firstError)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Removes an attached document
+    public func removeAttachment(_ attachment: DocumentAttachment) {
+        attachments.removeAll { $0.id == attachment.id }
+    }
+    
+    /// Removes all attached documents
+    public func clearAttachments() {
+        attachments.removeAll()
+        attachmentError = nil
+    }
+    
+    /// Full prompt text with attached document content injected
+    public var promptWithAttachments: String {
+        guard !attachments.isEmpty else { return promptText }
+        var context = promptText
+        for attachment in attachments {
+            context += attachment.promptContext()
+        }
+        return context
+    }
+    
+    /// Total size of attached documents in bytes
+    public var totalAttachmentBytes: UInt64 {
+        attachments.reduce(0) { $0 + $1.fileSize }
+    }
+    
+    /// Whether the prompt has attached documents
+    public var hasAttachments: Bool {
+        !attachments.isEmpty
+    }
+    
+    // MARK: - Conversation history management
+    
+    /// Saves the current conversation to history
+    public func saveCurrentConversation(diagnostic: AppDiagnostics? = nil) {
+        guard !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        let title = Conversation.title(from: promptText)
+        let now = Date()
+        let conversation = Conversation(
+            id: activeConversationID ?? UUID(),
+            title: title,
+            prompt: promptText,
+            response: outputText,
+            createdAt: now,
+            updatedAt: now,
+            promptTokenCount: diagnostic?.promptTokenCount,
+            generatedTokenCount: diagnostic?.generatedTokens,
+            stopReason: diagnostic?.stopReason.rawValue
+        )
+        
+        conversationStore.upsert(conversation)
+        activeConversationID = conversation.id
+    }
+    
+    /// Loads an existing conversation from history
+    public func loadConversation(_ conversation: Conversation) {
+        guard !isRunning else { return }
+        activeConversationID = conversation.id
+        promptText = conversation.prompt
+        outputPromptText = conversation.prompt
+        outputText = conversation.response
+        // Clear the previous generation state
+        diagnostics = nil
+        error = nil
+        phase = .idle
+    }
+    
+    /// Starts a new empty conversation
+    public func newConversation() {
+        guard !isRunning else { return }
+        activeConversationID = nil
+        promptText = ""
+        outputPromptText = ""
+        outputText = ""
+        clearAttachments()
+    }
+    
+    /// Deletes a conversation from history
+    public func deleteConversation(_ conversation: Conversation) {
+        conversationStore.delete(conversation)
+        if activeConversationID == conversation.id {
+            newConversation()
+        }
     }
 }

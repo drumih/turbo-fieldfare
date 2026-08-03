@@ -7,12 +7,11 @@ struct RootView: View {
     @State private var conversationChromeHeight: CGFloat = 0
 
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
+            ConversationSidebarView(model: model)
+        } content: {
             primaryContent
-                .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
-
-            Divider()
-
+        } detail: {
             InspectorView(model: model)
                 .frame(width: 320)
                 .frame(maxHeight: .infinity)

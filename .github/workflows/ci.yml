@@ -25,9 +25,35 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
+
+      - name: Build debug (fast first signal)
+        run: swift build
+
+      - name: Lint with swift-format (non-blocking)
+        continue-on-error: true
+        run: |
+          if xcrun --find swift-format >/dev/null 2>&1; then
+            xcrun swift-format lint --recursive Sources
+          else
+            echo "swift-format not found in toolchain; skipping"
+          fi
+
       - name: Build release products
         run: swift build -c release
+
       - name: Run serial tests
         run: Scripts/test.sh
+
       - name: Check Markdown links
         run: ruby Scripts/check_markdown_links.rb

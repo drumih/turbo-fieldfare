@@ -69,11 +69,15 @@ struct PromptComposerView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            promptTips
-            Spacer()
-            clearAction
-            GenerateControl(model: model)
+        VStack(alignment: .leading, spacing: 10) {
+            DocumentAttachmentView(model: model)
+            
+            HStack(spacing: 10) {
+                promptTips
+                Spacer()
+                clearAction
+                GenerateControl(model: model)
+            }
         }
     }
 

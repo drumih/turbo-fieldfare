@@ -44,6 +44,9 @@ benchmark-results/
 scratch/
 tmp/
 
+# Local app bundle builds
+TurboFieldfare.app/
+
 # Python
 __pycache__/
 *.pyc

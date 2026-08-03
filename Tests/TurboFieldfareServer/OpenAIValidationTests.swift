@@ -434,9 +434,67 @@ struct ServerArgumentTests {
     @Test func defaults() throws {
         let arguments = try ServerArguments.parse(["--model", "model.gturbo"])
         #expect(arguments.port == 8080)
+        #expect(arguments.host == "127.0.0.1")
+        #expect(arguments.allowRemote == false)
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+    }
+
+    @Test func acceptsLoopbackHostVariants() throws {
+        for host in ["127.0.0.1", "::1", "localhost", "LOCALHOST"] {
+            let arguments = try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--host", host,
+            ])
+            #expect(arguments.host == host)
+            #expect(arguments.allowRemote == false)
+        }
+    }
+
+    @Test func rejectsNonLoopbackHostWithoutAllowRemote() throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--host", "0.0.0.0",
+            ])
+        }
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--host", "192.168.1.10",
+            ])
+        }
+    }
+
+    @Test func permitsNonLoopbackHostWithAllowRemote() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--host", "0.0.0.0",
+            "--allow-remote",
+        ])
+        #expect(arguments.host == "0.0.0.0")
+        #expect(arguments.allowRemote == true)
+    }
+
+    @Test func allowRemoteIsAFlagNotAValue() throws {
+        // --allow-remote takes no value; the next flag must still parse normally.
+        let arguments = try ServerArguments.parse([
+            "--allow-remote",
+            "--model", "model.gturbo",
+            "--host", "10.0.0.5",
+        ])
+        #expect(arguments.allowRemote == true)
+        #expect(arguments.host == "10.0.0.5")
+    }
+
+    @Test func rejectsEmptyHost() throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--host", "   ",
+            ])
+        }
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {
