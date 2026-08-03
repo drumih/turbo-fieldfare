@@ -2,6 +2,7 @@ import Foundation
 
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
+    public let host: String
     public let port: Int
     public let modelID: String
     public let maxContext: Int
@@ -12,7 +13,8 @@ public struct ServerArguments: Equatable, Sendable {
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
       --model <dir>          Required model directory.
-      --port <1...65535>     Loopback port (default 8080).
+      --host <address>       Bind address (default 127.0.0.1). Use 0.0.0.0 for all interfaces.
+      --port <1...65535>     Port (default 8080).
       --model-id <id>        API model identifier (default gemma-4-26b-a4b-it).
       --max-context <tokens> 4096, 8192, 16384, 32768, or 65536 (default 16384).
       --queue-limit <count>  Maximum queued requests (default 4).
@@ -23,6 +25,7 @@ public struct ServerArguments: Equatable, Sendable {
 
     public static func parse(_ input: [String]) throws -> ServerArguments {
         var model: String?
+        var host = "127.0.0.1"
         var port = 8080
         var modelID = "gemma-4-26b-a4b-it"
         var maxContext = 16_384
@@ -40,6 +43,11 @@ public struct ServerArguments: Equatable, Sendable {
             switch flag {
             case "--model":
                 model = value
+            case "--host":
+                guard !value.isEmpty else {
+                    throw ServerArgumentError.invalid("--host must not be empty")
+                }
+                host = value
             case "--port":
                 guard let parsed = Int(value), (1...65_535).contains(parsed) else {
                     throw ServerArgumentError.invalid("--port must be between 1 and 65535")
@@ -73,6 +81,7 @@ public struct ServerArguments: Equatable, Sendable {
         }
         guard let model else { throw ServerArgumentError.invalid("--model is required") }
         return ServerArguments(model: model,
+                               host: host,
                                port: port,
                                modelID: modelID,
                                maxContext: maxContext,

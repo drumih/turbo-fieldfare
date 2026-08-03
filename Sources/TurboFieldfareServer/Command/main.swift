@@ -24,8 +24,9 @@ do {
         modelID: arguments.modelID,
         queueLimit: arguments.queueLimit,
         backend: backend)
-    _ = try await server.start(port: arguments.port)
-    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
+    _ = try await server.start(host: arguments.host, port: arguments.port)
+    let displayHost = arguments.host == "0.0.0.0" ? "0.0.0.0" : arguments.host
+    print("TurboFieldfareServer ready at http://\(displayHost):\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue)")
 
     _ = await signals.wait()
     try await server.shutdown()
