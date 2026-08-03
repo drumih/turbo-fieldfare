@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// A past conversation between the user and the model.
 public struct Conversation: Identifiable, Codable, Equatable, Sendable {
@@ -115,6 +116,10 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
 @MainActor
 @Observable
 public final class ConversationStore {
+    private static let logger = Logger(
+        subsystem: "app.turbofieldfare",
+        category: "conversation-store")
+
     public private(set) var conversations: [Conversation] = []
 
     private let storageURL: URL
@@ -199,6 +204,7 @@ public final class ConversationStore {
             conversations = try JSONDecoderValue.decode([Conversation].self, from: data)
             sortConversations()
         } catch {
+            Self.logger.error("Failed to decode conversation history at \(self.storageURL.path): \(error)")
             conversations = []
         }
     }
@@ -210,16 +216,32 @@ public final class ConversationStore {
             let data = try JSONEncoderValue.encode(conversations)
             try data.write(to: storageURL, options: .atomic)
         } catch {
-            // Silent: history is not critical
+            Self.logger.error("Failed to save conversation history at \(self.storageURL.path): \(error)")
         }
     }
 }
 
-// JSON helpers with ISO8601 dates
+// JSON helpers with ISO8601 dates. Decoding accepts both whole-second and
+// fractional-second timestamps so files written by other tools still load.
 private enum JSONDecoderValue {
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: string) {
+                return date
+            }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: string) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO8601 date: \(string)")
+        }
         return try decoder.decode(T.self, from: data)
     }
 }

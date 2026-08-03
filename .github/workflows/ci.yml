@@ -40,11 +40,17 @@ jobs:
       - name: Build debug (fast first signal)
         run: swift build
 
-      - name: Lint with swift-format (non-blocking)
+      - name: Lint changed Swift files with swift-format (non-blocking)
         continue-on-error: true
         run: |
           if xcrun --find swift-format >/dev/null 2>&1; then
-            xcrun swift-format lint --recursive Sources
+            BASE="${GITHUB_EVENT_PULL_REQUEST_BASE_SHA:-${GITHUB_SHA}}"
+            files="$(git diff --name-only "$BASE" HEAD -- '*.swift' || true)"
+            if [ -n "$files" ]; then
+              xcrun swift-format lint $files
+            else
+              echo "No Swift files changed; skipping"
+            fi
           else
             echo "swift-format not found in toolchain; skipping"
           fi

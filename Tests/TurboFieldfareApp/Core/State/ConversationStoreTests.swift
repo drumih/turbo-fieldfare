@@ -175,6 +175,31 @@ import Testing
         #expect(store.conversations[0].attachments.isEmpty)
     }
 
+    @Test func decodesFractionalSecondDates() throws {
+        // Files written by other tools may use fractional-second timestamps;
+        // they must still load (whole-second ones are produced by the app).
+        let json = """
+        [
+          {
+            "id": "\(UUID().uuidString)",
+            "title": "fractional",
+            "prompt": "p",
+            "response": "r",
+            "createdAt": "2026-01-01T10:00:00.123Z",
+            "updatedAt": "2026-01-01T10:00:00Z"
+          }
+        ]
+        """.data(using: .utf8)!
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fractional-\(UUID().uuidString).json")
+        try json.write(to: url)
+
+        let store = ConversationStore(storageURL: url)
+
+        #expect(store.conversations.count == 1)
+        #expect(store.conversations[0].title == "fractional")
+    }
+
     @Test func persistsAttachmentsAcrossStoreInstances() {
         let (store, url) = makeStore()
         let attachment = DocumentAttachment(filename: "report.pdf",
