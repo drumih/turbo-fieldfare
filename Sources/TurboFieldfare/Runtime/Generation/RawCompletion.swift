@@ -81,6 +81,7 @@ extension GenerationConfig {
 public func runRawCompletion(producer: any LogitProducer,
                              tokenizer: GFTokenizer,
                              promptIds: [Int32],
+                             multimodalInput: MultimodalPrefillInput? = nil,
                              config: GenerationConfig,
                              context: MetalContext,
                              scratch: RawCompletionScratch,
@@ -91,6 +92,27 @@ public func runRawCompletion(producer: any LogitProducer,
     try config.validate()
     guard !promptIds.isEmpty else {
         throw GeneratorError.emptyPrompt
+    }
+    if let multimodalInput {
+        let ranges = multimodalInput.visionTokenRanges
+        guard !ranges.isEmpty else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill requires at least one image embedding overlay")
+        }
+        var previousEnd = 0
+        for (index, overlay) in multimodalInput.embeddingOverlays.enumerated() {
+            let range = overlay.tokenRange
+            guard range.lowerBound >= previousEnd,
+                  range.upperBound <= promptIds.count else {
+                throw PrefillError.chunkedUnsupported(
+                    "image embedding overlays must be ordered, disjoint, and inside the prompt")
+            }
+            guard promptIds[range].allSatisfy({ $0 == tokenizer.imageID }) else {
+                throw PrefillError.chunkedUnsupported(
+                    "image embedding overlay \(index) does not align with image placeholder tokens")
+            }
+            previousEnd = range.upperBound
+        }
     }
     let fusedRunner = producer as? RealForwardRunner
     let fusedGreedy = fusedRunner?.usesFusedGreedyHead == true
@@ -104,6 +126,10 @@ public func runRawCompletion(producer: any LogitProducer,
     case .reset:
         cachedPromptTokens = 0
     case .resume(let count):
+        guard multimodalInput == nil else {
+            throw GeneratorError.invalidContinuation(
+                "multimodal prompts cannot resume a text-only KV continuation")
+        }
         guard count > 0, count < promptIds.count else {
             throw GeneratorError.invalidContinuation(
                 "cached prompt token count must be greater than zero and less than the effective prompt")
@@ -137,38 +163,78 @@ public func runRawCompletion(producer: any LogitProducer,
     var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
     let prefillTokens = promptIds[cachedPromptTokens...]
-    switch prefillConfig.mode {
-    case .chunked where producer is any ChunkedPrefillRunner:
-        let chunked = producer as! any ChunkedPrefillRunner
-        let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
-        let result = try await chunked.prefillChunked(tokens: prefillTokens,
-                                                      startPosition: position,
-                                                      outputMode: mode,
-                                                      config: prefillConfig,
-                                                      into: scratch.logits) { done in
-            onProgress(.prefill(done: cachedPromptTokens + done, total: promptIds.count))
+    if let multimodalInput {
+        guard let multimodal = producer as? any MultimodalChunkedPrefillRunner else {
+            throw PrefillError.chunkedUnsupported(
+                "image prompts require a multimodal chunked prefill runner")
         }
+        let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
+        // Correct visual-block attention always uses the chunked path, even if
+        // ordinary text prefill was disabled in runtime settings.
+        let effectiveConfig = prefillConfig.mode == .chunked
+            ? prefillConfig
+            : PrefillRuntimeConfig.defaultChunked
+        let result = try await multimodal.prefillMultimodal(
+            tokens: prefillTokens,
+            startPosition: position,
+            input: multimodalInput,
+            outputMode: mode,
+            config: effectiveConfig,
+            into: scratch.logits) { done in
+                onProgress(.prefill(done: cachedPromptTokens + done,
+                                    total: promptIds.count))
+            }
         if mode == .logits, result.seed != .logitsWritten {
             throw PrefillError.unsupportedPrefillSeed(
-                "RawCompletion chunked prefill requested logits but producer returned \(result.seed)")
+                "RawCompletion multimodal prefill requested logits but producer returned \(result.seed)")
         }
         if case .greedyToken = result.seed, !config.isPureGreedy {
             throw PrefillError.unsupportedPrefillSeed(
-                "RawCompletion chunked prefill returned a greedy token for a sampling config")
+                "RawCompletion multimodal prefill returned a greedy token for a sampling config")
         }
         position = result.newPosition
         prefillSeed = result.seed
         history.append(contentsOf: prefillTokens)
-    case .chunked:
-        throw PrefillError.chunkedUnsupported(
-            PrefillError.chunkedRequiresChunkedRunnerReason)
-    case .off:
-        for t in prefillTokens {
-            try Task.checkCancellation()
-            try await producer.produce(token: t, position: position, into: scratch.logits)
-            position += 1
-            history.append(t)
-            onProgress(.prefill(done: position, total: promptIds.count))
+    } else {
+        switch prefillConfig.mode {
+        case .chunked where producer is any ChunkedPrefillRunner:
+            let chunked = producer as! any ChunkedPrefillRunner
+            let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
+            let result = try await chunked.prefillChunked(
+                tokens: prefillTokens,
+                startPosition: position,
+                outputMode: mode,
+                config: prefillConfig,
+                into: scratch.logits) { done in
+                    onProgress(.prefill(
+                        done: cachedPromptTokens + done,
+                        total: promptIds.count))
+                }
+            if mode == .logits, result.seed != .logitsWritten {
+                throw PrefillError.unsupportedPrefillSeed(
+                    "RawCompletion chunked prefill requested logits but producer returned \(result.seed)")
+            }
+            if case .greedyToken = result.seed, !config.isPureGreedy {
+                throw PrefillError.unsupportedPrefillSeed(
+                    "RawCompletion chunked prefill returned a greedy token for a sampling config")
+            }
+            position = result.newPosition
+            prefillSeed = result.seed
+            history.append(contentsOf: prefillTokens)
+        case .chunked:
+            throw PrefillError.chunkedUnsupported(
+                PrefillError.chunkedRequiresChunkedRunnerReason)
+        case .off:
+            for token in prefillTokens {
+                try Task.checkCancellation()
+                try await producer.produce(
+                    token: token,
+                    position: position,
+                    into: scratch.logits)
+                position += 1
+                history.append(token)
+                onProgress(.prefill(done: position, total: promptIds.count))
+            }
         }
     }
 
@@ -176,6 +242,7 @@ public func runRawCompletion(producer: any LogitProducer,
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
+    var consecutiveInvisibleTokens = 0
     var reason: StopReason = .maxTokens
     var uncommittedBoundaryTokenIDs: [Int32] = []
 
@@ -215,7 +282,16 @@ public func runRawCompletion(producer: any LogitProducer,
 
         let delta = detok.push(tokenID)
         let visible = stopMatcher.push(delta)
+        if visible.isEmpty {
+            consecutiveInvisibleTokens += 1
+        } else {
+            consecutiveInvisibleTokens = 0
+        }
         onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
+
+        if consecutiveInvisibleTokens >= 64 {
+            throw GeneratorError.noVisibleOutput
+        }
 
         let hitStopString = stopMatcher.isStopped || shouldStop()
         let hitMax = generated >= config.maxNewTokens

@@ -43,7 +43,6 @@ struct OutputPaneView: View {
     private var placeholder: some View {
         EmptyConversationLayout(spacing: 8) {
             EmptyPlaceholderIcon(systemName: placeholderSymbol)
-                .frame(width: 32, height: 32)
 
             emptyPlaceholderContent
         }
@@ -57,6 +56,7 @@ struct OutputPaneView: View {
         ChatTranscriptView(
             prompt: model.outputPromptText,
             messages: model.outputMessages,
+            attachmentRootURL: model.chatAttachmentRootURL,
             output: model.outputText,
             isRunning: model.isRunning,
             canRegenerate: model.canRegenerate,
@@ -167,9 +167,13 @@ private struct EmptyConversationLayout: Layout {
         guard subviews.count == 2 else { return }
 
         let iconSize = subviews[0].sizeThatFits(.unspecified)
-        let iconCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+        let contentSize = subviews[1].sizeThatFits(
+            ProposedViewSize(width: bounds.width, height: nil))
+        let groupHeight = iconSize.height + spacing + contentSize.height
+        let groupTop = bounds.midY - groupHeight / 2
+
         subviews[0].place(
-            at: iconCenter,
+            at: CGPoint(x: bounds.midX, y: groupTop + iconSize.height / 2),
             anchor: .center,
             proposal: ProposedViewSize(
                 width: iconSize.width,
@@ -178,9 +182,9 @@ private struct EmptyConversationLayout: Layout {
         subviews[1].place(
             at: CGPoint(
                 x: bounds.midX,
-                y: iconCenter.y + iconSize.height / 2 + spacing),
+                y: groupTop + iconSize.height + spacing),
             anchor: .top,
-            proposal: ProposedViewSize(width: bounds.width, height: nil))
+            proposal: ProposedViewSize(width: bounds.width, height: contentSize.height))
     }
 }
 
@@ -425,7 +429,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     }
 }
 
-#if DEBUG
+#if DEBUG && canImport(PreviewsMacros)
 private struct TranscriptPreview: View {
     let response: String
     let isTerminal: Bool

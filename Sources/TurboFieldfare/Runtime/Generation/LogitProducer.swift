@@ -1,5 +1,42 @@
 import Metal
 
+/// Projected image rows that replace ordinary token embeddings during prompt
+/// prefill. The buffer stores tightly packed FP16 rows in language hidden size.
+public struct PrefillEmbeddingOverlay: @unchecked Sendable {
+    public let tokenRange: Range<Int>
+    public let buffer: MTLBuffer
+    public let bufferOffsetBytes: Int
+    public let hiddenSize: Int
+
+    public init(tokenRange: Range<Int>,
+                buffer: MTLBuffer,
+                bufferOffsetBytes: Int = 0,
+                hiddenSize: Int) {
+        precondition(!tokenRange.isEmpty, "embedding overlay must not be empty")
+        precondition(bufferOffsetBytes >= 0, "embedding overlay offset must be non-negative")
+        precondition(hiddenSize > 0, "embedding overlay hidden size must be positive")
+        let bytes = tokenRange.count * hiddenSize * MemoryLayout<Float16>.stride
+        precondition(bufferOffsetBytes + bytes <= buffer.length,
+                     "embedding overlay exceeds its Metal buffer")
+        self.tokenRange = tokenRange
+        self.buffer = buffer
+        self.bufferOffsetBytes = bufferOffsetBytes
+        self.hiddenSize = hiddenSize
+    }
+}
+
+public struct MultimodalPrefillInput: @unchecked Sendable {
+    public let embeddingOverlays: [PrefillEmbeddingOverlay]
+
+    public init(embeddingOverlays: [PrefillEmbeddingOverlay]) {
+        self.embeddingOverlays = embeddingOverlays
+    }
+
+    public var visionTokenRanges: [Range<Int>] {
+        embeddingOverlays.map(\.tokenRange)
+    }
+}
+
 /// Produces next-token logits for the `Generator`. The production
 /// implementation is `RealForwardRunner`; tests use scripted logits so decode
 /// behavior stays independent of the kernel stack.
@@ -47,4 +84,14 @@ protocol ChunkedPrefillRunner: LogitProducer {
                         config: PrefillRuntimeConfig,
                         into logits: MTLBuffer,
                         onProgress: (Int) -> Void) async throws -> PrefillResult
+}
+
+protocol MultimodalChunkedPrefillRunner: ChunkedPrefillRunner {
+    func prefillMultimodal(tokens: ArraySlice<Int32>,
+                           startPosition: Int,
+                           input: MultimodalPrefillInput,
+                           outputMode: PrefillOutputMode,
+                           config: PrefillRuntimeConfig,
+                           into logits: MTLBuffer,
+                           onProgress: (Int) -> Void) async throws -> PrefillResult
 }

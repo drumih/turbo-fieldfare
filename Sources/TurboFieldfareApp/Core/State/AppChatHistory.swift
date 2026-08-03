@@ -23,7 +23,10 @@ public struct AppChatThread: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var preview: String {
-        messages.last?.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let message = messages.last else { return "" }
+        let content = message.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !content.isEmpty { return content }
+        return message.images.isEmpty ? "" : "Image"
     }
 }
 
@@ -45,9 +48,18 @@ struct AppChatHistoryDocument: Codable, Equatable, Sendable {
             && Set(chats.map(\.id)).count == chats.count
             && chats.contains(where: { $0.id == selectedChatID })
             && chats.allSatisfy { chat in
-                !chat.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                let attachmentDirectory = chat.id.uuidString.lowercased()
+                return !chat.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     && !chat.messages.contains(where: { message in
                         message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || message.images.count > 1
+                            || !message.images.allSatisfy(\.hasValidStoredMetadata)
+                            || (!message.images.isEmpty && message.role != .user)
+                            || message.images.contains { image in
+                                guard let imageDirectory = image.relativePath
+                                    .split(separator: "/").first else { return true }
+                                return String(imageDirectory) != attachmentDirectory
+                            }
                     })
             }
     }

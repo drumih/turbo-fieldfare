@@ -130,7 +130,8 @@ internal enum PrefillProjectionDispatchPolicy {
     }
 }
 
-public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
+public final class RealForwardRunner: MultimodalChunkedPrefillRunner,
+    ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
     private struct LayerSharedExpertProjections {
         let gate: SharedExpertInt8Proj
         let up: SharedExpertInt8Proj
@@ -512,7 +513,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             return PrefillResult(newPosition: startPosition, seed: .logitsWritten)
         }
 
-        let scratch = try ensurePrefillScratch(config: config)
+        let scratch = try ensurePrefillScratch(tokenCapacity: config.chunkTokens)
         let spans = PrefillChunkPlanner.spans(tokenCount: tokens.count,
                                               startPosition: startPosition,
                                               config: config)
@@ -526,6 +527,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 logits: logits,
                 scratch: scratch,
                 config: config,
+                chunkKind: .text,
+                embeddingOverlay: nil,
                 writeFinalHead: spanIndex == spans.count - 1)
             onProgress(span.completedCount)
         }
@@ -537,9 +540,108 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                              seed: .logitsWritten)
     }
 
+    func prefillMultimodal(tokens: ArraySlice<Int32>,
+                           startPosition: Int,
+                           input: MultimodalPrefillInput,
+                           outputMode: PrefillOutputMode,
+                           config: PrefillRuntimeConfig,
+                           into logits: MTLBuffer,
+                           onProgress: (Int) -> Void) async throws -> PrefillResult {
+        try prefillChunkState.requireClean(operation: "prefillMultimodal")
+        guard config.mode == .chunked else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill requires chunked mode")
+        }
+        guard startPosition >= 0,
+              tokens.count <= maxContext - startPosition else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill range exceeds the configured context")
+        }
+        let kvPosition = kv?.position ?? 0
+        guard kvPosition == startPosition else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill cursor \(kvPosition) != startPosition \(startPosition)")
+        }
+        guard !tokens.isEmpty else {
+            return PrefillResult(newPosition: startPosition, seed: .logitsWritten)
+        }
+
+        let overlays = input.embeddingOverlays.sorted {
+            $0.tokenRange.lowerBound < $1.tokenRange.lowerBound
+        }
+        guard !overlays.isEmpty else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill requires image embedding overlays")
+        }
+        var priorEnd = startPosition
+        let endPosition = startPosition + tokens.count
+        for overlay in overlays {
+            guard overlay.hiddenSize == cfg.hiddenSize,
+                  overlay.tokenRange.lowerBound >= priorEnd,
+                  overlay.tokenRange.upperBound <= endPosition,
+                  overlay.tokenRange.count <= PrefillRuntimeConfig.maxVisionSoftTokens else {
+                throw PrefillError.chunkedUnsupported(
+                    "invalid or overlapping image embedding overlay")
+            }
+            priorEnd = overlay.tokenRange.upperBound
+        }
+
+        let spans = PrefillChunkPlanner.multimodalSpans(
+            tokenCount: tokens.count,
+            startPosition: startPosition,
+            chunkTokens: config.chunkTokens,
+            visionRanges: overlays.map(\.tokenRange))
+        let capacity = max(config.chunkTokens,
+                           overlays.map { $0.tokenRange.count }.max() ?? 1)
+        let scratch = try ensurePrefillScratch(tokenCapacity: capacity)
+        var overlayIndex = 0
+        for (spanIndex, span) in spans.enumerated() {
+            let lower = tokens.index(tokens.startIndex, offsetBy: span.tokenOffset)
+            let upper = tokens.index(lower, offsetBy: span.tokenCount)
+            let overlay: PrefillEmbeddingOverlay?
+            if span.kind == .vision {
+                guard overlays.indices.contains(overlayIndex),
+                      overlays[overlayIndex].tokenRange
+                        == (span.startPosition..<(span.startPosition + span.tokenCount)) else {
+                    throw PrefillError.chunkedUnsupported(
+                        "visual chunk does not match its projected embedding rows")
+                }
+                overlay = overlays[overlayIndex]
+                overlayIndex += 1
+            } else {
+                overlay = nil
+            }
+            try await executePrefillChunk(
+                tokens: tokens[lower..<upper],
+                startPosition: span.startPosition,
+                outputMode: outputMode,
+                logits: logits,
+                scratch: scratch,
+                config: config,
+                chunkKind: span.kind,
+                embeddingOverlay: overlay,
+                writeFinalHead: spanIndex == spans.count - 1)
+            onProgress(span.completedCount)
+        }
+        guard overlayIndex == overlays.count else {
+            throw PrefillError.chunkedUnsupported(
+                "not every image embedding overlay was consumed")
+        }
+        if outputMode == .greedyIfAvailable, useFusedGreedyHead {
+            return PrefillResult(newPosition: endPosition,
+                                 seed: .greedyToken(lastGreedyToken))
+        }
+        return PrefillResult(newPosition: endPosition, seed: .logitsWritten)
+    }
+
     @discardableResult
-    private func ensurePrefillScratch(config: PrefillRuntimeConfig) throws -> PrefillChunkScratchBuffers {
-        let layout = PrefillChunkScratchLayout(config: cfg, runtime: config)
+    private func ensurePrefillScratch(tokenCapacity: Int) throws -> PrefillChunkScratchBuffers {
+        let maximum = tokenCapacity > PrefillRuntimeConfig.maxChunkTokens
+            ? PrefillRuntimeConfig.maxVisionSoftTokens
+            : PrefillRuntimeConfig.maxChunkTokens
+        let layout = PrefillChunkScratchLayout(config: cfg,
+                                               chunkTokens: tokenCapacity,
+                                               maximumChunkTokens: maximum)
         if let scratch = prefillScratch, scratch.layout == layout {
             return scratch
         }
@@ -554,6 +656,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                      logits: MTLBuffer,
                                      scratch: PrefillChunkScratchBuffers,
                                      config: PrefillRuntimeConfig,
+                                     chunkKind: PrefillChunkKind,
+                                     embeddingOverlay: PrefillEmbeddingOverlay?,
                                      writeFinalHead: Bool) async throws {
         guard !tokens.isEmpty else { return }
         guard kv != nil else {
@@ -572,7 +676,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill token count \(tokens.count) exceeds scratch chunk size \(scratch.layout.chunkTokens)")
         }
-        if let kv, kv.fp16RingEnabled, let ringLayer = (0..<cfg.numLayers).first(where: {
+        if chunkKind == .text,
+           let kv, kv.fp16RingEnabled, let ringLayer = (0..<cfg.numLayers).first(where: {
             kv.ringCapacity(layer: $0) > 0
         }) {
             let requiredCapacity = min(maxContext, cfg.slidingWindow + config.chunkTokens)
@@ -776,6 +881,27 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                             t: UInt32(t),
                             d: UInt32(D),
                             outScale: sqrtHidden)
+        if chunkKind == .vision {
+            guard let embeddingOverlay,
+                  embeddingOverlay.tokenRange
+                    == (startPosition..<(startPosition + tokens.count)) else {
+                throw PrefillError.chunkedUnsupported(
+                    "visual prefill chunk is missing its projected embeddings")
+            }
+            guard let blit = cb.makeBlitCommandEncoder() else {
+                throw ModelError.residentBufferWrapFailed
+            }
+            let byteCount = tokens.count * D * MemoryLayout<Float16>.stride
+            blit.copy(from: embeddingOverlay.buffer,
+                      sourceOffset: embeddingOverlay.bufferOffsetBytes,
+                      to: scratch.hidden,
+                      destinationOffset: 0,
+                      size: byteCount)
+            blit.endEncoding()
+        } else if embeddingOverlay != nil {
+            throw PrefillError.chunkedUnsupported(
+                "text prefill chunk received an image embedding overlay")
+        }
 
         for L in 0..<cfg.numLayers {
             model.beginOpeningRoutedExpertStreamer(layer: L)
@@ -847,7 +973,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                        rotatedPairs: rotatedPairs,
                                        eps: eps)
 
-            if let kv {
+            let stagedVisionAttention = chunkKind == .vision && !isFull
+            if let kv, !stagedVisionAttention {
                 let bytes = t * kvDim * MemoryLayout<Float16>.stride
                 try copyPrefillKVToCache(commandBuffer: cb,
                                          kv: kv,
@@ -869,7 +996,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     kvTokenStrideElements: UInt32(kvDim),
                     qTokenStrideElements: UInt32(qDim),
                     oTokenStrideElements: UInt32(qDim),
-                    scale: 1.0)
+                    scale: 1.0,
+                    visionBlockStart: stagedVisionAttention ? UInt32(startPosition) : 0,
+                    visionBlockEnd: stagedVisionAttention ? UInt32(startPosition + t) : 0,
+                    useStagedKV: stagedVisionAttention,
+                    bidirectionalVision: stagedVisionAttention)
             if let kv {
                     let keyBuffer = kv.keyBuffer(layer: L, validTokenCount: startPosition + t)
                     let valueBuffer = kv.valueBuffer(layer: L, validTokenCount: startPosition + t)
@@ -884,10 +1015,25 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   out: scratch.attentionOutput,
                                                   params: params,
                                                   kvRingCapacity: activeRingCapacity,
+                                                  stagedK: stagedVisionAttention
+                                                    ? scratch.kStage : nil,
+                                                  stagedV: stagedVisionAttention
+                                                    ? scratch.vStage : nil,
                                                   path: prefillAttentionPath)
             } else {
                 throw PrefillError.chunkedUnsupported(
                     "chunked prefill attention requires FP16 KV")
+            }
+            if let kv, stagedVisionAttention {
+                let bytes = t * kvDim * MemoryLayout<Float16>.stride
+                try copyPrefillKVToCache(commandBuffer: cb,
+                                         kv: kv,
+                                         layer: L,
+                                         startPosition: startPosition,
+                                         tokenCount: t,
+                                         keySource: scratch.kStage,
+                                         valueSource: scratch.vStage,
+                                         bytesPerToken: bytes / t)
             }
             encodeInt4Projection(commandBuffer: cb,
                                      family: .o,

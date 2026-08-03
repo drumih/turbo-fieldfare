@@ -111,7 +111,20 @@ import TurboFieldfareDecodeProtocol
                             case .user: role = .user
                             case .assistant: role = .assistant
                             }
-                            return AppChatMessage(role: role, content: message.content)
+                            return AppChatMessage(
+                                role: role,
+                                content: message.content,
+                                images: message.images.map { image in
+                                    AppImageAttachment(
+                                        id: image.id,
+                                        relativePath: image.relativePath,
+                                        originalFilename: image.originalFilename,
+                                        mediaTypeIdentifier: image.mediaTypeIdentifier,
+                                        pixelWidth: image.pixelWidth,
+                                        pixelHeight: image.pixelHeight,
+                                        byteCount: image.byteCount,
+                                        sha256: image.sha256)
+                                })
                         })
                     for try await event in client.generate(generation) {
                         outbox.publish(event)

@@ -150,6 +150,49 @@ import TurboFieldfareDecodeProtocol
         #expect(decoded.messages.map(\.role) == [.system, .user, .assistant, .user])
     }
 
+    @Test func generationRequestCarriesOnlyImageReferenceMetadata() throws {
+        let image = DecodeImageAttachment(
+            id: UUID(),
+            relativePath: "chat/image.png",
+            originalFilename: "image.png",
+            mediaTypeIdentifier: "public.png",
+            pixelWidth: 800,
+            pixelHeight: 600,
+            byteCount: 12_345,
+            sha256: String(repeating: "b", count: 64))
+        let request = DecodeGenerationRequest(
+            prompt: "What is shown?",
+            maxNewTokens: 10,
+            maxContextTokens: 4_096,
+            temperature: 0.2,
+            messages: [
+                DecodeChatMessage(
+                    role: .user,
+                    content: "What is shown?",
+                    images: [image]),
+            ])
+
+        let frame = try DecodeFrameCodec.encode(request)
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(contentsOf: frame)
+        try pipe.fileHandleForWriting.close()
+        let decoded = try DecodeFrameCodec.read(
+            DecodeGenerationRequest.self,
+            from: pipe.fileHandleForReading)
+
+        #expect(decoded.messages.first?.images == [image])
+        #expect(frame.count < 2_048)
+        #expect(!String(decoding: frame, as: UTF8.self).contains("data:image"))
+    }
+
+    @Test func legacyDecodeMessageDefaultsToNoImages() throws {
+        let message = try JSONDecoder().decode(
+            DecodeChatMessage.self,
+            from: Data(#"{"role":"user","content":"hello"}"#.utf8))
+
+        #expect(message.images.isEmpty)
+    }
+
     @Test func oversizedFrameIsRejectedBeforePayloadRead() throws {
         let pipe = Pipe()
         var count = UInt32(DecodeFrameCodec.maximumPayloadBytes + 1).littleEndian

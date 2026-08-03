@@ -23,7 +23,9 @@ struct PromptExamplesView: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
                 primaryCards
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background {
             RoundedRectangle(cornerRadius: 18)
@@ -90,7 +92,12 @@ struct PromptExamplesView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: 170), spacing: 10, alignment: .top)]
+        // There are three primary prompts, so keep three columns. An adaptive
+        // column can create a fourth empty column as the window grows, which
+        // leaves the populated cards clustered against the leading edge.
+        Array(
+            repeating: GridItem(.flexible(minimum: 170), spacing: 10, alignment: .top),
+            count: 3)
     }
 
     private var moreExamples: some View {

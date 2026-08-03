@@ -234,11 +234,15 @@ enum RepackPlanner {
 
     // MARK: - Resident planning
 
-    private static func planResidentFile(path: String,
-                                         baseNames: [String],
-                                         registry: [String: SourceTensor],
-                                         meta: IndexLoader.SourceMetadata) throws
-                                        -> ResidentFilePlan {
+    /// Plans any resident-index payload that uses the same packed affine
+    /// representation as `model_weights.bin`. The vision sidecar deliberately
+    /// reuses this format so it can be mapped by the existing resident-index
+    /// reader without inventing another tensor container.
+    static func planResidentFile(path: String,
+                                 baseNames: [String],
+                                 registry: [String: SourceTensor],
+                                 meta: IndexLoader.SourceMetadata) throws
+                                -> ResidentFilePlan {
         let entryCount = baseNames.count
 
         var stringTable: [UInt8] = []

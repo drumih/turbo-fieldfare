@@ -112,6 +112,67 @@ public enum RangeCopyPlanner {
                              expectedOutputs: expectedOutputs)
     }
 
+    static func planVisionSidecar(
+        visionPlan: VisionSidecarPlan,
+        rangeChunkBytes: Int
+    ) throws -> RangeCopyPlan {
+        let resident = visionPlan.resident
+        var copies: [RangeCopy] = []
+        copies.reserveCapacity(resident.entries.count * 3)
+        for entry in resident.entries {
+            copies.append(RangeCopy(
+                shardID: entry.sourceWeight.shardPath,
+                sourceOffset: entry.sourceWeight.absoluteOffset,
+                size: entry.sizeBytes,
+                destinationPath: resident.path,
+                destinationOffset: entry.fileOffset))
+            if let scales = entry.sourceScales {
+                copies.append(RangeCopy(
+                    shardID: scales.shardPath,
+                    sourceOffset: scales.absoluteOffset,
+                    size: entry.scaleSize,
+                    destinationPath: resident.path,
+                    destinationOffset: entry.scaleOffset))
+            }
+            if let biases = entry.sourceBiases {
+                copies.append(RangeCopy(
+                    shardID: biases.shardPath,
+                    sourceOffset: biases.absoluteOffset,
+                    size: entry.biasSize,
+                    destinationPath: resident.path,
+                    destinationOffset: entry.biasOffset))
+            }
+        }
+
+        let root = (resident.path as NSString).deletingLastPathComponent
+        try validateDestinationIntervals(copies, outputRoot: root)
+        let coalesced = try coalesce(copies: copies, rangeChunkBytes: rangeChunkBytes)
+        let indexData = try ResidentWriter.encodeIndex(plan: resident)
+        let indexSha = hashData(indexData)
+        let expectedOutputs = [
+            RemoteExpectedOutput(relativePath: "weights.bin", size: resident.totalSize)
+        ]
+        let fingerprint = try canonicalFingerprint(
+            copies: coalesced,
+            outputRoot: root,
+            rangeChunkBytes: rangeChunkBytes,
+            layoutMode: "vision-resident-index",
+            layoutOrderSha256: nil,
+            residentIndexSha256: indexSha,
+            expectedOutputs: expectedOutputs,
+            domain: "TurboFieldfare.RemoteVisionInstallPlan.v1")
+        let downloaded = coalesced.reduce(UInt64(0)) { $0 + $1.size }
+        let copied = copies.reduce(UInt64(0)) { $0 + $1.size }
+        return RangeCopyPlan(
+            scalarCopies: copies,
+            coalescedCopies: coalesced,
+            remoteBytesToDownload: downloaded,
+            remoteGapBytesDownloaded: downloaded - copied,
+            canonicalFingerprint: fingerprint,
+            residentIndexSha256: indexSha,
+            expectedOutputs: expectedOutputs)
+    }
+
     public static func coalesce(copies: [RangeCopy],
                                 rangeChunkBytes: Int) throws -> [CoalescedRangeCopy] {
         guard rangeChunkBytes > 0 else {
@@ -245,9 +306,10 @@ public enum RangeCopyPlanner {
         layoutMode: String,
         layoutOrderSha256: String?,
         residentIndexSha256: String,
-        expectedOutputs: [RemoteExpectedOutput]
+        expectedOutputs: [RemoteExpectedOutput],
+        domain: String = "TurboFieldfare.RemoteInstallPlan.v1"
     ) throws -> String {
-        var writer = FingerprintWriter(domain: "TurboFieldfare.RemoteInstallPlan.v1")
+        var writer = FingerprintWriter(domain: domain)
         writer.append(UInt64(GTurboJSON.versionMajor))
         writer.append(UInt64(GTurboJSON.versionMinor))
         writer.append(UInt64(rangeChunkBytes))

@@ -13,6 +13,13 @@ struct PrefillAttentionParams: Sendable, Equatable {
     var qTokenStrideElements: UInt32
     var oTokenStrideElements: UInt32
     var scale: Float
+    /// A visual block is bidirectional only for sliding-attention layers.
+    /// When enabled, current-block K/V rows are read from staging before they
+    /// are committed to the ring, avoiding overwrite of still-visible history.
+    var visionBlockStart: UInt32
+    var visionBlockEnd: UInt32
+    var useStagedKV: UInt32
+    var bidirectionalVision: UInt32
 
     init(startPosition: UInt32,
                 queryCount: UInt32,
@@ -24,7 +31,11 @@ struct PrefillAttentionParams: Sendable, Equatable {
                 kvTokenStrideElements: UInt32,
                 qTokenStrideElements: UInt32,
                 oTokenStrideElements: UInt32,
-                scale: Float) {
+                scale: Float,
+                visionBlockStart: UInt32 = 0,
+                visionBlockEnd: UInt32 = 0,
+                useStagedKV: Bool = false,
+                bidirectionalVision: Bool = false) {
         self.startPosition = startPosition
         self.queryCount = queryCount
         self.headDim = headDim
@@ -36,6 +47,10 @@ struct PrefillAttentionParams: Sendable, Equatable {
         self.qTokenStrideElements = qTokenStrideElements
         self.oTokenStrideElements = oTokenStrideElements
         self.scale = scale
+        self.visionBlockStart = visionBlockStart
+        self.visionBlockEnd = visionBlockEnd
+        self.useStagedKV = useStagedKV ? 1 : 0
+        self.bidirectionalVision = bidirectionalVision ? 1 : 0
     }
 }
 
@@ -60,6 +75,10 @@ final class PrefillAttention {
                              out: MTLBuffer, outOffset: Int = 0,
                              params: PrefillAttentionParams,
                              kvRingCapacity: UInt32 = 0,
+                             stagedK: MTLBuffer? = nil,
+                             stagedKOffset: Int = 0,
+                             stagedV: MTLBuffer? = nil,
+                             stagedVOffset: Int = 0,
                              path: RuntimePrefillAttentionPath = .causalTiled) {
         validate(params)
 
@@ -101,6 +120,12 @@ final class PrefillAttention {
         enc.setBuffer(k, offset: kOffset, index: 1)
         enc.setBuffer(v, offset: vOffset, index: 2)
         enc.setBuffer(out, offset: outOffset, index: 3)
+        enc.setBuffer(stagedK ?? k,
+                      offset: stagedK == nil ? kOffset : stagedKOffset,
+                      index: 5)
+        enc.setBuffer(stagedV ?? v,
+                      offset: stagedV == nil ? vOffset : stagedVOffset,
+                      index: 6)
         var p = params
         enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
         let groups = useTensorOps
@@ -132,6 +157,15 @@ final class PrefillAttention {
                      "KV token stride is too small")
         precondition(params.startPosition + params.queryCount <= params.kvValidCount,
                      "kvValidCount must include all in-flight query rows")
+        if params.bidirectionalVision != 0 || params.useStagedKV != 0 {
+            precondition(params.bidirectionalVision != 0 && params.useStagedKV != 0,
+                         "visual prefill requires staged K/V and bidirectional visibility together")
+            precondition(params.visionBlockStart == params.startPosition,
+                         "visual block must begin at the current chunk")
+            precondition(params.visionBlockEnd
+                            == params.startPosition + params.queryCount,
+                         "visual block must occupy the complete current chunk")
+        }
     }
 
 

@@ -96,4 +96,31 @@ extension RawCompletionLoopTests {
         #expect(producer.resetCalls == 0)
         #expect(producer.produceCalls == 0)
     }
+
+    @Test func rawCompletionStopsAnInvisibleControlTokenRun() async throws {
+        let context = try MetalContext()
+        let tokenizer = try await GFTokenizer.load()
+        let promptIDs = tokenizer.encode("hello", addBOS: true)
+        let producer = CountingProducer(
+            vocabSize: tokenizer.vocabSize,
+            step: automaton(
+                Array(repeating: tokenizer.padID, count: 80),
+                end: tokenizer.eosID))
+        let scratch = try RawCompletionScratch(
+            context: context,
+            vocab: tokenizer.vocabSize)
+
+        await #expect(throws: GeneratorError.noVisibleOutput) {
+            _ = try await runRawCompletion(
+                producer: producer,
+                tokenizer: tokenizer,
+                promptIds: promptIDs,
+                config: GenerationConfig(maxNewTokens: 80, temperature: 0),
+                context: context,
+                scratch: scratch,
+                prefillConfig: .off) { _ in }
+        }
+
+        #expect(producer.produceCalls < 80)
+    }
 }

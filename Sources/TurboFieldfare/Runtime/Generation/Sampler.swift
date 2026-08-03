@@ -15,6 +15,7 @@ public struct GenerationConfig: Sendable {
     public var seed: UInt64? = nil         // nil = nondeterministic
     public var stopStrings: [String] = []
     public var extraStopTokens: Set<Int32> = []
+    public var suppressedTokenIDs: Set<Int32> = []
 
     public init(maxNewTokens: Int = 256,
                 temperature: Float = 1.0,
@@ -23,7 +24,8 @@ public struct GenerationConfig: Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stopStrings: [String] = [],
-                extraStopTokens: Set<Int32> = []) {
+                extraStopTokens: Set<Int32> = [],
+                suppressedTokenIDs: Set<Int32> = []) {
         self.maxNewTokens = maxNewTokens
         self.temperature = temperature
         self.topK = topK
@@ -32,6 +34,7 @@ public struct GenerationConfig: Sendable {
         self.seed = seed
         self.stopStrings = stopStrings
         self.extraStopTokens = extraStopTokens
+        self.suppressedTokenIDs = suppressedTokenIDs
     }
 
     public func validate() throws {
@@ -120,6 +123,7 @@ final class Sampler {
                                           history: history,
                                           penalty: config.repetitionPenalty)
         }
+        suppressTokenLogitsInPlace(logits: logits, tokenIDs: config.suppressedTokenIDs)
 
         softcap.encode(commandBuffer: commandBuffer,
                        logits: logits, probs: probs, v: v, softcap: logitSoftcap)
@@ -149,6 +153,15 @@ final class Sampler {
     }
 
     // MARK: - Repetition penalty (host, in place)
+
+    private func suppressTokenLogitsInPlace(logits: MTLBuffer,
+                                             tokenIDs: Set<Int32>) {
+        guard !tokenIDs.isEmpty else { return }
+        let pointer = logits.contents().bindMemory(to: Float16.self, capacity: vocab)
+        for tokenID in tokenIDs where tokenID >= 0 && Int(tokenID) < vocab {
+            pointer[Int(tokenID)] = -.infinity
+        }
+    }
 
     /// HF convention: for each token id seen in `history`, a positive logit is
     /// divided by `penalty`, a negative logit multiplied. Edits the shared

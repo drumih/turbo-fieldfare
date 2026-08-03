@@ -8,6 +8,7 @@ import SwiftUI
 struct ChatTranscriptView: View {
     let prompt: String
     let messages: [AppChatMessage]
+    let attachmentRootURL: URL
     let output: String
     let isRunning: Bool
     let canRegenerate: Bool
@@ -62,7 +63,10 @@ struct ChatTranscriptView: View {
                     messageList
 
                     if messages.isEmpty, !prompt.isEmpty {
-                        userMessage(prompt, index: nil, isEditable: false)
+                        userMessage(
+                            AppChatMessage(role: .user, content: prompt),
+                            index: nil,
+                            isEditable: false)
                     }
 
                     if isRunning || !response.isEmpty {
@@ -142,7 +146,7 @@ struct ChatTranscriptView: View {
                 systemMessage(message.content)
             case .user:
                 userMessage(
-                    message.content,
+                    message,
                     index: index,
                     isEditable: index == latestUserMessageIndex)
             case .assistant:
@@ -158,7 +162,7 @@ struct ChatTranscriptView: View {
     }
 
     private func userMessage(
-        _ content: String,
+        _ message: AppChatMessage,
         index: Int?,
         isEditable: Bool
     ) -> some View {
@@ -168,27 +172,41 @@ struct ChatTranscriptView: View {
                 promptEditor(index: index)
             } else {
                 VStack(alignment: .trailing, spacing: 5) {
-                    Text(content)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: 620, alignment: .leading)
-                        .padding(.horizontal, 17)
-                        .padding(.vertical, 12)
-                        .background(
-                            TurboFieldfareMacTheme.accentSurface,
-                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(
-                                    TurboFieldfareMacTheme.accentColor.opacity(0.14),
-                                    lineWidth: 0.5)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let image = message.images.first {
+                            LocalImageThumbnailView(
+                                fileURL: imageURL(for: image),
+                                maximumPixelSize: 720)
+                                .frame(maxWidth: 420, maxHeight: 300)
+                                .clipShape(RoundedRectangle(
+                                    cornerRadius: 13,
+                                    style: .continuous))
+                                .accessibilityLabel(
+                                    "Attached image \(image.originalFilename)")
                         }
+
+                        Text(message.content)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxWidth: 620, alignment: .leading)
+                    .padding(.horizontal, 17)
+                    .padding(.vertical, 12)
+                    .background(
+                        TurboFieldfareMacTheme.accentSurface,
+                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(
+                                TurboFieldfareMacTheme.accentColor.opacity(0.14),
+                                lineWidth: 0.5)
+                    }
 
                     if let index, isEditable {
                         Button {
-                            beginPromptEditing(content, index: index)
+                            beginPromptEditing(message.content, index: index)
                         } label: {
                             Label("Edit latest prompt", systemImage: "pencil")
                                 .labelStyle(.iconOnly)
@@ -214,6 +232,15 @@ struct ChatTranscriptView: View {
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .accessibilityElement(children: .contain)
+    }
+
+    private func imageURL(for attachment: AppImageAttachment) -> URL? {
+        let root = attachmentRootURL.standardizedFileURL
+        let candidate = root
+            .appendingPathComponent(attachment.relativePath, isDirectory: false)
+            .standardizedFileURL
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        return candidate.path.hasPrefix(rootPrefix) ? candidate : nil
     }
 
     private func promptEditor(index: Int) -> some View {

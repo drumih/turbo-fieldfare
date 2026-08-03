@@ -12,6 +12,10 @@ public final class AppModel {
 
     public var modelPathText: String
     public var promptText: String = ""
+    /// One app-managed local image queued for the next user turn.
+    public private(set) var pendingImage: AppImageAttachment?
+    public private(set) var attachmentError: String?
+    public private(set) var isImportingImage = false
     /// Optional guidance that is prepended to each request in the current chat.
     public var systemPromptText: String = ""
     /// Locally saved conversations, ordered by most recently updated.
@@ -241,14 +245,38 @@ public final class AppModel {
     }
 
     public var canRun: Bool {
-        !isRunning && isModelAvailable && !loadState.isLoading
+        !isRunning && !isImportingImage
+            && isModelAvailable && !loadState.isLoading
             && !hasStaleLoadedRuntime
             && !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    public var canAttachImage: Bool {
+        !isRunning
+            && !isImportingImage
+            && pendingImage == nil
+            && conversation.reduce(0) { $0 + $1.images.count }
+                < AppGenerationRequest.maximumImageAttachments
+    }
+
+    public var chatAttachmentRootURL: URL {
+        AppChatAttachmentStore.rootURL(
+            forModelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+    }
+
+    public func imageURL(for attachment: AppImageAttachment) -> URL? {
+        try? AppChatAttachmentStore.fileURL(
+            for: attachment,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+    }
+
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
-    public var canManageChats: Bool { !isRunning }
+    public var canManageChats: Bool { !isRunning && !isImportingImage }
 
     public var completedTurnCount: Int {
         conversation.reduce(into: 0) { count, message in
@@ -261,14 +289,15 @@ public final class AppModel {
     }
 
     public var canRegenerate: Bool {
-        !isRunning && isModelAvailable && !loadState.isLoading && !hasStaleLoadedRuntime
+        !isRunning && !isImportingImage
+            && isModelAvailable && !loadState.isLoading && !hasStaleLoadedRuntime
             && hasCompletedLatestTurn
     }
 
     /// Editing is intentionally limited to the user message belonging to the
     /// latest completed assistant response. Earlier context stays immutable.
     public var canEditLastPrompt: Bool {
-        !isRunning && hasCompletedLatestTurn
+        !isRunning && !isImportingImage && hasCompletedLatestTurn
     }
 
     /// A completed prompt remains editable while the model is unloaded, but
@@ -301,7 +330,11 @@ public final class AppModel {
             case .user: "You"
             case .assistant: "Answer"
             }
-            return "\(label):\n\(message.content)"
+            let imageLines = message.images.map {
+                "[Image: \($0.originalFilename)]"
+            }
+            return (["\(label):"] + imageLines + [message.content])
+                .joined(separator: "\n")
         }.joined(separator: "\n\n")
     }
 
@@ -360,6 +393,8 @@ public final class AppModel {
         guard path != modelPathText else { return }
 
         saveActiveChat()
+        discardPendingImage()
+        attachmentError = nil
         modelPathText = path
         applyPersistedSettings(
             forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
@@ -420,6 +455,64 @@ public final class AppModel {
         guard showPromptExamples != show else { return }
         showPromptExamples = show
         persistSettings()
+    }
+
+    @discardableResult
+    public func attachImage(at sourceURL: URL) async -> Bool {
+        guard canAttachImage else { return false }
+        let chatID = selectedChatID
+        let modelDirectory = URL(
+            fileURLWithPath: modelPathText,
+            isDirectory: true).standardizedFileURL
+        attachmentError = nil
+        isImportingImage = true
+        defer { isImportingImage = false }
+        do {
+            let attachment = try await Task.detached(priority: .userInitiated) {
+                let accessedSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessedSecurityScope {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                return try AppChatAttachmentStore.importImage(
+                    from: sourceURL,
+                    chatID: chatID,
+                    forModelDirectory: modelDirectory)
+            }.value
+            let activeDirectory = URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true).standardizedFileURL
+            guard selectedChatID == chatID,
+                  activeDirectory == modelDirectory else {
+                AppChatAttachmentStore.remove(
+                    attachment,
+                    forModelDirectory: modelDirectory)
+                return false
+            }
+            pendingImage = attachment
+            attachmentError = nil
+            return true
+        } catch {
+            let activeDirectory = URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true).standardizedFileURL
+            if selectedChatID == chatID, activeDirectory == modelDirectory {
+                attachmentError = (error as? AppChatAttachmentStoreError)?.description
+                    ?? "The image could not be added: \(error)"
+            }
+            return false
+        }
+    }
+
+    public func removePendingImage() {
+        guard !isRunning else { return }
+        discardPendingImage()
+        attachmentError = nil
+    }
+
+    public func dismissAttachmentError() {
+        attachmentError = nil
     }
 
     public func reloadModel() {
@@ -786,7 +879,14 @@ public final class AppModel {
     }
 
     public func clearOutput() {
-        guard !isRunning else { return }
+        guard !isRunning, !isImportingImage else { return }
+        discardPendingImage()
+        AppChatAttachmentStore.removeAll(
+            forChatID: selectedChatID,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+        attachmentError = nil
         conversation = []
         outputMessages = []
         systemPromptText = ""
@@ -836,7 +936,16 @@ public final class AppModel {
         saveActiveChat()
         guard canManageChats,
               let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        if selectedChatID == id {
+            discardPendingImage()
+            attachmentError = nil
+        }
         chats.remove(at: index)
+        AppChatAttachmentStore.removeAll(
+            forChatID: id,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
         if chats.isEmpty {
             let chat = AppChatThread()
             chats = [chat]
@@ -880,8 +989,10 @@ public final class AppModel {
         // The request retains the submitted prompt; clear the composer so the
         // user can prepare the next turn while this response streams.
         promptText = ""
+        pendingImage = nil
+        attachmentError = nil
         generationTranscriptMailbox?.reset()
-        outputMessages = conversation + [AppChatMessage(role: .user, content: request.prompt)]
+        outputMessages = conversation + [request.messages.last!]
         outputPromptText = request.prompt
         outputText = ""
         diagnostics = nil
@@ -957,7 +1068,10 @@ public final class AppModel {
             messages.append(AppChatMessage(role: .system, content: systemPromptText))
         }
         messages.append(contentsOf: conversation)
-        messages.append(AppChatMessage(role: .user, content: promptText))
+        messages.append(AppChatMessage(
+            role: .user,
+            content: promptText,
+            images: pendingImage.map { [$0] } ?? []))
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             prompt: promptText,
@@ -996,13 +1110,18 @@ public final class AppModel {
         }
 
         let previousConversation = conversation
+        let previousUserMessage = conversation[conversation.count - 2]
         conversation.removeLast(2)
         regenerationBackup = previousConversation
         promptText = replacementPrompt
+        // Editing changes only the latest query text. Its managed image stays
+        // attached to both edit and regenerate requests.
+        pendingImage = previousUserMessage.images.first
         run()
 
         guard isRunning else {
             promptText = ""
+            pendingImage = nil
             restoreRegenerationBackupIfNeeded()
             return false
         }
@@ -1136,6 +1255,8 @@ public final class AppModel {
     }
 
     private func apply(chat: AppChatThread) {
+        discardPendingImage()
+        attachmentError = nil
         selectedChatID = chat.id
         conversation = chat.messages
         systemPromptText = chat.systemPrompt
@@ -1217,6 +1338,16 @@ public final class AppModel {
         try? AppChatHistoryFileStore.save(
             history,
             forModelDirectory: URL(fileURLWithPath: modelPathText, isDirectory: true))
+    }
+
+    private func discardPendingImage() {
+        guard let pendingImage else { return }
+        AppChatAttachmentStore.remove(
+            pendingImage,
+            forModelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+        self.pendingImage = nil
     }
 
     private func orderChatsByRecency() {

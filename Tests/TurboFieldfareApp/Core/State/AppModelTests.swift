@@ -633,6 +633,83 @@ import Testing
     }
 
     @MainActor
+    @Test func imageAttachmentPersistsAcrossSubmitChatSwitchAndLatestEdit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "AppModelImageAttachment-\(UUID().uuidString)",
+            isDirectory: true)
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("question.png")
+        try Self.onePixelPNG.write(to: source)
+
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = AppModel(
+            modelDirectory: directory,
+            client: client,
+            settingsPersistenceEnabled: true)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
+        model.maxNewTokensOverride = 8
+
+        #expect(await model.attachImage(at: source))
+        let image = try #require(model.pendingImage)
+        let managedURL = try #require(model.imageURL(for: image))
+        model.promptText = "What is shown?"
+        model.run()
+
+        #expect(model.pendingImage == nil)
+        #expect(model.outputMessages.last?.images == [image])
+        await waitForIdle(model)
+        #expect(model.conversation.first?.images == [image])
+        #expect(FileManager.default.fileExists(atPath: managedURL.path))
+
+        let imageChatID = model.selectedChatID
+        model.newChat()
+        model.selectChat(imageChatID)
+        #expect(model.conversation.first?.images == [image])
+
+        #expect(model.submitEditedLastPrompt("Describe the image."))
+        await waitForIdle(model)
+        #expect(client.requests().last?.messages.last?.images == [image])
+        #expect(model.conversation.first?.content == "Describe the image.")
+        #expect(model.conversation.first?.images == [image])
+
+        let restored = AppModel(
+            modelDirectory: directory,
+            client: MockInferenceClient(),
+            settingsPersistenceEnabled: true)
+        #expect(restored.conversation.first?.images == [image])
+        #expect(restored.imageURL(for: image) == managedURL)
+    }
+
+    @MainActor
+    @Test func removingPendingImageDeletesItsManagedCopy() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "AppModelPendingImage-\(UUID().uuidString)",
+            isDirectory: true)
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("question.png")
+        try Self.onePixelPNG.write(to: source)
+        let model = AppModel(modelDirectory: directory)
+
+        #expect(await model.attachImage(at: source))
+        let image = try #require(model.pendingImage)
+        let managedURL = try #require(model.imageURL(for: image))
+        #expect(FileManager.default.fileExists(atPath: managedURL.path))
+
+        model.removePendingImage()
+
+        #expect(model.pendingImage == nil)
+        #expect(!FileManager.default.fileExists(atPath: managedURL.path))
+    }
+
+    @MainActor
     @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() {
         let model = AppModel(client: MockInferenceClient())
         let oldURL = FileManager.default.temporaryDirectory.appendingPathComponent("old.gturbo")
@@ -674,4 +751,7 @@ import Testing
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
     }
+
+    private static let onePixelPNG = Data(base64Encoded:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!
 }

@@ -2,6 +2,7 @@ import AppKit
 import TurboFieldfareAppCore
 import TurboFieldfareMacPresentation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct PromptComposerView: View {
     @Bindable var model: AppModel
@@ -11,6 +12,12 @@ struct PromptComposerView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if let image = model.pendingImage {
+                pendingImagePreview(image)
+            }
+            if let attachmentError = model.attachmentError {
+                attachmentErrorView(attachmentError)
+            }
             editor
             footer
         }
@@ -100,6 +107,7 @@ struct PromptComposerView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
+            imagePicker
             promptTips
             chatInstructions
             if model.completedTurnCount > 0 {
@@ -114,6 +122,127 @@ struct PromptComposerView: View {
                 .foregroundStyle(.tertiary)
             clearAction
             GenerateControl(model: model)
+        }
+    }
+
+    private var imagePicker: some View {
+        Button(action: chooseImage) {
+            Group {
+                if model.isImportingImage {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Adding image")
+                } else {
+                    Label("Image", systemImage: "photo.badge.plus")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption.weight(.medium))
+                }
+            }
+            .frame(minWidth: 68, minHeight: 28)
+            .padding(.horizontal, 5)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(TurboFieldfareMacTheme.accentColor)
+        .background(
+            TurboFieldfareMacTheme.accentColor.opacity(0.12),
+            in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(TurboFieldfareMacTheme.accentColor.opacity(0.28), lineWidth: 0.75)
+        }
+        .layoutPriority(1)
+        .disabled(!model.canAttachImage)
+        .help(imagePickerHelp)
+    }
+
+    private var imagePickerHelp: String {
+        if model.isImportingImage {
+            return "Adding image…"
+        }
+        if model.pendingImage != nil {
+            return "Remove the current image before adding another"
+        }
+        let count = model.conversation.reduce(0) { $0 + $1.images.count }
+        if count >= AppGenerationRequest.maximumImageAttachments {
+            return "This chat has reached its \(AppGenerationRequest.maximumImageAttachments)-image limit"
+        }
+        return "Add an image"
+    }
+
+    private func pendingImagePreview(_ image: AppImageAttachment) -> some View {
+        HStack(spacing: 10) {
+            LocalImageThumbnailView(
+                fileURL: model.imageURL(for: image),
+                maximumPixelSize: 240)
+                .frame(width: 78, height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(image.originalFilename)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                Text("\(image.pixelWidth) × \(image.pixelHeight)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: model.removePendingImage) {
+                Label("Remove image", systemImage: "xmark.circle.fill")
+                    .labelStyle(.iconOnly)
+                    .symbolRenderingMode(.hierarchical)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Remove image")
+        }
+        .padding(8)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func attachmentErrorView(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button(action: model.dismissAttachmentError) {
+                Label("Dismiss image error", systemImage: "xmark")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 8)
+    }
+
+    private func chooseImage() {
+        guard model.canAttachImage else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose an image"
+        panel.prompt = "Add Image"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.resolvesAliases = true
+        panel.allowedContentTypes = [
+            .png,
+            .jpeg,
+            .heic,
+            .webP,
+        ]
+        guard panel.runModal() == .OK,
+              let url = panel.url else { return }
+        Task {
+            _ = await model.attachImage(at: url)
+            promptFocused = true
         }
     }
 

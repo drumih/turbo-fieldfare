@@ -51,10 +51,10 @@ final class GenerationTaskRegistry: Sendable {
 
 }
 
-/// Real-model inference client for the Mac app. Wraps the same raw-completion
-/// loop the CLI uses (`runRawCompletion`, BOS + verbatim encode, no chat
-/// template) behind the `AppInferenceClient` event stream, with an explicit
-/// load lifecycle so the resident weights stay warm across generations.
+/// Real-model inference client for the Mac app. Wraps the shared completion
+/// loop behind the `AppInferenceClient` event stream, with an explicit load
+/// lifecycle so the resident language-model weights stay warm across
+/// generations. Optional vision weights are opened only for image requests.
 public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Sendable {
     private let session: RealInferenceSession
     private let memorySampler: AppMemorySampler
@@ -150,12 +150,18 @@ struct TokenizerDirectoryCache: Equatable, Sendable {
 /// here: a reload releases the loaded model, runner, and scratch before constructing
 /// replacements, so two models are never alive at once.
 actor RealInferenceSession {
+    private static let visionCacheBytes = 16 * 1_024 * 1_024
+
     private var loadedKey: SessionLoadKey?
     private var ctx: MetalContext?
     private var tokenizer: GFTokenizer?
     private var tokenizerDirectoryCache = TokenizerDirectoryCache()
     private var runner: RealForwardRunner?
     private var scratch: RawCompletionScratch?
+    private var visionEncoder: Gemma4VisionEncoder?
+    private let visionFeatureCache = Gemma4VisionFeatureCache(
+        maximumBytes: visionCacheBytes,
+        maximumEntries: AppGenerationRequest.maximumImageAttachments)
 
     func ensureLoaded(key: SessionLoadKey,
                       onState: @Sendable (AppModelLoadState) -> Void) async throws {
@@ -163,6 +169,8 @@ actor RealInferenceSession {
 
         runner = nil
         scratch = nil
+        visionEncoder = nil
+        await visionFeatureCache.removeAll()
         loadedKey = nil
 
         let start = Date()
@@ -234,7 +242,7 @@ actor RealInferenceSession {
     }
 
     static func forceLogitsHead(for request: AppGenerationRequest) -> Bool {
-        !request.isPureGreedy
+        !request.isPureGreedy || request.messages.contains { !$0.images.isEmpty }
     }
 
     static func generationConfig(for request: AppGenerationRequest,
@@ -252,9 +260,11 @@ actor RealInferenceSession {
         min(requested, max(0, maxContext - promptTokenCount))
     }
 
-    func unload() {
+    func unload() async {
         runner = nil
         scratch = nil
+        visionEncoder = nil
+        await visionFeatureCache.removeAll()
         tokenizer = nil
         tokenizerDirectoryCache.clear()
         loadedKey = nil
@@ -267,8 +277,9 @@ actor RealInferenceSession {
         let progress = ProgressState()
         do {
             try request.validate()
+            let usesVision = request.messages.contains { !$0.images.isEmpty }
             let executedPrefillMode: PrefillExecutedMode =
-                prefillConfig.mode == .chunked ? .chunked : .off
+                usesVision || prefillConfig.mode == .chunked ? .chunked : .off
             let prefillDiagnostics = PrefillExecutionDiagnostics(config: prefillConfig,
                                                                  executedMode: executedPrefillMode,
                                                                  kvStorageMode: .fp16)
@@ -283,35 +294,32 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let renderedPrompt = try tokenizer.applyChatTemplate(request.messages.map { message in
-                let role: GFTokenizer.Role
-                switch message.role {
-                case .system: role = .system
-                case .user: role = .user
-                case .assistant: role = .assistant
-                }
-                return GFTokenizer.Message(role: role, content: message.content)
-            })
-            let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
+            memorySampler.resetPeak()
+            _ = memorySampler.sample()
+            let preparedPrompt = try await preparePrompt(
+                for: request,
+                tokenizer: tokenizer,
+                context: ctx)
+            let promptIds = preparedPrompt.tokenIDs
             progress.promptTokenCount = promptIds.count
             guard promptIds.count < runner.maxContext else {
                 throw AppInferenceError.contextOverflow(prompt: promptIds.count,
                                                         maxNew: request.maxNewTokens,
                                                         maxContext: runner.maxContext)
             }
-            memorySampler.resetPeak()
-            _ = memorySampler.sample()
-            let config = Self.generationConfig(
+            var config = Self.generationConfig(
                 for: request,
                 maxNewTokens: Self.effectiveMaxNewTokens(
                     requested: request.maxNewTokens,
                     promptTokenCount: promptIds.count,
                     maxContext: runner.maxContext))
+            config.suppressedTokenIDs = tokenizer.suppressedGenerationTokenIDs
             runner.reset()
             progress.prefillStart = Date()
 
             let result = try await runRawCompletion(
                 producer: runner, tokenizer: tokenizer, promptIds: promptIds,
+                multimodalInput: preparedPrompt.multimodalInput,
                 config: config, context: ctx, scratch: scratch,
                 prefillConfig: prefillConfig) { event in
                 switch event {
@@ -355,9 +363,10 @@ actor RealInferenceSession {
                                               prefillSeconds: progress.elapsedPrefillSeconds,
                                               decodeSeconds: progress.elapsedDecodeSeconds,
                                               generated: progress.generated,
-                                              prefill: PrefillExecutionDiagnostics(
+                                                prefill: PrefillExecutionDiagnostics(
                                                 config: prefillConfig,
-                                                executedMode: prefillConfig.mode == .chunked ? .chunked : .off,
+                                                executedMode: request.messages.contains { !$0.images.isEmpty }
+                                                    || prefillConfig.mode == .chunked ? .chunked : .off,
                                                 kvStorageMode: .fp16))
             continuation.yield(.cancelled(diagnostics))
             continuation.finish(throwing: AppInferenceError.cancelled)
@@ -378,6 +387,130 @@ actor RealInferenceSession {
         } catch {
             failGeneration(.unknown("\(error)"), request: request, memorySampler: memorySampler,
                            progress: progress, continuation: continuation)
+        }
+    }
+
+    private struct PreparedPrompt {
+        let tokenIDs: [Int32]
+        let multimodalInput: MultimodalPrefillInput?
+    }
+
+    /// Encodes only the images that are absent from the bounded projection
+    /// cache, then renders Gemma's exact marker sequence and associates every
+    /// projected row with its corresponding placeholder token. The encoder
+    /// releases tower weights and intermediate activations before this method
+    /// starts language-model prefill.
+    private func preparePrompt(for request: AppGenerationRequest,
+                               tokenizer: GFTokenizer,
+                               context: MetalContext) async throws -> PreparedPrompt {
+        let attachments = request.messages.flatMap(\.images)
+        guard !attachments.isEmpty else {
+            let prepared = try tokenizer.prepareChatPrompt(
+                tokenizerMessages(request.messages, imageFeatures: []))
+            return PreparedPrompt(tokenIDs: prepared.tokenIDs,
+                                  multimodalInput: nil)
+        }
+
+        let encoder = try makeVisionEncoder(
+            modelDirectory: request.modelDirectory,
+            context: context)
+        let sidecarHash = await encoder.sidecarSnapshotHash
+        var features: [Gemma4VisionFeatures] = []
+        features.reserveCapacity(attachments.count)
+
+        for attachment in attachments {
+            try Task.checkCancellation()
+            let key = Gemma4VisionFeatureCacheKey(
+                imageContentHash: attachment.sha256,
+                sidecarSnapshotHash: sidecarHash)
+            if let cached = await visionFeatureCache.features(for: key) {
+                guard cached.sourceWidth == attachment.pixelWidth,
+                      cached.sourceHeight == attachment.pixelHeight else {
+                    throw AppInferenceError.invalidRequest(
+                        "The attached image changed after it was added. Remove it and attach it again.")
+                }
+                features.append(cached)
+                continue
+            }
+
+            let imageURL: URL
+            do {
+                imageURL = try AppChatAttachmentStore.fileURL(
+                    for: attachment,
+                    modelDirectory: request.modelDirectory)
+            } catch let attachmentError as AppChatAttachmentStoreError {
+                throw AppInferenceError.invalidRequest(attachmentError.description)
+            }
+            let encoded = try await encoder.encode(imageAt: imageURL)
+            guard encoded.contentHash == attachment.sha256,
+                  encoded.sourceWidth == attachment.pixelWidth,
+                  encoded.sourceHeight == attachment.pixelHeight else {
+                throw AppInferenceError.invalidRequest(
+                    "The attached image changed after it was added. Remove it and attach it again.")
+            }
+            await visionFeatureCache.insert(encoded)
+            features.append(encoded)
+        }
+
+        let messages = tokenizerMessages(request.messages, imageFeatures: features)
+        let prepared = try tokenizer.prepareChatPrompt(messages)
+        guard prepared.imageSpans.count == features.count else {
+            throw AppInferenceError.invalidRequest(
+                "Image placeholders did not match the attached images.")
+        }
+        let overlays = try zip(prepared.imageSpans, features).map { span, feature in
+            guard span.count == feature.tokenCount else {
+                throw AppInferenceError.invalidRequest(
+                    "An image projection did not match its prompt placeholder count.")
+            }
+            return PrefillEmbeddingOverlay(
+                tokenRange: span,
+                buffer: feature.buffer,
+                hiddenSize: Gemma4VisionFeatures.hiddenSize)
+        }
+        return PreparedPrompt(
+            tokenIDs: prepared.tokenIDs,
+            multimodalInput: MultimodalPrefillInput(embeddingOverlays: overlays))
+    }
+
+    private func makeVisionEncoder(modelDirectory: URL,
+                                   context: MetalContext) throws -> Gemma4VisionEncoder {
+        if let visionEncoder { return visionEncoder }
+        do {
+            let encoder = try Gemma4VisionEncoder(
+                modelDirectory: modelDirectory,
+                context: context,
+                integrityPolicy: .fullSHA256)
+            visionEncoder = encoder
+            return encoder
+        } catch VisionSidecarError.missingSidecar {
+            throw AppInferenceError.invalidRequest(
+                "Image input requires the optional Gemma 4 vision sidecar. Install it with `swift run -c release TurboFieldfareRepack --install-vision --output <model.gturbo>`.")
+        } catch let sidecarError as VisionSidecarError {
+            throw AppInferenceError.invalidRequest(
+                "The installed Gemma 4 vision sidecar is invalid: \(sidecarError). Reinstall or verify it before using images.")
+        }
+    }
+
+    private func tokenizerMessages(_ messages: [AppChatMessage],
+                                   imageFeatures: [Gemma4VisionFeatures])
+        -> [GFTokenizer.Message] {
+        var featureIndex = 0
+        return messages.map { message in
+            let role: GFTokenizer.Role
+            switch message.role {
+            case .system: role = .system
+            case .user: role = .user
+            case .assistant: role = .assistant
+            }
+            let imageTokenCounts = message.images.map { _ in
+                defer { featureIndex += 1 }
+                return imageFeatures[featureIndex].tokenCount
+            }
+            return GFTokenizer.Message(
+                role: role,
+                content: message.content,
+                imageTokenCounts: imageTokenCounts)
         }
     }
 

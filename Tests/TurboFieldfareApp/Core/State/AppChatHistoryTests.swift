@@ -3,6 +3,15 @@ import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct AppChatHistoryTests {
+    @Test func messageWithoutImagesDecodesAsLegacyTextMessage() throws {
+        let data = Data(#"{"role":"user","content":"legacy question"}"#.utf8)
+
+        let message = try JSONDecoder().decode(AppChatMessage.self, from: data)
+
+        #expect(message == AppChatMessage(role: .user, content: "legacy question"))
+        #expect(message.images.isEmpty)
+    }
+
     @Test func historyFileLivesBesideModelDirectory() {
         let model = URL(fileURLWithPath: "/tmp/TurboFieldfare/gemma4.gturbo",
                         isDirectory: true)
@@ -38,6 +47,43 @@ import Testing
         let loaded = AppChatHistoryFileStore.load(forModelDirectory: model)
 
         #expect(loaded == history)
+    }
+
+    @Test func savedHistoryRoundTripsImageMetadataWithoutImageBytes() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let chatID = UUID()
+        let image = AppImageAttachment(
+            relativePath: "\(chatID.uuidString.lowercased())/image.png",
+            originalFilename: "diagram.png",
+            mediaTypeIdentifier: "public.png",
+            pixelWidth: 640,
+            pixelHeight: 480,
+            byteCount: 1_024,
+            sha256: String(repeating: "a", count: 64))
+        let chat = AppChatThread(
+            id: chatID,
+            title: "Image question",
+            messages: [
+                AppChatMessage(
+                    role: .user,
+                    content: "What is shown?",
+                    images: [image]),
+            ])
+        let history = AppChatHistoryDocument(
+            selectedChatID: chat.id,
+            chats: [chat])
+
+        try AppChatHistoryFileStore.save(history, forModelDirectory: model)
+        let loaded = AppChatHistoryFileStore.load(forModelDirectory: model)
+        let historyData = try Data(contentsOf:
+            AppChatHistoryFileStore.fileURL(forModelDirectory: model))
+
+        #expect(loaded == history)
+        #expect(historyData.count < 4_096)
+        #expect(!String(decoding: historyData, as: UTF8.self)
+            .contains("data:image"))
     }
 
     private func makeTemporaryRoot() throws -> URL {

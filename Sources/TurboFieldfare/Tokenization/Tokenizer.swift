@@ -42,7 +42,11 @@ public struct GFTokenizer: @unchecked Sendable {
     public let toolResponseEndID: Int32
     public let channelStartID: Int32
     public let channelEndID: Int32
+    public let beginningOfImageID: Int32
+    public let imageID: Int32
+    public let endOfImageID: Int32
     public let stopTokenIDs: Set<Int32>
+    public let suppressedGenerationTokenIDs: Set<Int32>
     public let vocabSize: Int
 
     @usableFromInline
@@ -120,6 +124,11 @@ public struct GFTokenizer: @unchecked Sendable {
               let channelEnd = tokenizer.convertTokenToId("<channel|>") else {
             throw GFTokenizerError.missingSpecialToken("Gemma tool/channel markers")
         }
+        guard let beginningOfImage = tokenizer.convertTokenToId("<|image>"),
+              let image = tokenizer.convertTokenToId("<|image|>"),
+              let endOfImage = tokenizer.convertTokenToId("<image|>") else {
+            throw GFTokenizerError.missingSpecialToken("Gemma image markers")
+        }
 
         self.bosID = Int32(bos)
         self.eosID = Int32(eos)
@@ -131,7 +140,17 @@ public struct GFTokenizer: @unchecked Sendable {
         self.toolResponseEndID = Int32(toolResponseEnd)
         self.channelStartID = Int32(channelStart)
         self.channelEndID = Int32(channelEnd)
+        self.beginningOfImageID = Int32(beginningOfImage)
+        self.imageID = Int32(image)
+        self.endOfImageID = Int32(endOfImage)
         self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
+        self.suppressedGenerationTokenIDs = [
+            self.padID,
+            self.bosID,
+            self.beginningOfImageID,
+            self.imageID,
+            self.endOfImageID,
+        ]
         self.vocabSize = 262_144
     }
 
@@ -181,13 +200,17 @@ public struct GFTokenizer: @unchecked Sendable {
     public struct Message: Sendable, Equatable {
         public let role: Role
         public let content: String?
+        /// Number of projected soft tokens for each image, in content order.
+        /// The app currently supplies at most one image per user turn.
+        public let imageTokenCounts: [Int]
         public let toolCalls: [HistoricalToolCall]
         public let toolCallID: String?
         public let name: String?
 
-        public init(role: Role, content: String) {
+        public init(role: Role, content: String, imageTokenCounts: [Int] = []) {
             self.role = role
             self.content = content
+            self.imageTokenCounts = imageTokenCounts
             self.toolCalls = []
             self.toolCallID = nil
             self.name = nil
@@ -195,11 +218,13 @@ public struct GFTokenizer: @unchecked Sendable {
 
         public init(role: Role,
                     content: String?,
+                    imageTokenCounts: [Int] = [],
                     toolCalls: [HistoricalToolCall] = [],
                     toolCallID: String? = nil,
                     name: String? = nil) {
             self.role = role
             self.content = content
+            self.imageTokenCounts = imageTokenCounts
             self.toolCalls = toolCalls
             self.toolCallID = toolCallID
             self.name = name
@@ -212,6 +237,21 @@ public struct GFTokenizer: @unchecked Sendable {
     private static let turnOpen    = "<|turn>"
     private static let turnClose   = "<turn|>"
     private static let bosMark     = "<bos>"
+    private static let beginningOfImageMark = "<|image>"
+    private static let imageMark = "<|image|>"
+    private static let endOfImageMark = "<image|>"
+
+    public struct PreparedChatPrompt: Sendable, Equatable {
+        public let tokenIDs: [Int32]
+        /// Ranges occupied by `<|image|>` placeholder tokens. Boundary tokens
+        /// remain ordinary text embeddings, matching the reference processor.
+        public let imageSpans: [Range<Int>]
+
+        public init(tokenIDs: [Int32], imageSpans: [Range<Int>]) {
+            self.tokenIDs = tokenIDs
+            self.imageSpans = imageSpans
+        }
+    }
 
     public func applyChatTemplate(_ messages: [Message]) throws -> String {
         var s = Self.bosMark
@@ -223,17 +263,73 @@ public struct GFTokenizer: @unchecked Sendable {
             if message.role == .system && index != 0 {
                 throw GFTokenizerError.invalidChatTemplate("system message must be first")
             }
+            if !message.imageTokenCounts.isEmpty && message.role != .user {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "images are only supported in user messages")
+            }
+            guard message.imageTokenCounts.allSatisfy({ (1...280).contains($0) }) else {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "each image must produce between 1 and 280 soft tokens")
+            }
             let role = message.role == .assistant ? "model" : message.role.rawValue
-            s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
+            let images = message.imageTokenCounts.map { count in
+                Self.beginningOfImageMark
+                    + String(repeating: Self.imageMark, count: count)
+                    + Self.endOfImageMark
+            }.joined()
+            s += Self.turnOpen + role + "\n" + images + content + Self.turnClose + "\n"
         }
         s += Self.turnOpen + "model\n<|channel>thought\n<channel|>"
         return s
+    }
+
+    /// Render and tokenize a chat while retaining the exact placeholder rows
+    /// that must be overwritten by projected image features during prefill.
+    public func prepareChatPrompt(_ messages: [Message]) throws -> PreparedChatPrompt {
+        let expectedCounts = messages.flatMap(\.imageTokenCounts)
+        let rendered = try applyChatTemplate(messages)
+        let tokenIDs = encode(rendered, addBOS: false)
+        // Reject literal/spoofed media control tokens instead of guessing which
+        // rows should receive image embeddings.
+        guard tokenIDs.filter({ $0 == beginningOfImageID }).count == expectedCounts.count,
+              tokenIDs.filter({ $0 == endOfImageID }).count == expectedCounts.count,
+              tokenIDs.filter({ $0 == imageID }).count == expectedCounts.reduce(0, +) else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "image marker sequence is ambiguous")
+        }
+        guard !expectedCounts.isEmpty else {
+            return PreparedChatPrompt(tokenIDs: tokenIDs, imageSpans: [])
+        }
+
+        var spans: [Range<Int>] = []
+        spans.reserveCapacity(expectedCounts.count)
+        var cursor = tokenIDs.startIndex
+        for count in expectedCounts {
+            guard let boundary = tokenIDs[cursor...].firstIndex(of: beginningOfImageID) else {
+                throw GFTokenizerError.invalidChatTemplate("image start marker is missing")
+            }
+            let lower = boundary + 1
+            let upper = lower + count
+            guard upper < tokenIDs.endIndex,
+                  tokenIDs[lower..<upper].allSatisfy({ $0 == imageID }),
+                  tokenIDs[upper] == endOfImageID else {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "image placeholder count does not match projected features")
+            }
+            spans.append(lower..<upper)
+            cursor = upper + 1
+        }
+        return PreparedChatPrompt(tokenIDs: tokenIDs, imageSpans: spans)
     }
 
     public func encodeToolChat(messages: [Message],
                                tools: [FunctionDefinition]) throws -> [Int32] {
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
+        }
+        guard messages.allSatisfy({ $0.imageTokenCounts.isEmpty }) else {
+            throw GFTokenizerError.invalidChatTemplate(
+                "image inputs are not supported in tool-calling chats")
         }
         let upstreamMessages: [Tokenizers.Message] = try messages.map { message in
             var value: Tokenizers.Message = [

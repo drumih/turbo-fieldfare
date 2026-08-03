@@ -82,6 +82,29 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         throw AppInferenceError.modelNotLoaded
                     }
                     generationTranscriptMailbox.reset()
+                    let decodeMessages = request.messages.map { message in
+                        let role: DecodeChatRole
+                        switch message.role {
+                        case .system: role = .system
+                        case .user: role = .user
+                        case .assistant: role = .assistant
+                        }
+                        let images = message.images.map { image in
+                            DecodeImageAttachment(
+                                id: image.id,
+                                relativePath: image.relativePath,
+                                originalFilename: image.originalFilename,
+                                mediaTypeIdentifier: image.mediaTypeIdentifier,
+                                pixelWidth: image.pixelWidth,
+                                pixelHeight: image.pixelHeight,
+                                byteCount: image.byteCount,
+                                sha256: image.sha256)
+                        }
+                        return DecodeChatMessage(
+                            role: role,
+                            content: message.content,
+                            images: images)
+                    }
                     let command = DecodeGenerationRequest(
                         prompt: request.prompt, maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
@@ -89,15 +112,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
                         generationID: generationID,
-                        messages: request.messages.map { message in
-                            let role: DecodeChatRole
-                            switch message.role {
-                            case .system: role = .system
-                            case .user: role = .user
-                            case .assistant: role = .assistant
-                            }
-                            return DecodeChatMessage(role: role, content: message.content)
-                        })
+                        messages: decodeMessages)
                     try send(.generate(command), to: handles.input)
 
                     var expectedSequence: UInt64 = 1

@@ -12,6 +12,7 @@ enum GeneratorError: Error, CustomStringConvertible, Equatable {
     case contextOverflow(prompt: Int, maxNew: Int, maxContext: Int)
     case invalidGenerationConfig(String)
     case invalidContinuation(String)
+    case noVisibleOutput
     case emptyPrompt
 
     public var description: String {
@@ -22,6 +23,8 @@ enum GeneratorError: Error, CustomStringConvertible, Equatable {
             return reason
         case .invalidContinuation(let reason):
             return reason
+        case .noVisibleOutput:
+            return "generation produced too many non-text control tokens without visible output"
         case .emptyPrompt:
             return "empty prompt"
         }
