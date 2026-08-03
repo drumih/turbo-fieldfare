@@ -173,6 +173,9 @@ number of generated tokens. You can:
 
 - click an entry to reload its prompt and response,
 - search the history by title, prompt, or response,
+- pin entries so they stay at the top of the list,
+- rename entries by double-clicking the title,
+- export or import the whole history as JSON,
 - delete entries individually or clear the whole history,
 - start a fresh conversation with the **New** button.
 
@@ -190,9 +193,13 @@ it into the prompt inside `[Document: …]` markers, so the model can answer
 about the file's content.
 
 - Files up to 50 MB are accepted; extracted text is limited to 500,000
-  characters and is marked as truncated when the limit is hit.
+  characters and is marked as truncated when the limit is hit. Both limits
+  are configurable in the **Attachments** pane of the inspector.
 - Attachments show their size, page count (PDFs), character count, and a text
   preview popover, and can be removed individually or all at once.
+- The composer shows an approximate token count for the full prompt
+  (documents included) and warns in orange when it exceeds the selected
+  context window.
 - Attached documents are stored with the conversation, so reloading a
   conversation from history restores its context.
 

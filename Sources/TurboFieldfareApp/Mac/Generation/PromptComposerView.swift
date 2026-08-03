@@ -74,9 +74,37 @@ struct PromptComposerView: View {
             
             HStack(spacing: 10) {
                 promptTips
+                estimatedContextHint
                 Spacer()
                 clearAction
                 GenerateControl(model: model)
+            }
+        }
+    }
+
+    private var estimatedContextHint: some View {
+        Group {
+            if model.estimatedPromptTokenCount > 0 {
+                Label {
+                    Text("≈ \(model.estimatedPromptTokenCount) tokens")
+                } icon: {
+                    Image(systemName: "text.magnifyingglass")
+                }
+                .font(.caption)
+                .foregroundStyle(model.estimatedPromptExceedsContext
+                                 ? AnyShapeStyle(Color.orange)
+                                 : AnyShapeStyle(.tertiary))
+                .help(model.estimatedPromptExceedsContext
+                      ? "Estimated prompt exceeds the \(model.maxContextTokens)-token context window; tokens beyond the window would be cut."
+                      : "Estimated prompt length, including attached documents.")
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background {
+                    Capsule()
+                        .fill(model.estimatedPromptExceedsContext
+                              ? Color.orange.opacity(0.12)
+                              : Color.secondary.opacity(0.08))
+                }
             }
         }
     }

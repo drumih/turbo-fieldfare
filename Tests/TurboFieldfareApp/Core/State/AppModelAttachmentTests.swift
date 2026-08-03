@@ -126,6 +126,37 @@ import Testing
         #expect(model.attachmentErrors.isEmpty)
     }
 
+    @Test
+    func estimatedPromptTokenCountIncludesAttachments() {
+        let model = AppModel()
+        model.promptText = "abcd"
+        let expectedWithoutDocs = (model.promptText.count + 3) / 4
+        #expect(model.estimatedPromptTokenCount == expectedWithoutDocs)
+
+        model.attachments = [attachment(text: "efghijklmnopqrst")]
+        let expectedWithDocs = (model.promptWithAttachments.count + 3) / 4
+
+        #expect(model.estimatedPromptTokenCount == expectedWithDocs)
+        #expect(expectedWithDocs > expectedWithoutDocs)
+    }
+
+    @Test
+    func estimatedPromptTokenCountIsZeroForEmptyPrompt() {
+        let model = AppModel()
+        #expect(model.estimatedPromptTokenCount == 0)
+    }
+
+    @Test
+    func estimatedPromptExceedsContextFlags() {
+        let model = AppModel()
+        model.promptText = String(repeating: "a", count: 10_000)
+        model.maxContextTokens = 1_024
+        #expect(model.estimatedPromptExceedsContext)
+
+        model.maxContextTokens = 100_000
+        #expect(!model.estimatedPromptExceedsContext)
+    }
+
     /// Polls until the detached extraction task publishes its result.
     
     private func waitForExtraction(_ model: AppModel, timeoutMilliseconds: Int = 5_000) async {

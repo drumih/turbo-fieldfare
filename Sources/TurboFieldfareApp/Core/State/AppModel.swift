@@ -970,6 +970,22 @@ public final class AppModel {
         !attachments.isEmpty
     }
     
+    /// Rough token estimate of the effective prompt, including attached
+    /// documents. The app never loads the tokenizer in-process, so this is
+    /// an approximation used only for the composer hint.
+    public var estimatedPromptTokenCount: Int {
+        let text = hasAttachments ? promptWithAttachments : promptText
+        guard !text.isEmpty else { return 0 }
+        return (text.count + 3) / 4
+    }
+    
+    /// Whether the estimated prompt (with documents) exceeds the configured
+    /// context window. Generation would still run but tokens beyond the
+    /// window would be cut during prompt formatting.
+    public var estimatedPromptExceedsContext: Bool {
+        estimatedPromptTokenCount > maxContextTokens
+    }
+    
     // MARK: - Conversation history management
     
     /// Saves the current conversation to history
