@@ -32,6 +32,7 @@ struct RootView: View {
         .tint(TurboFieldfareMacTheme.accentColor)
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
         .animation(.smooth(duration: 0.25), value: model.error)
+        .animation(.smooth(duration: 0.2), value: model.presentation.conversationAction)
         .transaction { transaction in
             if model.isRunning {
                 transaction.animation = nil
@@ -90,17 +91,20 @@ struct RootView: View {
     private var conversationChrome: some View {
         VStack(spacing: 10) {
             ErrorBanner(model: model)
-            if model.promptText.isEmpty {
+            if model.promptText.isEmpty && model.showPromptExamples {
                 PromptExamplesView { preset in
                     model.promptText = preset.prompt
                 }
             }
+            ModelActionBanner(model: model)
             PromptComposerView(model: model)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .animation(.smooth(duration: 0.2), value: model.promptText.isEmpty)
+        .animation(.smooth(duration: 0.2), value: model.showPromptExamples)
     }
+
 }
 
 private struct ConversationChromeHeightKey: PreferenceKey {

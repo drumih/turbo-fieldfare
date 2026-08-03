@@ -116,8 +116,13 @@ let package = Package(
             path: "Tests/TurboFieldfareApp/Core"
         ),
         .testTarget(
+            name: "TurboFieldfareDecodeServiceTests",
+            dependencies: ["TurboFieldfareDecodeService", "TurboFieldfareAppCore", "TurboFieldfareDecodeProtocol"],
+            path: "Tests/TurboFieldfareDecodeService"
+        ),
+        .testTarget(
             name: "TurboFieldfareMacPresentationTests",
-            dependencies: ["TurboFieldfareMacPresentation"],
+            dependencies: ["TurboFieldfareAppCore", "TurboFieldfareMacPresentation"],
             path: "Tests/TurboFieldfareApp/MacPresentation"
         ),
         .testTarget(

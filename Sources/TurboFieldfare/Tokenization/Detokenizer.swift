@@ -59,14 +59,22 @@ struct GFDetokenizer {
 
     @usableFromInline
     mutating func commitDelta(_ current: String) -> String {
-        guard current.hasPrefix(emitted) else {
-            // Decoder altered the prefix — extremely rare in append-only streams.
-            // Resync rather than emit garbage; the user-visible loss is bounded
-            // to whatever was retokenized.
-            emitted = current
-            return ""
+        // A combining mark can extend the last emitted grapheme, so compare the
+        // append-only prefix without using Character boundaries.
+        let currentUTF8 = current.utf8
+        var boundary = currentUTF8.startIndex
+        for byte in emitted.utf8 {
+            guard boundary != currentUTF8.endIndex,
+                  currentUTF8[boundary] == byte else {
+                // Decoder altered the prefix — extremely rare in append-only streams.
+                // Resync rather than emit garbage; the user-visible loss is bounded
+                // to whatever was retokenized.
+                emitted = current
+                return ""
+            }
+            currentUTF8.formIndex(after: &boundary)
         }
-        let delta = String(current.dropFirst(emitted.count))
+        let delta = String(current[boundary...])
         emitted = current
         return delta
     }

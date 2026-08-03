@@ -23,6 +23,8 @@ public final class AppModel {
     public var topK: Int = 64
     public var topPEnabled: Bool = true
     public var topP: Double = 0.95
+    public private(set) var newlineShortcut: AppNewlineShortcut = .return
+    public private(set) var showPromptExamples: Bool = true
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -79,6 +81,8 @@ public final class AppModel {
         self.topK = settings.topK
         self.topPEnabled = settings.topPEnabled
         self.topP = settings.topP
+        self.newlineShortcut = settings.newlineShortcut
+        self.showPromptExamples = settings.showPromptExamples
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -318,6 +322,18 @@ public final class AppModel {
         case .reload: reloadModel()
         case .unload: unloadModel()
         }
+    }
+
+    public func setNewlineShortcut(_ shortcut: AppNewlineShortcut) {
+        guard newlineShortcut != shortcut else { return }
+        newlineShortcut = shortcut
+        persistSettings()
+    }
+
+    public func setShowPromptExamples(_ show: Bool) {
+        guard showPromptExamples != show else { return }
+        showPromptExamples = show
+        persistSettings()
     }
 
     public func reloadModel() {
@@ -611,6 +627,8 @@ public final class AppModel {
         topK = settings.topK
         topPEnabled = settings.topPEnabled
         topP = settings.topP
+        newlineShortcut = settings.newlineShortcut
+        showPromptExamples = settings.showPromptExamples
     }
 
     private func persistSettings() {
@@ -623,7 +641,9 @@ public final class AppModel {
             topK: topK,
             topPEnabled: topPEnabled,
             topP: topP,
-            prefillEnabled: runtimeOptions.prefillEnabled)
+            prefillEnabled: runtimeOptions.prefillEnabled,
+            newlineShortcut: newlineShortcut,
+            showPromptExamples: showPromptExamples)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,

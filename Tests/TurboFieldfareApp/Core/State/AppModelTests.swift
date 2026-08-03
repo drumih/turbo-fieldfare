@@ -121,6 +121,32 @@ import Testing
     }
 
     @MainActor
+    @Test func newlineShortcutDoesNotMarkReadySessionStale() {
+        let model = AppModel(client: MockLifecycleInferenceClient())
+        let directory = FileManager.default.temporaryDirectory
+        model.modelPathText = directory.path
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+
+        model.setNewlineShortcut(.shiftReturn)
+
+        #expect(model.newlineShortcut == .shiftReturn)
+        #expect(!model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
+    @Test func promptExamplesPreferenceDoesNotMarkReadySessionStale() {
+        let model = AppModel(client: MockLifecycleInferenceClient())
+        let directory = FileManager.default.temporaryDirectory
+        model.modelPathText = directory.path
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+
+        model.setShowPromptExamples(false)
+
+        #expect(!model.showPromptExamples)
+        #expect(!model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
     @Test func mockRunUpdatesOutputAndDiagnostics() async throws {
         let client = MockInferenceClient(response: "alpha beta", tokenDelayNanos: 1)
         let model = AppModel(client: client)

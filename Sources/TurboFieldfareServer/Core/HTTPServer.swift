@@ -170,7 +170,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private func route(head: HTTPRequestHead,
                        body: ByteBuffer,
                        context: ChannelHandlerContext) {
-        switch (head.method, head.uri) {
+        let path = head.uri.split(separator: "?", maxSplits: 1,
+                                  omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
+        switch (head.method, path) {
         case (.GET, "/health"):
             writeJSON(context, status: .ok, object: ["status": "ok"])
         case (.GET, "/v1/models"):
@@ -211,6 +213,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             let created = Int(Date().timeIntervalSince1970)
             let contextBox = SendableContext(context)
             let streamState = StreamState()
+            let phaseState = RequestPhaseState()
             let startStream: @Sendable () -> Void = {
                 guard request.stream,
                       streamState.start(eventLoop: contextBox.value.eventLoop,
@@ -218,37 +221,62 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                         ping: {
                           self.writeHeartbeat(contextBox.value)
                       }) else { return }
-                self.beginStream(contextBox.value)
-                self.writeStreamChunk(
+                let future = self.beginStream(
                     contextBox.value,
                     self.chunk(id: responseID, created: created,
                                delta: ["role": "assistant"],
                                finishReason: nil))
+                streamState.setStartFuture(future)
+            }
+            let onQueued: @Sendable () -> Void = {
+                phaseState.set("queued")
+                ServerLog.queued(id: responseID)
+                startStream()
             }
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
+                let started = ContinuousClock.now
+                ServerLog.accepted(id: responseID, streaming: request.stream)
                 do {
-                    let completion = try await self.coordinator.run(onQueued: startStream) {
-                        startStream()
-                        return try await self.backend.generate(request) { event in
-                            guard request.stream else { return }
-                            switch event {
-                            case .content(let text):
-                                self.writeStreamChunk(
-                                    contextBox.value,
-                                    self.chunk(id: responseID, created: created,
-                                               delta: ["content": text],
-                                               finishReason: nil))
-                            case .toolCall(let call):
-                                self.writeToolCall(contextBox.value,
-                                                   id: responseID,
-                                                   created: created,
-                                                   toolIndex: streamState.nextToolIndex(),
-                                                   call: call)
+                    let completion = try await self.coordinator.runPreparing(
+                        onQueued: onQueued,
+                        prepare: {
+                            let prepared = try await self.backend.prepare(request)
+                            phaseState.set("prepared")
+                            ServerLog.prepared(id: responseID,
+                                               promptTokens: prepared.promptTokenCount)
+                            return prepared
+                        },
+                        operation: { prepared in
+                            try Task.checkCancellation()
+                            startStream()
+                            try await streamState.waitUntilStarted()
+                            try Task.checkCancellation()
+                            phaseState.set("generating")
+                            ServerLog.generating(id: responseID)
+                            return try await self.backend.generate(prepared) { event in
+                                guard request.stream else { return }
+                                switch event {
+                                case .content(let text):
+                                    self.writeStreamChunk(
+                                        contextBox.value,
+                                        self.chunk(id: responseID, created: created,
+                                                   delta: ["content": text],
+                                                   finishReason: nil))
+                                case .toolCall(let call):
+                                    self.writeToolCall(contextBox.value,
+                                                       id: responseID,
+                                                       created: created,
+                                                       toolIndex: streamState.nextToolIndex(),
+                                                       call: call)
+                                }
                             }
-                        }
-                    }
+                    })
+                    ServerLog.completed(id: responseID,
+                                        duration: started.duration(to: .now),
+                                        completion: completion)
                     if request.stream {
+                        streamState.stop()
                         self.finishStream(contextBox.value,
                                           id: responseID,
                                           created: created,
@@ -261,8 +289,11 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                              completion: completion)
                     }
                 } catch {
+                    streamState.stop()
                     self.handleAsyncError(error,
                                           context: contextBox.value,
+                                          id: responseID,
+                                          phase: phaseState.value,
                                           stream: streamState.isStarted)
                 }
             }
@@ -307,18 +338,35 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         writeJSON(context, status: .ok, object: object)
     }
 
-    private func beginStream(_ context: ChannelHandlerContext) {
+    private func beginStream(
+        _ context: ChannelHandlerContext,
+        _ initialChunk: [String: Any]
+    ) -> EventLoopFuture<Void> {
+        guard let data = try? JSONSerialization.data(withJSONObject: initialChunk) else {
+            return context.eventLoop.makeFailedFuture(ServerRequestError.invalid(
+                message: "stream response could not be encoded",
+                param: nil,
+                code: "internal_error"))
+        }
         var headers = HTTPHeaders()
         headers.add(name: "content-type", value: "text/event-stream")
         headers.add(name: "cache-control", value: "no-cache")
         headers.add(name: "connection", value: "keep-alive")
         let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
         let contextBox = SendableContext(context)
+        let promise = context.eventLoop.makePromise(of: Void.self)
         context.eventLoop.execute {
             contextBox.value.write(self.wrapOutboundOut(.head(head)),
                 promise: nil)
-            contextBox.value.flush()
+            var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count + 8)
+            buffer.writeString("data: ")
+            buffer.writeBytes(data)
+            buffer.writeString("\n\n")
+            contextBox.value.writeAndFlush(
+                self.wrapOutboundOut(.body(.byteBuffer(buffer))),
+                promise: promise)
         }
+        return promise.futureResult
     }
 
     private func writeToolCall(_ context: ChannelHandlerContext,
@@ -413,21 +461,46 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     private func handleAsyncError(_ error: Error,
                                   context: ChannelHandlerContext,
+                                  id: String,
+                                  phase: String,
                                   stream: Bool) {
+        let envelope: OpenAIErrorEnvelope
+        let status: HTTPResponseStatus
+        if let requestError = error as? ServerRequestError {
+            status = requestError == .queueFull ? .tooManyRequests : .badRequest
+            envelope = requestError.envelope
+        } else {
+            status = .internalServerError
+            envelope = OpenAIErrorEnvelope(
+                message: "generation failed; see TurboFieldfareServer stderr",
+                code: "internal_error",
+                type: "server_error")
+        }
+        if !(error is CancellationError) {
+            ServerLog.failed(id: id, phase: phase, status: status.code, error: error)
+        }
         if stream {
-            let contextBox = SendableContext(context)
-            context.eventLoop.execute {
-                contextBox.value.close(promise: nil)
-            }
+            finishStreamWithError(context, envelope: envelope)
             return
         }
-        if let requestError = error as? ServerRequestError {
-            let status: HTTPResponseStatus = requestError == .queueFull ? .tooManyRequests : .badRequest
-            writeError(context, status: status, requestError.envelope)
-        } else {
-            writeError(context, status: .internalServerError,
-                       OpenAIErrorEnvelope(message: "generation failed",
-                                           code: "internal_error"))
+        writeError(context, status: status, envelope)
+    }
+
+    private func finishStreamWithError(_ context: ChannelHandlerContext,
+                                       envelope: OpenAIErrorEnvelope) {
+        guard let data = try? JSONEncoder().encode(envelope) else { return }
+        let contextBox = SendableContext(context)
+        context.eventLoop.execute {
+            guard contextBox.value.channel.isActive else { return }
+            var buffer = contextBox.value.channel.allocator.buffer(
+                capacity: data.count + 32)
+            buffer.writeString("data: ")
+            buffer.writeBytes(data)
+            buffer.writeString("\n\ndata: [DONE]\n\n")
+            contextBox.value.write(
+                self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            contextBox.value.writeAndFlush(
+                self.wrapOutboundOut(.end(nil)), promise: nil)
         }
     }
 
@@ -588,11 +661,22 @@ private final class SendableContext: @unchecked Sendable {
     }
 }
 
+private final class RequestPhaseState: Sendable {
+    private let state = Mutex("accepted")
+
+    var value: String { state.withLock { $0 } }
+
+    func set(_ value: String) {
+        state.withLock { $0 = value }
+    }
+}
+
 private final class StreamState: @unchecked Sendable {
     private let lock = NSLock()
     private var started = false
     private var stopped = false
     private var heartbeat: RepeatedTask?
+    private var startFuture: EventLoopFuture<Void>?
     private var toolIndex = 0
 
     var isStarted: Bool {
@@ -606,6 +690,7 @@ private final class StreamState: @unchecked Sendable {
             guard !started else { return false }
             started = true
             stopped = false
+            startFuture = nil
             heartbeat = eventLoop.scheduleRepeatedTask(
                 initialDelay: interval,
                 delay: interval) { [weak self] _ in
@@ -613,6 +698,17 @@ private final class StreamState: @unchecked Sendable {
                     ping()
                 }
             return true
+        }
+    }
+
+    func setStartFuture(_ future: EventLoopFuture<Void>) {
+        lock.withLock { startFuture = future }
+    }
+
+    func waitUntilStarted() async throws {
+        let future = lock.withLock { startFuture }
+        if let future {
+            try await future.get()
         }
     }
 

@@ -59,8 +59,10 @@ curl --silent --show-error http://127.0.0.1:8080/v1/chat/completions \
   }'
 ```
 
-By default, the server runs one generation and queues up to four requests. Use
-`--queue-limit` to change the queue size. Press Control-C to stop the server.
+By default, the server runs one generation and admits up to four additional
+requests for preparation or queueing. The limit is enforced before prompt
+rendering and tokenization. Use `--queue-limit` to change it. Press Control-C
+to stop the server.
 
 ## Connect a client
 
@@ -95,7 +97,11 @@ OpenCode:
       },
       "models": {
         "gemma-4-26b-a4b-it": {
-          "name": "Gemma 4 26B-A4B IT"
+          "name": "Gemma 4 26B-A4B IT",
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          }
         }
       }
     }
@@ -104,6 +110,34 @@ OpenCode:
 ```
 
 Select `turbofieldfare/gemma-4-26b-a4b-it` in OpenCode.
+
+Pi uses its `openai-completions` adapter:
+
+```json
+{
+  "providers": {
+    "turbofieldfare": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsReasoningEffort": false,
+        "supportsStrictMode": false,
+        "supportsUsageInStreaming": true
+      },
+      "models": [{
+        "id": "gemma-4-26b-a4b-it",
+        "name": "Gemma 4 26B-A4B IT",
+        "reasoning": false,
+        "contextWindow": 16384,
+        "maxTokens": 4096
+      }]
+    }
+  }
+}
+```
+
+Keep the client context setting at or below the server's `--max-context`.
 
 ## Prompt reuse
 
@@ -136,6 +170,14 @@ The server accepts only function tools. Omit `tool_choice` or set it to `auto`
 to allow calls. Set it to `none` to disable them. The server does not support
 `required`, named tool selection, or `parallel_tool_calls: false`.
 
+Tool schemas need a non-null object at the top level and explicit JSON Schema
+types. Nested properties and items may use nullable forms with one concrete
+type plus `null`, including equivalent two-branch `anyOf` and disjoint `oneOf`
+forms. Unions of string constants are also supported. Overlapping `oneOf`,
+mixed-type unions such as `string | object`, and `allOf` return HTTP 400 with
+`invalid_tool_schema`; the server does not guess which branch the model should
+use.
+
 ## Supported API
 
 Endpoints:
@@ -160,3 +202,7 @@ batching, log probabilities, or remote model switching.
 Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
 KV contexts use more memory. On an 8 GB Mac, run one model process at a time and
 watch memory pressure.
+
+For long requests, stderr reports the request lifecycle as prepared, queued,
+generating, completed, or failed. It includes token counts and timing, but not
+prompt text, tool arguments, headers, or request bodies.
