@@ -62,6 +62,100 @@ public enum OpenAIMessageContent: Codable, Equatable, Sendable {
     }
 }
 
+/// Optional reference to a document attached to a chat message.
+public struct ServerDocumentReference: Codable, Equatable, Sendable {
+    /// Absolute path to a text file on the server host.
+    public let path: String?
+    /// Base64-encoded file content (UTF-8 or UTF-16 text).
+    public let base64: String?
+    /// Display name used in the injected context marker.
+    public let filename: String?
+    /// Already-extracted text (skips file access entirely).
+    public let text: String?
+
+    public init(path: String? = nil,
+                base64: String? = nil,
+                filename: String? = nil,
+                text: String? = nil) {
+        self.path = path
+        self.base64 = base64
+        self.filename = filename
+        self.text = text
+    }
+}
+
+/// Extracts plain text from document references for the loopback server.
+/// Text-only formats (txt, md, rtf, json) are supported; binary formats
+/// such as PDF or DOCX are refused with a clear error.
+public enum ServerDocumentExtractor {
+    public enum ExtractionError: Error, CustomStringConvertible {
+        case nothingProvided
+        case multipleSources
+        case unsupportedBinary(String)
+        case readFailed(String)
+        case empty
+
+        public var description: String {
+            switch self {
+            case .nothingProvided:
+                return "document reference requires one of text, path, or base64"
+            case .multipleSources:
+                return "document reference must provide exactly one of text, path, or base64"
+            case .unsupportedBinary(let name):
+                return "document '\(name)' is a binary format; extract its text before sending"
+            case .readFailed(let reason):
+                return "could not read document: \(reason)"
+            case .empty:
+                return "document contains no extractable text"
+            }
+        }
+    }
+
+    public static func text(for reference: ServerDocumentReference) throws -> String {
+        let provided = [reference.text, reference.path, reference.base64]
+            .compactMap { $0 }.count
+        guard provided > 0 else { throw ExtractionError.nothingProvided }
+        guard provided == 1 else { throw ExtractionError.multipleSources }
+
+        if let text = reference.text {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw ExtractionError.empty
+            }
+            return trimmed
+        }
+        if let path = reference.path {
+            let url = URL(fileURLWithPath: path)
+            let ext = url.pathExtension.lowercased()
+            guard !["pdf", "docx", "doc", "xlsx"].contains(ext) else {
+                throw ExtractionError.unsupportedBinary(url.lastPathComponent)
+            }
+            guard let data = try? Data(contentsOf: url) else {
+                throw ExtractionError.readFailed(url.path)
+            }
+            return try decode(data)
+        }
+        if let base64 = reference.base64 {
+            guard let data = Data(base64Encoded: base64) else {
+                throw ExtractionError.readFailed("invalid base64")
+            }
+            return try decode(data)
+        }
+        throw ExtractionError.nothingProvided
+    }
+
+    private static func decode(_ data: Data) throws -> String {
+        guard let text = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .utf16) else {
+            throw ExtractionError.readFailed("unrecognized text encoding")
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ExtractionError.empty
+        }
+        return text
+    }
+}
+
 public struct OpenAIFunctionCall: Codable, Equatable, Sendable {
     public let name: String
     public let arguments: String
@@ -79,11 +173,13 @@ public struct OpenAIChatMessage: Codable, Equatable, Sendable {
     public let toolCalls: [OpenAIToolCall]?
     public let toolCallID: String?
     public let name: String?
+    public let document: ServerDocumentReference?
 
     enum CodingKeys: String, CodingKey {
         case role, content, name
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case document
     }
 }
 
@@ -407,6 +503,21 @@ public enum OpenAIRequestValidator {
                 sawConversationMessage = true
             }
             let content = try message.content?.textValue()
+            // I.1: attach documents to user messages; the extracted text is
+            // injected before the message content.
+            let effectiveContent: String?
+            if let document = message.document {
+                guard role == .user || role == .developer else {
+                    throw invalid("documents are only supported on user or developer messages",
+                                  "messages", "invalid_message")
+                }
+                let documentText = try ServerDocumentExtractor.text(for: document)
+                let label = document.filename ?? "document"
+                effectiveContent = "[Document: \(label)]\n\(documentText)"
+                    + (content.map { "\n\n\($0)" } ?? "")
+            } else {
+                effectiveContent = content
+            }
             let calls: [GFTokenizer.HistoricalToolCall] = try (message.toolCalls ?? []).map { call in
                 guard role == .assistant, call.type == "function",
                       !call.id.isEmpty, knownCalls[call.id] == nil,
@@ -440,16 +551,16 @@ public enum OpenAIRequestValidator {
                                   "messages", "invalid_tool_result")
                 }
                 knownCalls[id] = (call.name, true)
-                guard content != nil else {
+                guard effectiveContent != nil else {
                     throw invalid("tool result content is required",
                                   "messages", "invalid_tool_result")
                 }
-            } else if content == nil && calls.isEmpty {
+            } else if effectiveContent == nil && calls.isEmpty {
                 throw invalid("message content is required",
                               "messages", "invalid_message")
             }
             result.append(GFTokenizer.Message(role: role,
-                                              content: content,
+                                              content: effectiveContent,
                                               toolCalls: calls,
                                               toolCallID: message.toolCallID,
                                               name: message.name))

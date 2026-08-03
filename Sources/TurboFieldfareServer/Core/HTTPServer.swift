@@ -187,6 +187,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                              created: 0,
                              ownedBy: "turbofieldfare")])
             writeCodable(context, status: .ok, response)
+        case (.GET, "/v1/conversations"):
+            writeConversations(context)
         case (.POST, "/v1/chat/completions"):
             completionRequestCount += 1
             guard head.headers.first(name: "content-type")?
@@ -197,7 +199,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 return
             }
             handleCompletion(body: body, context: context)
-        case (_, "/health"), (_, "/metrics"), (_, "/v1/models"), (_, "/v1/chat/completions"):
+        case (_, "/health"), (_, "/metrics"), (_, "/v1/models"),
+             (_, "/v1/conversations"), (_, "/v1/chat/completions"):
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -529,8 +532,23 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         writeData(context, status: status, data: data)
     }
 
-    private func writeMetrics(_ context: ChannelHandlerContext) {
-        let uptime = Int(Date().timeIntervalSince(startDate))
+    /// Serves the app's conversation history JSON (read-only). Empty when
+    /// the app has not produced a history file on this machine.
+    private func writeConversations(_ context: ChannelHandlerContext) {
+        let applicationSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+        let url = applicationSupport
+            .appendingPathComponent("TurboFieldfare", isDirectory: true)
+            .appendingPathComponent("conversations.json")
+        if let data = try? Data(contentsOf: url), !data.isEmpty {
+            writeData(context, status: .ok, data: data)
+        } else {
+            writeJSON(context, status: .ok, object: [])
+        }
+    }
+
+    private func writeMetrics(_ context: ChannelHandlerContext) {        let uptime = Int(Date().timeIntervalSince(startDate))
         let metrics = """
         # HELP turbofieldfare_requests_total Chat completions requests served.
         # TYPE turbofieldfare_requests_total counter

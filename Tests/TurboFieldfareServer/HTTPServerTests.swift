@@ -74,6 +74,25 @@ private actor ContentAndToolBackend: ServerInferenceBackend {
     }
 }
 
+/// Captures the rendered message contents so tests can verify prompt
+/// composition (e.g. document injection).
+private actor RecordingBackend: ServerInferenceBackend {
+    private(set) var capturedPrompt = ""
+
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        capturedPrompt = request.messages.compactMap(\.content).joined(separator: "\n")
+        onEvent(.content("ok"))
+        return ServerCompletion(
+            content: "ok",
+            toolCalls: [],
+            finishReason: "eos",
+            usage: OpenAIUsage(promptTokens: 1, completionTokens: 1, totalTokens: 2))
+    }
+}
+
 private actor PipelinedRequestBackend: ServerInferenceBackend {
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var generationCount = 0
@@ -918,6 +937,57 @@ private enum RawSocketError: Error {
         let text = String(decoding: data, as: UTF8.self)
 
         #expect(text.contains("turbofieldfare_requests_total 1"))
+
+        try await server.shutdown()
+    }
+
+    @Test func userMessageDocumentIsInjectedIntoPrompt() async throws {
+        let backend = RecordingBackend()
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: backend,
+            heartbeatInterval: .seconds(10))
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[
+          {"role":"user","content":"summarize","document":{"text":"confidential notes","filename":"notes.txt"}}
+        ]}
+        """#.utf8)
+        let response = try await URLSession.shared.data(for: request)
+
+        #expect((response.1 as? HTTPURLResponse)?.statusCode == 200)
+        let prompt = await backend.capturedPrompt
+        #expect(prompt.contains("[Document: notes.txt]"))
+        #expect(prompt.contains("confidential notes"))
+        #expect(prompt.contains("summarize"))
+
+        try await server.shutdown()
+    }
+
+    @Test func conversationsRouteReturnsHistoryOrEmpty() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ContentAndToolBackend(),
+            heartbeatInterval: .seconds(10))
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        let data = try await URLSession.shared.data(
+            for: URLRequest(
+                url: URL(string: "http://127.0.0.1:\(port)/v1/conversations")!)).0
+
+        // The endpoint must always return a JSON array (history may be
+        // present on machines where the app has run).
+        let object = try JSONSerialization.jsonObject(with: data) as? [Any]
+        #expect(object != nil)
 
         try await server.shutdown()
     }
