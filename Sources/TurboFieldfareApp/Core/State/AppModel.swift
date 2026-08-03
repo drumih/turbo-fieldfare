@@ -1288,6 +1288,32 @@ public final class AppModel {
         }
     }
     
+    /// Forks a conversation into a new entry: same turns (up to the given
+    /// turn when provided), a "Fork of" title, and a link to the source.
+    /// The fork becomes the active conversation, ready to continue.
+    public func forkConversation(_ conversation: Conversation,
+                                 upTo turn: Turn? = nil) {
+        guard !isRunning else { return }
+        let forkedTurns: [Turn]
+        if let turn, let index = conversation.turns.firstIndex(where: { $0.id == turn.id }) {
+            forkedTurns = Array(conversation.turns[...index])
+        } else {
+            forkedTurns = conversation.turns
+        }
+        let now = Date()
+        let fork = Conversation(
+            title: "Fork of \(conversation.title)",
+            turns: forkedTurns,
+            createdAt: now,
+            updatedAt: now,
+            attachments: conversation.attachments,
+            maxNewTokens: conversation.maxNewTokens,
+            parentConversationID: conversation.id
+        )
+        conversationStore.upsert(fork)
+        loadConversation(fork)
+    }
+    
     /// Renames a conversation in the history
     public func renameConversation(_ conversation: Conversation, title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1310,5 +1336,27 @@ public final class AppModel {
     public func importConversations(from url: URL) throws -> Int {
         let data = try Data(contentsOf: url)
         return try conversationStore.importJSON(data)
+    }
+    
+    /// Renders a conversation as Markdown (title, metadata, labelled turns).
+    public func exportConversationMarkdown(_ conversation: Conversation) -> String {
+        var markdown = "# \(conversation.title)\n\n"
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        markdown += "*\(formatter.string(from: conversation.updatedAt))*\n"
+        if let parentID = conversation.parentConversationID {
+            markdown += "_Fork of \(parentID.uuidString.prefix(8))_\n"
+        }
+        markdown += "\n"
+        for turn in conversation.turns {
+            switch turn.role {
+            case .user:
+                markdown += "## User\n\n\(turn.text)\n\n"
+            case .model:
+                markdown += "## Assistant\n\n\(turn.text)\n\n"
+            }
+        }
+        return markdown.trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
     }
 }

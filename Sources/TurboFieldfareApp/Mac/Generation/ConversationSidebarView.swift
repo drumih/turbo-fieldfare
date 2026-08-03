@@ -14,6 +14,9 @@ struct ConversationSidebarView: View {
     @State private var importedCount: Int?
     @FocusState private var searchFocused: Bool
     @State private var showingCorruptionWarning = false
+    @State private var markdownDocument: MarkdownExportDocument?
+    @State private var showingMarkdownExporter = false
+    @State private var markdownFilename = "conversation"
 
     private var filteredConversations: [Conversation] {
         let items = model.conversationStore.conversations
@@ -94,7 +97,14 @@ struct ConversationSidebarView: View {
                             onSelect: { model.loadConversation(conversation) },
                             onDelete: { model.deleteConversation(conversation) },
                             onRename: { model.renameConversation(conversation, title: $0) },
-                            onTogglePin: { model.togglePin(conversation) }
+                            onTogglePin: { model.togglePin(conversation) },
+                            onFork: { model.forkConversation(conversation) },
+                            onExportMarkdown: {
+                                markdownFilename = Self.safeFilename(conversation.title)
+                                markdownDocument = MarkdownExportDocument(
+                                    text: model.exportConversationMarkdown(conversation))
+                                showingMarkdownExporter = true
+                            }
                         )
                     }
                 }
@@ -153,6 +163,14 @@ struct ConversationSidebarView: View {
         ) { _ in
             exportDocument = nil
         }
+        .fileExporter(
+            isPresented: $showingMarkdownExporter,
+            document: markdownDocument,
+            contentType: .plainText,
+            defaultFilename: markdownFilename
+        ) { _ in
+            markdownDocument = nil
+        }
         .fileImporter(
             isPresented: $showingImporter,
             allowedContentTypes: [.json]
@@ -174,6 +192,34 @@ struct ConversationSidebarView: View {
         guard let data = try? model.conversationStore.exportJSON() else { return }
         exportDocument = ConversationsExportDocument(data: data)
         showingExporter = true
+    }
+
+    /// Builds a filesystem-safe filename from a conversation title.
+    static func safeFilename(_ title: String) -> String {
+        let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
+        let cleaned = title.components(separatedBy: invalid).joined()
+        let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "conversation" : trimmed
+    }
+}
+
+/// Markdown document backing the per-conversation export sheet.
+struct MarkdownExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+
+    var text: String
+
+    init(text: String) {
+        self.text = text
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        text = String(data: configuration.file.regularFileContents ?? Data(),
+                      encoding: .utf8) ?? ""
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 
@@ -204,6 +250,8 @@ struct ConversationRowView: View {
     let onDelete: () -> Void
     let onRename: (String) -> Void
     let onTogglePin: () -> Void
+    let onFork: () -> Void
+    let onExportMarkdown: () -> Void
     @State private var isRenaming = false
     @State private var draftTitle = ""
 
@@ -252,6 +300,9 @@ struct ConversationRowView: View {
             Button("Open", action: onSelect)
             Button(conversation.isPinned ? "Unpin" : "Pin", action: onTogglePin)
             Button("Rename", action: beginRename)
+            Button("Fork", action: onFork)
+            Divider()
+            Button("Export Markdown…", action: onExportMarkdown)
             Divider()
             Button("Delete", role: .destructive, action: onDelete)
         }

@@ -190,7 +190,8 @@ public struct DocumentExtractor: Sendable {
         }
     }
     
-    /// PDF extraction via PDFKit
+    /// PDF extraction via PDFKit. Pages are separated with a `[Page N]`
+    /// marker so the model can cite where information came from.
     private func extractPDF(from url: URL) throws -> (String, Int?) {
         guard let document = PDFDocument(url: url) else {
             throw DocumentError.pdfExtractionFailed
@@ -199,7 +200,9 @@ public struct DocumentExtractor: Sendable {
         for pageIndex in 0..<document.pageCount {
             guard let page = document.page(at: pageIndex) else { continue }
             if let pageText = page.string {
-                if !text.isEmpty { text += "\n\n" }
+                if pageIndex > 0 {
+                    text += "\n\n[Page \(pageIndex + 1)]\n"
+                }
                 text += pageText
             }
         }

@@ -46,6 +46,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var isPinned: Bool
     /// Per-conversation max response length; nil means "use the global default".
     public var maxNewTokens: Int?
+    /// Id of the conversation this one was forked from, if any.
+    public var parentConversationID: UUID?
 
     /// The first user turn, or an empty string when there is none.
     public var firstPrompt: String {
@@ -68,7 +70,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 stopReason: String? = nil,
                 attachments: [DocumentAttachment] = [],
                 isPinned: Bool = false,
-                maxNewTokens: Int? = nil) {
+                maxNewTokens: Int? = nil,
+                parentConversationID: UUID? = nil) {
         self.id = id
         self.title = title
         self.turns = [
@@ -85,6 +88,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.attachments = attachments
         self.isPinned = isPinned
         self.maxNewTokens = maxNewTokens
+        self.parentConversationID = parentConversationID
     }
 
     /// Creates a conversation with an explicit turn list (for multi-turn history).
@@ -98,7 +102,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 stopReason: String? = nil,
                 attachments: [DocumentAttachment] = [],
                 isPinned: Bool = false,
-                maxNewTokens: Int? = nil) {
+                maxNewTokens: Int? = nil,
+                parentConversationID: UUID? = nil) {
         self.id = id
         self.title = title
         self.turns = turns
@@ -110,6 +115,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.attachments = attachments
         self.isPinned = isPinned
         self.maxNewTokens = maxNewTokens
+        self.parentConversationID = parentConversationID
     }
 
     /// Returns a copy with the given mutable fields replaced.
@@ -126,7 +132,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                      stopReason: stopReason,
                      attachments: attachments,
                      isPinned: isPinned ?? self.isPinned,
-                     maxNewTokens: maxNewTokens)
+                     maxNewTokens: maxNewTokens,
+                     parentConversationID: parentConversationID)
     }
 
     /// Formats the full multi-turn history as a single prompt for generation.
@@ -167,6 +174,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         case id, title, createdAt, updatedAt
         case promptTokenCount, generatedTokenCount, stopReason
         case attachments, isPinned, maxNewTokens, turns
+        case parentConversationID
         // Legacy single-exchange keys, kept for backward decoding.
         case prompt, response
     }
@@ -183,6 +191,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.attachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .attachments) ?? []
         self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
         self.maxNewTokens = try container.decodeIfPresent(Int.self, forKey: .maxNewTokens)
+        self.parentConversationID = try container.decodeIfPresent(UUID.self, forKey: .parentConversationID)
         // Newer files carry turns; legacy files used prompt/response fields.
         if let turns = try container.decodeIfPresent([Turn].self, forKey: .turns),
            !turns.isEmpty {
@@ -209,6 +218,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         try container.encode(attachments, forKey: .attachments)
         try container.encode(isPinned, forKey: .isPinned)
         try container.encodeIfPresent(maxNewTokens, forKey: .maxNewTokens)
+        try container.encodeIfPresent(parentConversationID, forKey: .parentConversationID)
         try container.encode(turns, forKey: .turns)
     }
 

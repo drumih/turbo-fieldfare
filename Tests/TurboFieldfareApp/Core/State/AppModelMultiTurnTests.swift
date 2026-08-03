@@ -149,4 +149,72 @@ import Testing
         #expect(turns.count == 2)
         #expect(turns[1].text == "answer two")
     }
+
+    // MARK: - Fork
+
+    @Test
+    func forkCreatesLinkedCopyAsActiveConversation() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        model.promptText = "original"
+        model.outputText = "answer"
+        model.saveCurrentConversation()
+        let source = model.conversationStore.conversations[0]
+
+        model.forkConversation(source)
+
+        #expect(model.conversationStore.conversations.count == 2)
+        let fork = model.conversationStore.conversations[0]
+        #expect(fork.id != source.id)
+        #expect(fork.parentConversationID == source.id)
+        #expect(fork.title == "Fork of \(source.title)")
+        #expect(fork.turns == source.turns)
+        #expect(model.activeConversationID == fork.id)
+    }
+
+    @Test
+    func forkUpToTurnTruncatesHistory() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        model.promptText = "one"
+        model.outputText = "answer one"
+        model.saveCurrentConversation()
+        model.promptText = "two"
+        model.outputText = "answer two"
+        model.saveCurrentConversation()
+        let source = model.conversationStore.conversations[0]
+        let secondUserTurn = source.turns[2]
+
+        model.forkConversation(source, upTo: secondUserTurn)
+
+        let fork = model.conversationStore.conversations[0]
+        #expect(fork.turns.count == 3)
+        #expect(fork.turns.last?.text == "two")
+    }
+
+    // MARK: - Markdown export
+
+    @Test
+    func exportMarkdownRendersTurns() {
+        let (model, _) = AppModelConversationTestsHelper.makeModel()
+        let conversation = Conversation(title: "My chat",
+                                        turns: [
+                                            Turn(role: .user, text: "hello"),
+                                            Turn(role: .model, text: "hi"),
+                                        ])
+
+        let markdown = model.exportConversationMarkdown(conversation)
+
+        #expect(markdown.hasPrefix("# My chat"))
+        #expect(markdown.contains("## User\n\nhello"))
+        #expect(markdown.contains("## Assistant\n\nhi"))
+    }
+}
+
+/// Test helper sharing the isolated-store model factory.
+enum AppModelConversationTestsHelper {
+    @MainActor
+    static func makeModel() -> (AppModel, URL) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("helper-\(UUID().uuidString).json")
+        return (AppModel(conversationStore: ConversationStore(storageURL: url)), url)
+    }
 }
