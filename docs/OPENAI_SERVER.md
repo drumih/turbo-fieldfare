@@ -1,8 +1,9 @@
 # Local OpenAI-compatible server
 
 `TurboFieldfareServer` exposes a local Chat Completions API for one Gemma
-model. It binds to `127.0.0.1` without authentication or TLS. Do not expose it
-through a proxy or tunnel.
+model. It binds to `127.0.0.1` by default, without authentication or TLS. Do
+not expose it through a proxy or tunnel, and keep it on loopback unless you
+explicitly choose otherwise (see [Bind address](#bind-address)).
 
 ## Start the server
 
@@ -26,6 +27,25 @@ swift build -c release --product TurboFieldfareServer
 The server loads the model before opening the port. Wait for
 `TurboFieldfareServer ready`, then keep the process running while clients use
 it.
+
+### Bind address
+
+`--host` selects the bind address (default `127.0.0.1`). Loopback hosts
+(`127.0.0.1`, `::1`, `localhost`) are always allowed. Binding any other host
+is refused unless `--allow-remote` is passed, because the server has no
+authentication or TLS:
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --host 192.168.1.10 \
+  --allow-remote
+```
+
+Only enable `--allow-remote` on a trusted, isolated network. Anyone who can
+reach the bound address can generate with your model, read its outputs, and
+ask it to make tool calls (which the client must still authorize). Prefer a
+loopback connection or an SSH tunnel to a remote host instead.
 
 Check the server from another terminal:
 

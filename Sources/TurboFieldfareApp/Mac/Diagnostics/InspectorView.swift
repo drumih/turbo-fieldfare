@@ -11,6 +11,7 @@ struct InspectorView: View {
             memorySection
             generationSection
             runtimeSection
+            attachmentsSection
             RunnerDiagnosticsSection(diagnostics: model.diagnostics)
         }
         .formStyle(.grouped)
@@ -155,11 +156,45 @@ struct InspectorView: View {
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Cognitive mode", isOn: $model.cognitiveModeEnabled)
+                .toggleStyle(.switch)
+            Text("Runs four passes: plan, draft, critique, and final revision. Each pass generates up to the full response limit, so runs are slower.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if model.hasStaleLoadedRuntime {
                 Text("Reload required")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .disabled(model.isRunning || model.loadState.isLoading)
+    }
+
+    private var attachmentsSection: some View {
+        Section("Attachments") {
+            LabeledContent("Max file size") {
+                Picker("Max file size", selection: $model.maxAttachmentFileSize) {
+                    ForEach([10, 25, 50, 100, 250, 500], id: \.self) { megabytes in
+                        Text("\(megabytes) MB").tag(UInt64(megabytes) * 1_048_576)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+            LabeledContent("Max text length") {
+                Picker("Max text length", selection: $model.maxAttachmentTextLength) {
+                    ForEach([100_000, 250_000, 500_000, 1_000_000], id: \.self) { length in
+                        Text("\(length / 1_000)k chars").tag(length)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+            Text("Limits apply to newly attached documents and are saved with your settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .disabled(model.isRunning || model.loadState.isLoading)
     }

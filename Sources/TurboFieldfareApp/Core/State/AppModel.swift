@@ -25,6 +25,10 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
+    /// Maximum file size accepted for document attachments
+    public var maxAttachmentFileSize: UInt64 = DocumentExtractor.maximumFileSize
+    /// Maximum extracted text length for document attachments
+    public var maxAttachmentTextLength: Int = DocumentExtractor.maximumTextLength
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -42,6 +46,29 @@ public final class AppModel {
     public private(set) var livePrefillTotal: Int = 0
     public private(set) var liveMemoryBytes: UInt64?
     public private(set) var isCancellationPending: Bool = false
+    
+    // MARK: - Document attachments
+    
+    /// Documents attached to the current prompt
+    public var attachments: [DocumentAttachment] = []
+    /// Per-file extraction errors for the current prompt
+    public var attachmentErrors: [String] = []
+    /// Whether an attachment extraction is in progress
+    public private(set) var isExtractingAttachment: Bool = false
+
+    // MARK: - Conversation history
+    
+    /// Persistent store of past conversations
+    public private(set) var conversationStore: ConversationStore
+    
+    /// Conversation currently loaded from history
+    public private(set) var activeConversationID: UUID?
+
+    // MARK: - Cognitive mode
+    
+    /// Whether generation runs the advanced cognitive cycle (plan, draft,
+    /// critique, final revision) instead of a single pass.
+    public var cognitiveModeEnabled = false
 
     private let client: any AppInferenceClient
     private let installer: any AppModelInstallerClient
@@ -65,7 +92,8 @@ public final class AppModel {
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
-                settingsPersistenceEnabled: Bool = false) {
+                settingsPersistenceEnabled: Bool = false,
+                conversationStore: ConversationStore? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
@@ -83,11 +111,15 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.maxAttachmentFileSize = settings.maxAttachmentFileSize
+        self.maxAttachmentTextLength = settings.maxAttachmentTextLength
+        self.cognitiveModeEnabled = settings.cognitiveModeEnabled
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
         self.memorySampler = memorySampler
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
+        self.conversationStore = conversationStore ?? ConversationStore()
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
@@ -629,6 +661,9 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
+        maxAttachmentFileSize = settings.maxAttachmentFileSize
+        maxAttachmentTextLength = settings.maxAttachmentTextLength
+        cognitiveModeEnabled = settings.cognitiveModeEnabled
     }
 
     private func persistSettings() {
@@ -643,7 +678,10 @@ public final class AppModel {
             topP: topP,
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
-            showPromptExamples: showPromptExamples)
+            showPromptExamples: showPromptExamples,
+            maxAttachmentFileSize: maxAttachmentFileSize,
+            maxAttachmentTextLength: maxAttachmentTextLength,
+            cognitiveModeEnabled: cognitiveModeEnabled)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,
@@ -722,7 +760,14 @@ public final class AppModel {
             return
         }
         persistSettings()
-
+        if cognitiveModeEnabled {
+            runCognitiveCycle(request: request)
+        } else {
+            runStandardGeneration(request: request)
+        }
+    }
+    
+    private func runStandardGeneration(request: AppGenerationRequest) {
         generationTranscriptMailbox?.reset()
         outputPromptText = request.prompt
         outputText = ""
@@ -756,6 +801,147 @@ public final class AppModel {
             }
         }
     }
+    
+    /// Runs the advanced cognitive cycle: plan, draft, critique, final
+    /// revision. Each pass streams into the output pane under its own
+    /// header; the conversation history stores the final revision.
+    private func runCognitiveCycle(request: AppGenerationRequest) {
+        generationTranscriptMailbox?.reset()
+        outputPromptText = request.prompt
+        outputText = ""
+        diagnostics = nil
+        error = nil
+        hasHandledTerminalEvent = false
+        activeRunRuntimeKey = AppLoadedRuntimeKey(
+            modelDirectory: request.modelDirectory,
+            maxContextTokens: request.maxContextTokens,
+            options: request.runtimeOptions,
+            forceLogitsHead: !request.isPureGreedy)
+        isCancellationPending = false
+        liveTokenCount = 0
+        liveElapsedDecodeSeconds = 0
+        livePrefillDone = 0
+        livePrefillTotal = 0
+        liveMemoryBytes = nil
+        phase = .prefill
+        runState = .running
+
+        runTask = Task.detached { [weak self, client, request] in
+            guard let self else { return }
+            var engine = CognitiveCycleEngine(userPrompt: request.prompt)
+            var finalText = ""
+            var finalDiagnostics: AppDiagnostics?
+            var cancelled = false
+
+            while let step = engine.nextStep() {
+                var passRequest = request
+                passRequest.prompt = step.prompt
+
+                // Reset the per-pass counters and open the pass in the output.
+                await MainActor.run {
+                    self.phase = .prefill
+                    self.liveTokenCount = 0
+                    self.liveElapsedDecodeSeconds = 0
+                    self.livePrefillDone = 0
+                    self.livePrefillTotal = 0
+                    if !self.outputText.isEmpty { self.outputText += "\n\n" }
+                    self.outputText += "— \(step.kind.header) —\n"
+                }
+
+                var passText = ""
+                var passDiagnostics: AppDiagnostics?
+                var passCancelled = false
+                var passFailed = false
+
+                do {
+                    for try await event in client.generate(passRequest) {
+                        switch event {
+                        case .prefillProgress(let done, let total):
+                            await MainActor.run {
+                                self.phase = .prefill
+                                self.livePrefillDone = done
+                                self.livePrefillTotal = total
+                            }
+                        case .token(let token):
+                            passText += token.textDelta
+                            await MainActor.run {
+                                self.phase = .decode
+                                self.liveTokenCount = token.index + 1
+                                self.liveElapsedDecodeSeconds = token.elapsedDecodeSeconds
+                                if let reporter = self.client as? any AppInferenceMemoryReporting {
+                                    self.liveMemoryBytes = reporter.currentInferenceMemoryBytes
+                                } else {
+                                    self.liveMemoryBytes = self.memorySampler.sample()
+                                }
+                                if !token.textDelta.isEmpty {
+                                    self.outputText += token.textDelta
+                                }
+                            }
+                        case .finished(let diagnostics):
+                            passDiagnostics = diagnostics
+                        case .cancelled(let diagnostics):
+                            passDiagnostics = diagnostics
+                            passCancelled = true
+                        case .failed(let appError, let partial):
+                            passDiagnostics = partial
+                            await self.finishCognitiveCycleFailure(appError, partial: partial)
+                            passFailed = true
+                        }
+                        if passCancelled || passFailed { break }
+                    }
+                } catch let appError as AppInferenceError {
+                    await self.finishCognitiveCycleFailure(appError, partial: passDiagnostics)
+                    passFailed = true
+                } catch {
+                    await self.finishCognitiveCycleFailure(.unknown("\(error)"), partial: passDiagnostics)
+                    passFailed = true
+                }
+
+                if passCancelled {
+                    cancelled = true
+                    await self.finishCognitiveCycleCancelled(passDiagnostics)
+                    break
+                }
+                if passFailed { return }
+
+                engine.record(output: passText)
+                finalText = passText
+                finalDiagnostics = passDiagnostics
+            }
+
+            if !cancelled {
+                let handled = await MainActor.run { self.hasHandledTerminalEvent }
+                if !handled {
+                    await self.finishCognitiveCycle(finalDiagnostics, response: finalText)
+                }
+            }
+        }
+    }
+    
+    private func finishCognitiveCycle(_ diagnostics: AppDiagnostics?, response: String) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        self.diagnostics = diagnostics
+        finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics, response: response)
+    }
+    
+    private func finishCognitiveCycleCancelled(_ diagnostics: AppDiagnostics?) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        self.diagnostics = diagnostics
+        error = .cancelled
+        finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)
+    }
+    
+    private func finishCognitiveCycleFailure(_ appError: AppInferenceError, partial: AppDiagnostics?) {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        diagnostics = partial
+        error = appError
+        finishTerminalRun()
+    }
 
     public func cancel() {
         guard canCancel else { return }
@@ -764,9 +950,11 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
+        // Append attached document text to the prompt when present
+        let effectivePrompt = hasAttachments ? promptWithAttachments : promptText
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
-            prompt: promptText,
+            prompt: effectivePrompt,
             maxNewTokens: maxNewTokensOverride ?? maxContextTokens,
             maxContextTokens: maxContextTokens,
             temperature: Float(temperature),
@@ -813,6 +1001,7 @@ public final class AppModel {
         materializeServiceTranscript()
         self.diagnostics = diagnostics
         finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)  // History
     }
 
     private func finishCancelled(_ diagnostics: AppDiagnostics) {
@@ -822,6 +1011,7 @@ public final class AppModel {
         self.diagnostics = diagnostics
         error = .cancelled
         finishTerminalRun()
+        saveCurrentConversation(diagnostic: diagnostics)  // History (stopped run)
     }
 
     private func materializeServiceTranscript() {
@@ -858,5 +1048,199 @@ public final class AppModel {
     private func clearUnloadTask(generation: UInt64) {
         guard generation == unloadGeneration else { return }
         unloadTask = nil
+    }
+    
+    // MARK: - Document attachment management
+    
+    /// Attaches documents to the current prompt
+    public func attachDocuments(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        isExtractingAttachment = true
+        attachmentErrors = []
+        // Capture the configured limits before leaving the main actor.
+        let extractor = DocumentExtractor(maximumFileSize: maxAttachmentFileSize,
+                                          maximumTextLength: maxAttachmentTextLength)
+        
+        Task.detached(priority: .userInitiated) { [weak self, extractor] in
+            var newAttachments: [DocumentAttachment] = []
+            var errors: [String] = []
+            
+            for url in urls {
+                // Enable secure access for sandboxed files and always release
+                // it when extraction finishes, regardless of the outcome.
+                let isAccessing = url.startAccessingSecurityScopedResource()
+                defer {
+                    if isAccessing {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                do {
+                    let attachment = try extractor.extract(from: url)
+                    newAttachments.append(attachment)
+                } catch let error as DocumentError {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                } catch {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.isExtractingAttachment = false
+                self.attachments.append(contentsOf: newAttachments)
+                self.attachmentErrors = errors
+            }
+        }
+    }
+    
+    /// Removes an attached document
+    public func removeAttachment(_ attachment: DocumentAttachment) {
+        attachments.removeAll { $0.id == attachment.id }
+    }
+    
+    /// Removes all attached documents
+    public func clearAttachments() {
+        attachments.removeAll()
+        attachmentErrors = []
+    }
+    
+    /// Full prompt text with attached document content injected
+    public var promptWithAttachments: String {
+        guard !attachments.isEmpty else { return promptText }
+        var context = promptText
+        for attachment in attachments {
+            context += attachment.promptContext()
+        }
+        return context
+    }
+    
+    /// Total size of attached documents in bytes
+    public var totalAttachmentBytes: UInt64 {
+        attachments.reduce(0) { $0 + $1.fileSize }
+    }
+    
+    /// Whether the prompt has attached documents
+    public var hasAttachments: Bool {
+        !attachments.isEmpty
+    }
+    
+    /// Rough token estimate of the effective prompt, including attached
+    /// documents. The app never loads the tokenizer in-process, so this is
+    /// an approximation used only for the composer hint.
+    public var estimatedPromptTokenCount: Int {
+        let text = hasAttachments ? promptWithAttachments : promptText
+        guard !text.isEmpty else { return 0 }
+        return (text.count + 3) / 4
+    }
+    
+    /// Whether the estimated prompt (with documents) exceeds the configured
+    /// context window. Generation would still run but tokens beyond the
+    /// window would be cut during prompt formatting.
+    public var estimatedPromptExceedsContext: Bool {
+        estimatedPromptTokenCount > maxContextTokens
+    }
+    
+    // MARK: - Conversation history management
+    
+    /// Saves the current conversation to history
+    public func saveCurrentConversation(diagnostic: AppDiagnostics? = nil, response: String? = nil) {
+        guard !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        
+        let now = Date()
+        // Regenerating the same prompt updates the active conversation instead
+        // of creating a duplicate entry; a different prompt starts a new one.
+        let active = activeConversationID.flatMap { id in
+            conversationStore.conversations.first { $0.id == id }
+        }
+        let savedResponse = response ?? outputText
+        let conversation: Conversation
+        if let active, active.prompt == promptText {
+            conversation = Conversation(
+                id: active.id,
+                title: active.title,
+                prompt: promptText,
+                response: savedResponse,
+                createdAt: active.createdAt,
+                updatedAt: now,
+                promptTokenCount: diagnostic?.promptTokenCount,
+                generatedTokenCount: diagnostic?.generatedTokens,
+                stopReason: diagnostic?.stopReason.rawValue,
+                attachments: attachments
+            )
+        } else {
+            conversation = Conversation(
+                id: UUID(),
+                title: Conversation.title(from: promptText),
+                prompt: promptText,
+                response: savedResponse,
+                createdAt: now,
+                updatedAt: now,
+                promptTokenCount: diagnostic?.promptTokenCount,
+                generatedTokenCount: diagnostic?.generatedTokens,
+                stopReason: diagnostic?.stopReason.rawValue,
+                attachments: attachments
+            )
+        }
+        
+        conversationStore.upsert(conversation)
+        activeConversationID = conversation.id
+    }
+    
+    /// Loads an existing conversation from history
+    public func loadConversation(_ conversation: Conversation) {
+        guard !isRunning else { return }
+        activeConversationID = conversation.id
+        promptText = conversation.prompt
+        outputPromptText = conversation.prompt
+        outputText = conversation.response
+        // Restore attached documents so regenerating keeps the context
+        attachments = conversation.attachments
+        attachmentErrors = []
+        // Clear the previous generation state
+        diagnostics = nil
+        error = nil
+        phase = .idle
+    }
+    
+    /// Starts a new empty conversation
+    public func newConversation() {
+        guard !isRunning else { return }
+        activeConversationID = nil
+        promptText = ""
+        outputPromptText = ""
+        outputText = ""
+        clearAttachments()
+    }
+    
+    /// Deletes a conversation from history
+    public func deleteConversation(_ conversation: Conversation) {
+        conversationStore.delete(conversation)
+        if activeConversationID == conversation.id {
+            newConversation()
+        }
+    }
+    
+    /// Renames a conversation in the history
+    public func renameConversation(_ conversation: Conversation, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        conversationStore.upsert(conversation.replacing(title: trimmed))
+    }
+    
+    /// Pins or unpins a conversation so it stays at the top of the list
+    public func togglePin(_ conversation: Conversation) {
+        conversationStore.upsert(conversation.replacing(isPinned: !conversation.isPinned))
+    }
+    
+    /// Exports all conversations to a JSON file
+    public func exportConversations(to url: URL) throws {
+        let data = try conversationStore.exportJSON()
+        try data.write(to: url, options: .atomic)
+    }
+    
+    /// Imports conversations from an exported JSON file; returns the count
+    public func importConversations(from url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        return try conversationStore.importJSON(data)
     }
 }

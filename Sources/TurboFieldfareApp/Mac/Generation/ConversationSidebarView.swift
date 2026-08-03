@@ -1,0 +1,267 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import TurboFieldfareAppCore
+
+/// Sidebar showing the conversation history.
+struct ConversationSidebarView: View {
+    @Bindable var model: AppModel
+    @State private var searchText: String = ""
+    @State private var showingClearConfirmation = false
+    @State private var exportDocument: ConversationsExportDocument?
+    @State private var showingExporter = false
+    @State private var showingImporter = false
+    @State private var importError: String?
+    @State private var importedCount: Int?
+    @FocusState private var searchFocused: Bool
+
+    private var filteredConversations: [Conversation] {
+        let items = model.conversationStore.conversations
+        guard !searchText.isEmpty else { return items }
+        let query = searchText.lowercased()
+        return items.filter {
+            $0.title.lowercased().contains(query)
+                || $0.prompt.lowercased().contains(query)
+                || $0.response.lowercased().contains(query)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Toolbar: new conversation + search + export/import
+            VStack(spacing: 8) {
+                HStack {
+                    Button {
+                        model.newConversation()
+                    } label: {
+                        Label("New", systemImage: "square.and.pencil")
+                            .font(.callout.weight(.medium))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(model.isRunning)
+                    .keyboardShortcut("n", modifiers: .command)
+
+                    Spacer()
+
+                    if !model.conversationStore.conversations.isEmpty {
+                        Menu {
+                            Button("Export…") { prepareExport() }
+                            Button("Import…") { showingImporter = true }
+                            Divider()
+                            Button("Clear all", role: .destructive) {
+                                showingClearConfirmation = true
+                            }
+                        } label: {
+                            Label("More", systemImage: "ellipsis.circle")
+                                .labelStyle(.iconOnly)
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("Export, import, or clear history")
+                    }
+                }
+
+                TextField("Search…", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                    .focused($searchFocused)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // Conversation list
+            if filteredConversations.isEmpty {
+                ContentUnavailableView(
+                    searchText.isEmpty ? "No conversations" : "No results",
+                    systemImage: "bubble.left.and.bubble.right",
+                    description: Text(
+                        searchText.isEmpty
+                            ? "Run a generation to create your first conversation."
+                            : "No conversations match “\(searchText)”."
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(selection: .constant(model.activeConversationID)) {
+                    ForEach(filteredConversations) { conversation in
+                        ConversationRowView(
+                            conversation: conversation,
+                            isActive: model.activeConversationID == conversation.id,
+                            onSelect: { model.loadConversation(conversation) },
+                            onDelete: { model.deleteConversation(conversation) },
+                            onRename: { model.renameConversation(conversation, title: $0) },
+                            onTogglePin: { model.togglePin(conversation) }
+                        )
+                    }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+            }
+        }
+        .background {
+            // Hidden command: focus the search field (⌘F).
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .alert("Clear all history?", isPresented: $showingClearConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive) {
+                model.conversationStore.clearAll()
+                model.newConversation()
+            }
+        } message: {
+            Text("This action cannot be undone.")
+        }
+        .alert("Import failed", isPresented: .init(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
+        }
+        .alert("Import complete", isPresented: .init(
+            get: { importedCount != nil },
+            set: { if !$0 { importedCount = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Imported \(importedCount ?? 0) conversation(s).")
+        }
+        .fileExporter(
+            isPresented: $showingExporter,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: "turbofieldfare-conversations"
+        ) { _ in
+            exportDocument = nil
+        }
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [.json]
+        ) { result in
+            switch result {
+            case .success(let url):
+                do {
+                    importedCount = try model.importConversations(from: url)
+                } catch {
+                    importError = error.localizedDescription
+                }
+            case .failure(let error):
+                importError = error.localizedDescription
+            }
+        }
+    }
+
+    private func prepareExport() {
+        guard let data = try? model.conversationStore.exportJSON() else { return }
+        exportDocument = ConversationsExportDocument(data: data)
+        showingExporter = true
+    }
+}
+
+/// JSON document backing the export sheet.
+struct ConversationsExportDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+
+    var data: Data
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
+/// A row in the conversation list.
+struct ConversationRowView: View {
+    let conversation: Conversation
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onDelete: () -> Void
+    let onRename: (String) -> Void
+    let onTogglePin: () -> Void
+    @State private var isRenaming = false
+    @State private var draftTitle = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onSelect) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        if conversation.isPinned {
+                            Image(systemName: "pin.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        if isRenaming {
+                            TextField("Title", text: $draftTitle)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.callout.weight(.semibold))
+                                .onSubmit { commitRename() }
+                                .onExitCommand { isRenaming = false }
+                        } else {
+                            Text(conversation.title)
+                                .font(.callout.weight(isActive ? .semibold : .regular))
+                                .lineLimit(1)
+                                .onTapGesture(count: 2) { beginRename() }
+                        }
+                        Spacer()
+                        Text(conversation.updatedAt, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(conversation.responsePreview)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    if let tokens = conversation.generatedTokenCount {
+                        Text("\(tokens) tokens")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+        }
+        .contextMenu {
+            Button("Open", action: onSelect)
+            Button(conversation.isPinned ? "Unpin" : "Pin", action: onTogglePin)
+            Button("Rename", action: beginRename)
+            Divider()
+            Button("Delete", role: .destructive, action: onDelete)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive, action: onDelete) {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+
+    private func beginRename() {
+        draftTitle = conversation.title
+        isRenaming = true
+    }
+
+    private func commitRename() {
+        isRenaming = false
+        onRename(draftTitle)
+    }
+}
+
+#Preview {
+    ConversationSidebarView(model: AppModel())
+        .frame(width: 260, height: 400)
+}
