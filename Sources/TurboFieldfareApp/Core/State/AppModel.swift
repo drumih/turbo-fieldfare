@@ -25,6 +25,10 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
+    /// Maximum file size accepted for document attachments
+    public var maxAttachmentFileSize: UInt64 = DocumentExtractor.maximumFileSize
+    /// Maximum extracted text length for document attachments
+    public var maxAttachmentTextLength: Int = DocumentExtractor.maximumTextLength
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -101,6 +105,8 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.maxAttachmentFileSize = settings.maxAttachmentFileSize
+        self.maxAttachmentTextLength = settings.maxAttachmentTextLength
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -648,6 +654,8 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
+        maxAttachmentFileSize = settings.maxAttachmentFileSize
+        maxAttachmentTextLength = settings.maxAttachmentTextLength
     }
 
     private func persistSettings() {
@@ -662,7 +670,9 @@ public final class AppModel {
             topP: topP,
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
-            showPromptExamples: showPromptExamples)
+            showPromptExamples: showPromptExamples,
+            maxAttachmentFileSize: maxAttachmentFileSize,
+            maxAttachmentTextLength: maxAttachmentTextLength)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,
@@ -893,9 +903,11 @@ public final class AppModel {
         guard !urls.isEmpty else { return }
         isExtractingAttachment = true
         attachmentErrors = []
+        // Capture the configured limits before leaving the main actor.
+        let extractor = DocumentExtractor(maximumFileSize: maxAttachmentFileSize,
+                                          maximumTextLength: maxAttachmentTextLength)
         
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let extractor = DocumentExtractor()
+        Task.detached(priority: .userInitiated) { [weak self, extractor] in
             var newAttachments: [DocumentAttachment] = []
             var errors: [String] = []
             
@@ -1035,5 +1047,29 @@ public final class AppModel {
         if activeConversationID == conversation.id {
             newConversation()
         }
+    }
+    
+    /// Renames a conversation in the history
+    public func renameConversation(_ conversation: Conversation, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        conversationStore.upsert(conversation.replacing(title: trimmed))
+    }
+    
+    /// Pins or unpins a conversation so it stays at the top of the list
+    public func togglePin(_ conversation: Conversation) {
+        conversationStore.upsert(conversation.replacing(isPinned: !conversation.isPinned))
+    }
+    
+    /// Exports all conversations to a JSON file
+    public func exportConversations(to url: URL) throws {
+        let data = try conversationStore.exportJSON()
+        try data.write(to: url, options: .atomic)
+    }
+    
+    /// Imports conversations from an exported JSON file; returns the count
+    public func importConversations(from url: URL) throws -> Int {
+        let data = try Data(contentsOf: url)
+        return try conversationStore.importJSON(data)
     }
 }

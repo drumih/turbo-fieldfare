@@ -200,6 +200,67 @@ import Testing
         #expect(reloaded.attachments[0].filename == "report.txt")
     }
 
+    @Test
+    func renameUpdatesTitle() {
+        let (model, _) = makeModel()
+        model.promptText = "prompt"
+        model.outputText = "response"
+        model.saveCurrentConversation()
+        let saved = model.conversationStore.conversations[0]
+
+        model.renameConversation(saved, title: "  Custom title  ")
+
+        #expect(model.conversationStore.conversations[0].title == "Custom title")
+        #expect(model.conversationStore.conversations[0].id == saved.id)
+    }
+
+    @Test
+    func renameIgnoresBlankTitle() {
+        let (model, _) = makeModel()
+        model.promptText = "prompt"
+        model.outputText = "response"
+        model.saveCurrentConversation()
+        let saved = model.conversationStore.conversations[0]
+
+        model.renameConversation(saved, title: "   ")
+
+        #expect(model.conversationStore.conversations[0].title == "prompt")
+    }
+
+    @Test
+    func togglePinFlipsConversation() {
+        let (model, _) = makeModel()
+        model.promptText = "p"
+        model.outputText = "r"
+        model.saveCurrentConversation()
+        let saved = model.conversationStore.conversations[0]
+        #expect(!saved.isPinned)
+
+        model.togglePin(saved)
+        #expect(model.conversationStore.conversations[0].isPinned)
+
+        model.togglePin(model.conversationStore.conversations[0])
+        #expect(!model.conversationStore.conversations[0].isPinned)
+    }
+
+    @Test
+    func exportAndImportThroughModel() throws {
+        let (model, _) = makeModel()
+        model.promptText = "export me"
+        model.outputText = "done"
+        model.saveCurrentConversation()
+
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("export-\(UUID().uuidString).json")
+        try model.exportConversations(to: url)
+
+        let (otherModel, _) = makeModel()
+        let count = try otherModel.importConversations(from: url)
+
+        #expect(count == 1)
+        #expect(otherModel.conversationStore.conversations[0].prompt == "export me")
+    }
+
     /// Minimal diagnostics for token-count assertions.
     private func makeDiagnostics() -> AppDiagnostics {
         AppDiagnostics(generatedTokens: 34,

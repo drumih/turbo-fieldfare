@@ -128,18 +128,27 @@ public struct DocumentAttachment: Identifiable, Sendable, Equatable, Codable {
 
 /// Text extractor for documents
 public struct DocumentExtractor: Sendable {
-    /// Maximum file size (50 MB)
+    /// Default maximum file size (50 MB)
     public static let maximumFileSize: UInt64 = 50 * 1_048_576
-    /// Maximum extracted text length (before truncation)
+    /// Default maximum extracted text length (before truncation)
     public static let maximumTextLength: Int = 500_000
-    
-    public init() {}
+
+    /// Maximum file size for this extractor
+    public let maximumFileSize: UInt64
+    /// Maximum extracted text length (before truncation)
+    public let maximumTextLength: Int
+
+    public init(maximumFileSize: UInt64 = DocumentExtractor.maximumFileSize,
+                maximumTextLength: Int = DocumentExtractor.maximumTextLength) {
+        self.maximumFileSize = maximumFileSize
+        self.maximumTextLength = maximumTextLength
+    }
     
     /// Extracts text from a file
     public func extract(from url: URL) throws -> DocumentAttachment {
         let fileSize = try fileSize(at: url)
-        guard fileSize <= Self.maximumFileSize else {
-            throw DocumentError.fileTooLarge(fileSize, maximum: Self.maximumFileSize)
+        guard fileSize <= maximumFileSize else {
+            throw DocumentError.fileTooLarge(fileSize, maximum: maximumFileSize)
         }
         
         let filename = url.lastPathComponent
@@ -154,8 +163,8 @@ public struct DocumentExtractor: Sendable {
         }
         
         // Truncate if needed
-        let truncated = text.count > Self.maximumTextLength
-        let finalText = truncated ? String(text.prefix(Self.maximumTextLength)) : text
+        let truncated = text.count > maximumTextLength
+        let finalText = truncated ? String(text.prefix(maximumTextLength)) : text
         
         return DocumentAttachment(
             filename: filename,

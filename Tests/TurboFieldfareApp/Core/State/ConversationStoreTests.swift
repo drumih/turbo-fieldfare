@@ -37,6 +37,51 @@ import Testing
         #expect(store.conversations.map(\.title) == ["newer", "older"])
     }
 
+    @Test func pinnedConversationsSortFirst() {
+        let (store, _) = makeStore()
+        let olderPinned = conversation(title: "pinned old",
+                                       updatedAt: Date().addingTimeInterval(-3600))
+            .replacing(isPinned: true)
+        let recent = conversation(title: "recent", updatedAt: Date())
+
+        store.upsert(recent)
+        store.upsert(olderPinned)
+
+        #expect(store.conversations.map(\.title) == ["pinned old", "recent"])
+    }
+
+    @Test func exportAndImportRoundTrip() throws {
+        let (store, _) = makeStore()
+        store.upsert(conversation(title: "a", promptTokenCount: 1))
+        store.upsert(conversation(title: "b"))
+
+        let data = try store.exportJSON()
+
+        let (otherStore, _) = makeStore()
+        let count = try otherStore.importJSON(data)
+
+        #expect(count == 2)
+        #expect(otherStore.conversations.map(\.title) == store.conversations.map(\.title))
+        #expect(otherStore.conversations.first { $0.title == "a" }?.promptTokenCount == 1)
+    }
+
+    @Test func importReplacesSameId() throws {
+        let (store, _) = makeStore()
+        store.upsert(conversation(title: "original"))
+
+        // An exported file with the same id but a renamed title.
+        let renamed = store.conversations[0].replacing(title: "renamed")
+        let (otherStore, _) = makeStore()
+        otherStore.upsert(renamed)
+        let data = try otherStore.exportJSON()
+
+        let count = try store.importJSON(data)
+
+        #expect(count == 1)
+        #expect(store.conversations.count == 1)
+        #expect(store.conversations[0].title == "renamed")
+    }
+
     @Test func upsertReplacesExistingConversation() {
         let (store, _) = makeStore()
         let id = UUID()

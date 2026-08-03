@@ -140,6 +140,39 @@ import Testing
         #expect(attachment.originalLength == DocumentExtractor.maximumTextLength + 1)
     }
 
+    // MARK: - Configurable limits
+
+    @Test func customTextLimitTruncates() throws {
+        let url = try temporaryFile(named: "custom.txt", text: "0123456789ABCDEF")
+        let custom = DocumentExtractor(maximumTextLength: 10)
+
+        let attachment = try custom.extract(from: url)
+
+        #expect(attachment.truncated)
+        #expect(attachment.extractedText == "0123456789")
+        #expect(attachment.originalLength == 16)
+    }
+
+    @Test func customFileSizeLimitRejects() throws {
+        // Sparse file of 1 KB with a 512-byte limit.
+        let url = try temporaryFile(named: "big.txt", data: Data())
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.seek(toOffset: 1024)
+        try handle.write(contentsOf: Data([0]))
+        try handle.close()
+
+        let custom = DocumentExtractor(maximumFileSize: 512)
+        do {
+            _ = try custom.extract(from: url)
+            Issue.record("Expected fileTooLarge error")
+        } catch let error as DocumentError {
+            guard case .fileTooLarge = error else {
+                Issue.record("Unexpected error: \(error)")
+                return
+            }
+        }
+    }
+
     // MARK: - Attachment presentation
 
     @Test func promptContextWrapsDocument() {

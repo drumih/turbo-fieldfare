@@ -12,6 +12,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
     public var generatedTokenCount: Int?
     public var stopReason: String?
     public var attachments: [DocumentAttachment]
+    public var isPinned: Bool
 
     public init(id: UUID = UUID(),
                 title: String,
@@ -22,7 +23,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
                 promptTokenCount: Int? = nil,
                 generatedTokenCount: Int? = nil,
                 stopReason: String? = nil,
-                attachments: [DocumentAttachment] = []) {
+                attachments: [DocumentAttachment] = [],
+                isPinned: Bool = false) {
         self.id = id
         self.title = title
         self.prompt = prompt
@@ -33,6 +35,25 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.generatedTokenCount = generatedTokenCount
         self.stopReason = stopReason
         self.attachments = attachments
+        self.isPinned = isPinned
+    }
+
+    /// Returns a copy with the given mutable fields replaced.
+    public func replacing(title: String? = nil,
+                          response: String? = nil,
+                          attachments: [DocumentAttachment]? = nil,
+                          isPinned: Bool? = nil) -> Conversation {
+        Conversation(id: id,
+                     title: title ?? self.title,
+                     prompt: prompt,
+                     response: response ?? self.response,
+                     createdAt: createdAt,
+                     updatedAt: updatedAt,
+                     promptTokenCount: promptTokenCount,
+                     generatedTokenCount: generatedTokenCount,
+                     stopReason: stopReason,
+                     attachments: attachments ?? self.attachments,
+                     isPinned: isPinned ?? self.isPinned)
     }
 
     /// Automatic title from the prompt when none is provided.
@@ -54,7 +75,8 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, title, prompt, response, createdAt, updatedAt
-        case promptTokenCount, generatedTokenCount, stopReason, attachments
+        case promptTokenCount, generatedTokenCount, stopReason
+        case attachments, isPinned
     }
 
     public init(from decoder: Decoder) throws {
@@ -68,8 +90,9 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.promptTokenCount = try container.decodeIfPresent(Int.self, forKey: .promptTokenCount)
         self.generatedTokenCount = try container.decodeIfPresent(Int.self, forKey: .generatedTokenCount)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
-        // Older history files predate document attachments.
+        // Older history files predate document attachments and pinning.
         self.attachments = try container.decodeIfPresent([DocumentAttachment].self, forKey: .attachments) ?? []
+        self.isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,6 +107,7 @@ public struct Conversation: Identifiable, Codable, Equatable, Sendable {
         try container.encodeIfPresent(generatedTokenCount, forKey: .generatedTokenCount)
         try container.encodeIfPresent(stopReason, forKey: .stopReason)
         try container.encode(attachments, forKey: .attachments)
+        try container.encode(isPinned, forKey: .isPinned)
     }
 }
 
@@ -119,8 +143,7 @@ public final class ConversationStore {
         } else {
             conversations.insert(conversation, at: 0)
         }
-        // Keep most recently updated first
-        conversations.sort { $0.updatedAt > $1.updatedAt }
+        sortConversations()
         save()
     }
 
@@ -141,11 +164,40 @@ public final class ConversationStore {
         load()
     }
 
+    /// Exports all conversations in the same JSON format the store uses.
+    public func exportJSON() throws -> Data {
+        try JSONEncoderValue.encode(conversations)
+    }
+
+    /// Imports conversations from exported JSON. Existing entries with the
+    /// same id are replaced; new ones are inserted. Returns the count.
+    public func importJSON(_ data: Data) throws -> Int {
+        let imported = try JSONDecoderValue.decode([Conversation].self, from: data)
+        for conversation in imported {
+            if let index = conversations.firstIndex(where: { $0.id == conversation.id }) {
+                conversations[index] = conversation
+            } else {
+                conversations.append(conversation)
+            }
+        }
+        sortConversations()
+        save()
+        return imported.count
+    }
+
+    /// Pinned conversations first, then most recently updated.
+    private func sortConversations() {
+        conversations.sort {
+            if $0.isPinned != $1.isPinned { return $0.isPinned }
+            return $0.updatedAt > $1.updatedAt
+        }
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: storageURL), !data.isEmpty else { return }
         do {
             conversations = try JSONDecoderValue.decode([Conversation].self, from: data)
-            conversations.sort { $0.updatedAt > $1.updatedAt }
+            sortConversations()
         } catch {
             conversations = []
         }
