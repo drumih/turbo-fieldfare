@@ -7,9 +7,8 @@ struct StatusHUDView: View {
 
     var body: some View {
         strip
-            .padding(.top, 10)
-            .padding(.leading, 84)
-            .padding(.trailing, 20)
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
     }
 
     private var strip: some View {
@@ -24,15 +23,13 @@ struct StatusHUDView: View {
                 HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
             }
         }
-        .frame(height: 30)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background {
-            Capsule()
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    Capsule().stroke(.separator.opacity(0.5), lineWidth: 0.5)
-                }
+        .frame(height: 28)
+        .padding(.horizontal, 2)
+        .padding(.bottom, 8)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(TurboFieldfareMacTheme.border)
+                .frame(height: 1)
         }
         .gesture(WindowDragGesture())
     }

@@ -40,6 +40,11 @@ constant constexpr float kSampleTopMaxK     = 256.0f;  // cap for top-k mask sca
 // ----------------------------------------------------------------------------
 
 inline float softcap_value(float z, float softcap) {
+    // A negative infinity is an explicit hard-suppression sentinel written by
+    // the host. Preserve it through softcapping so its probability stays zero.
+    // Treat NaN logits as invalid candidates instead of letting them poison the
+    // complete softmax reduction.
+    if (isnan(z) || (isinf(z) && z < 0.0f)) return -INFINITY;
     // tanh saturates well before |z/softcap|=10, so values like +1e3 collapse
     // cleanly to softcap=30 without exp overflow downstream.
     return softcap * precise::tanh(z / softcap);
@@ -68,12 +73,23 @@ void logit_softcap_softmax(
     threadgroup float final_m;
     threadgroup float final_inv_d;
 
+    // Initialize the cross-SIMD outputs explicitly. The Metal compiler does
+    // not infer that SIMD-group zero always writes these values before the
+    // barrier, and newer toolchains promote that diagnostic to a library
+    // compilation error.
+    if (lid == 0) {
+        final_m = -INFINITY;
+        final_inv_d = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
     // -log-of-zero sentinel: any real logit beats this on the first compare.
     float m = -INFINITY;
     float d = 0.0f;
 
     for (uint i = lid; i < V; i += lsize) {
         float z  = softcap_value(float(logits[i]), softcap);
+        if (z == -INFINITY) continue;
         float mn = max(m, z);
         // Guard against the (-inf, -inf) → (-inf, NaN) case on the first iter.
         float scale = (m == -INFINITY) ? 0.0f : logit_softmax_exp(m - mn);

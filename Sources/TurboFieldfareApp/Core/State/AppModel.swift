@@ -12,6 +12,19 @@ public final class AppModel {
 
     public var modelPathText: String
     public var promptText: String = ""
+    /// One app-managed local image queued for the next user turn.
+    public private(set) var pendingImage: AppImageAttachment?
+    public private(set) var attachmentError: String?
+    public private(set) var isImportingImage = false
+    /// Optional guidance that is prepended to each request in the current chat.
+    public var systemPromptText: String = ""
+    /// Locally saved conversations, ordered by most recently updated.
+    public private(set) var chats: [AppChatThread] = []
+    public private(set) var selectedChatID = UUID()
+    /// Completed turns in the current in-memory chat.
+    public private(set) var conversation: [AppChatMessage] = []
+    /// The conversation snapshot currently being generated or displayed.
+    public private(set) var outputMessages: [AppChatMessage] = []
     public private(set) var outputPromptText: String = ""
     public var outputText: String = ""
     public var runState: RunState = .idle
@@ -49,12 +62,21 @@ public final class AppModel {
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
     private var unloadTask: Task<Void, Never>?
+    private var runGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
     private var unloadGeneration: UInt64 = 0
     private var installGeneration: UInt64 = 0
     private var pendingExplicitLoadRuntimeKey: AppLoadedRuntimeKey?
     private var activeRunRuntimeKey: AppLoadedRuntimeKey?
     private var hasHandledTerminalEvent = false
+    /// The original completed turn while its answer is being regenerated or
+    /// its prompt is being edited. It stays in memory and on disk until the
+    /// replacement succeeds.
+    private var regenerationBackup: [AppChatMessage]?
+    /// While a response is streaming, periodically checkpoint the displayed
+    /// turn. This keeps a stopped or unexpectedly interrupted reply from
+    /// disappearing from the selected chat without writing on every token.
+    private var lastChatPersistenceDate: Date?
     private let memorySampler: AppMemorySampler
     private let settingsPersistenceEnabled: Bool
     private let installETAClock: SuspendingClock
@@ -71,6 +93,16 @@ public final class AppModel {
         let settings = settingsPersistenceEnabled
             ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
             : MacAppSettings()
+        let chatHistory = settingsPersistenceEnabled
+            ? AppChatHistoryFileStore.load(forModelDirectory: directory)
+            : .fresh()
+        let orderedChats = chatHistory.chats.sorted(by: Self.isMoreRecent)
+        let normalizedChats = Self.normalizedChatList(
+            orderedChats,
+            preserving: chatHistory.selectedChatID)
+        let selectedChat = normalizedChats.first(where: {
+            $0.id == chatHistory.selectedChatID
+        }) ?? normalizedChats[0]
         self.modelPathText = directory.path
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: settings.expertCacheSlots,
@@ -83,6 +115,18 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.chats = normalizedChats
+        self.selectedChatID = selectedChat.id
+        self.conversation = selectedChat.messages
+        self.systemPromptText = selectedChat.systemPrompt
+        if let response = selectedChat.messages.last, response.role == .assistant {
+            self.outputMessages = Array(selectedChat.messages.dropLast())
+            self.outputPromptText = selectedChat.messages.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            self.outputText = response.content
+        } else {
+            self.outputMessages = selectedChat.messages
+        }
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
@@ -91,6 +135,9 @@ public final class AppModel {
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
         refreshInstallReadiness()
+        if normalizedChats.count != orderedChats.count {
+            persistChatHistory()
+        }
     }
 
     public var isRunning: Bool { runState == .running }
@@ -198,33 +245,97 @@ public final class AppModel {
     }
 
     public var canRun: Bool {
-        !isRunning && isModelAvailable && !loadState.isLoading
+        !isRunning && !isImportingImage
+            && isModelAvailable && !loadState.isLoading
             && !hasStaleLoadedRuntime
             && !promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    public var canAttachImage: Bool {
+        !isRunning
+            && !isImportingImage
+            && pendingImage == nil
+            && conversation.reduce(0) { $0 + $1.images.count }
+                < AppGenerationRequest.maximumImageAttachments
+    }
+
+    public var chatAttachmentRootURL: URL {
+        AppChatAttachmentStore.rootURL(
+            forModelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+    }
+
+    public func imageURL(for attachment: AppImageAttachment) -> URL? {
+        try? AppChatAttachmentStore.fileURL(
+            for: attachment,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+    }
+
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
+    public var canManageChats: Bool { !isRunning && !isImportingImage }
+
+    public var completedTurnCount: Int {
+        conversation.reduce(into: 0) { count, message in
+            if message.role == .user { count += 1 }
+        }
+    }
+
+    public var hasSystemPrompt: Bool {
+        !systemPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    public var canRegenerate: Bool {
+        !isRunning && !isImportingImage
+            && isModelAvailable && !loadState.isLoading && !hasStaleLoadedRuntime
+            && hasCompletedLatestTurn
+    }
+
+    /// Editing is intentionally limited to the user message belonging to the
+    /// latest completed assistant response. Earlier context stays immutable.
+    public var canEditLastPrompt: Bool {
+        !isRunning && !isImportingImage && hasCompletedLatestTurn
+    }
+
+    /// A completed prompt remains editable while the model is unloaded, but
+    /// its replacement can only be submitted once generation is available.
+    public var canSubmitEditedLastPrompt: Bool { canRegenerate }
+
+    public var selectedChatTitle: String {
+        chats.first(where: { $0.id == selectedChatID })?.title ?? "New chat"
+    }
+
     public var hasOutputTranscript: Bool {
-        !outputPromptText.isEmpty || !outputText.isEmpty
+        !outputMessages.isEmpty || !outputText.isEmpty
     }
 
     public var outputResponsePlainText: String {
-        generationTranscriptMailbox?.completeText ?? outputText
+        guard let mailbox = generationTranscriptMailbox else { return outputText }
+        let canonicalText = mailbox.completeText
+        return canonicalText.isEmpty ? outputText : canonicalText
     }
 
     public var outputConversationPlainText: String {
+        var messages = outputMessages
         let response = outputResponsePlainText
-        switch (outputPromptText.isEmpty, response.isEmpty) {
-        case (true, true):
-            return ""
-        case (false, true):
-            return "You:\n\(outputPromptText)"
-        case (true, false):
-            return "Answer:\n\(response)"
-        case (false, false):
-            return "You:\n\(outputPromptText)\n\nAnswer:\n\(response)"
+        if !response.isEmpty {
+            messages.append(AppChatMessage(role: .assistant, content: response))
         }
+        return messages.map { message in
+            let label: String = switch message.role {
+            case .system: "Instructions"
+            case .user: "You"
+            case .assistant: "Answer"
+            }
+            let imageLines = message.images.map {
+                "[Image: \($0.originalFilename)]"
+            }
+            return (["\(label):"] + imageLines + [message.content])
+                .joined(separator: "\n")
+        }.joined(separator: "\n\n")
     }
 
     public var liveTokensPerSecond: Double {
@@ -270,14 +381,24 @@ public final class AppModel {
         temperature != 0
     }
 
+    private var hasCompletedLatestTurn: Bool {
+        conversation.count >= 2
+            && conversation[conversation.count - 2].role == .user
+            && conversation.last?.role == .assistant
+    }
+
     public func setModelURL(_ url: URL) {
         guard !isRunning else { return }
         let path = url.standardizedFileURL.path
         guard path != modelPathText else { return }
 
+        saveActiveChat()
+        discardPendingImage()
+        attachmentError = nil
         modelPathText = path
         applyPersistedSettings(
             forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
+        loadChatHistory(forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
         loadGeneration &+= 1
         loadTask?.cancel()
         loadTask = nil
@@ -334,6 +455,64 @@ public final class AppModel {
         guard showPromptExamples != show else { return }
         showPromptExamples = show
         persistSettings()
+    }
+
+    @discardableResult
+    public func attachImage(at sourceURL: URL) async -> Bool {
+        guard canAttachImage else { return false }
+        let chatID = selectedChatID
+        let modelDirectory = URL(
+            fileURLWithPath: modelPathText,
+            isDirectory: true).standardizedFileURL
+        attachmentError = nil
+        isImportingImage = true
+        defer { isImportingImage = false }
+        do {
+            let attachment = try await Task.detached(priority: .userInitiated) {
+                let accessedSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+                defer {
+                    if accessedSecurityScope {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                }
+                return try AppChatAttachmentStore.importImage(
+                    from: sourceURL,
+                    chatID: chatID,
+                    forModelDirectory: modelDirectory)
+            }.value
+            let activeDirectory = URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true).standardizedFileURL
+            guard selectedChatID == chatID,
+                  activeDirectory == modelDirectory else {
+                AppChatAttachmentStore.remove(
+                    attachment,
+                    forModelDirectory: modelDirectory)
+                return false
+            }
+            pendingImage = attachment
+            attachmentError = nil
+            return true
+        } catch {
+            let activeDirectory = URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true).standardizedFileURL
+            if selectedChatID == chatID, activeDirectory == modelDirectory {
+                attachmentError = (error as? AppChatAttachmentStoreError)?.description
+                    ?? "The image could not be added: \(error)"
+            }
+            return false
+        }
+    }
+
+    public func removePendingImage() {
+        guard !isRunning else { return }
+        discardPendingImage()
+        attachmentError = nil
+    }
+
+    public func dismissAttachmentError() {
+        attachmentError = nil
     }
 
     public func reloadModel() {
@@ -700,12 +879,96 @@ public final class AppModel {
     }
 
     public func clearOutput() {
-        guard !isRunning else { return }
+        guard !isRunning, !isImportingImage else { return }
+        discardPendingImage()
+        AppChatAttachmentStore.removeAll(
+            forChatID: selectedChatID,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+        attachmentError = nil
+        conversation = []
+        outputMessages = []
+        systemPromptText = ""
         outputPromptText = ""
         outputText = ""
         generationTranscriptMailbox?.reset()
         diagnostics = nil
         error = nil
+        saveActiveChat()
+        normalizeNewChatPlaceholders()
+        persistChatHistory()
+    }
+
+    public func newChat() {
+        guard canManageChats else { return }
+        saveActiveChat()
+
+        normalizeNewChatPlaceholders()
+        if let existing = chats.first(where: Self.isPristineNewChat) {
+            // Reuse the existing blank page and reset any unsent draft so
+            // repeated taps always land on a genuinely new-chat surface.
+            apply(chat: existing)
+            persistChatHistory()
+            return
+        }
+
+        let chat = AppChatThread()
+        chats.append(chat)
+        orderChatsByRecency()
+        selectedChatID = chat.id
+        apply(chat: chat)
+        persistChatHistory()
+    }
+
+    public func selectChat(_ id: UUID) {
+        guard canManageChats, id != selectedChatID else { return }
+        saveActiveChat()
+        guard let chat = chats.first(where: { $0.id == id }) else { return }
+        selectedChatID = chat.id
+        apply(chat: chat)
+        persistChatHistory()
+    }
+
+    public func deleteChat(_ id: UUID) {
+        // Instruction edits do not otherwise have a dedicated Save button;
+        // synchronize the selected chat before an unrelated sidebar action.
+        saveActiveChat()
+        guard canManageChats,
+              let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        if selectedChatID == id {
+            discardPendingImage()
+            attachmentError = nil
+        }
+        chats.remove(at: index)
+        AppChatAttachmentStore.removeAll(
+            forChatID: id,
+            modelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+        if chats.isEmpty {
+            let chat = AppChatThread()
+            chats = [chat]
+        }
+        if selectedChatID == id {
+            let replacement = chats[0]
+            selectedChatID = replacement.id
+            apply(chat: replacement)
+        }
+        normalizeNewChatPlaceholders()
+        persistChatHistory()
+    }
+
+    public func renameChat(_ id: UUID, to title: String) {
+        saveActiveChat()
+        guard canManageChats,
+              let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        chats[index].title = String(cleaned.prefix(80))
+        chats[index].updatedAt = Date()
+        orderChatsByRecency()
+        persistChatHistory()
     }
 
     public func run() {
@@ -723,7 +986,13 @@ public final class AppModel {
         }
         persistSettings()
 
+        // The request retains the submitted prompt; clear the composer so the
+        // user can prepare the next turn while this response streams.
+        promptText = ""
+        pendingImage = nil
+        attachmentError = nil
         generationTranscriptMailbox?.reset()
+        outputMessages = conversation + [request.messages.last!]
         outputPromptText = request.prompt
         outputText = ""
         diagnostics = nil
@@ -742,17 +1011,47 @@ public final class AppModel {
         liveMemoryBytes = nil
         phase = .prefill
         runState = .running
+        runGeneration &+= 1
+        let generation = runGeneration
+        lastChatPersistenceDate = Date()
+        // Store the submitted turn before prefill starts. In particular, this
+        // preserves a prompt when the app is closed or generation is stopped
+        // before the first token arrives.
+        saveActiveChat(titleForFirstPrompt: request.prompt)
 
-        runTask = Task.detached { [weak self, client, request] in
+        runTask = Task.detached { [weak self, client, request, generation] in
             guard let self else { return }
+            guard await self.canStartRun(generation: generation) else {
+                await self.finishStreamFailure(.cancelled, generation: generation)
+                return
+            }
+
+            let stream = client.generate(request)
+            // `cancel()` can arrive before the client task has registered its
+            // generation. Check again after creating the stream so Stop is
+            // never lost in that narrow startup window.
+            guard await self.canStartRun(generation: generation) else {
+                client.cancel()
+                await self.finishStreamFailure(.cancelled, generation: generation)
+                return
+            }
             do {
-                for try await event in client.generate(request) {
-                    await self.apply(event)
+                for try await event in stream {
+                    await self.apply(event, generation: generation)
                 }
+                if await self.hasActiveRun(generation: generation) {
+                    let wasCancelled = await self.isCancellationPending
+                    let error: AppInferenceError = wasCancelled
+                        ? .cancelled
+                        : .unknown("Generation ended without a completion event.")
+                    await self.finishStreamFailure(error, generation: generation)
+                }
+            } catch is CancellationError {
+                await self.finishStreamFailure(.cancelled, generation: generation)
             } catch let appError as AppInferenceError {
-                await self.finishStreamFailure(appError)
+                await self.finishStreamFailure(appError, generation: generation)
             } catch {
-                await self.finishStreamFailure(.unknown("\(error)"))
+                await self.finishStreamFailure(.unknown("\(error)"), generation: generation)
             }
         }
     }
@@ -764,6 +1063,15 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
+        var messages: [AppChatMessage] = []
+        if hasSystemPrompt {
+            messages.append(AppChatMessage(role: .system, content: systemPromptText))
+        }
+        messages.append(contentsOf: conversation)
+        messages.append(AppChatMessage(
+            role: .user,
+            content: promptText,
+            images: pendingImage.map { [$0] } ?? []))
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             prompt: promptText,
@@ -773,9 +1081,51 @@ public final class AppModel {
             topK: topKEnabled ? topK : nil,
             topP: topKEnabled && topPEnabled ? Float(topP) : nil,
             repetitionPenalty: 1.0,
-            runtimeOptions: runtimeOptions)
+            runtimeOptions: runtimeOptions,
+            messages: messages)
         try request.validate(requireModelDirectory: true)
         return request
+    }
+
+    public func regenerateLastResponse() {
+        guard canRegenerate, conversation.count >= 2 else { return }
+        _ = replaceLastCompletedTurn(
+            with: conversation[conversation.count - 2].content)
+    }
+
+    /// Replaces only the latest user prompt and regenerates its answer using
+    /// every earlier turn as context. The old prompt and answer remain the
+    /// persisted source of truth until the replacement finishes successfully.
+    @discardableResult
+    public func submitEditedLastPrompt(_ editedPrompt: String) -> Bool {
+        replaceLastCompletedTurn(with: editedPrompt)
+    }
+
+    @discardableResult
+    private func replaceLastCompletedTurn(with replacementPrompt: String) -> Bool {
+        guard canSubmitEditedLastPrompt,
+              conversation.count >= 2,
+              !replacementPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        let previousConversation = conversation
+        let previousUserMessage = conversation[conversation.count - 2]
+        conversation.removeLast(2)
+        regenerationBackup = previousConversation
+        promptText = replacementPrompt
+        // Editing changes only the latest query text. Its managed image stays
+        // attached to both edit and regenerate requests.
+        pendingImage = previousUserMessage.images.first
+        run()
+
+        guard isRunning else {
+            promptText = ""
+            pendingImage = nil
+            restoreRegenerationBackupIfNeeded()
+            return false
+        }
+        return true
     }
 
     func apply(_ event: AppInferenceEvent) {
@@ -796,6 +1146,7 @@ public final class AppModel {
             if !token.textDelta.isEmpty {
                 outputText += token.textDelta
             }
+            persistActiveRunIfNeeded()
         case .finished(let diagnostics):
             finishSuccessfully(diagnostics)
         case .cancelled(let diagnostics):
@@ -807,10 +1158,16 @@ public final class AppModel {
         }
     }
 
+    private func apply(_ event: AppInferenceEvent, generation: UInt64) {
+        guard generation == runGeneration, isRunning else { return }
+        apply(event)
+    }
+
     private func finishSuccessfully(_ diagnostics: AppDiagnostics) {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
+        commitDisplayedTurnToConversation()
         self.diagnostics = diagnostics
         finishTerminalRun()
     }
@@ -819,6 +1176,9 @@ public final class AppModel {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
+        if !restoreRegenerationBackupIfNeeded() {
+            commitDisplayedTurnToConversation()
+        }
         self.diagnostics = diagnostics
         error = .cancelled
         finishTerminalRun()
@@ -826,12 +1186,19 @@ public final class AppModel {
 
     private func materializeServiceTranscript() {
         guard let reporter = client as? any AppInferenceTranscriptReporting else { return }
-        outputText = reporter.generationTranscriptMailbox.completeText
+        let canonicalText = reporter.generationTranscriptMailbox.completeText
+        if !canonicalText.isEmpty || outputText.isEmpty {
+            outputText = canonicalText
+        }
     }
 
     private func finishWithError(_ appError: AppInferenceError) {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
+        materializeServiceTranscript()
+        if !restoreRegenerationBackupIfNeeded() {
+            commitDisplayedTurnToConversation()
+        }
         error = appError
         finishTerminalRun()
     }
@@ -841,12 +1208,202 @@ public final class AppModel {
         finishWithError(appError)
     }
 
+    private func finishStreamFailure(_ appError: AppInferenceError, generation: UInt64) {
+        guard generation == runGeneration, isRunning else { return }
+        finishStreamFailure(appError)
+    }
+
     private func finishTerminalRun() {
         phase = .idle
         runState = .idle
         isCancellationPending = false
         activeRunRuntimeKey = nil
         runTask = nil
+        lastChatPersistenceDate = nil
+    }
+
+    /// Makes the transcript currently visible in the chat authoritative. A
+    /// completed answer, a stopped partial answer, and a failed partial answer
+    /// all remain available when the user changes chats or relaunches the app.
+    private func commitDisplayedTurnToConversation() {
+        conversation = outputMessages
+        if !outputText.isEmpty {
+            conversation.append(AppChatMessage(role: .assistant, content: outputText))
+        }
+        regenerationBackup = nil
+        saveActiveChat()
+    }
+
+    @discardableResult
+    private func restoreRegenerationBackupIfNeeded() -> Bool {
+        guard let regenerationBackup else { return false }
+        self.regenerationBackup = nil
+        conversation = regenerationBackup
+        generationTranscriptMailbox?.reset()
+        if let response = regenerationBackup.last, response.role == .assistant {
+            outputMessages = Array(regenerationBackup.dropLast())
+            outputPromptText = regenerationBackup.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            outputText = response.content
+        } else {
+            outputMessages = regenerationBackup
+            outputPromptText = regenerationBackup.last(where: { $0.role == .user })?.content ?? ""
+            outputText = ""
+        }
+        saveActiveChat()
+        return true
+    }
+
+    private func apply(chat: AppChatThread) {
+        discardPendingImage()
+        attachmentError = nil
+        selectedChatID = chat.id
+        conversation = chat.messages
+        systemPromptText = chat.systemPrompt
+        promptText = ""
+        generationTranscriptMailbox?.reset()
+        diagnostics = nil
+        error = nil
+        if let response = chat.messages.last, response.role == .assistant {
+            outputMessages = Array(chat.messages.dropLast())
+            outputPromptText = chat.messages.dropLast()
+                .last(where: { $0.role == .user })?.content ?? ""
+            outputText = response.content
+        } else {
+            outputMessages = chat.messages
+            outputPromptText = chat.messages.last(where: { $0.role == .user })?.content ?? ""
+            outputText = ""
+        }
+    }
+
+    private func loadChatHistory(forModelDirectory modelDirectory: URL) {
+        let history = settingsPersistenceEnabled
+            ? AppChatHistoryFileStore.load(forModelDirectory: modelDirectory)
+            : .fresh()
+        chats = Self.normalizedChatList(
+            history.chats,
+            preserving: history.selectedChatID)
+        orderChatsByRecency()
+        let chat = chats.first(where: { $0.id == history.selectedChatID }) ?? chats[0]
+        apply(chat: chat)
+        persistChatHistory()
+    }
+
+    private func saveActiveChat(titleForFirstPrompt prompt: String? = nil) {
+        guard let index = chats.firstIndex(where: { $0.id == selectedChatID }) else { return }
+        let messages = messagesForPersistence()
+        var didChange = chats[index].systemPrompt != systemPromptText
+            || chats[index].messages != messages
+        chats[index].systemPrompt = systemPromptText
+        chats[index].messages = messages
+        if chats[index].title == "New chat",
+           let prompt,
+           !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            chats[index].title = Self.chatTitle(for: prompt)
+            didChange = true
+        }
+        if didChange {
+            chats[index].updatedAt = Date()
+            orderChatsByRecency()
+        }
+        persistChatHistory()
+    }
+
+    private func persistActiveRunIfNeeded(now: Date = Date()) {
+        guard settingsPersistenceEnabled, isRunning else { return }
+        if let lastChatPersistenceDate,
+           now.timeIntervalSince(lastChatPersistenceDate) < 1 {
+            return
+        }
+        lastChatPersistenceDate = now
+        saveActiveChat()
+    }
+
+    /// Uses the displayed transcript while a generation is finishing so a
+    /// chat switch cannot lose the submitted turn or its latest response.
+    private func messagesForPersistence() -> [AppChatMessage] {
+        guard isRunning else { return conversation }
+        if let regenerationBackup { return regenerationBackup }
+        var messages = outputMessages
+        let response = outputResponsePlainText
+        if !response.isEmpty {
+            messages.append(AppChatMessage(role: .assistant, content: response))
+        }
+        return messages
+    }
+
+    private func persistChatHistory() {
+        guard settingsPersistenceEnabled else { return }
+        let history = AppChatHistoryDocument(selectedChatID: selectedChatID, chats: chats)
+        try? AppChatHistoryFileStore.save(
+            history,
+            forModelDirectory: URL(fileURLWithPath: modelPathText, isDirectory: true))
+    }
+
+    private func discardPendingImage() {
+        guard let pendingImage else { return }
+        AppChatAttachmentStore.remove(
+            pendingImage,
+            forModelDirectory: URL(
+                fileURLWithPath: modelPathText,
+                isDirectory: true))
+        self.pendingImage = nil
+    }
+
+    private func orderChatsByRecency() {
+        chats.sort(by: Self.isMoreRecent)
+    }
+
+    private func normalizeNewChatPlaceholders() {
+        let blankChats = chats.filter(Self.isPristineNewChat)
+        guard blankChats.count > 1 else { return }
+
+        let keepID = blankChats.first(where: { $0.id == selectedChatID })?.id
+            ?? blankChats[0].id
+        chats.removeAll { chat in
+            Self.isPristineNewChat(chat) && chat.id != keepID
+        }
+        orderChatsByRecency()
+    }
+
+    private func canStartRun(generation: UInt64) -> Bool {
+        generation == runGeneration && isRunning && !isCancellationPending
+    }
+
+    private func hasActiveRun(generation: UInt64) -> Bool {
+        generation == runGeneration && isRunning
+    }
+
+    private static func isMoreRecent(_ lhs: AppChatThread, _ rhs: AppChatThread) -> Bool {
+        if lhs.updatedAt == rhs.updatedAt { return lhs.createdAt > rhs.createdAt }
+        return lhs.updatedAt > rhs.updatedAt
+    }
+
+    private static func normalizedChatList(
+        _ chats: [AppChatThread],
+        preserving preferredID: UUID?
+    ) -> [AppChatThread] {
+        let blankChats = chats.filter(Self.isPristineNewChat)
+        guard blankChats.count > 1 else { return chats }
+
+        let keepID = blankChats.first(where: { $0.id == preferredID })?.id
+            ?? blankChats[0].id
+        return chats.filter { chat in
+            !Self.isPristineNewChat(chat) || chat.id == keepID
+        }
+    }
+
+    private static func isPristineNewChat(_ chat: AppChatThread) -> Bool {
+        chat.title.trimmingCharacters(in: .whitespacesAndNewlines) == "New chat"
+            && chat.messages.isEmpty
+            && chat.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func chatTitle(for prompt: String) -> String {
+        let title = prompt
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return title.isEmpty ? "New chat" : String(title.prefix(80))
     }
 
     private func clearLoadTask(generation: UInt64) {

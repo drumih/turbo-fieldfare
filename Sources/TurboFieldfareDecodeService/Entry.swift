@@ -103,7 +103,29 @@ import TurboFieldfareDecodeProtocol
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
-                        runtimeOptions: options)
+                        runtimeOptions: options,
+                        messages: request.messages.map { message in
+                            let role: AppChatRole
+                            switch message.role {
+                            case .system: role = .system
+                            case .user: role = .user
+                            case .assistant: role = .assistant
+                            }
+                            return AppChatMessage(
+                                role: role,
+                                content: message.content,
+                                images: message.images.map { image in
+                                    AppImageAttachment(
+                                        id: image.id,
+                                        relativePath: image.relativePath,
+                                        originalFilename: image.originalFilename,
+                                        mediaTypeIdentifier: image.mediaTypeIdentifier,
+                                        pixelWidth: image.pixelWidth,
+                                        pixelHeight: image.pixelHeight,
+                                        byteCount: image.byteCount,
+                                        sha256: image.sha256)
+                                })
+                        })
                     for try await event in client.generate(generation) {
                         outbox.publish(event)
                     }

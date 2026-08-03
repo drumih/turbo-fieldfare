@@ -39,6 +39,16 @@ import Testing
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText == "You:\nnew prompt")
     }
+
+    @MainActor
+    @Test func restoredOutputFallsBackWhenTheServiceMailboxIsEmpty() {
+        let client = ReportingInferenceClient(memoryBytes: 2_100_000_000)
+        let model = AppModel(client: client)
+        model.outputText = "restored answer"
+
+        #expect(model.outputResponsePlainText == "restored answer")
+        #expect(model.outputConversationPlainText == "Answer:\nrestored answer")
+    }
 }
 
 private final class ReportingInferenceClient: AppInferenceClient,

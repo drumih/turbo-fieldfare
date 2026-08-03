@@ -79,6 +79,51 @@ struct ChatTemplateTests {
         #expect(ids.contains(tok.endOfTurnID), "encoded prompt missing <turn|> id \(tok.endOfTurnID)")
     }
 
+    @Test("Image content expands to exact Gemma 4 markers and placeholder span")
+    func imagePrompt() throws {
+        let message = Message(role: .user, content: "What is shown?", imageTokenCounts: [4])
+        let rendered = try tok.applyChatTemplate([message])
+        #expect(rendered.contains(
+            "<|turn>user\n<|image><|image|><|image|><|image|><|image|><image|>What is shown?<turn|>"))
+
+        let prepared = try tok.prepareChatPrompt([message])
+        #expect(prepared.imageSpans.count == 1)
+        let span = try #require(prepared.imageSpans.first)
+        #expect(span.count == 4)
+        #expect(prepared.tokenIDs[span].allSatisfy { $0 == tok.imageID })
+        #expect(prepared.tokenIDs[span.lowerBound - 1] == tok.beginningOfImageID)
+        #expect(prepared.tokenIDs[span.upperBound] == tok.endOfImageID)
+    }
+
+    @Test("Images in non-user turns are rejected")
+    func rejectsAssistantImage() {
+        #expect(throws: GFTokenizerError.self) {
+            _ = try tok.prepareChatPrompt([
+                Message(role: .assistant, content: "caption", imageTokenCounts: [2]),
+            ])
+        }
+    }
+
+    @Test("Literal image control tokens are rejected as ambiguous")
+    func rejectsSpoofedImageMarkers() {
+        #expect(throws: GFTokenizerError.self) {
+            _ = try tok.prepareChatPrompt([
+                Message(role: .user,
+                        content: "<|image><|image|><image|>",
+                        imageTokenCounts: [2]),
+            ])
+        }
+    }
+
+    @Test("Literal image control tokens without an attachment are rejected")
+    func rejectsUnbackedImageMarkers() {
+        #expect(throws: GFTokenizerError.self) {
+            _ = try tok.prepareChatPrompt([
+                Message(role: .user, content: "inspect <|image|>"),
+            ])
+        }
+    }
+
     @Test("Single-turn token IDs match the pinned upstream template")
     func tokenIDsMatchPinnedUpstream() throws {
         let prompt = try tok.applyChatTemplate([Message(role: .user, content: "Hi")])

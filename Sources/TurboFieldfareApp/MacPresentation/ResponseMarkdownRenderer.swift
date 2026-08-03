@@ -41,8 +41,11 @@ public struct ResponseMarkdownRenderer {
         guard !source.isEmpty else {
             return Result(attributedString: NSAttributedString(), usedFallback: false)
         }
-        guard !requiresRawFallback(source) else { return fallback(source) }
-        let presentationSource = source.replacingOccurrences(
+        let normalizedSource = normalizeTables(in: source)
+        guard !requiresRawFallback(normalizedSource) else {
+            return fallback(normalizedSource)
+        }
+        let presentationSource = normalizedSource.replacingOccurrences(
             of: #"(?m)^([ \t]*\*\*[^*\n]+\*\*[ \t]*)\n(?=\S)"#,
             with: "$1\n\n",
             options: .regularExpression)
@@ -53,7 +56,9 @@ public struct ResponseMarkdownRenderer {
                 options: .init(
                     interpretedSyntax: .full,
                     failurePolicy: .returnPartiallyParsedIfPossible))
-            guard !containsUnsupportedBlock(in: parsed) else { return fallback(source) }
+            guard !containsUnsupportedBlock(in: parsed) else {
+                return fallback(normalizedSource)
+            }
 
             let output = NSMutableAttributedString()
             var previousBlock: Block?
@@ -85,15 +90,30 @@ public struct ResponseMarkdownRenderer {
                         block: block.kind)))
             }
 
-            guard output.length > 0 else { return fallback(source) }
+            guard output.length > 0 else { return fallback(normalizedSource) }
+            // A partial streamed emphasis marker is not useful to display;
+            // keep the text readable until the closing marker arrives.
+            if output.string.contains("**")
+                || output.string.contains("__")
+                || output.string.contains("~~") {
+                return fallback(normalizedSource)
+            }
             return Result(attributedString: output, usedFallback: false)
         } catch {
-            return fallback(source)
+            return fallback(normalizedSource)
         }
     }
 
     public func plainText(_ source: String) -> String {
         render(source).attributedString.string
+    }
+
+    /// A lightweight, marker-free representation for a response that is
+    /// still arriving. It deliberately avoids reparsing and reflowing the
+    /// whole growing Markdown document on every transport snapshot; full
+    /// Markdown rendering happens when the response is terminal.
+    public func streamingText(_ source: String) -> String {
+        fallback(normalizeTables(in: source)).attributedString.string
     }
 
     private func requiresRawFallback(_ source: String) -> Bool {
@@ -120,6 +140,103 @@ public struct ResponseMarkdownRenderer {
                 }
             } == true
         }
+    }
+
+    /// Foundation's Markdown parser intentionally does not interpret tables.
+    /// Convert GitHub-style tables to readable labelled rows before parsing so
+    /// one table cannot force the entire response down the raw-text path.
+    private func normalizeTables(in source: String) -> String {
+        let lines = source.components(separatedBy: .newlines)
+        var normalized: [String] = []
+        var index = 0
+        var insideFence = false
+
+        while index < lines.count {
+            let line = lines[index]
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                insideFence.toggle()
+                normalized.append(line)
+                index += 1
+                continue
+            }
+
+            guard !insideFence,
+                  index + 1 < lines.count,
+                  let headers = tableCells(from: line),
+                  let separator = tableCells(from: lines[index + 1]),
+                  isTableSeparator(separator) else {
+                normalized.append(line)
+                index += 1
+                continue
+            }
+
+            var rows: [[String]] = []
+            var next = index + 2
+            while next < lines.count,
+                  let cells = tableCells(from: lines[next]),
+                  !cells.isEmpty {
+                rows.append(cells)
+                next += 1
+            }
+
+            if rows.isEmpty {
+                normalized.append(headers.map(cleanTableLabel).joined(separator: "  "))
+            } else {
+                for (rowIndex, row) in rows.enumerated() {
+                    if rowIndex > 0 { normalized.append("") }
+                    for column in 0..<min(headers.count, row.count) {
+                        let label = cleanTableLabel(headers[column])
+                        let value = row[column].trimmingCharacters(in: .whitespaces)
+                        guard !label.isEmpty, !value.isEmpty else { continue }
+                        normalized.append("**\(label):** \(value)")
+                    }
+                }
+            }
+            index = next
+        }
+
+        return normalized.joined(separator: "\n")
+    }
+
+    private func tableCells(from line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("|") else { return nil }
+
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        for character in trimmed {
+            if character == "|" && !escaped {
+                cells.append(current)
+                current = ""
+            } else {
+                current.append(character)
+            }
+            escaped = character == "\\" && !escaped
+            if character != "\\" { escaped = false }
+        }
+        cells.append(current)
+
+        if trimmed.first == "|" { cells.removeFirst() }
+        if trimmed.last == "|", !cells.isEmpty { cells.removeLast() }
+        return cells.map {
+            $0.replacingOccurrences(of: #"\\\|"#, with: "|",
+                                    options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    private func isTableSeparator(_ cells: [String]) -> Bool {
+        !cells.isEmpty && cells.allSatisfy {
+            $0.range(of: #"^:?-{3,}:?$"#, options: .regularExpression) != nil
+        }
+    }
+
+    private func cleanTableLabel(_ label: String) -> String {
+        label
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func block(for intent: PresentationIntent?) -> Block {
@@ -308,9 +425,38 @@ public struct ResponseMarkdownRenderer {
     }
 
     private func fallback(_ source: String) -> Result {
-        Result(
+        let readable = source
+            .replacingOccurrences(
+                of: #"```[A-Za-z0-9_+.-]*\n?"#,
+                with: "",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"!\[([^\]]*)\]\([^\)]*\)"#,
+                with: "$1",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"\[([^\]]+)\]\([^\)]*\)"#,
+                with: "$1",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^[ \t]{0,3}#{1,6}[ \t]+"#,
+                with: "",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^([ \t]*)[-+*][ \t]+"#,
+                with: "$1• ",
+                options: .regularExpression)
+            .replacingOccurrences(
+                of: #"(?m)^[ \t]*>[ \t]?"#,
+                with: "",
+                options: .regularExpression)
+            .replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "__", with: "")
+            .replacingOccurrences(of: "~~", with: "")
+            .replacingOccurrences(of: "`", with: "")
+        return Result(
             attributedString: NSAttributedString(
-                string: source,
+                string: readable,
                 attributes: baseAttributes()),
             usedFallback: true)
     }

@@ -91,6 +91,52 @@ import TurboFieldfareValidationSupport
         #expect(rel <= 2e-2, "future mask rel=\(rel) maxAbs=\(maxAbs)")
     }
 
+    @Test func prefillAttentionVisionBlockUsesStagedFutureKeysWithoutClobberingHistory() throws {
+        let fixture = Self.makeFixture(
+            start: 12,
+            chunk: 4,
+            window: 8,
+            seed: 0xA629,
+            headDim: 8,
+            qHeads: 4,
+            kvHeads: 2)
+        let ringCapacity = 12
+        var kRing = [Float](repeating: 0, count: ringCapacity * fixture.kvStride)
+        var vRing = [Float](repeating: 0, count: ringCapacity * fixture.kvStride)
+        for position in 0..<fixture.start {
+            let destination = (position % ringCapacity) * fixture.kvStride
+            let source = position * fixture.kvStride
+            kRing.replaceSubrange(
+                destination..<(destination + fixture.kvStride),
+                with: fixture.k[source..<(source + fixture.kvStride)])
+            vRing.replaceSubrange(
+                destination..<(destination + fixture.kvStride),
+                with: fixture.v[source..<(source + fixture.kvStride)])
+        }
+        let stageStart = fixture.start * fixture.kvStride
+        let stageEnd = fixture.kvValid * fixture.kvStride
+        let stagedK = Array(fixture.k[stageStart..<stageEnd])
+        let stagedV = Array(fixture.v[stageStart..<stageEnd])
+
+        var ringFixture = fixture
+        ringFixture.k = kRing
+        ringFixture.v = vRing
+        let actual = try Self.runKernel(
+            ringFixture,
+            kvRingCapacity: UInt32(ringCapacity),
+            stagedK: stagedK,
+            stagedV: stagedV,
+            bidirectionalVision: true)
+        let reference = Self.reference(fixture, bidirectionalVision: true)
+        let causalReference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(actual, reference)
+        let rel = RelError.compute(actual: actual, reference: reference)
+        #expect(maxAbs <= 2e-2, "vision staged maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "vision staged rel=\(rel) maxAbs=\(maxAbs)")
+        #expect(RelError.maxAbsDiff(actual, causalReference) > 1e-3,
+                "fixture must prove that early visual queries see later visual keys")
+    }
+
     @Test func prefillAttentionProductionDimsBoundedVisibility() throws {
         let cases: [(label: String, start: Int, chunk: Int, window: Int, headDim: Int, qHeads: Int, kvHeads: Int)] = [
             ("swa-current-key-at-1023", 1023, 1, 1, 256, 16, 8),
@@ -242,6 +288,9 @@ import TurboFieldfareValidationSupport
     private static func runKernel(
         _ fixture: Fixture,
         kvRingCapacity: UInt32 = 0,
+        stagedK: [Float]? = nil,
+        stagedV: [Float]? = nil,
+        bidirectionalVision: Bool = false,
         path: RuntimePrefillAttentionPath = .causalTiled
     ) throws -> [Float] {
         let ctx = try MetalContext()
@@ -274,7 +323,22 @@ import TurboFieldfareValidationSupport
             kvTokenStrideElements: UInt32(fixture.kvStride),
             qTokenStrideElements: UInt32(fixture.qStride),
             oTokenStrideElements: UInt32(fixture.oStride),
-            scale: fixture.scale)
+            scale: fixture.scale,
+            visionBlockStart: bidirectionalVision ? UInt32(fixture.start) : 0,
+            visionBlockEnd: bidirectionalVision ? UInt32(fixture.kvValid) : 0,
+            useStagedKV: bidirectionalVision,
+            bidirectionalVision: bidirectionalVision)
+
+        let stagedKBuffer = stagedK.flatMap {
+            Fp16Buffer.make(ctx.device, values: $0)
+        }
+        let stagedVBuffer = stagedV.flatMap {
+            Fp16Buffer.make(ctx.device, values: $0)
+        }
+        if bidirectionalVision {
+            #expect(stagedKBuffer != nil)
+            #expect(stagedVBuffer != nil)
+        }
 
         let cb = ctx.queue.makeCommandBuffer()!
         prefill.encodeCausal(commandBuffer: cb,
@@ -288,6 +352,8 @@ import TurboFieldfareValidationSupport
                              outOffset: oPrefix * MemoryLayout<Float16>.size,
                              params: params,
                              kvRingCapacity: kvRingCapacity,
+                             stagedK: stagedKBuffer,
+                             stagedV: stagedVBuffer,
                              path: path)
         cb.commit()
         cb.waitUntilCompleted()
@@ -307,7 +373,10 @@ import TurboFieldfareValidationSupport
 
 
 
-    private static func reference(_ fixture: Fixture) -> [Float] {
+    private static func reference(
+        _ fixture: Fixture,
+        bidirectionalVision: Bool = false
+    ) -> [Float] {
         var out = [Float](repeating: 0, count: fixture.chunk * fixture.qHeads * fixture.headDim)
         let qPerKV = fixture.qHeads / fixture.kvHeads
         for t in 0..<fixture.chunk {
@@ -318,7 +387,9 @@ import TurboFieldfareValidationSupport
             } else {
                 first = max(0, absQ + 1 - fixture.window)
             }
-            let last = min(fixture.kvValid, absQ + 1)
+            let last = bidirectionalVision
+                ? fixture.kvValid
+                : min(fixture.kvValid, absQ + 1)
             for qh in 0..<fixture.qHeads {
                 let kvh = qh / qPerKV
                 var scores: [Float] = []

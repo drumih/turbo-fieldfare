@@ -25,4 +25,21 @@ public enum SupportedModelSource {
             overwrite: overwrite,
             resume: resume)
     }
+
+    public static func visionSidecarOptions(
+        modelDirectory: URL,
+        overwrite: Bool,
+        token: String?,
+        resume: Bool = false
+    ) -> RemoteVisionSidecarOptions {
+        RemoteVisionSidecarOptions(
+            repoID: repoID,
+            revision: revision,
+            modelDirectory: modelDirectory.path,
+            token: token,
+            requireKnownSource: true,
+            minFreeReserveBytes: reserveBytes,
+            overwrite: overwrite,
+            resume: resume)
+    }
 }

@@ -64,6 +64,21 @@ import TurboFieldfareValidationSupport
         #expect(path == .greedyGPU)
     }
 
+    @Test func greedy_neverPicksSuppressedArgmax() throws {
+        let v = 128
+        let rig = try Rig(vocab: v)
+        var logits = [Float](repeating: -4, count: v)
+        logits[17] = 30
+        logits[42] = 20
+        let config = GenerationConfig(
+            temperature: 0,
+            suppressedTokenIDs: [17])
+
+        let (id, _) = rig.draw(logits, config: config)
+
+        #expect(id == 42)
+    }
+
     @Test func seeded_isDeterministicAtPosition() throws {
         let v = 1024
         let rig = try Rig(vocab: v)

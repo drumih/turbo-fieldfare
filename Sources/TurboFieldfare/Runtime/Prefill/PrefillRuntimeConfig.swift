@@ -65,20 +65,28 @@ struct PrefillChunkCommitState: Sendable, Equatable {
     }
 }
 
+enum PrefillChunkKind: Sendable, Equatable {
+    case text
+    case vision
+}
+
 struct PrefillChunkSpan: Sendable, Equatable {
     let tokenOffset: Int
     let tokenCount: Int
     let startPosition: Int
     let completedCount: Int
+    let kind: PrefillChunkKind
 
     init(tokenOffset: Int,
                 tokenCount: Int,
                 startPosition: Int,
-                completedCount: Int) {
+                completedCount: Int,
+                kind: PrefillChunkKind = .text) {
         self.tokenOffset = tokenOffset
         self.tokenCount = tokenCount
         self.startPosition = startPosition
         self.completedCount = completedCount
+        self.kind = kind
     }
 
 }
@@ -113,6 +121,61 @@ enum PrefillChunkPlanner {
             offset = completed
         }
         return spans
+    }
+
+    /// Split ordinary text at the configured size while keeping each visual
+    /// placeholder block in one complete chunk. Ranges use absolute prompt
+    /// positions, not offsets into the supplied token slice.
+    static func multimodalSpans(tokenCount: Int,
+                                startPosition: Int,
+                                chunkTokens: Int,
+                                visionRanges: [Range<Int>]) -> [PrefillChunkSpan] {
+        precondition(tokenCount >= 0, "prefill tokenCount must be non-negative")
+        precondition(startPosition >= 0, "prefill startPosition must be non-negative")
+        guard tokenCount > 0 else { return [] }
+
+        let endPosition = startPosition + tokenCount
+        let ordered = visionRanges.sorted { $0.lowerBound < $1.lowerBound }
+        var priorEnd = startPosition
+        for range in ordered {
+            precondition(!range.isEmpty, "visual token ranges must not be empty")
+            precondition(range.lowerBound >= priorEnd && range.upperBound <= endPosition,
+                         "visual token ranges must be ordered, disjoint, and inside prefill")
+            precondition(range.count <= PrefillRuntimeConfig.maxVisionSoftTokens,
+                         "Gemma 4 visual blocks may contain at most 280 soft tokens")
+            priorEnd = range.upperBound
+        }
+
+        let textChunk = max(1, min(chunkTokens, PrefillRuntimeConfig.maxChunkTokens))
+        var result: [PrefillChunkSpan] = []
+        var cursor = startPosition
+
+        func appendText(until upperBound: Int) {
+            while cursor < upperBound {
+                let count = min(textChunk, upperBound - cursor)
+                let end = cursor + count
+                result.append(PrefillChunkSpan(
+                    tokenOffset: cursor - startPosition,
+                    tokenCount: count,
+                    startPosition: cursor,
+                    completedCount: end - startPosition,
+                    kind: .text))
+                cursor = end
+            }
+        }
+
+        for range in ordered {
+            appendText(until: range.lowerBound)
+            result.append(PrefillChunkSpan(
+                tokenOffset: range.lowerBound - startPosition,
+                tokenCount: range.count,
+                startPosition: range.lowerBound,
+                completedCount: range.upperBound - startPosition,
+                kind: .vision))
+            cursor = range.upperBound
+        }
+        appendText(until: endPosition)
+        return result
     }
 }
 
@@ -169,6 +232,7 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     }
 
     public static let maxChunkTokens = 128
+    public static let maxVisionSoftTokens = 280
 
     public let mode: Mode
     public let chunkTokens: Int

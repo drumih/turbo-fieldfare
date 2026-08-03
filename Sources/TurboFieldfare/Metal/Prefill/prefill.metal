@@ -785,6 +785,10 @@ struct PrefillAttentionParams {
     uint qTokenStrideElements;
     uint oTokenStrideElements;
     float scale;
+    uint visionBlockStart;
+    uint visionBlockEnd;
+    uint useStagedKV;
+    uint bidirectionalVision;
 };
 
 static inline uint prefill_kv_slot(uint logical) {
@@ -839,6 +843,8 @@ kernel void attention_prefill_causal_tiled(
     device const half* V [[buffer(2)]],
     device half* O [[buffer(3)]],
     constant PrefillAttentionParams& p [[buffer(4)]],
+    device const half* stagedK [[buffer(5)]],
+    device const half* stagedV [[buffer(6)]],
     uint3 tg [[threadgroup_position_in_grid]],
     uint3 tid [[thread_position_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
@@ -860,7 +866,14 @@ kernel void attention_prefill_causal_tiled(
     if (p.slidingWindow != 0u && abs_q + 1u > p.slidingWindow) {
         first = abs_q + 1u - p.slidingWindow;
     }
-    const uint last_exclusive = min(p.kvValidCount, abs_q + 1u);
+    uint last_exclusive = min(p.kvValidCount, abs_q + 1u);
+    if (p.bidirectionalVision != 0u &&
+        abs_q >= p.visionBlockStart && abs_q < p.visionBlockEnd) {
+        // Gemma 4 composes AND(sliding-window, OR(causal, same-vision-block)).
+        // Its sliding overlay only bounds the left edge, so every later token
+        // in this contiguous visual block is visible.
+        last_exclusive = min(p.kvValidCount, p.visionBlockEnd);
+    }
 
     device const half* q_row = Q + t * p.qTokenStrideElements + qh * p.headDim;
     float row_max = -INFINITY;
@@ -868,8 +881,12 @@ kernel void attention_prefill_causal_tiled(
     float acc = 0.0f;
 
     for (uint key = first; key < last_exclusive; ++key) {
+        const bool staged = p.useStagedKV != 0u &&
+            key >= p.visionBlockStart && key < p.visionBlockEnd;
         const uint phys_key = prefill_kv_slot(key);
-        device const half* k_row = K + phys_key * p.kvTokenStrideElements + kvh * p.headDim;
+        device const half* k_row = staged
+            ? stagedK + (key - p.visionBlockStart) * p.kvTokenStrideElements + kvh * p.headDim
+            : K + phys_key * p.kvTokenStrideElements + kvh * p.headDim;
         const float qv = owns ? float(q_row[d]) : 0.0f;
         const float kv = owns ? float(k_row[d]) : 0.0f;
         const uint bank = key & 1u;
@@ -884,7 +901,9 @@ kernel void attention_prefill_causal_tiled(
         const float old_scale = row_sum > 0.0f ? fast::exp(row_max - new_max) : 0.0f;
         const float new_scale = fast::exp(score - new_max);
         if (owns) {
-            device const half* v_row = V + phys_key * p.kvTokenStrideElements + kvh * p.headDim;
+            device const half* v_row = staged
+                ? stagedV + (key - p.visionBlockStart) * p.kvTokenStrideElements + kvh * p.headDim
+                : V + phys_key * p.kvTokenStrideElements + kvh * p.headDim;
             acc = fma(new_scale, float(v_row[d]), acc * old_scale);
         }
         row_sum = row_sum * old_scale + new_scale;

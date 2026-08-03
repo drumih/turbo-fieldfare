@@ -40,6 +40,43 @@ struct RepackCLITests {
         #expect(result.stderr.contains("no resumable install state exists"))
     }
 
+    @Test func visionInstallRequiresCompletedModelBeforeNetwork() throws {
+        let output = temporaryOutput("vision-missing-model")
+        defer { clean(output) }
+        let result = try run([
+            "--install-vision",
+            "--output", output,
+        ])
+
+        #expect(result.status == 1)
+        #expect(result.stderr.contains("completed .gturbo model is required"))
+    }
+
+    @Test func visionDiscardWithoutStateReportsAnError() throws {
+        let output = temporaryOutput("vision-missing-discard")
+        defer { clean(output) }
+        let result = try run([
+            "--discard-vision-partial",
+            "--output", output,
+        ])
+
+        #expect(result.status == 1)
+        #expect(result.stderr.contains("no resumable install state exists"))
+    }
+
+    @Test func visionActionsAreMutuallyExclusive() throws {
+        let output = temporaryOutput("vision-exclusive")
+        defer { clean(output) }
+        let result = try run([
+            "--install-vision",
+            "--discard-vision-partial",
+            "--output", output,
+        ])
+
+        #expect(result.status == 2)
+        #expect(result.stderr.contains("mutually exclusive"))
+    }
+
     private func run(_ arguments: [String]) throws
         -> (status: Int32, stdout: String, stderr: String) {
         let executable = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -73,6 +110,7 @@ struct RepackCLITests {
             output + ".install-state",
             output + ".install-state.cleanup",
             output + ".install.lock",
+            output + ".resume.json",
         ] {
             try? FileManager.default.removeItem(atPath: path)
         }

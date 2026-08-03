@@ -234,7 +234,9 @@ flowchart LR
 ## Instruction framing
 
 The Mac app and CLI `--messages-file` mode use the pinned text-only Gemma 4 chat
-format. The app wraps one user prompt. `--messages-file` accepts user and
+format. The app retains completed user and assistant turns for the current
+in-memory conversation and appends the new user prompt before each generation.
+`--messages-file` accepts user and
 assistant messages plus optional leading system guidance. Assistant messages
 render with Gemma's `model` role. The separate loopback server uses the pinned
 upstream Jinja template for developer messages, function declarations,
@@ -431,7 +433,8 @@ references lead to the supporting code and tests.
 
 The current runtime supports text-only generation with the pinned Gemma 4
 26B-A4B instruction checkpoint. The source model supports image input, but
-TurboFieldfare omits its vision tower.
+TurboFieldfare omits its vision tower. See [Vision support assessment](VISION_SUPPORT.md)
+for the required on-demand sidecar design and its memory trade-offs.
 
 The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Published app
 and CLI acceptance evidence covers up to 4K. Vision input, training,

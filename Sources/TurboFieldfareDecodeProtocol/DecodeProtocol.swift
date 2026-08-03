@@ -44,6 +44,7 @@ public struct DecodeLoadRequest: Codable, Sendable {
 
 public struct DecodeGenerationRequest: Codable, Sendable {
     public var prompt: String
+    public var messages: [DecodeChatMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -54,14 +55,93 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public init(prompt: String, maxNewTokens: Int, maxContextTokens: Int,
                 temperature: Float, repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
-                generationID: UUID = UUID()) {
+                generationID: UUID = UUID(),
+                messages: [DecodeChatMessage]? = nil) {
         self.prompt = prompt
+        self.messages = messages ?? [DecodeChatMessage(role: .user, content: prompt)]
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
         self.repetitionPenalty = repetitionPenalty
         self.runtimeOptions = runtimeOptions
         self.generationID = generationID
+    }
+}
+
+public enum DecodeChatRole: String, Codable, Equatable, Sendable {
+    case system
+    case user
+    case assistant
+}
+
+/// Reference-only image transport. The app copies selected images into its
+/// managed attachment directory; image bytes are never JSON/base64 encoded.
+public struct DecodeImageAttachment: Codable, Equatable, Sendable {
+    public var id: UUID
+    /// Path relative to the app-managed attachment root beside the model.
+    /// The decode service resolves and validates this reference locally.
+    public var relativePath: String
+    public var originalFilename: String
+    public var mediaTypeIdentifier: String
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    public var byteCount: UInt64
+    public var sha256: String
+
+    public init(id: UUID,
+                relativePath: String,
+                originalFilename: String,
+                mediaTypeIdentifier: String,
+                pixelWidth: Int,
+                pixelHeight: Int,
+                byteCount: UInt64,
+                sha256: String) {
+        self.id = id
+        self.relativePath = relativePath
+        self.originalFilename = originalFilename
+        self.mediaTypeIdentifier = mediaTypeIdentifier
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.byteCount = byteCount
+        self.sha256 = sha256
+    }
+}
+
+public struct DecodeChatMessage: Codable, Equatable, Sendable {
+    public var role: DecodeChatRole
+    public var content: String
+    public var images: [DecodeImageAttachment]
+
+    public init(role: DecodeChatRole,
+                content: String,
+                images: [DecodeImageAttachment] = []) {
+        self.role = role
+        self.content = content
+        self.images = images
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case images
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(DecodeChatRole.self, forKey: .role)
+        content = try container.decode(String.self, forKey: .content)
+        images = try container.decodeIfPresent(
+            [DecodeImageAttachment].self,
+            forKey: .images) ?? []
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        try container.encode(content, forKey: .content)
+        if !images.isEmpty {
+            try container.encode(images, forKey: .images)
+        }
     }
 }
 

@@ -5,7 +5,6 @@ import SwiftUI
 
 struct OutputPaneView: View {
     let model: AppModel
-    @State private var responseCopyFeedbackID: UUID?
 
     var body: some View {
         Group {
@@ -13,14 +12,6 @@ struct OutputPaneView: View {
                 transcript
             } else {
                 placeholder
-            }
-        }
-        .task(id: responseCopyFeedbackID) {
-            guard let feedbackID = responseCopyFeedbackID else { return }
-            try? await Task.sleep(for: .seconds(1.2))
-            guard !Task.isCancelled, responseCopyFeedbackID == feedbackID else { return }
-            withAnimation(.easeOut(duration: 0.15)) {
-                responseCopyFeedbackID = nil
             }
         }
         .contextMenu {
@@ -41,7 +32,10 @@ struct OutputPaneView: View {
 
             Divider()
 
-            Button("Clear") { model.clearOutput() }
+            Button("Regenerate response") { model.regenerateLastResponse() }
+                .disabled(!model.canRegenerate)
+
+            Button("New Chat") { model.newChat() }
                 .disabled(model.isRunning || !model.hasOutputTranscript)
         }
     }
@@ -49,61 +43,29 @@ struct OutputPaneView: View {
     private var placeholder: some View {
         EmptyConversationLayout(spacing: 8) {
             EmptyPlaceholderIcon(systemName: placeholderSymbol)
-                .frame(width: 32, height: 32)
 
             emptyPlaceholderContent
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 20)
+        .frame(maxWidth: 820, maxHeight: .infinity)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var transcript: some View {
-        IncrementalTranscriptView(
+        ChatTranscriptView(
             prompt: model.outputPromptText,
+            messages: model.outputMessages,
+            attachmentRootURL: model.chatAttachmentRootURL,
             output: model.outputText,
-            mailbox: model.generationTranscriptMailbox,
-            isTerminal: !model.isRunning,
-            showsPrefillPlaceholder: model.isRunning
-                && model.outputResponsePlainText.isEmpty)
+            isRunning: model.isRunning,
+            canRegenerate: model.canRegenerate,
+            canEditLastPrompt: model.canEditLastPrompt,
+            canSubmitEditedLastPrompt: model.canSubmitEditedLastPrompt,
+            onRegenerate: { model.regenerateLastResponse() },
+            onEditLastPrompt: { model.submitEditedLastPrompt($0) })
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topTrailing) {
-                if !model.isRunning && !model.outputResponsePlainText.isEmpty {
-                    copyResponseButton
-                        .padding(8)
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-    }
-
-    private var copyResponseButton: some View {
-        Button {
-            copyResponse()
-        } label: {
-            Image(systemName: responseCopyFeedbackID == nil
-                  ? "doc.on.doc"
-                  : "checkmark.circle.fill")
-                .font(.callout.weight(.medium))
-                .contentTransition(.symbolEffect(.replace))
-                .foregroundStyle(responseCopyFeedbackID == nil
-                                 ? Color.secondary
-                                 : TurboFieldfareMacTheme.accentColor)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle().stroke(.separator.opacity(0.5), lineWidth: 0.5)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(responseCopyFeedbackID == nil
-                            ? "Copy response"
-                            : "Response copied")
-        .accessibilityHint("Copies only the generated answer")
-        .help(responseCopyFeedbackID == nil
-              ? "Copy response"
-              : "Response copied")
+            .padding(.vertical, 8)
     }
 
     private var emptyPlaceholderContent: some View {
@@ -130,21 +92,6 @@ struct OutputPaneView: View {
                     .font(.caption)
                     .foregroundStyle(model.presentation.severity == .error ? .red : .secondary)
                     .multilineTextAlignment(.center)
-            }
-            if model.canLoadModel {
-                Button(model.loadState.isFailed ? "Retry Load" : "Load Model",
-                       action: model.loadModel)
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-            } else if isLoadingModel {
-                Button("Load Model", action: {})
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .hidden()
-                    .accessibilityHidden(true)
-            } else if model.canReloadModel {
-                Button("Reload Model", action: model.reloadModel)
-                    .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity)
@@ -176,9 +123,6 @@ struct OutputPaneView: View {
 
     private func copyResponse() {
         copy(model.outputResponsePlainText)
-        withAnimation(.easeIn(duration: 0.15)) {
-            responseCopyFeedbackID = UUID()
-        }
     }
 }
 
@@ -186,10 +130,20 @@ private struct EmptyPlaceholderIcon: View {
     let systemName: String
 
     var body: some View {
-        Image(systemName: systemName)
-            .font(.title2)
-            .foregroundStyle(.quaternary)
-            .accessibilityHidden(true)
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(TurboFieldfareMacTheme.accentSurface)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(TurboFieldfareMacTheme.accentColor.opacity(0.16), lineWidth: 0.5)
+                }
+            Image(systemName: systemName)
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(TurboFieldfareMacTheme.accentColor.opacity(0.78))
+        }
+        .frame(width: 58, height: 58)
+        .shadow(color: TurboFieldfareMacTheme.accentColor.opacity(0.12), radius: 12, y: 5)
+        .accessibilityHidden(true)
     }
 }
 
@@ -213,9 +167,13 @@ private struct EmptyConversationLayout: Layout {
         guard subviews.count == 2 else { return }
 
         let iconSize = subviews[0].sizeThatFits(.unspecified)
-        let iconCenter = CGPoint(x: bounds.midX, y: bounds.midY)
+        let contentSize = subviews[1].sizeThatFits(
+            ProposedViewSize(width: bounds.width, height: nil))
+        let groupHeight = iconSize.height + spacing + contentSize.height
+        let groupTop = bounds.midY - groupHeight / 2
+
         subviews[0].place(
-            at: iconCenter,
+            at: CGPoint(x: bounds.midX, y: groupTop + iconSize.height / 2),
             anchor: .center,
             proposal: ProposedViewSize(
                 width: iconSize.width,
@@ -224,9 +182,9 @@ private struct EmptyConversationLayout: Layout {
         subviews[1].place(
             at: CGPoint(
                 x: bounds.midX,
-                y: iconCenter.y + iconSize.height / 2 + spacing),
+                y: groupTop + iconSize.height + spacing),
             anchor: .top,
-            proposal: ProposedViewSize(width: bounds.width, height: nil))
+            proposal: ProposedViewSize(width: bounds.width, height: contentSize.height))
     }
 }
 
@@ -257,6 +215,7 @@ private struct LoadingModelText: View {
 
 private struct IncrementalTranscriptView: NSViewRepresentable {
     var prompt: String
+    var messages: [AppChatMessage]
     var output: String
     var mailbox: GenerationTranscriptMailbox?
     var isTerminal: Bool
@@ -268,6 +227,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         weak var textView: NSTextView?
         var mailbox: GenerationTranscriptMailbox?
         var prompt = ""
+        var messages: [AppChatMessage] = []
         var isTerminal = false
         var showsPrefillPlaceholder = false
         var timer: Timer?
@@ -288,6 +248,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
         func synchronize(
             prompt: String,
+            messages: [AppChatMessage],
             output: String,
             mailbox: GenerationTranscriptMailbox?,
             isTerminal: Bool,
@@ -295,11 +256,14 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         ) {
             self.mailbox = mailbox
             self.prompt = prompt
+            self.messages = messages
             self.isTerminal = isTerminal
             self.showsPrefillPlaceholder = showsPrefillPlaceholder
-            let response = mailbox?.drain().completeText ?? output
+            let mailboxResponse = mailbox?.drain().completeText ?? ""
+            let response = mailboxResponse.isEmpty ? output : mailboxResponse
             apply(
                 prompt: prompt,
+                messages: messages,
                 response: response,
                 isTerminal: isTerminal,
                 showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -309,10 +273,12 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             guard let mailbox else { return }
             let snapshot = mailbox.drain()
             guard !snapshot.pendingText.isEmpty
-                    || snapshot.completeText != documentController.response else {
+                    || (!snapshot.completeText.isEmpty
+                        && snapshot.completeText != documentController.response) else {
                 return
             }
             apply(prompt: prompt,
+                  messages: messages,
                   response: snapshot.completeText,
                   isTerminal: isTerminal,
                   showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -373,6 +339,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
 
         private func apply(
             prompt: String,
+            messages: [AppChatMessage],
             response: String,
             isTerminal: Bool,
             showsPrefillPlaceholder: Bool
@@ -385,6 +352,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             let update = documentController.synchronize(
                 storage: storage,
                 prompt: prompt,
+                messages: messages,
                 response: response,
                 isTerminal: isTerminal,
                 showsPrefillPlaceholder: showsPrefillPlaceholder)
@@ -449,6 +417,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.synchronize(
             prompt: prompt,
+            messages: messages,
             output: output,
             mailbox: mailbox,
             isTerminal: isTerminal,
@@ -460,7 +429,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     }
 }
 
-#if DEBUG
+#if DEBUG && canImport(PreviewsMacros)
 private struct TranscriptPreview: View {
     let response: String
     let isTerminal: Bool
@@ -469,6 +438,7 @@ private struct TranscriptPreview: View {
     var body: some View {
         IncrementalTranscriptView(
             prompt: "Explain this clearly.",
+            messages: [],
             output: response,
             mailbox: nil,
             isTerminal: isTerminal,

@@ -60,27 +60,54 @@ import Testing
             .strikethroughStyle, at: strikeRange.location, effectiveRange: nil) != nil)
     }
 
-    @Test func unfinishedFenceFallsBackToExactRawText() {
+    @Test func unfinishedFenceStaysReadableWithoutMarkdownDelimiters() {
         let source = "Before\n\n```python\nprint('unfinished')"
         let result = ResponseMarkdownRenderer().render(source)
 
         #expect(result.usedFallback)
-        #expect(result.attributedString.string == source)
+        #expect(result.attributedString.string == "Before\n\nprint('unfinished')")
     }
 
-    @Test func unsupportedHTMLTableAndImageStayReadableAsRawText() {
-        let renderer = ResponseMarkdownRenderer()
-        let samples = [
-            "<div>Never execute this</div>",
-            "| A | B |\n|---|---|\n| 1 | 2 |",
-            "![remote](https://example.com/image.png)",
-        ]
+    @Test func tableRowsRenderWithoutExposingMarkdownMarkers() {
+        let source = "| **Feature** | **Value** |\n|---|---|\n| **Action** | **Splitting** |"
+        let result = ResponseMarkdownRenderer().render(source)
 
-        for source in samples {
-            let result = renderer.render(source)
-            #expect(result.usedFallback)
-            #expect(result.attributedString.string == source)
-        }
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string.contains("Feature: Action"))
+        #expect(result.attributedString.string.contains("Value: Splitting"))
+        #expect(!result.attributedString.string.contains("**"))
+    }
+
+    @Test func unfinishedEmphasisStaysReadableDuringStreaming() {
+        let result = ResponseMarkdownRenderer().render("A **bold response still arriving")
+
+        #expect(!result.attributedString.string.contains("**"))
+        #expect(result.attributedString.string.contains("bold response still arriving"))
+    }
+
+    @Test func streamingTextHidesPartialMarkdownDelimiters() {
+        let text = ResponseMarkdownRenderer().streamingText(
+            "## **Heading**\n\n* `let bird = \"fieldfare\"`\n\n```swift\nlet flight = true\n")
+
+        #expect(!text.contains("**"))
+        #expect(!text.contains("```"))
+        #expect(!text.contains("##"))
+        #expect(!text.contains("`"))
+        #expect(text.contains("Heading"))
+        #expect(text.contains("let bird"))
+        #expect(text.contains("• let bird"))
+    }
+
+    @Test func unsupportedHTMLAndImageStayReadableWithoutMarkdownMarkers() {
+        let renderer = ResponseMarkdownRenderer()
+
+        let html = renderer.render("<div>Never **execute** this</div>")
+        #expect(html.usedFallback)
+        #expect(!html.attributedString.string.contains("**"))
+
+        let image = renderer.render("![remote](https://example.com/image.png)")
+        #expect(image.usedFallback)
+        #expect(image.attributedString.string == "remote")
     }
 
     @Test func latexRemainsReadableText() {
@@ -113,7 +140,7 @@ import Testing
         #expect(abs((color?.blueComponent ?? 0) - 113.0 / 255.0) < 0.000_001)
     }
 
-    @Test func rebuildsThenAppendsOnlyNewResponseSuffix() {
+    @Test func streamingUpdatesRebuildWithRenderedMarkdown() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()
 
@@ -129,7 +156,7 @@ import Testing
             isTerminal: false)
 
         #expect(first.mutation == .rebuilt)
-        #expect(second.mutation == .appended)
+        #expect(second.mutation == .rebuilt)
         #expect(storage.string == "You\nExplain this\n\nAnswer\nHello")
         #expect(storage.string.components(separatedBy: "Answer").count == 2)
         let answerRange = (storage.string as NSString).range(of: "Answer")
@@ -139,6 +166,22 @@ import Testing
             effectiveRange: nil) as? NSColor
         #expect(answerColor?.isEqual(TurboFieldfareMacTheme.accentNSColor) == true)
         #expect(controller.response == "Hello")
+    }
+
+    @Test func streamingResponseRendersMarkdownBeforeItFinishes() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        let update = controller.synchronize(
+            storage: storage,
+            prompt: "Question",
+            response: "**Bold answer**",
+            isTerminal: false)
+
+        #expect(update.mutation == .rebuilt)
+        #expect(storage.string == "You\nQuestion\n\nAnswer\nBold answer")
+        #expect((storage.string as NSString).substring(with: update.assistantRange)
+            == "Bold answer")
     }
 
     @Test func animatedPrefillPlaceholderIsPresentationOnlyAndFirstResponseRemovesIt() {
@@ -257,7 +300,7 @@ import Testing
             isTerminal: false)
         #expect(result.mutation == .rebuilt)
         #expect(!controller.isFinalized)
-        #expect(storage.string.hasSuffix("Partial **answer**"))
+        #expect(storage.string.hasSuffix("Partial answer"))
     }
 
     @Test func terminalResponseRendersAgainWhenClosingFenceArrivesLate() {
