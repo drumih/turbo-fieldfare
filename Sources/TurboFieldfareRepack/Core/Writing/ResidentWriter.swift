@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import TurboFieldfareFormat
 
 /// Writes the resident LM `.bin` file (`model_weights.bin`).
 /// from a planned layout + a shard registry. Shards are mapped one at a time;
@@ -8,8 +9,8 @@ import Darwin
 enum ResidentWriter {
 
     static func write(plan: ResidentFilePlan,
-                      shardsByPath: inout [String: MmapHandle],
-                      audit: RepackAudit) throws -> RepackAudit.OutputFile {
+                             shardsByPath: inout [String: MmapHandle],
+                             audit: RepackAudit) throws -> RepackAudit.OutputFile {
         // 1. Create + size the output file.
         try Posix.mkdirP(((plan.path as NSString).deletingLastPathComponent))
         let fd = try Posix.openCreateRW(plan.path)
@@ -48,7 +49,7 @@ enum ResidentWriter {
     }
 
     static func createAndWriteIndex(plan: ResidentFilePlan,
-                                    audit: RepackAudit) throws -> Int32 {
+                                           audit: RepackAudit) throws -> Int32 {
         try Posix.mkdirP(((plan.path as NSString).deletingLastPathComponent))
         let fd = try Posix.openCreateRW(plan.path)
         do {
@@ -62,10 +63,45 @@ enum ResidentWriter {
     }
 
     static func encodeIndex(plan: ResidentFilePlan) throws -> Data {
+        guard plan.indexSize <= UInt64(Int.max),
+              plan.indexSize <= GTurboFormatV1.residentIndexMaxBytes else {
+            throw RepackError.configurationInvalid(
+                detail: "resident index size \(plan.indexSize) exceeds v1 metadata cap")
+        }
         let idxBytes = Int(plan.indexSize)
         guard idxBytes <= BoundedScratch.defaultLimitBytes else {
             throw RepackError.scratchExceeded(requested: idxBytes,
                                               limit: BoundedScratch.defaultLimitBytes)
+        }
+        guard plan.entries.count == plan.stringTableOffsets.count else {
+            throw RepackError.configurationInvalid(
+                detail: "resident index entry/string offset count mismatch")
+        }
+        let (entryTableBytes, tableOverflow) = plan.entries.count
+            .multipliedReportingOverflow(by: GTurboBinary.indexEntryBytes)
+        let (stringTableBase, baseOverflow) = GTurboBinary.indexHeaderBytes
+            .addingReportingOverflow(entryTableBytes)
+        guard !tableOverflow, !baseOverflow,
+              stringTableBase <= idxBytes,
+              plan.stringTable.count <= idxBytes - stringTableBase,
+              stringTableBase <= Int(UInt32.max) else {
+            throw RepackError.configurationInvalid(
+                detail: "resident index table exceeds declared index region")
+        }
+        for (index, entry) in plan.entries.enumerated() {
+            guard entry.name.utf8.count <= Int(UInt16.max),
+                  entry.logicalShape4.count == 4,
+                  GTurboFormatV1.DType(rawValue: entry.dtype) != nil else {
+                throw RepackError.configurationInvalid(
+                    detail: "resident index entry \(index) is not representable")
+            }
+            let absoluteNameOffset = UInt64(stringTableBase)
+                + UInt64(plan.stringTableOffsets[index])
+            guard absoluteNameOffset <= UInt64(UInt32.max),
+                  absoluteNameOffset + UInt64(entry.name.utf8.count) <= UInt64(idxBytes) else {
+                throw RepackError.configurationInvalid(
+                    detail: "resident index entry \(index) name range is invalid")
+            }
         }
         let idxBuf = UnsafeMutableRawBufferPointer.allocate(byteCount: idxBytes,
                                                             alignment: 16_384)
@@ -75,8 +111,7 @@ enum ResidentWriter {
                                       indexSize: plan.indexSize,
                                       residentSize: plan.residentSize,
                                       entryCount: UInt64(plan.entries.count))
-        let entriesBase = 24
-        let stringTableBase = entriesBase + plan.entries.count * GTurboBinary.indexEntryBytes
+        let entriesBase = GTurboBinary.indexHeaderBytes
         for i in 0..<plan.entries.count {
             let dst = idxBuf.baseAddress!.advanced(by: entriesBase + i * GTurboBinary.indexEntryBytes)
             let nameOff = UInt32(stringTableBase) + plan.stringTableOffsets[i]
@@ -86,7 +121,17 @@ enum ResidentWriter {
             let dst = idxBuf.baseAddress!.advanced(by: stringTableBase)
             memcpy(dst, src.baseAddress!, src.count)
         }
-        return Data(bytes: idxBuf.baseAddress!, count: idxBytes)
+        let data = Data(bytes: idxBuf.baseAddress!, count: idxBytes)
+        do {
+            try data.withUnsafeBytes { raw in
+                let header = try GTurboResidentIndexCodec.decodeHeader(raw)
+                _ = try GTurboResidentIndexCodec.decodeRegion(raw, header: header)
+            }
+        } catch {
+            throw RepackError.configurationInvalid(
+                detail: "resident index encoding invalid: \(error)")
+        }
+        return data
     }
 
     private static func writeIndex(plan: ResidentFilePlan,

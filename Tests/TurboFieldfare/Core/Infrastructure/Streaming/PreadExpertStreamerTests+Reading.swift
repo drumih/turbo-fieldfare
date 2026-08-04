@@ -24,6 +24,36 @@ extension PreadExpertStreamerTests {
     }
   }
 
+  @Test func directPreadStreamerFollowsCallerSelectedSymlink() throws {
+    let target = try Self.writeSyntheticLayer()
+    let alias = target.deletingLastPathComponent()
+      .appendingPathComponent("pread-streamer-alias-\(UUID().uuidString).bin")
+    defer {
+      try? FileManager.default.removeItem(at: alias)
+      try? FileManager.default.removeItem(at: target)
+    }
+    #expect(symlink(target.path, alias.path) == 0)
+    let device = try MetalContext().device
+    _ = try PreadExpertStreamer(
+      layout: Self.makeLayout(path: alias.path), device: device, slotCount: 1)
+  }
+
+  @Test func directPreadStreamerRejectsSymlinkToFIFOWithoutBlocking() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("pread-streamer-fifo-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let fifo = directory.appendingPathComponent("layer.fifo")
+    let alias = directory.appendingPathComponent("layer.bin")
+    #expect(mkfifo(fifo.path, 0o600) == 0)
+    #expect(symlink(fifo.path, alias.path) == 0)
+    let device = try MetalContext().device
+    #expect(throws: StreamerError.self) {
+      try PreadExpertStreamer(
+        layout: Self.makeLayout(path: alias.path), device: device, slotCount: 1)
+    }
+  }
+
   @Test func shortRead_throwsSizeMismatch() throws {
     let url = try Self.writeSyntheticLayer()
     defer { try? FileManager.default.removeItem(at: url) }

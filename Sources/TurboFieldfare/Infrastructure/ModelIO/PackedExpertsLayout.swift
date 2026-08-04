@@ -1,12 +1,20 @@
 import Foundation
+import TurboFieldfareFormat
 
 struct SubTensorEntry: Sendable, Equatable {
     let offset: UInt64    // relative to the expert blob's start
+    let size: UInt64
+    let dtype: String     // "U32" | "BF16"
+    let shape: [UInt32]
+    let bits: Int?        // weight bit width override (4 or 8), if applicable
 }
 
 struct ExpertEntry: Sendable {
     /// Logical routed-expert id used by the model/router.
     let expert: Int
+    /// Physical rank inside the layer file. Old identity layouts use
+    /// `physicalRank == expert`.
+    let physicalRank: Int
     /// Absolute byte offset of this expert blob's start inside its layer file.
     let offset: UInt64
     /// Total bytes consumed by this expert blob (== `expertStride`).
@@ -16,10 +24,12 @@ struct ExpertEntry: Sendable {
     let subTensors: [String: SubTensorEntry]
 
     init(expert: Int,
+                physicalRank: Int? = nil,
                 offset: UInt64,
                 size: UInt64,
                 subTensors: [String: SubTensorEntry]) {
         self.expert = expert
+        self.physicalRank = physicalRank ?? expert
         self.offset = offset
         self.size = size
         self.subTensors = subTensors
@@ -49,100 +59,60 @@ enum PackedExpertsLayoutReader {
 
     static func load(directoryURL: URL,
                             maxBytes: UInt64 = defaultMaxBytes) throws -> PackedExpertsLayout {
-        let url = directoryURL
-            .appendingPathComponent("packed_experts")
-            .appendingPathComponent("layout.json")
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw ModelError.missingFile(name: "packed_experts/layout.json")
-        }
-        let size = try metadataFileSize(url)
-        guard size <= maxBytes else {
-            throw ModelError.indexCorrupt(
-                detail: "layout.json size \(size) exceeds metadata cap \(maxBytes)")
-        }
-        let data = try Data(contentsOf: url)
-        let root: [String: Any]
+        try load(directoryURL: directoryURL, manifest: nil, maxBytes: maxBytes)
+    }
+
+    package static func load(directoryURL: URL,
+                             manifest: Manifest,
+                             maxBytes: UInt64 = defaultMaxBytes) throws -> PackedExpertsLayout {
+        try load(directoryURL: directoryURL, manifest: Optional(manifest), maxBytes: maxBytes)
+    }
+
+    private static func load(directoryURL: URL,
+                             manifest: Manifest?,
+                             maxBytes: UInt64) throws -> PackedExpertsLayout {
+        let directory = try GTurboModelDirectory(rootURL: directoryURL)
+        let data = try directory.readMetadata(
+            "packed_experts/layout.json", maxBytes: maxBytes)
+        return try decode(data: data, manifest: manifest)
+    }
+
+    package static func decode(data: Data,
+                               manifest: Manifest?) throws -> PackedExpertsLayout {
+        let wire: GTurboPackedExpertsLayoutV1
         do {
-            root = try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            wire = try GTurboPackedExpertsLayoutCodec.decode(data)
+            if let manifest {
+                try GTurboV1StructuralValidator.crossValidate(
+                    manifestNumLayers: manifest.numLayers,
+                    manifestExpertsPerLayer: manifest.expertsPerLayer,
+                    manifestExpertStride: manifest.expertStride,
+                    manifestFileSizes: manifest.files.mapValues(\.size),
+                    layout: wire)
+            }
         } catch {
             throw ModelError.indexCorrupt(detail: "layout.json: \(error)")
         }
-        guard
-            let expertStride = (root["expertStride"] as? NSNumber)?.uint64Value,
-            let numLayers = root["numLayers"] as? Int,
-            let expertsPerLayer = root["expertsPerLayer"] as? Int,
-            let layersArr = root["layers"] as? [[String: Any]]
-        else {
-            throw ModelError.indexCorrupt(detail: "layout.json: missing top-level keys")
+        let layers = wire.layers.sorted { $0.layer < $1.layer }.map { layer -> LayerLayout in
+            let experts = layer.experts.enumerated().map { position, expert -> ExpertEntry in
+                let logical = expert.expert ?? position
+                return ExpertEntry(
+                    expert: logical,
+                    physicalRank: expert.physicalRank,
+                    offset: expert.offset,
+                    size: expert.size,
+                    subTensors: expert.tensors.mapValues {
+                        SubTensorEntry(offset: $0.offset, size: $0.size,
+                                       dtype: $0.dtype, shape: $0.shape,
+                                       bits: $0.bits)
+                    })
+            }.sorted { $0.expert < $1.expert }
+            return LayerLayout(layer: layer.layer, file: layer.file, experts: experts)
         }
-
-        var layers: [LayerLayout] = []
-        layers.reserveCapacity(layersArr.count)
-        for layerObj in layersArr {
-            guard
-                let layerIdx = layerObj["layer"] as? Int,
-                let file = layerObj["file"] as? String,
-                let expertsArr = layerObj["experts"] as? [[String: Any]]
-            else {
-                throw ModelError.indexCorrupt(detail: "layout.json: malformed layer entry")
-            }
-            var experts = [ExpertEntry?](repeating: nil, count: expertsPerLayer)
-            for expertObj in expertsArr {
-                guard
-                    let offset = (expertObj["offset"] as? NSNumber)?.uint64Value,
-                    let size = (expertObj["size"] as? NSNumber)?.uint64Value,
-                    let tensorsObj = expertObj["tensors"] as? [String: [String: Any]]
-                else {
-                    throw ModelError.indexCorrupt(detail: "layout.json: malformed expert entry")
-                }
-                var subTensors: [String: SubTensorEntry] = [:]
-                for (role, t) in tensorsObj {
-                    guard
-                        let toff = (t["offset"] as? NSNumber)?.uint64Value,
-                        t["size"] is NSNumber,
-                        t["dtype"] is String,
-                        t["shape"] is [Int]
-                    else {
-                        throw ModelError.indexCorrupt(detail: "layout.json: malformed tensor \(role)")
-                    }
-                    if let bits = t["bits"], !(bits is Int) {
-                        throw ModelError.indexCorrupt(detail: "layout.json: malformed tensor bits \(role)")
-                    }
-                    subTensors[role] = SubTensorEntry(offset: toff)
-                }
-                let expertID = expertObj["expert"] as? Int ?? experts.compactMap { $0 }.count
-                guard expertID >= 0 && expertID < expertsPerLayer else {
-                    throw ModelError.indexCorrupt(detail: "layout.json: expert id out of range")
-                }
-                let physicalRank = expertObj["physicalRank"] as? Int
-                if let physicalRank,
-                   (physicalRank < 0 || physicalRank >= expertsPerLayer) {
-                    throw ModelError.indexCorrupt(detail: "layout.json: physicalRank out of range")
-                }
-                experts[expertID] = ExpertEntry(expert: expertID,
-                                                offset: offset,
-                                                size: size,
-                                                subTensors: subTensors)
-            }
-            guard experts.allSatisfy({ $0 != nil }) else {
-                throw ModelError.indexCorrupt(detail: "layout.json: missing expert entries")
-            }
-            layers.append(LayerLayout(layer: layerIdx,
-                                      file: file,
-                                      experts: experts.map { $0! }))
-        }
-
-        return PackedExpertsLayout(expertStride: expertStride,
-                                   numLayers: numLayers,
-                                   expertsPerLayer: expertsPerLayer,
+        return PackedExpertsLayout(expertStride: wire.expertStride,
+                                   numLayers: wire.numLayers,
+                                   expertsPerLayer: wire.expertsPerLayer,
                                    layers: layers)
     }
 
-    private static func metadataFileSize(_ url: URL) throws -> UInt64 {
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard let number = attrs[.size] as? NSNumber else {
-            throw ModelError.indexCorrupt(detail: "layout.json: file size unavailable")
-        }
-        return number.uint64Value
-    }
 }

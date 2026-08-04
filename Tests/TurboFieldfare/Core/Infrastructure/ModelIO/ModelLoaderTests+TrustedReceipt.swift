@@ -1,10 +1,22 @@
 import Foundation
+import Darwin
 import Metal
 import Testing
 
 @testable import TurboFieldfare
 
 extension ModelLoaderTests {
+  @Test func receiptReaderRejectsFIFOWithoutBlocking() throws {
+    let dir = try Self.writeToySynthetic()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let receipt = dir.appendingPathComponent(VerifiedInstallReceiptReader.fileName)
+    #expect(mkfifo(receipt.path, 0o600) == 0)
+
+    #expect(throws: ModelError.self) {
+      _ = try VerifiedInstallReceiptReader.load(directoryURL: dir)
+    }
+  }
+
   @Test func trustedReceiptModeRequiresReceipt() throws {
     let dir = try Self.writeToySynthetic()
     defer { try? FileManager.default.removeItem(at: dir) }

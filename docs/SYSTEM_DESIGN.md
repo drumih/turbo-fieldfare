@@ -125,6 +125,14 @@ may load. It records the architecture, file sizes, and SHA-256 hashes. Without
 it, the runtime treats the installation as partial. `verified-install.json`
 records which manifest, directory, and files were verified.
 
+[`TurboFieldfareFormat`](../Sources/TurboFieldfareFormat) is the single code
+authority for the v1 JSON documents and resident-index binary records. The
+installer, verifier, and runtime use the same bounded codecs and structural
+validation. Filesystem access stays in their owning modules, where model files
+are opened relative to a captured root without following descendant symlinks.
+The root itself may be selected through a symlink, which supports normal user
+paths while keeping the loaded directory stable if that symlink later changes.
+
 By default, TurboFieldfare hashes `manifest.json`, `model_weights.bin`, and
 `packed_experts/layout.json` at load, then hashes each routed-expert layer file
 on first use. The trusted-receipt policy is an explicit alternative. It still

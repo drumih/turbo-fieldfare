@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import TurboFieldfareFormat
 
 /// On-disk header. `indexSize` is the full byte size of the leading index
 /// region — it INCLUDES the 24-byte header itself, the entry table, the
@@ -40,133 +41,113 @@ struct ResidentIndex: Sendable {
 }
 
 enum ResidentIndexReader {
-
-    static let headerBytes = 24
-    static let entryBytes = 72
+    static let defaultMaxBytes = GTurboFormatV1.residentIndexMaxBytes
 
     /// `pread` the header + index region out of `model_weights.bin`. The
     /// tensor data region (starting at byte `header.indexSize`) is **not**
     /// read here — that's the resident-buffer materialization job.
-    static func load(fileURL: URL) throws -> ResidentIndex {
-        let fd = open(fileURL.path, O_RDONLY)
+    static func load(fileURL: URL,
+                            maxBytes: UInt64 = defaultMaxBytes) throws -> ResidentIndex {
+        let fd = open(fileURL.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else {
             throw ModelError.posixFailed(call: "open(\(fileURL.path))", errno: errno)
         }
         defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            throw ModelError.posixFailed(call: "fstat(\(fileURL.path))", errno: errno)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw ModelError.indexCorrupt(detail: "resident index is not a regular file")
+        }
 
-        // -- header
+        return try load(fileDescriptor: fd, displayPath: fileURL.path,
+                        maxBytes: maxBytes)
+    }
+
+    package static func load(fileDescriptor fd: Int32,
+                             displayPath: String,
+                             maxBytes: UInt64 = defaultMaxBytes) throws -> ResidentIndex {
+        let headerBytes = GTurboFormatV1.residentHeaderBytes
         var headerBuf = [UInt8](repeating: 0, count: headerBytes)
-        var got = 0
-        headerBuf.withUnsafeMutableBufferPointer { p in
-            got = pread(fd, p.baseAddress!, headerBytes, 0)
+        try headerBuf.withUnsafeMutableBytes {
+            try preadExactly(fd: fd, into: $0, offset: 0,
+                             field: "IndexHeader")
         }
-        guard got == headerBytes else {
-            throw ModelError.indexCorrupt(detail: "short read for IndexHeader (\(got)/\(headerBytes))")
+        let wireHeader: GTurboResidentIndexHeaderV1
+        do {
+            wireHeader = try headerBuf.withUnsafeBytes {
+                try GTurboResidentIndexCodec.decodeHeader($0)
+            }
+        } catch {
+            throw ModelError.indexCorrupt(detail: "\(error)")
         }
-        let header = headerBuf.withUnsafeBytes { raw -> ResidentIndexHeader in
-            let base = raw.baseAddress!
-            return ResidentIndexHeader(
-                indexSize:    decodeU64LE(base, 0),
-                residentSize: decodeU64LE(base, 8),
-                entryCount:   decodeU64LE(base, 16))
-        }
-
-        guard header.indexSize >= UInt64(headerBytes) else {
+        guard wireHeader.indexSize <= maxBytes else {
             throw ModelError.indexCorrupt(
-                detail: "indexSize \(header.indexSize) < header size \(headerBytes)")
+                detail: "indexSize \(wireHeader.indexSize) exceeds metadata cap \(maxBytes)")
         }
-        let expectedEntryTableEnd = UInt64(headerBytes) + UInt64(header.entryCount) * UInt64(entryBytes)
-        guard expectedEntryTableEnd <= header.indexSize else {
-            throw ModelError.indexCorrupt(
-                detail: "header+entries (\(expectedEntryTableEnd)) > indexSize \(header.indexSize)")
+        guard wireHeader.indexSize >= UInt64(headerBytes) else {
+            throw ModelError.indexCorrupt(detail: "indexSize is smaller than the header")
+        }
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_size >= 0 else {
+            throw ModelError.posixFailed(call: "fstat(\(displayPath))", errno: errno)
+        }
+        guard wireHeader.indexSize <= UInt64(st.st_size),
+              wireHeader.indexSize <= UInt64(Int.max) else {
+            throw ModelError.indexCorrupt(detail: "index region exceeds file size")
         }
 
         // -- entire index region (header + entries + string table + padding)
-        let regionLen = Int(header.indexSize)
+        let regionLen = Int(wireHeader.indexSize)
         var indexBuf = [UInt8](repeating: 0, count: regionLen)
-        indexBuf.withUnsafeMutableBufferPointer { p in
-            got = pread(fd, p.baseAddress!, regionLen, 0)
+        indexBuf.replaceSubrange(0..<headerBytes, with: headerBuf)
+        try indexBuf.withUnsafeMutableBytes { raw in
+            try preadExactly(
+                fd: fd,
+                into: UnsafeMutableRawBufferPointer(
+                    rebasing: raw[headerBytes..<regionLen]),
+                offset: off_t(headerBytes),
+                field: "index region")
         }
-        guard got == regionLen else {
-            throw ModelError.indexCorrupt(detail: "short read for index region (\(got)/\(regionLen))")
-        }
 
-        // -- parse entries. Each IndexEntry stores `nameOffset` as an
-        // absolute file offset; since we read the leading region starting
-        // at file offset 0, that's also the buffer offset.
-        var entries: [String: ResidentIndexEntry] = [:]
-        entries.reserveCapacity(Int(header.entryCount))
-        try indexBuf.withUnsafeBytes { raw in
-            let base = raw.baseAddress!
-            for i in 0..<Int(header.entryCount) {
-                let p = base.advanced(by: headerBytes + i * entryBytes)
-                let nameOffset = Int(decodeU32LE(p, 0))
-                let nameLength = Int(decodeU16LE(p, 4))
-                let dtype = decodeU8(p, 6)
-                // byte 7 is reserved
-                let fileOffset = decodeU64LE(p, 8)
-                let sizeBytes  = decodeU64LE(p, 16)
-                let s0 = decodeU32LE(p, 24)
-                let s1 = decodeU32LE(p, 28)
-                let s2 = decodeU32LE(p, 32)
-                let s3 = decodeU32LE(p, 36)
-                let scaleOffset = decodeU64LE(p, 40)
-                let scaleSize   = decodeU64LE(p, 48)
-                let biasOffset  = decodeU64LE(p, 56)
-                let biasSize    = decodeU64LE(p, 64)
-
-                guard nameOffset >= headerBytes,
-                      nameOffset + nameLength <= regionLen else {
-                    throw ModelError.indexCorrupt(
-                        detail: "entry \(i) name range [\(nameOffset), \(nameOffset + nameLength)) " +
-                                "out of index region [\(headerBytes), \(regionLen))")
-                }
-                let namePtr = base.advanced(by: nameOffset)
-                let name = String(decoding: UnsafeRawBufferPointer(
-                    start: namePtr, count: nameLength), as: UTF8.self)
-
-                let entry = ResidentIndexEntry(
-                    name: name, dtype: dtype,
-                    fileOffset: fileOffset, sizeBytes: sizeBytes,
-                    shape: (s0, s1, s2, s3),
-                    scaleOffset: scaleOffset, scaleSize: scaleSize,
-                    biasOffset: biasOffset, biasSize: biasSize)
-                if entries[name] != nil {
-                    throw ModelError.indexCorrupt(detail: "duplicate tensor name \(name)")
-                }
-                entries[name] = entry
+        let wireEntries: [GTurboResidentIndexEntryV1]
+        do {
+            wireEntries = try indexBuf.withUnsafeBytes {
+                try GTurboResidentIndexCodec.decodeRegion($0, header: wireHeader)
             }
+        } catch {
+            throw ModelError.indexCorrupt(detail: "\(error)")
         }
-
+        let header = ResidentIndexHeader(indexSize: wireHeader.indexSize,
+                                         residentSize: wireHeader.residentSize,
+                                         entryCount: wireHeader.entryCount)
+        let entries = Dictionary(uniqueKeysWithValues: wireEntries.map { wire in
+            let shape = wire.shape
+            return (wire.name, ResidentIndexEntry(
+                name: wire.name, dtype: wire.dtype,
+                fileOffset: wire.fileOffset, sizeBytes: wire.sizeBytes,
+                shape: (shape[0], shape[1], shape[2], shape[3]),
+                scaleOffset: wire.scaleOffset, scaleSize: wire.scaleSize,
+                biasOffset: wire.biasOffset, biasSize: wire.biasSize))
+        })
         return ResidentIndex(header: header, entries: entries)
     }
 
-    // MARK: - little-endian primitives
-
-    @inline(__always)
-    static func decodeU64LE(_ base: UnsafeRawPointer, _ off: Int) -> UInt64 {
-        let p = base.advanced(by: off).assumingMemoryBound(to: UInt8.self)
-        var v: UInt64 = 0
-        for i in (0..<8).reversed() { v = (v << 8) | UInt64(p[i]) }
-        return v
-    }
-
-    @inline(__always)
-    static func decodeU32LE(_ base: UnsafeRawPointer, _ off: Int) -> UInt32 {
-        let p = base.advanced(by: off).assumingMemoryBound(to: UInt8.self)
-        var v: UInt32 = 0
-        for i in (0..<4).reversed() { v = (v << 8) | UInt32(p[i]) }
-        return v
-    }
-
-    @inline(__always)
-    static func decodeU16LE(_ base: UnsafeRawPointer, _ off: Int) -> UInt16 {
-        let p = base.advanced(by: off).assumingMemoryBound(to: UInt8.self)
-        return UInt16(p[0]) | (UInt16(p[1]) << 8)
-    }
-
-    @inline(__always)
-    static func decodeU8(_ base: UnsafeRawPointer, _ off: Int) -> UInt8 {
-        base.advanced(by: off).assumingMemoryBound(to: UInt8.self)[0]
+    private static func preadExactly(fd: Int32,
+                                     into buffer: UnsafeMutableRawBufferPointer,
+                                     offset: off_t,
+                                     field: String) throws {
+        var total = 0
+        while total < buffer.count {
+            let count = pread(fd, buffer.baseAddress!.advanced(by: total),
+                              buffer.count - total, offset + off_t(total))
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else {
+                throw ModelError.indexCorrupt(
+                    detail: "short read for \(field) (\(total)/\(buffer.count))")
+            }
+            total += count
+        }
     }
 }

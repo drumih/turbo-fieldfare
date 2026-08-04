@@ -10,7 +10,7 @@ Submitted measurements are listed under
 [Community results](#community-results).
 
 The frozen prompts are in
-[`benchmark-prompts/real-generation-v1/`](benchmark-prompts/real-generation-v1/).
+[`benchmark-prompts/real-generation-v1/`](benchmark-prompts/real-generation-v1).
 Runs use the app sampling defaults with fixed seeds: temperature `0.2`, Top-K
 `64`, Top-P `0.95`, a 4,096-token context, and up to 1,024 generated tokens.
 

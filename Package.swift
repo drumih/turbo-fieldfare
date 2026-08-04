@@ -21,8 +21,13 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "TurboFieldfareFormat",
+            path: "Sources/TurboFieldfareFormat"
+        ),
+        .target(
             name: "TurboFieldfare",
             dependencies: [
+                "TurboFieldfareFormat",
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "Sources/TurboFieldfare",
@@ -32,6 +37,7 @@ let package = Package(
         ),
         .target(
             name: "TurboFieldfareRepackCore",
+            dependencies: ["TurboFieldfareFormat"],
             path: "Sources/TurboFieldfareRepack/Core"
         ),
         .executableTarget(
@@ -101,13 +107,24 @@ let package = Package(
             path: "Sources/TurboFieldfareValidation/Support"
         ),
         .testTarget(
+            name: "TurboFieldfareFormatTests",
+            dependencies: ["TurboFieldfareFormat"],
+            path: "Tests/TurboFieldfareFormat"
+        ),
+        .testTarget(
+            name: "TurboFieldfareFormatCompatibilityTests",
+            dependencies: ["TurboFieldfareFormat", "TurboFieldfare", "TurboFieldfareRepackCore"],
+            path: "Tests/TurboFieldfareFormatCompatibility",
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
             name: "TurboFieldfareTestsCore",
             dependencies: ["TurboFieldfare", "TurboFieldfareValidationSupport", "TurboFieldfareRepackCore", "TurboFieldfareCLICore"],
             path: "Tests/TurboFieldfare/Core"
         ),
         .testTarget(
             name: "TurboFieldfareRepackTests",
-            dependencies: ["TurboFieldfareRepackCore"],
+            dependencies: ["TurboFieldfareFormat", "TurboFieldfareRepackCore"],
             path: "Tests/TurboFieldfareRepack/Core"
         ),
         .testTarget(
