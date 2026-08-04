@@ -51,6 +51,9 @@ mkdir -p benchmark-results/system benchmark-results/warmup benchmark-results/mea
 Review the system file before sharing it. The filtered hardware command omits
 the serial number and hardware UUID.
 
+If you calculate memory from `vm_stat`, use the page size printed on its first
+line. Do not assume 4 KB; the A18 Pro report in issue #80 used 16 KB pages.
+
 ## Run the cases
 
 Run one discarded warmup for each case:
@@ -132,6 +135,9 @@ all affect decode speed.
 
 | Source | Mac | Memory | Storage | Prompt / generated tokens | Decode | Measurement |
 | --- | --- | ---: | --- | ---: | ---: | --- |
+| [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 61 / 516 | 4.134 tok/s | One submitted run |
+| [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 430 / 780 | 3.672 tok/s | One submitted run |
+| [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 3,015 / 617 | 3.012 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 61 / 511 | 7.802 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 430 / 669 | 7.173 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 3,015 / 604 | 6.093 tok/s | One submitted run |

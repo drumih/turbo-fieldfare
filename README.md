@@ -301,6 +301,9 @@ multiple rows. Generation repeats the routed layer loop one token at a time.
 The installer applies the same bounded-memory rule: it repacks remote ranges
 directly into `.gturbo` without staging a full shard or tensor.
 
+For a video overview of TurboFieldfare, see Better Stack's
+[Local AI On Apple Silicon uses 7X Less RAM](https://youtu.be/vHhephsP6vU).
+
 For a visual introduction to the model architecture, see Maarten Grootendorst's
 [A Visual Guide to Gemma 4](https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-gemma-4).
 
