@@ -697,7 +697,6 @@ struct HTTPServerTests {
         let batchData = try await URLSession.shared.data(for: request).0
         let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
         let id = try #require(batch["id"] as? String)
-        let outputFileID = try #require(batch["output_file_id"] as? String)
         var status = ""
         for _ in 0..<100 {
             let data = try await URLSession.shared.data(
@@ -707,7 +706,11 @@ struct HTTPServerTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(status == "completed")
-        let output = try String(contentsOf: outputDirectory.appendingPathComponent(outputFileID)
+        let final = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
+        let finalObject = try #require(JSONSerialization.jsonObject(with: final) as? [String: Any])
+        let errorFileID = try #require(finalObject["error_file_id"] as? String)
+        let output = try String(contentsOf: outputDirectory.appendingPathComponent(errorFileID)
             .appendingPathExtension("jsonl"), encoding: .utf8)
         #expect(output.contains("\"custom_id\":\"will-fail\""))
         #expect(output.contains("\"response\":null"))

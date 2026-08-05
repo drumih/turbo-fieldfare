@@ -56,10 +56,17 @@ public actor BatchFileStore {
         return file
     }
 
-    public func get(_ id: String) -> File? { files[id] }
+    public func get(_ id: String) -> File? {
+        if let file = files[id] { return file }
+        let output = url(for: id).appendingPathExtension("jsonl")
+        guard FileManager.default.fileExists(atPath: output.path) else { return nil }
+        let bytes = (try? output.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return File(id: id, bytes: bytes, createdAt: Int(Date().timeIntervalSince1970),
+                    filename: id + ".jsonl", purpose: "batch")
+    }
 
     public func contents(_ id: String) throws -> Data? {
-        guard files[id] != nil else { return nil }
+        guard files[id] != nil || FileManager.default.fileExists(atPath: url(for: id).appendingPathExtension("jsonl").path) else { return nil }
         let direct = url(for: id)
         let output = direct.appendingPathExtension("jsonl")
         return try Data(contentsOf: FileManager.default.fileExists(atPath: direct.path) ? direct : output)

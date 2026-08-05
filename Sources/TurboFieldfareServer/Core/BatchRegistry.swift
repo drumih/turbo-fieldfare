@@ -80,6 +80,8 @@ public actor BatchRegistry {
         let total: Int
         let outputFileID: String
         let outputURL: URL
+        var errorFileID: String?
+        var errorURL: URL?
         var completed = 0
         var failed = 0
         var task: Task<Void, Never>?
@@ -206,7 +208,14 @@ public actor BatchRegistry {
     private func failed(_ id: String, customID: String, error: Error) {
         guard var job = jobs[id] else { return }
         do {
-            try appendFailure(to: job.outputURL, customID: customID, error: error)
+            if job.errorFileID == nil {
+                let errorFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+                let errorURL = outputDirectory.appendingPathComponent(errorFileID).appendingPathExtension("jsonl")
+                try Data().write(to: errorURL, options: .withoutOverwriting)
+                job.errorFileID = errorFileID
+                job.errorURL = errorURL
+            }
+            try appendFailure(to: job.errorURL!, customID: customID, error: error)
         } catch {
             // The original inference error remains the result of this item.
         }
@@ -245,7 +254,7 @@ public actor BatchRegistry {
                                              completed: job.completed,
                                              failed: job.failed),
                         outputFileID: job.outputFileID,
-                        errorFileID: nil,
+                        errorFileID: job.errorFileID,
                         metadata: job.metadata)
     }
 
