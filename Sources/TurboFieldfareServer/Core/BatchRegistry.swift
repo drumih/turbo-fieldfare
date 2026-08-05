@@ -21,7 +21,7 @@ public actor BatchRegistry {
         public let status: Status
         public let endpoint: String
         public let model: String
-        public let errors: [BatchError]?
+        public let errors: Errors?
         public let inputFileID: String?
         public let completionWindow: String?
         public let createdAt: Int
@@ -91,6 +91,16 @@ public actor BatchRegistry {
         public let line: Int?
     }
 
+    public struct Errors: Codable, Sendable {
+        public let object: String
+        public let data: [BatchError]
+
+        public init(data: [BatchError]) {
+            self.object = "list"
+            self.data = data
+        }
+    }
+
     public struct Counts: Codable, Sendable {
         public let total: Int
         public let completed: Int
@@ -140,6 +150,7 @@ public actor BatchRegistry {
         var inputTokens = 0
         var cachedTokens = 0
         var outputTokens = 0
+        let batchErrors: [BatchError]?
     }
 
     private let outputDirectory: URL
@@ -175,7 +186,8 @@ public actor BatchRegistry {
                        createdAt: created,
                        total: requests.count,
                        expiresAt: completionWindow == "24h" ? created + 86_400 : nil,
-                       outputExpiresAfterSeconds: outputExpiresAfterSeconds)
+                       outputExpiresAfterSeconds: outputExpiresAfterSeconds,
+                       batchErrors: nil)
         let task = Task { [weak self] in
             guard let self else { return }
             await self.start(id)
@@ -206,6 +218,28 @@ public actor BatchRegistry {
             await self.finish(id)
         }
         jobs[id]?.task = task
+        return snapshot(id)!
+    }
+
+    public func createFailed(modelID: String,
+                             inputFileID: String,
+                             completionWindow: String,
+                             metadata: [String: String]?,
+                             error: BatchError) -> Snapshot {
+        let id = "batch_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        let created = Int(Date().timeIntervalSince1970)
+        jobs[id] = Job(status: .failed,
+                       endpoint: "/v1/chat/completions",
+                       model: modelID,
+                       inputFileID: inputFileID,
+                       completionWindow: completionWindow,
+                       metadata: metadata,
+                       createdAt: created,
+                       total: 0,
+                       failedAt: created,
+                       expiresAt: created + 86_400,
+                       outputExpiresAfterSeconds: nil,
+                       batchErrors: [error])
         return snapshot(id)!
     }
 
@@ -328,7 +362,7 @@ public actor BatchRegistry {
                         status: job.status,
                         endpoint: job.endpoint,
                         model: job.model,
-                        errors: nil,
+                        errors: job.batchErrors.map(Errors.init),
                         inputFileID: job.inputFileID,
                         completionWindow: job.completionWindow,
                         createdAt: job.createdAt,

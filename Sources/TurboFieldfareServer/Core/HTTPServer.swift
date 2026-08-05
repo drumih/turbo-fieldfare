@@ -284,7 +284,21 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                         guard let input = try await self.files.contents(create.inputFileID) else {
                             throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
                         }
-                        requests = try self.decodeBatchInput(input)
+                        do {
+                            requests = try self.decodeBatchInput(input)
+                        } catch let error as ServerRequestError {
+                            let snapshot = await self.batches.createFailed(
+                                modelID: self.modelID,
+                                inputFileID: create.inputFileID,
+                                completionWindow: create.completionWindow,
+                                metadata: create.metadata,
+                                error: .init(code: error.envelope.error.code,
+                                             message: error.envelope.error.message,
+                                             param: error.envelope.error.param,
+                                             line: nil))
+                            self.writeCodable(box.value, status: .ok, snapshot)
+                            return
+                        }
                         inputFileID = create.inputFileID
                         completionWindow = create.completionWindow
                         metadata = create.metadata

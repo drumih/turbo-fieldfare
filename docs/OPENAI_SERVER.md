@@ -191,6 +191,10 @@ output and error JSONL files after that interval, and their File objects expose
 embeddings, multimodal input, structured output, log probabilities, or remote
 model switching. Batch and Files data is discarded on server restart.
 
+An invalid JSONL input file produces a Batch with status `failed` and a
+structured `errors` list. Invalid `POST /v1/batches` parameters still return an
+HTTP error envelope.
+
 Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
 KV contexts use more memory. On an 8 GB Mac, run one model process at a time and
 watch memory pressure.

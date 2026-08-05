@@ -268,6 +268,10 @@ The local server implements the OpenAI Files → Batch flow for non-streaming
 output/error JSONL after that interval. Each JSONL line contains `custom_id`, `method`,
 `url`, and the normal Chat Completions `body`.
 
+If a stored JSONL input fails Batch validation, creation returns a Batch in
+`failed` state with an `errors` list; malformed Batch request parameters still
+return the usual HTTP error envelope.
+
 `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, and `GET /v1/batches`
 provide lifecycle status. Download `output_file_id` and, when present,
 `error_file_id` through `GET /v1/files/{id}/content`. Requests run through the
