@@ -129,6 +129,10 @@ private struct BatchInputValidationError: Error {
     let line: Int?
 }
 
+private struct BatchInputErrors: Error {
+    let errors: [BatchRegistry.BatchError]
+}
+
 private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
@@ -289,18 +293,16 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                         guard let input = try await self.files.contents(create.inputFileID) else {
                             throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
                         }
-                        do {
-                            requests = try self.decodeBatchInput(input)
-                        } catch let error as BatchInputValidationError {
+                        switch self.decodeBatchInput(input) {
+                        case .success(let decoded):
+                            requests = decoded
+                        case .failure(let validation):
                             let snapshot = await self.batches.createFailed(
                                 modelID: self.modelID,
                                 inputFileID: create.inputFileID,
                                 completionWindow: create.completionWindow,
                                 metadata: create.metadata,
-                                error: .init(code: error.error.envelope.error.code,
-                                             message: error.error.envelope.error.message,
-                                             param: error.error.envelope.error.param,
-                                             line: error.line))
+                                errors: validation.errors)
                             self.writeCodable(box.value, status: .ok, snapshot)
                             return
                         }
@@ -333,36 +335,54 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
-    private func decodeBatchInput(_ data: Data) throws -> [BatchRequest] {
+    private func decodeBatchInput(_ data: Data) -> Result<[BatchRequest], BatchInputErrors> {
         struct Line: Decodable { let customID: String; let method: String; let url: String; let body: OpenAIChatRequest
             enum CodingKeys: String, CodingKey { case customID = "custom_id", method, url, body } }
         let text = String(decoding: data, as: UTF8.self)
         var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
         if lines.last?.isEmpty == true { lines.removeLast() }
-        guard !lines.isEmpty else { throw BatchInputValidationError(error: .invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value"), line: nil) }
-        guard lines.count <= 50_000 else { throw BatchInputValidationError(error: .invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value"), line: nil) }
+        guard !lines.isEmpty else { return .failure(.init(errors: [batchError(.init(error: .invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value"), line: nil))])) }
+        guard lines.count <= 50_000 else { return .failure(.init(errors: [batchError(.init(error: .invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value"), line: nil))])) }
         var ids = Set<String>()
-        return try lines.enumerated().map { index, line in
-            guard !line.isEmpty else {
-                throw BatchInputValidationError(error: .invalid(message: "JSONL request line must not be empty", param: "input_file_id", code: "invalid_value"), line: index + 1)
-            }
-            guard let lineData = String(line).data(using: .utf8) else { throw BatchInputValidationError(error: .invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value"), line: index + 1) }
-            let item: Line
-            do { item = try JSONDecoder().decode(Line.self, from: lineData) }
-            catch { throw BatchInputValidationError(error: .invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1) }
-            guard !item.customID.isEmpty, item.customID.utf8.count <= 512 else {
-                throw BatchInputValidationError(error: .invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value"), line: index + 1)
-            }
-            guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
-                throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
-            }
-            guard item.body.stream != true else { throw BatchInputValidationError(error: .invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value"), line: index + 1) }
+        var requests: [BatchRequest] = []
+        var errors: [BatchRegistry.BatchError] = []
+        for (index, line) in lines.enumerated() {
             do {
-                return BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID))
-            } catch let error as ServerRequestError {
-                throw BatchInputValidationError(error: error, line: index + 1)
+                guard !line.isEmpty else {
+                    throw BatchInputValidationError(error: .invalid(message: "JSONL request line must not be empty", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard let lineData = String(line).data(using: .utf8) else { throw BatchInputValidationError(error: .invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value"), line: index + 1) }
+                let item: Line
+                do { item = try JSONDecoder().decode(Line.self, from: lineData) }
+                catch { throw BatchInputValidationError(error: .invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1) }
+                guard !item.customID.isEmpty, item.customID.utf8.count <= 512 else {
+                    throw BatchInputValidationError(error: .invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
+                    throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard item.body.stream != true else { throw BatchInputValidationError(error: .invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value"), line: index + 1) }
+                do {
+                    requests.append(BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID)))
+                } catch let error as ServerRequestError {
+                    throw BatchInputValidationError(error: error, line: index + 1)
+                } catch {
+                    throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+            } catch let error as BatchInputValidationError {
+                errors.append(batchError(error))
+            } catch {
+                errors.append(batchError(.init(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)))
             }
         }
+        return errors.isEmpty ? .success(requests) : .failure(.init(errors: errors))
+    }
+
+    private func batchError(_ error: BatchInputValidationError) -> BatchRegistry.BatchError {
+        .init(code: error.error.envelope.error.code,
+              message: error.error.envelope.error.message,
+              param: error.error.envelope.error.param,
+              line: error.line)
     }
 
     private func handleFileUpload(head: HTTPRequestHead, body: ByteBuffer, context: ChannelHandlerContext) {

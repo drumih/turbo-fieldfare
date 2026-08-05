@@ -225,7 +225,7 @@ public actor BatchRegistry {
                              inputFileID: String,
                              completionWindow: String,
                              metadata: [String: String]?,
-                             error: BatchError) -> Snapshot {
+                             errors: [BatchError]) -> Snapshot {
         let id = "batch_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let created = Int(Date().timeIntervalSince1970)
         jobs[id] = Job(status: .failed,
@@ -239,7 +239,7 @@ public actor BatchRegistry {
                        failedAt: created,
                        expiresAt: created + 86_400,
                        outputExpiresAfterSeconds: nil,
-                       batchErrors: [error])
+                       batchErrors: errors)
         return snapshot(id)!
     }
 
