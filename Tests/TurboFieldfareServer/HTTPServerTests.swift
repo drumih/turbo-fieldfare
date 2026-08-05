@@ -543,7 +543,8 @@ struct HTTPServerTests {
             from: URL(string: "http://127.0.0.1:\(port)/v1/files")!).0
         let filesObject = try #require(JSONSerialization.jsonObject(with: filesData) as? [String: Any])
         let files = try #require(filesObject["data"] as? [[String: Any]])
-        #expect(files.contains { $0["id"] as? String == outputFileID })
+        let listedOutput = try #require(files.first { $0["id"] as? String == outputFileID })
+        #expect(listedOutput["purpose"] as? String == "batch_output")
         let lines = output.split(separator: "\n")
         #expect(lines.count == 2)
         #expect(lines[0].contains("\"custom_id\":\"first\""))
