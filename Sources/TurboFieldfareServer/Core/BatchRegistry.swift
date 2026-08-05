@@ -381,9 +381,13 @@ public actor BatchRegistry {
     private func appendFailure(to url: URL, customID: String, error: Error) throws {
         let detail: [String: Any]
         if let error = error as? ServerRequestError {
-            detail = ["code": error.envelope.error.code, "message": error.envelope.error.message]
+            detail = ["code": error.envelope.error.code,
+                      "message": error.envelope.error.message,
+                      "type": error.envelope.error.type,
+                      "param": error.envelope.error.param ?? NSNull()]
         } else {
-            detail = ["code": "internal_error", "message": "generation failed"]
+            detail = ["code": "internal_error", "message": "generation failed",
+                      "type": "server_error", "param": NSNull()]
         }
         try appendLine([
             "id": "batch_req_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: ""),

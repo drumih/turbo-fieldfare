@@ -768,6 +768,7 @@ struct HTTPServerTests {
         #expect(output.contains("\"custom_id\":\"will-fail\""))
         #expect(output.contains("\"response\":null"))
         #expect(output.contains("\"synthetic_failure\""))
+        #expect(output.contains("\"type\":\"invalid_request_error\""))
 
         try await server.shutdown()
     }
