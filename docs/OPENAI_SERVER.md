@@ -185,7 +185,7 @@ The server supports one model and one choice. Batch accepts OpenAI-format JSONL
 input files for non-streaming `/v1/chat/completions` with `completion_window`
 set to `"24h"`. It does not support the Responses API, legacy Completions,
 embeddings, multimodal input, structured output, log probabilities, or remote
-model switching.
+model switching. Batch and Files data is discarded on server restart.
 
 Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
 KV contexts use more memory. On an 8 GB Mac, run one model process at a time and

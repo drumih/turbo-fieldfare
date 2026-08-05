@@ -270,7 +270,8 @@ The local server implements the OpenAI Files → Batch flow for non-streaming
 provide lifecycle status. Download `output_file_id` and, when present,
 `error_file_id` through `GET /v1/files/{id}/content`. Requests run through the
 same single-model queue as interactive requests; only Chat Completions batches
-are supported.
+are supported. Batch and Files state is in-memory/process-local and is removed
+when the server restarts.
 
 ## Test and contribute
 

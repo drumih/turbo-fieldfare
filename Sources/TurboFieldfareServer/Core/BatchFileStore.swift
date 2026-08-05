@@ -22,12 +22,10 @@ public actor BatchFileStore {
 
     public init(directory: URL) {
         self.directory = directory
+        // The loopback server deliberately has no cross-process persistence.
+        // Starting a new server instance discards Files and Batch artifacts.
+        try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let metadata = directory.appendingPathComponent("files.json")
-        if let data = try? Data(contentsOf: metadata),
-           let decoded = try? JSONDecoder().decode([String: File].self, from: data) {
-            files = decoded
-        }
     }
 
     public func create(filename: String, purpose: String, contents: Data) throws -> File {

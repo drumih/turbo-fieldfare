@@ -258,6 +258,7 @@ public actor BatchRegistry {
                         metadata: job.metadata)
     }
 
+
     private func appendSuccess(to url: URL,
                                customID: String,
                                completion: ServerCompletion,
