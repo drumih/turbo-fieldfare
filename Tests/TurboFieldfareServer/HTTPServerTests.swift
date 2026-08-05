@@ -512,7 +512,7 @@ struct HTTPServerTests {
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(object["object"] as? String == "batch")
         let batchID = try #require(object["id"] as? String)
-        let outputFileID = try #require(object["output_file_id"] as? String)
+        #expect(object["output_file_id"] is NSNull || object["output_file_id"] == nil)
         #expect((object["request_counts"] as? [String: Any])?["total"] as? Int == 2)
 
         let listData = try await URLSession.shared.data(
@@ -523,17 +523,21 @@ struct HTTPServerTests {
         #expect(list["has_more"] as? Bool == false)
 
         var status = ""
+        var outputFileID: String?
         for _ in 0..<100 {
             let statusData = try await URLSession.shared.data(
                 from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(batchID)")!).0
             let snapshot = try #require(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
             status = try #require(snapshot["status"] as? String)
-            if status == "completed" { break }
+            if status == "completed" {
+                outputFileID = try #require(snapshot["output_file_id"] as? String)
+                break
+            }
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(status == "completed")
         let output = try String(contentsOf: outputDirectory
-            .appendingPathComponent(outputFileID)
+            .appendingPathComponent(try #require(outputFileID))
             .appendingPathExtension("jsonl"), encoding: .utf8)
         let lines = output.split(separator: "\n")
         #expect(lines.count == 2)

@@ -12,7 +12,7 @@ public struct BatchRequest: Sendable {
 
 public actor BatchRegistry {
     public enum Status: String, Codable, Sendable {
-        case validating, inProgress = "in_progress", completed, failed, cancelling, cancelled
+        case validating, inProgress = "in_progress", finalizing, completed, failed, expired, cancelling, cancelled
     }
 
     public struct Snapshot: Codable, Sendable {
@@ -26,10 +26,13 @@ public actor BatchRegistry {
         public let inProgressAt: Int?
         public let completedAt: Int?
         public let failedAt: Int?
+        public let expiresAt: Int?
+        public let finalizingAt: Int?
+        public let expiredAt: Int?
         public let cancellingAt: Int?
         public let cancelledAt: Int?
         public let requestCounts: Counts
-        public let outputFileID: String
+        public let outputFileID: String?
         public let errorFileID: String?
         public let metadata: [String: String]?
 
@@ -41,6 +44,9 @@ public actor BatchRegistry {
             case inProgressAt = "in_progress_at"
             case completedAt = "completed_at"
             case failedAt = "failed_at"
+            case expiresAt = "expires_at"
+            case finalizingAt = "finalizing_at"
+            case expiredAt = "expired_at"
             case cancellingAt = "cancelling_at"
             case cancelledAt = "cancelled_at"
             case requestCounts = "request_counts"
@@ -88,6 +94,9 @@ public actor BatchRegistry {
         var inProgressAt: Int?
         var completedAt: Int?
         var failedAt: Int?
+        var expiresAt: Int?
+        var finalizingAt: Int?
+        var expiredAt: Int?
         var cancellingAt: Int?
         var cancelledAt: Int?
     }
@@ -232,6 +241,9 @@ public actor BatchRegistry {
 
     private func finish(_ id: String) {
         guard var job = jobs[id], job.status != .cancelled else { return }
+        job.status = .finalizing
+        job.finalizingAt = Int(Date().timeIntervalSince1970)
+        jobs[id] = job
         job.status = .completed
         job.completedAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
@@ -248,13 +260,16 @@ public actor BatchRegistry {
                         inProgressAt: job.inProgressAt,
                         completedAt: job.completedAt,
                         failedAt: job.failedAt,
+                        expiresAt: job.expiresAt,
+                        finalizingAt: job.finalizingAt,
+                        expiredAt: job.expiredAt,
                         cancellingAt: job.cancellingAt,
                         cancelledAt: job.cancelledAt,
                         requestCounts: .init(total: job.total,
                                              completed: job.completed,
                                              failed: job.failed),
-                        outputFileID: job.outputFileID,
-                        errorFileID: job.errorFileID,
+                        outputFileID: (job.status == .completed || job.status == .cancelled) ? job.outputFileID : nil,
+                        errorFileID: (job.status == .completed || job.status == .cancelled) ? job.errorFileID : nil,
                         metadata: job.metadata)
     }
 

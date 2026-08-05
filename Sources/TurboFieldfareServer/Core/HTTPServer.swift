@@ -281,17 +281,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                                                  inputFileID: inputFileID,
                                                                  completionWindow: completionWindow,
                                                                  metadata: metadata)
-                    _ = try await self.files.registerBatchOutput(snapshot.outputFileID)
                     self.writeCodable(box.value, status: .ok, snapshot)
                 } catch let error as ServerRequestError {
                     self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
                 } catch {
-                    self.handleAsyncError(
-                        error,
-                        context: box.value,
-                        id: "batch-" + UUID().uuidString.lowercased(),
-                        phase: "creating batch",
-                        stream: false)
+                    self.writeError(box.value, status: .badRequest,
+                                    OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
                 }
             }
         } catch let error as ServerRequestError { writeError(context, status: error == .unknownModel ? .notFound : .badRequest, error.envelope) }
