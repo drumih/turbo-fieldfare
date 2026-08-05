@@ -819,6 +819,19 @@ struct HTTPServerTests {
         #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
+    @Test func batchFileSizeLimitReturnsOpenAIError() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileSizeTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BatchFileStore(directory: directory, maximumInputBytes: 3)
+        do {
+            _ = try await store.create(filename: "input.jsonl", purpose: "batch", contents: Data("1234".utf8))
+            Issue.record("expected batch file size rejection")
+        } catch let error as ServerRequestError {
+            #expect(error.envelope.error.code == "invalid_value")
+            #expect(error.envelope.error.param == "file")
+        }
+    }
+
     @Test func batchRejectsMoreThanFiftyThousandJSONLRequests() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchLimitTest-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }

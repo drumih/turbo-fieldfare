@@ -20,10 +20,13 @@ public actor BatchFileStore {
     }
 
     private let directory: URL
+    private let maximumInputBytes: Int
     private var files: [String: File] = [:]
 
-    public init(directory: URL) {
+    public init(directory: URL,
+                maximumInputBytes: Int = TurboFieldfareHTTPServer.maximumBatchFileBytes) {
         self.directory = directory
+        self.maximumInputBytes = maximumInputBytes
         // The loopback server deliberately has no cross-process persistence.
         // Starting a new server instance discards Files and Batch artifacts.
         try? FileManager.default.removeItem(at: directory)
@@ -37,7 +40,7 @@ public actor BatchFileStore {
         guard filename.lowercased().hasSuffix(".jsonl") else {
             throw ServerRequestError.invalid(message: "batch files must use the .jsonl extension", param: "file", code: "invalid_value")
         }
-        guard contents.count <= TurboFieldfareHTTPServer.maximumBatchFileBytes else {
+        guard contents.count <= maximumInputBytes else {
             throw ServerRequestError.invalid(message: "batch files may not exceed 200 MiB", param: "file", code: "invalid_value")
         }
         return try write(filename: filename, purpose: purpose, contents: contents)
