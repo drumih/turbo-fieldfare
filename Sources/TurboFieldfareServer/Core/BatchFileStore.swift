@@ -70,7 +70,7 @@ public actor BatchFileStore {
         return generatedFile(id: id, url: output, fallbackBytes: 0)
     }
 
-    public func list() -> [File] {
+    public func list(order: String = "desc", purpose: String? = nil) -> [File] {
         var ids = Set(files.keys)
         if let urls = try? FileManager.default.contentsOfDirectory(at: directory,
                                                                      includingPropertiesForKeys: nil) {
@@ -78,7 +78,14 @@ public actor BatchFileStore {
                 ids.insert(url.deletingPathExtension().lastPathComponent)
             }
         }
-        return ids.sorted().compactMap(get)
+        return ids.compactMap(get)
+            .filter { purpose == nil || $0.purpose == purpose }
+            .sorted {
+                if $0.createdAt != $1.createdAt {
+                    return order == "asc" ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt
+                }
+                return order == "asc" ? $0.id < $1.id : $0.id > $1.id
+            }
     }
 
     public func delete(_ id: String) throws -> Bool {

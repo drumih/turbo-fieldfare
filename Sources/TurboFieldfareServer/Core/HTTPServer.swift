@@ -225,7 +225,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         case (.POST, "/v1/files"):
             handleFileUpload(head: head, body: body, context: context)
         case (.GET, "/v1/files"):
-            handleFileList(context: context)
+            handleFileList(uri: head.uri, context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/files/") && uri.hasSuffix("/content"):
             handleFileContent(id: String(uri.dropFirst("/v1/files/".count).dropLast("/content".count)), context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/files/"):
@@ -373,10 +373,42 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         activeTask = childChannels.startTask { guard let file = await self.files.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, file) }
     }
 
-    private func handleFileList(context: ChannelHandlerContext) {
-        struct List: Encodable { let object = "list"; let data: [BatchFileStore.File] }
+    private func handleFileList(uri: String, context: ChannelHandlerContext) {
+        struct List: Encodable {
+            let object = "list"
+            let data: [BatchFileStore.File]
+            let firstID: String?
+            let lastID: String?
+            let hasMore: Bool
+            enum CodingKeys: String, CodingKey {
+                case object, data
+                case firstID = "first_id"
+                case lastID = "last_id"
+                case hasMore = "has_more"
+            }
+        }
+        guard let components = URLComponents(string: "http://localhost\(uri)") else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid query", code: "invalid_value"))
+            return
+        }
+        let query = components.queryItems ?? []
+        let limit = query.first(where: { $0.name == "limit" })?.value.flatMap(Int.init) ?? 10_000
+        let order = query.first(where: { $0.name == "order" })?.value ?? "desc"
+        guard (1...10_000).contains(limit), order == "asc" || order == "desc" else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid Files list query", code: "invalid_value"))
+            return
+        }
+        let after = query.first(where: { $0.name == "after" })?.value
+        let purpose = query.first(where: { $0.name == "purpose" })?.value
         let box = SendableContext(context)
-        activeTask = childChannels.startTask { self.writeCodable(box.value, status: .ok, List(data: await self.files.list())) }
+        activeTask = childChannels.startTask {
+            let all = await self.files.list(order: order, purpose: purpose)
+            let start = after.flatMap { id in all.firstIndex(where: { $0.id == id }).map { $0 + 1 } } ?? 0
+            let page = Array(all.dropFirst(start).prefix(limit))
+            self.writeCodable(box.value, status: .ok, List(data: page, firstID: page.first?.id,
+                                                            lastID: page.last?.id,
+                                                            hasMore: start + page.count < all.count))
+        }
     }
 
     private func handleFileDelete(id: String, context: ChannelHandlerContext) {
