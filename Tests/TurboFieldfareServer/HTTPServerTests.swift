@@ -804,6 +804,21 @@ struct HTTPServerTests {
         try await second.shutdown()
     }
 
+    @Test func expiredBatchOutputFileIsRemoved() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareExpiredOutputTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BatchFileStore(directory: directory)
+        let id = "file-expired-output"
+        let output = directory.appendingPathComponent(id).appendingPathExtension("jsonl")
+        try Data("{}\n".utf8).write(to: output)
+        _ = try await store.registerBatchOutput(id, expiresAt: Int(Date().timeIntervalSince1970) - 1)
+        #expect((await store.get(id))?.id == nil)
+        for _ in 0..<20 where FileManager.default.fileExists(atPath: output.path) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
     @Test func batchListPaginatesWithAfterCursor() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
