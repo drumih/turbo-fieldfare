@@ -54,6 +54,11 @@ public func run(args: Args,
             stopStrings: args.stops,
             extraStopTokens: [])
         let runtime = RuntimeConfiguration(
+            expertCacheSlots: args.expertCacheSlots,
+            expertCachePolicy: args.expertCachePolicy == "lru" ? .lru : .lfu,
+            rdadvisePolicy: RDAdvicePolicyMode.parse(args.rdadvisePolicy),
+            prefillEnabled: args.prefillEnabled,
+            prefillChunkTokens: args.prefillChunkTokens,
             forceLogitsHead: !config.isPureGreedy)
 
         guard MTLCreateSystemDefaultDevice() != nil else {

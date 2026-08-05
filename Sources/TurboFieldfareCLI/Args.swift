@@ -11,6 +11,11 @@ public struct Args: Equatable, Sendable {
     public var seed: UInt64?
     public var stops: [String]
     public var quiet: Bool
+    public var expertCacheSlots: Int
+    public var expertCachePolicy: String
+    public var prefillEnabled: Bool
+    public var prefillChunkTokens: Int
+    public var rdadvisePolicy: String
 
     public init(model: String,
                 prompt: String? = nil,
@@ -23,7 +28,12 @@ public struct Args: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stops: [String] = [],
-                quiet: Bool = false) {
+                quiet: Bool = false,
+                expertCacheSlots: Int = 16,
+                expertCachePolicy: String = "lfu",
+                prefillEnabled: Bool = true,
+                prefillChunkTokens: Int = 128,
+                rdadvisePolicy: String = "off") {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -36,6 +46,11 @@ public struct Args: Equatable, Sendable {
         self.seed = seed
         self.stops = stops
         self.quiet = quiet
+        self.expertCacheSlots = expertCacheSlots
+        self.expertCachePolicy = expertCachePolicy
+        self.prefillEnabled = prefillEnabled
+        self.prefillChunkTokens = prefillChunkTokens
+        self.rdadvisePolicy = rdadvisePolicy
     }
 }
 
@@ -82,6 +97,11 @@ extension Args {
       --seed <uint64>           Deterministic sampling seed (default off).
       --stop <string>           Stop substring (repeatable).
       --quiet                   Suppress the timing footer.
+      --expert-cache-slots <n>  Expert-cache slots: 8, 16, 24, or 32 (default 16).
+      --expert-cache-policy <s> Expert-cache policy: lfu or lru (default lfu).
+      --prefill on|off          Enable or disable chunked prompt prefill (default on).
+      --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, or 128 (default 128).
+      --rdadvise <s>            RDADVISE policy: off, default, bounded, or adaptive (default off).
       --help                    Show this message.
     """
 
@@ -98,6 +118,11 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var quiet = false
+        var expertCacheSlots = 16
+        var expertCachePolicy = "lfu"
+        var prefillEnabled = true
+        var prefillChunkTokens = 128
+        var rdadvisePolicy = "off"
 
         var index = 0
         while index < argv.count {
@@ -158,6 +183,37 @@ extension Args {
                 seed = parsed
             case "--stop":
                 stops.append(try takeValue(argv, &index, flag: flag))
+            case "--expert-cache-slots":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value), [8, 16, 24, 32].contains(parsed) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                expertCacheSlots = parsed
+            case "--expert-cache-policy":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard ["lfu", "lru"].contains(value) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                expertCachePolicy = value
+            case "--prefill":
+                let value = try takeValue(argv, &index, flag: flag)
+                switch value {
+                case "on": prefillEnabled = true
+                case "off": prefillEnabled = false
+                default: throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+            case "--prefill-chunk-tokens":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value), [32, 64, 128].contains(parsed) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                prefillChunkTokens = parsed
+            case "--rdadvise":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard ["off", "default", "bounded", "adaptive"].contains(value) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                rdadvisePolicy = value
             default:
                 throw ArgsError.unknownFlag(flag)
             }
@@ -184,7 +240,12 @@ extension Args {
                     repetitionPenalty: repetitionPenalty,
                     seed: seed,
                     stops: stops,
-                    quiet: quiet)
+                    quiet: quiet,
+                    expertCacheSlots: expertCacheSlots,
+                    expertCachePolicy: expertCachePolicy,
+                    prefillEnabled: prefillEnabled,
+                    prefillChunkTokens: prefillChunkTokens,
+                    rdadvisePolicy: rdadvisePolicy)
     }
 
     private static func takeValue(_ argv: [String],
