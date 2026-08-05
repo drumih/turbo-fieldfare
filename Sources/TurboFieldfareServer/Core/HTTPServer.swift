@@ -7,6 +7,7 @@ import TurboFieldfare
 
 public actor TurboFieldfareHTTPServer {
     public static let maximumBodyBytes = 1_048_576
+    public static let maximumBatchFileBytes = 200 * 1_024 * 1_024
 
     private let group: MultiThreadedEventLoopGroup
     private let modelID: String
@@ -159,7 +160,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             body.clear()
             oversized = false
         case .body(var part):
-            if body.readableBytes + part.readableBytes > TurboFieldfareHTTPServer.maximumBodyBytes {
+            let limit = head?.uri.split(separator: "?", maxSplits: 1).first == "/v1/files"
+                ? TurboFieldfareHTTPServer.maximumBatchFileBytes
+                : TurboFieldfareHTTPServer.maximumBodyBytes
+            if body.readableBytes + part.readableBytes > limit {
                 oversized = true
             } else {
                 body.writeBuffer(&part)
@@ -253,6 +257,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                     var completionWindow: String?
                     var metadata: [String: String]?
                     if let create = decoded {
+                        guard (create.metadata?.count ?? 0) <= 16,
+                              create.metadata?.allSatisfy({ $0.key.utf8.count <= 64 && $0.value.utf8.count <= 512 }) ?? true else {
+                            throw ServerRequestError.invalid(message: "metadata supports at most 16 entries with keys up to 64 and values up to 512 UTF-8 bytes", param: "metadata", code: "invalid_value")
+                        }
                         guard create.endpoint == "/v1/chat/completions" else {
                             throw ServerRequestError.invalid(message: "only /v1/chat/completions batches are supported", param: "endpoint", code: "unsupported_value")
                         }
@@ -299,12 +307,16 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.split(whereSeparator: \.isNewline)
         guard !lines.isEmpty else { throw ServerRequestError.invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value") }
+        guard lines.count <= 50_000 else { throw ServerRequestError.invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value") }
         var ids = Set<String>()
         return try lines.enumerated().map { index, line in
             guard let lineData = String(line).data(using: .utf8) else { throw ServerRequestError.invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value") }
             let item: Line
             do { item = try JSONDecoder().decode(Line.self, from: lineData) }
             catch { throw ServerRequestError.invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value") }
+            guard !item.customID.isEmpty, item.customID.utf8.count <= 512 else {
+                throw ServerRequestError.invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value")
+            }
             guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
                 throw ServerRequestError.invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value")
             }

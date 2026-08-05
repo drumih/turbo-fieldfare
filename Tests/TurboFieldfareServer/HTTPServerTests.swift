@@ -568,6 +568,24 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func batchRejectsOversizedMetadataBeforeReadingInputFile() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let metadata = Dictionary(uniqueKeysWithValues: (0..<17).map { ("key\($0)", "value") })
+        let body: [String: Any] = ["input_file_id": "file-missing", "endpoint": "/v1/chat/completions",
+                                   "completion_window": "24h", "metadata": metadata]
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("metadata"))
+        try await server.shutdown()
+    }
+
     @Test func batchAcceptsOpenAIFileAndJSONLContract() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileTest-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }

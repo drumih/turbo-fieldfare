@@ -35,6 +35,9 @@ public actor BatchFileStore {
         guard filename.lowercased().hasSuffix(".jsonl") else {
             throw ServerRequestError.invalid(message: "batch files must use the .jsonl extension", param: "file", code: "invalid_value")
         }
+        guard contents.count <= TurboFieldfareHTTPServer.maximumBatchFileBytes else {
+            throw ServerRequestError.invalid(message: "batch files may not exceed 200 MiB", param: "file", code: "invalid_value")
+        }
         return try write(filename: filename, purpose: purpose, contents: contents)
     }
 
