@@ -83,13 +83,101 @@ import Testing
         }
     }
 
-    @Test func latexRemainsReadableText() {
+    @Test func inlineMathRendersAsVisualAttachment() {
         let source = "Cosine is $\\frac{u \\cdot v}{||u|| ||v||}$."
         let result = ResponseMarkdownRenderer().render(source)
 
         #expect(!result.usedFallback)
-        #expect(result.attributedString.string.contains("\\frac"))
-        #expect(result.attributedString.string.contains("\\cdot"))
+        #expect(result.attributedString.string.contains("Cosine is"))
+        #expect(!result.attributedString.string.contains("\\frac"))
+        let attachments = mathAttachments(in: result.attributedString)
+        #expect(attachments.count == 1)
+        #expect(attachments[0].isDisplay == false)
+        #expect(attachments[0].latexSource == "$\\frac{u \\cdot v}{||u|| ||v||}$")
+    }
+
+    @Test func displayMathRendersAsCenteredAttachment() {
+        let source = "$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$"
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        let attachments = mathAttachments(in: result.attributedString)
+        #expect(attachments.count == 1)
+        #expect(attachments[0].isDisplay == true)
+    }
+
+    @Test func malformedMathFallsBackToRawText() {
+        let source = "The ratio $\\frac{1}{$ is undefined."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string.contains("$\\frac{1}{$"))
+        #expect(mathAttachments(in: result.attributedString).isEmpty)
+    }
+
+    @Test func currencyAmountsStayAsText() {
+        let source = "It costs $5 and $10."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string == source)
+        #expect(mathAttachments(in: result.attributedString).isEmpty)
+    }
+
+    @Test func mathInsideCodeBlockStaysRaw() {
+        let source = "```\n$\\frac{1}{2}$\n```"
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string.contains("$\\frac{1}{2}$"))
+        #expect(mathAttachments(in: result.attributedString).isEmpty)
+    }
+
+    @Test func sourceEndingWithUnmatchedDollarDoesNotCrash() {
+        let source = "The value is $"
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string.contains("$"))
+        #expect(mathAttachments(in: result.attributedString).isEmpty)
+    }
+
+    @Test func multipleInlineExpressionsRenderSeparately() {
+        let source = "Let $a = 1$ and $b = 2$."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(mathAttachments(in: result.attributedString).count == 2)
+    }
+
+    @Test func singleLetterInlineMathRenders() {
+        let source = "Let $x$ be positive."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(mathAttachments(in: result.attributedString).count == 1)
+    }
+
+    @Test func plainTextPreservesLatexSource() {
+        let renderer = ResponseMarkdownRenderer()
+        let source = "Area is $\\pi r^2$ and $$\\int_0^1 x\\,dx$$."
+        let plain = renderer.plainText(source)
+
+        #expect(plain.contains("$\\pi r^2$"))
+        #expect(plain.contains("$$\\int_0^1 x\\,dx$$"))
+    }
+
+    private func mathAttachments(in string: NSAttributedString) -> [MathTextAttachment] {
+        var found: [MathTextAttachment] = []
+        string.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: string.length),
+            options: []) { value, _, _ in
+            if let attachment = value as? MathTextAttachment {
+                found.append(attachment)
+            }
+        }
+        return found
     }
 
     @Test func boldOnlyModelHeadingStaysOnItsOwnLine() {
