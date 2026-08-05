@@ -524,6 +524,7 @@ struct HTTPServerTests {
 
         var status = ""
         var outputFileID: String?
+        var usage: [String: Any]?
         for _ in 0..<100 {
             let statusData = try await URLSession.shared.data(
                 from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(batchID)")!).0
@@ -531,11 +532,13 @@ struct HTTPServerTests {
             status = try #require(snapshot["status"] as? String)
             if status == "completed" {
                 outputFileID = try #require(snapshot["output_file_id"] as? String)
+                usage = try #require(snapshot["usage"] as? [String: Any])
                 break
             }
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(status == "completed")
+        #expect((usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int == 0)
         let outputData = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(try #require(outputFileID))/content")!).0
         let output = String(decoding: outputData, as: UTF8.self)

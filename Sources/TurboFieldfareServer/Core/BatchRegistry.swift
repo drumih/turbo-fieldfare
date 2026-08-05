@@ -62,12 +62,14 @@ public actor BatchRegistry {
         public let inputTokens: Int
         public let inputTokensDetails: InputTokensDetails
         public let outputTokens: Int
+        public let outputTokensDetails: OutputTokensDetails
         public let totalTokens: Int
 
         enum CodingKeys: String, CodingKey {
             case inputTokens = "input_tokens"
             case inputTokensDetails = "input_tokens_details"
             case outputTokens = "output_tokens"
+            case outputTokensDetails = "output_tokens_details"
             case totalTokens = "total_tokens"
         }
     }
@@ -75,6 +77,11 @@ public actor BatchRegistry {
     public struct InputTokensDetails: Codable, Sendable {
         public let cachedTokens: Int
         enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens" }
+    }
+
+    public struct OutputTokensDetails: Codable, Sendable {
+        public let reasoningTokens: Int
+        enum CodingKeys: String, CodingKey { case reasoningTokens = "reasoning_tokens" }
     }
 
     public struct BatchError: Codable, Sendable {
@@ -333,6 +340,7 @@ public actor BatchRegistry {
                             ? Usage(inputTokens: job.inputTokens,
                                     inputTokensDetails: .init(cachedTokens: job.cachedTokens),
                                     outputTokens: job.outputTokens,
+                                    outputTokensDetails: .init(reasoningTokens: 0),
                                     totalTokens: job.inputTokens + job.outputTokens)
                             : nil)
     }
