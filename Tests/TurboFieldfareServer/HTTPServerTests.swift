@@ -635,7 +635,7 @@ struct HTTPServerTests {
         var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
         create.httpMethod = "POST"
         create.setValue("application/json", forHTTPHeaderField: "content-type")
-        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h","output_expires_after":{"anchor":"created_at","seconds":3600}}"#.utf8)
         let (batchData, batchResponse) = try await URLSession.shared.data(for: create)
         #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
         let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
@@ -645,6 +645,24 @@ struct HTTPServerTests {
         #expect(batch["completion_window"] as? String == "24h")
         #expect(batch["errors"] is NSNull || batch["errors"] == nil)
         #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
+        try await server.shutdown()
+    }
+
+    @Test func batchRejectsInvalidOutputExpiryPolicy() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let body: [String: Any] = ["input_file_id": "file-missing", "endpoint": "/v1/chat/completions",
+                                   "completion_window": "24h",
+                                   "output_expires_after": ["anchor": "created_at", "seconds": 1]]
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("output_expires_after"))
         try await server.shutdown()
     }
 

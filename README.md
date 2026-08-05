@@ -263,7 +263,9 @@ OpenCode setup, prompt reuse, tool handling, and the supported API subset.
 The local server implements the OpenAI Files → Batch flow for non-streaming
 `/v1/chat/completions`: upload a `.jsonl` file with `purpose=batch` to `POST
 /v1/files`, then create a batch with its `input_file_id`, endpoint, and
-`completion_window: "24h"`. Each JSONL line contains `custom_id`, `method`,
+`completion_window: "24h"`; optional `output_expires_after` accepts
+`{"anchor":"created_at","seconds":3600...2592000}` and removes generated
+output/error JSONL after that interval. Each JSONL line contains `custom_id`, `method`,
 `url`, and the normal Chat Completions `body`.
 
 `GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, and `GET /v1/batches`

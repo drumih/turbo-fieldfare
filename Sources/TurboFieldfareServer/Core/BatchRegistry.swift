@@ -132,6 +132,7 @@ public actor BatchRegistry {
         var completedAt: Int?
         var failedAt: Int?
         var expiresAt: Int?
+        let outputExpiresAfterSeconds: Int?
         var finalizingAt: Int?
         var expiredAt: Int?
         var cancellingAt: Int?
@@ -155,7 +156,8 @@ public actor BatchRegistry {
                        modelID: String,
                        inputFileID: String? = nil,
                        completionWindow: String? = nil,
-                       metadata: [String: String]? = nil) throws -> Snapshot {
+                       metadata: [String: String]? = nil,
+                       outputExpiresAfterSeconds: Int? = nil) throws -> Snapshot {
         let id = "batch_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         try FileManager.default.createDirectory(at: outputDirectory,
                                                 withIntermediateDirectories: true)
@@ -169,7 +171,8 @@ public actor BatchRegistry {
                        metadata: metadata,
                        createdAt: created,
                        total: requests.count,
-                       expiresAt: completionWindow == "24h" ? created + 86_400 : nil)
+                       expiresAt: completionWindow == "24h" ? created + 86_400 : nil,
+                       outputExpiresAfterSeconds: outputExpiresAfterSeconds)
         let task = Task { [weak self] in
             guard let self else { return }
             await self.start(id)
@@ -253,6 +256,9 @@ public actor BatchRegistry {
             try Data().write(to: outputURL, options: .withoutOverwriting)
             job.outputFileID = outputFileID
             job.outputURL = outputURL
+            scheduleExpiry(of: outputURL,
+                           createdAt: job.createdAt,
+                           after: job.outputExpiresAfterSeconds)
         }
         try appendSuccess(to: job.outputURL!,
                           customID: customID,
@@ -274,6 +280,9 @@ public actor BatchRegistry {
                 try Data().write(to: errorURL, options: .withoutOverwriting)
                 job.errorFileID = errorFileID
                 job.errorURL = errorURL
+                scheduleExpiry(of: errorURL,
+                               createdAt: job.createdAt,
+                               after: job.outputExpiresAfterSeconds)
             }
             try appendFailure(to: job.errorURL!, customID: customID, error: error)
         } catch {
@@ -310,6 +319,15 @@ public actor BatchRegistry {
         job.status = .completed
         job.completedAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
+    }
+
+    private func scheduleExpiry(of url: URL, createdAt: Int, after seconds: Int?) {
+        guard let seconds else { return }
+        let delay = max(0, createdAt + seconds - Int(Date().timeIntervalSince1970))
+        Task.detached {
+            try? await Task.sleep(for: .seconds(delay))
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private func snapshot(_ id: String) -> Snapshot? {

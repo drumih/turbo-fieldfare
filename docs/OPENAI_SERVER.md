@@ -184,7 +184,9 @@ Supported options include `temperature`, `top_p`, `top_k`,
 
 The server supports one model and one choice. Batch accepts OpenAI-format JSONL
 input files for non-streaming `/v1/chat/completions` with `completion_window`
-set to `"24h"`. It does not support the Responses API, legacy Completions,
+set to `"24h"`. `output_expires_after` is supported with `anchor` set to
+`"created_at"` and `seconds` from 3,600 through 2,592,000; it removes generated
+output and error JSONL files after that interval. It does not support the Responses API, legacy Completions,
 embeddings, multimodal input, structured output, log probabilities, or remote
 model switching. Batch and Files data is discarded on server restart.
 

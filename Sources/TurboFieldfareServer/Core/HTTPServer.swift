@@ -259,6 +259,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                     var inputFileID: String?
                     var completionWindow: String?
                     var metadata: [String: String]?
+                    var outputExpiresAfterSeconds: Int?
                     if let create = decoded {
                         guard (create.metadata?.count ?? 0) <= 16,
                               create.metadata?.allSatisfy({ $0.key.utf8.count <= 64 && $0.value.utf8.count <= 512 }) ?? true else {
@@ -269,6 +270,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                         }
                         guard create.completionWindow == "24h" else {
                             throw ServerRequestError.invalid(message: "only completion_window=24h is supported", param: "completion_window", code: "unsupported_value")
+                        }
+                        if let outputExpiresAfter = create.outputExpiresAfter {
+                            guard outputExpiresAfter.anchor == "created_at",
+                                  (3_600...2_592_000).contains(outputExpiresAfter.seconds) else {
+                                throw ServerRequestError.invalid(message: "output_expires_after requires anchor=created_at and seconds between 3600 and 2592000", param: "output_expires_after", code: "invalid_value")
+                            }
+                            outputExpiresAfterSeconds = outputExpiresAfter.seconds
                         }
                         guard let input = try await self.files.contents(create.inputFileID) else {
                             throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
@@ -291,7 +299,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                                                  modelID: self.modelID,
                                                                  inputFileID: inputFileID,
                                                                  completionWindow: completionWindow,
-                                                                 metadata: metadata)
+                                                                 metadata: metadata,
+                                                                 outputExpiresAfterSeconds: outputExpiresAfterSeconds)
                     self.writeCodable(box.value, status: .ok, snapshot)
             } catch let error as ServerRequestError {
                 self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
