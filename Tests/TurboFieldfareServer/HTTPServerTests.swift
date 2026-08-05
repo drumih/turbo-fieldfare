@@ -123,8 +123,93 @@ private actor CancellableServerBackend: ServerInferenceBackend {
     }
 }
 
+private actor PreflightRejectingBackend: ServerInferenceBackend {
+    func preflight(_ request: ValidatedChatRequest) async throws {
+        throw ServerRequestError.invalid(
+            message: "prompt is 99 tokens, which exceeds the configured context of 8 tokens",
+            param: "messages",
+            code: "context_length_exceeded")
+    }
+
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        ServerCompletion(
+            content: "must-not-run",
+            toolCalls: [],
+            finishReason: "stop",
+            usage: OpenAIUsage(promptTokens: 0, completionTokens: 0, totalTokens: 0))
+    }
+}
+
+private actor FailsMidStreamBackend: ServerInferenceBackend {
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        onEvent(.content("partial"))
+        throw ServerRequestError.invalid(message: "backend exploded",
+                                         param: nil,
+                                         code: "internal_error")
+    }
+}
+
 @Suite("OpenAI HTTP server", .serialized)
 struct HTTPServerTests {
+    @Test func overLongPromptIsRejectedBeforeStreamStarts() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: PreflightRejectingBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let error = try #require(object["error"] as? [String: Any])
+        #expect(error["code"] as? String == "context_length_exceeded")
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(!text.contains("data: "))
+        #expect(!text.contains("must-not-run"))
+
+        try await server.shutdown()
+    }
+
+    @Test func midStreamFailureTerminatesEventStream() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: FailsMidStreamBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains("partial"))
+        #expect(text.contains(#""error""#))
+        #expect(text.contains("backend exploded"))
+        #expect(text.contains(#""finish_reason":"error""#))
+        #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
     @Test func healthModelsAndNonStreamingCompletion() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",

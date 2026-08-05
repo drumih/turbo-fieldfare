@@ -25,8 +25,19 @@ public struct ServerCompletion: Equatable, Sendable {
 }
 
 public protocol ServerInferenceBackend: Sendable {
+    /// Reject a request before the response is committed.  Streaming replies send
+    /// their headers and the opening `role` chunk as soon as generation starts, so
+    /// anything detectable from the request alone -- a prompt longer than the
+    /// context, above all -- has to be raised here or the client receives HTTP 200
+    /// followed by a truncated body instead of a readable error.
+    func preflight(_ request: ValidatedChatRequest) async throws
+
     func generate(_ request: ValidatedChatRequest,
                   onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void) async throws -> ServerCompletion
+}
+
+extension ServerInferenceBackend {
+    public func preflight(_ request: ValidatedChatRequest) async throws {}
 }
 
 public actor ServerCoordinator {
@@ -193,6 +204,36 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.promptCacheDomain = promptCacheDomain
     }
 
+    private func needsToolTemplate(_ request: ValidatedChatRequest) -> Bool {
+        !request.tools.isEmpty
+            || request.messages.contains {
+                $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
+            }
+    }
+
+    private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {
+        if needsToolTemplate(request) {
+            return try tokenizer.encodeToolChat(messages: request.messages, tools: request.tools)
+        }
+        let rendered = try tokenizer.applyChatTemplate(request.messages)
+        return tokenizer.encode(rendered, addBOS: false)
+    }
+
+    private func checkContext(_ promptIDs: [Int32], label: String) throws {
+        guard promptIDs.count >= maxContext else { return }
+        throw ServerRequestError.invalid(
+            message: "\(label) is \(promptIDs.count) tokens, which exceeds the configured "
+                + "context of \(maxContext) tokens",
+            param: "messages",
+            code: "context_length_exceeded")
+    }
+
+    /// Render and measure the prompt without touching the KV cache, so an
+    /// over-long request fails with HTTP 400 before any streaming header is sent.
+    public func preflight(_ request: ValidatedChatRequest) async throws {
+        try checkContext(try renderPrompt(request), label: "prompt")
+    }
+
     public func generate(
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
@@ -204,23 +245,9 @@ public actor ServerModelSession: ServerInferenceBackend {
                 runner.reset()
             }
         }
-        let needsToolTemplate = !request.tools.isEmpty
-            || request.messages.contains {
-                $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
-            }
-        let promptIDs: [Int32]
-        if needsToolTemplate {
-            promptIDs = try tokenizer.encodeToolChat(messages: request.messages, tools: request.tools)
-        } else {
-            let rendered = try tokenizer.applyChatTemplate(request.messages)
-            promptIDs = tokenizer.encode(rendered, addBOS: false)
-        }
-        guard promptIDs.count < maxContext else {
-            throw ServerRequestError.invalid(
-                message: "prompt exceeds the configured context",
-                param: "messages",
-                code: "context_length_exceeded")
-        }
+        let needsToolTemplate = needsToolTemplate(request)
+        let promptIDs = try renderPrompt(request)
+        try checkContext(promptIDs, label: "prompt")
 
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
@@ -243,12 +270,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             effectivePromptIDs = promptIDs
             completionStart = .reset
         }
-        guard effectivePromptIDs.count < maxContext else {
-            throw ServerRequestError.invalid(
-                message: "effective prompt exceeds the configured context",
-                param: "messages",
-                code: "context_length_exceeded")
-        }
+        try checkContext(effectivePromptIDs, label: "effective prompt")
 
         var config = request.generationConfig
         config.maxNewTokens = min(

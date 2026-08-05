@@ -228,6 +228,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
                 do {
+                    // Before the queue, and before any byte of the response is on the
+                    // wire: a prompt that cannot fit must surface as HTTP 400, not as a
+                    // 200 that dies after the opening chunk.
+                    try await self.backend.preflight(request)
                     let completion = try await self.coordinator.run(onQueued: startStream) {
                         startStream()
                         return try await self.backend.generate(request) { event in
@@ -404,6 +408,28 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
+    /// Close an already-started event stream with an error frame, a terminal
+    /// `finish_reason` and the `[DONE]` marker, so the body stays well formed.
+    private func errorStream(_ context: ChannelHandlerContext, _ error: Error) {
+        let envelope = (error as? ServerRequestError)?.envelope
+            ?? OpenAIErrorEnvelope(message: "generation failed", code: "internal_error")
+        var payload: [String: Any] = ["message": envelope.error.message,
+                                      "type": envelope.error.type,
+                                      "code": envelope.error.code]
+        if let param = envelope.error.param { payload["param"] = param }
+        writeStreamChunk(context, ["error": payload])
+        writeStreamChunk(context, chunk(id: "chatcmpl-error",
+                                        created: Int(Date().timeIntervalSince1970),
+                                        delta: [:],
+                                        finishReason: "error"))
+        let contextBox = SendableContext(context)
+        context.eventLoop.execute {
+            let buffer = contextBox.value.channel.allocator.buffer(string: "data: [DONE]\n\n")
+            contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
+    }
+
     private func writeHeartbeat(_ context: ChannelHandlerContext) {
         let buffer = context.channel.allocator.buffer(string: ": ping\n\n")
         context.writeAndFlush(
@@ -415,10 +441,11 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   context: ChannelHandlerContext,
                                   stream: Bool) {
         if stream {
-            let contextBox = SendableContext(context)
-            context.eventLoop.execute {
-                contextBox.value.close(promise: nil)
-            }
+            // The status line is already spent, so the failure has to travel inside
+            // the event stream.  Dropping the connection instead leaves the client
+            // with a truncated chunked body ("incomplete chunked read"), which reads
+            // as a network fault and sends callers hunting the wrong layer.
+            errorStream(context, error)
             return
         }
         if let requestError = error as? ServerRequestError {
