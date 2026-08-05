@@ -636,6 +636,7 @@ struct HTTPServerTests {
         #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
         let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
         #expect(batch["object"] as? String == "batch")
+        #expect(batch["model"] as? String == "test-model")
         #expect(batch["input_file_id"] as? String == fileID)
         #expect(batch["completion_window"] as? String == "24h")
         #expect(batch["errors"] is NSNull || batch["errors"] == nil)

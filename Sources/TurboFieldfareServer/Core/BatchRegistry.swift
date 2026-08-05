@@ -20,6 +20,7 @@ public actor BatchRegistry {
         public let object = "batch"
         public let status: Status
         public let endpoint: String
+        public let model: String
         public let errors: [BatchError]?
         public let inputFileID: String?
         public let completionWindow: String?
@@ -36,9 +37,10 @@ public actor BatchRegistry {
         public let outputFileID: String?
         public let errorFileID: String?
         public let metadata: [String: String]?
+        public let usage: Usage?
 
         enum CodingKeys: String, CodingKey {
-            case id, object, status, endpoint, errors, metadata
+            case id, object, status, endpoint, model, errors, metadata, usage
             case inputFileID = "input_file_id"
             case completionWindow = "completion_window"
             case createdAt = "created_at"
@@ -54,6 +56,25 @@ public actor BatchRegistry {
             case outputFileID = "output_file_id"
             case errorFileID = "error_file_id"
         }
+    }
+
+    public struct Usage: Codable, Sendable {
+        public let inputTokens: Int
+        public let inputTokensDetails: InputTokensDetails
+        public let outputTokens: Int
+        public let totalTokens: Int
+
+        enum CodingKeys: String, CodingKey {
+            case inputTokens = "input_tokens"
+            case inputTokensDetails = "input_tokens_details"
+            case outputTokens = "output_tokens"
+            case totalTokens = "total_tokens"
+        }
+    }
+
+    public struct InputTokensDetails: Codable, Sendable {
+        public let cachedTokens: Int
+        enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens" }
     }
 
     public struct BatchError: Codable, Sendable {
@@ -87,6 +108,7 @@ public actor BatchRegistry {
     private struct Job {
         var status: Status
         let endpoint: String
+        let model: String
         let inputFileID: String?
         let completionWindow: String?
         let metadata: [String: String]?
@@ -107,6 +129,9 @@ public actor BatchRegistry {
         var expiredAt: Int?
         var cancellingAt: Int?
         var cancelledAt: Int?
+        var inputTokens = 0
+        var cachedTokens = 0
+        var outputTokens = 0
     }
 
     private let outputDirectory: URL
@@ -131,6 +156,7 @@ public actor BatchRegistry {
         let created = Int(Date().timeIntervalSince1970)
         jobs[id] = Job(status: .validating,
                        endpoint: "/v1/chat/completions",
+                       model: modelID,
                        inputFileID: inputFileID,
                        completionWindow: completionWindow,
                        metadata: metadata,
@@ -226,6 +252,9 @@ public actor BatchRegistry {
                           completion: completion,
                           modelID: modelID)
         job.completed += 1
+        job.inputTokens += completion.usage.promptTokens
+        job.cachedTokens += completion.usage.promptTokensDetails.cachedTokens
+        job.outputTokens += completion.usage.completionTokens
         jobs[id] = job
     }
 
@@ -281,6 +310,7 @@ public actor BatchRegistry {
         return Snapshot(id: id,
                         status: job.status,
                         endpoint: job.endpoint,
+                        model: job.model,
                         errors: nil,
                         inputFileID: job.inputFileID,
                         completionWindow: job.completionWindow,
@@ -298,7 +328,13 @@ public actor BatchRegistry {
                                              failed: job.failed),
                         outputFileID: (job.status == .completed || job.status == .cancelled) ? job.outputFileID : nil,
                         errorFileID: (job.status == .completed || job.status == .cancelled) ? job.errorFileID : nil,
-                        metadata: job.metadata)
+                        metadata: job.metadata,
+                        usage: job.status == .completed || job.status == .cancelled
+                            ? Usage(inputTokens: job.inputTokens,
+                                    inputTokensDetails: .init(cachedTokens: job.cachedTokens),
+                                    outputTokens: job.outputTokens,
+                                    totalTokens: job.inputTokens + job.outputTokens)
+                            : nil)
     }
 
 
