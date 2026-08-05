@@ -592,6 +592,21 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func malformedBatchJSONUsesInvalidJSONError() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("invalid_json"))
+        try await server.shutdown()
+    }
+
     @Test func batchAcceptsOpenAIFileAndJSONLContract() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileTest-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }

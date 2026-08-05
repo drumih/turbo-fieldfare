@@ -250,11 +250,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     private func handleBatchJob(body: ByteBuffer, context: ChannelHandlerContext) {
-        do {
-            let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
-            let box = SendableContext(context)
-            activeTask = childChannels.startTask {
-                do {
+        let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask {
+            do {
                     let decoded = try? JSONDecoder().decode(OpenAIBatchCreateRequest.self, from: Data(bytes))
                     let requests: [BatchRequest]
                     var inputFileID: String?
@@ -294,15 +293,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                                                  completionWindow: completionWindow,
                                                                  metadata: metadata)
                     self.writeCodable(box.value, status: .ok, snapshot)
-                } catch let error as ServerRequestError {
-                    self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
-                } catch {
-                    self.writeError(box.value, status: .badRequest,
-                                    OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
-                }
+            } catch let error as ServerRequestError {
+                self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
+            } catch {
+                self.writeError(box.value, status: .badRequest,
+                                OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
             }
-        } catch let error as ServerRequestError { writeError(context, status: error == .unknownModel ? .notFound : .badRequest, error.envelope) }
-        catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")) }
+        }
     }
 
     private func decodeBatchInput(_ data: Data) throws -> [BatchRequest] {
