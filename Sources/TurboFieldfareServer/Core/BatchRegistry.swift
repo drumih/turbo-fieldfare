@@ -20,6 +20,7 @@ public actor BatchRegistry {
         public let object = "batch"
         public let status: Status
         public let endpoint: String
+        public let errors: [BatchError]?
         public let inputFileID: String?
         public let completionWindow: String?
         public let createdAt: Int
@@ -37,7 +38,7 @@ public actor BatchRegistry {
         public let metadata: [String: String]?
 
         enum CodingKeys: String, CodingKey {
-            case id, object, status, endpoint, metadata
+            case id, object, status, endpoint, errors, metadata
             case inputFileID = "input_file_id"
             case completionWindow = "completion_window"
             case createdAt = "created_at"
@@ -53,6 +54,13 @@ public actor BatchRegistry {
             case outputFileID = "output_file_id"
             case errorFileID = "error_file_id"
         }
+    }
+
+    public struct BatchError: Codable, Sendable {
+        public let code: String
+        public let message: String
+        public let param: String?
+        public let line: Int?
     }
 
     public struct Counts: Codable, Sendable {
@@ -132,13 +140,18 @@ public actor BatchRegistry {
                        createdAt: created,
                        total: requests.count,
                        outputFileID: outputFileID,
-                       outputURL: outputURL)
+                       outputURL: outputURL,
+                       expiresAt: completionWindow == "24h" ? created + 86_400 : nil)
         let task = Task { [weak self] in
             guard let self else { return }
             await self.start(id)
             for item in requests {
                 if Task.isCancelled {
                     await self.cancelled(id)
+                    return
+                }
+                if await self.isExpired(id) {
+                    await self.expired(id)
                     return
                 }
                 do {
@@ -239,6 +252,18 @@ public actor BatchRegistry {
         jobs[id] = job
     }
 
+    private func isExpired(_ id: String) -> Bool {
+        guard let expiresAt = jobs[id]?.expiresAt else { return false }
+        return Int(Date().timeIntervalSince1970) >= expiresAt
+    }
+
+    private func expired(_ id: String) {
+        guard var job = jobs[id] else { return }
+        job.status = .expired
+        job.expiredAt = Int(Date().timeIntervalSince1970)
+        jobs[id] = job
+    }
+
     private func finish(_ id: String) {
         guard var job = jobs[id], job.status != .cancelled else { return }
         job.status = .finalizing
@@ -254,6 +279,7 @@ public actor BatchRegistry {
         return Snapshot(id: id,
                         status: job.status,
                         endpoint: job.endpoint,
+                        errors: nil,
                         inputFileID: job.inputFileID,
                         completionWindow: job.completionWindow,
                         createdAt: job.createdAt,

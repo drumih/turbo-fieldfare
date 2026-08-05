@@ -622,6 +622,8 @@ struct HTTPServerTests {
         #expect(batch["object"] as? String == "batch")
         #expect(batch["input_file_id"] as? String == fileID)
         #expect(batch["completion_window"] as? String == "24h")
+        #expect(batch["errors"] is NSNull || batch["errors"] == nil)
+        #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
         try await server.shutdown()
     }
 
