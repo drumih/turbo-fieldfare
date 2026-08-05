@@ -74,12 +74,24 @@ public actor BatchFileStore {
                     filename: id + ".jsonl", purpose: "batch")
     }
 
-    public func list() -> [File] { files.keys.sorted().compactMap(get) }
+    public func list() -> [File] {
+        var ids = Set(files.keys)
+        if let urls = try? FileManager.default.contentsOfDirectory(at: directory,
+                                                                     includingPropertiesForKeys: nil) {
+            for url in urls where url.pathExtension == "jsonl" {
+                ids.insert(url.deletingPathExtension().lastPathComponent)
+            }
+        }
+        return ids.sorted().compactMap(get)
+    }
 
     public func delete(_ id: String) throws -> Bool {
-        guard let file = files.removeValue(forKey: id) else { return false }
-        try? FileManager.default.removeItem(at: url(for: file.id))
-        try? FileManager.default.removeItem(at: url(for: file.id).appendingPathExtension("jsonl"))
+        let file = files.removeValue(forKey: id)
+        let direct = url(for: id)
+        let output = direct.appendingPathExtension("jsonl")
+        guard file != nil || FileManager.default.fileExists(atPath: output.path) else { return false }
+        try? FileManager.default.removeItem(at: direct)
+        try? FileManager.default.removeItem(at: output)
         try persist()
         return true
     }

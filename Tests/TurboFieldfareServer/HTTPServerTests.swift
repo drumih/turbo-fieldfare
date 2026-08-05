@@ -539,6 +539,11 @@ struct HTTPServerTests {
         let outputData = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(try #require(outputFileID))/content")!).0
         let output = String(decoding: outputData, as: UTF8.self)
+        let filesData = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files")!).0
+        let filesObject = try #require(JSONSerialization.jsonObject(with: filesData) as? [String: Any])
+        let files = try #require(filesObject["data"] as? [[String: Any]])
+        #expect(files.contains { $0["id"] as? String == outputFileID })
         let lines = output.split(separator: "\n")
         #expect(lines.count == 2)
         #expect(lines[0].contains("\"custom_id\":\"first\""))

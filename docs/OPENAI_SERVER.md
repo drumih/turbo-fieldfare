@@ -168,7 +168,8 @@ Endpoints:
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
-- `POST /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`
+- `POST /v1/files`, `GET /v1/files`, `GET /v1/files/{id}`,
+  `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}`
 - `POST /v1/batches`, `GET /v1/batches`, `GET /v1/batches/{id}`,
   `POST /v1/batches/{id}/cancel`
 
