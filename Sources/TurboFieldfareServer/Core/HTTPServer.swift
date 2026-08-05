@@ -32,8 +32,11 @@ public actor TurboFieldfareHTTPServer {
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
         let batchDirectory = batchOutputDirectory ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("TurboFieldfare/batches", isDirectory: true)
-        self.batches = BatchRegistry(outputDirectory: batchDirectory)
-        self.files = BatchFileStore(directory: batchDirectory)
+        let files = BatchFileStore(directory: batchDirectory)
+        self.files = files
+        self.batches = BatchRegistry(outputDirectory: batchDirectory) { id, expiresAt in
+            _ = try? await files.registerBatchOutput(id, expiresAt: expiresAt)
+        }
         self.heartbeatInterval = heartbeatInterval
     }
 

@@ -272,8 +272,9 @@ output/error JSONL after that interval. Each JSONL line contains `custom_id`, `m
 provide lifecycle status. Download `output_file_id` and, when present,
 `error_file_id` through `GET /v1/files/{id}/content`. Requests run through the
 same single-model queue as interactive requests; only Chat Completions batches
-are supported. Batch and Files state is in-memory/process-local and is removed
-when the server restarts.
+are supported. Generated File objects expose the optional `expires_at` when an
+expiry policy is set. Batch and Files state is in-memory/process-local and is
+removed when the server restarts.
 
 ## Test and contribute
 

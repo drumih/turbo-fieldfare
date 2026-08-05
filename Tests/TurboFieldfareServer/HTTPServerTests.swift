@@ -645,6 +645,23 @@ struct HTTPServerTests {
         #expect(batch["completion_window"] as? String == "24h")
         #expect(batch["errors"] is NSNull || batch["errors"] == nil)
         #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
+        let batchID = try #require(batch["id"] as? String)
+        var outputFileID: String?
+        for _ in 0..<20 {
+            let statusData = try await URLSession.shared.data(
+                from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(batchID)")!).0
+            let status = try #require(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+            if status["status"] as? String == "completed" {
+                outputFileID = try #require(status["output_file_id"] as? String)
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let output = try #require(outputFileID)
+        let outputFile = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(output)")!).0
+        let outputObject = try #require(JSONSerialization.jsonObject(with: outputFile) as? [String: Any])
+        #expect((outputObject["expires_at"] as? Int ?? 0) > (outputObject["created_at"] as? Int ?? 0))
         try await server.shutdown()
     }
 

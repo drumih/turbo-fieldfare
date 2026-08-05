@@ -143,11 +143,14 @@ public actor BatchRegistry {
     }
 
     private let outputDirectory: URL
+    private let onOutputFileCreated: @Sendable (String, Int?) async -> Void
     private var jobs: [String: Job] = [:]
 
     public init(outputDirectory: URL = FileManager.default.temporaryDirectory
-        .appendingPathComponent("TurboFieldfare/batches", isDirectory: true)) {
+        .appendingPathComponent("TurboFieldfare/batches", isDirectory: true),
+        onOutputFileCreated: @escaping @Sendable (String, Int?) async -> Void = { _, _ in }) {
         self.outputDirectory = outputDirectory
+        self.onOutputFileCreated = onOutputFileCreated
     }
 
     public func create(requests: [BatchRequest],
@@ -248,7 +251,7 @@ public actor BatchRegistry {
     private func succeeded(_ id: String,
                            customID: String,
                            completion: ServerCompletion,
-                           modelID: String) throws {
+                           modelID: String) async throws {
         guard var job = jobs[id] else { return }
         if job.outputFileID == nil {
             let outputFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
@@ -256,9 +259,8 @@ public actor BatchRegistry {
             try Data().write(to: outputURL, options: .withoutOverwriting)
             job.outputFileID = outputFileID
             job.outputURL = outputURL
-            scheduleExpiry(of: outputURL,
-                           createdAt: job.createdAt,
-                           after: job.outputExpiresAfterSeconds)
+            await onOutputFileCreated(outputFileID,
+                                      job.outputExpiresAfterSeconds.map { job.createdAt + $0 })
         }
         try appendSuccess(to: job.outputURL!,
                           customID: customID,
@@ -271,7 +273,7 @@ public actor BatchRegistry {
         jobs[id] = job
     }
 
-    private func failed(_ id: String, customID: String, error: Error) {
+    private func failed(_ id: String, customID: String, error: Error) async {
         guard var job = jobs[id] else { return }
         do {
             if job.errorFileID == nil {
@@ -280,9 +282,8 @@ public actor BatchRegistry {
                 try Data().write(to: errorURL, options: .withoutOverwriting)
                 job.errorFileID = errorFileID
                 job.errorURL = errorURL
-                scheduleExpiry(of: errorURL,
-                               createdAt: job.createdAt,
-                               after: job.outputExpiresAfterSeconds)
+                await onOutputFileCreated(errorFileID,
+                                          job.outputExpiresAfterSeconds.map { job.createdAt + $0 })
             }
             try appendFailure(to: job.errorURL!, customID: customID, error: error)
         } catch {
@@ -319,15 +320,6 @@ public actor BatchRegistry {
         job.status = .completed
         job.completedAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
-    }
-
-    private func scheduleExpiry(of url: URL, createdAt: Int, after seconds: Int?) {
-        guard let seconds else { return }
-        let delay = max(0, createdAt + seconds - Int(Date().timeIntervalSince1970))
-        Task.detached {
-            try? await Task.sleep(for: .seconds(delay))
-            try? FileManager.default.removeItem(at: url)
-        }
     }
 
     private func snapshot(_ id: String) -> Snapshot? {

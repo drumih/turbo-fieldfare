@@ -10,10 +10,12 @@ public actor BatchFileStore {
         public let filename: String
         public let purpose: String
         public let status = "processed"
+        public let expiresAt: Int?
 
         enum CodingKeys: String, CodingKey {
             case id, object, bytes, filename, purpose, status
             case createdAt = "created_at"
+            case expiresAt = "expires_at"
         }
     }
 
@@ -46,28 +48,38 @@ public actor BatchFileStore {
     }
 
     /// Registers a result file produced by BatchRegistry, whose historical path is `<id>.jsonl`.
-    public func registerBatchOutput(_ id: String) throws -> File {
+    public func registerBatchOutput(_ id: String, expiresAt: Int?) throws -> File {
         if let file = files[id] { return file }
         let url = directory.appendingPathComponent(id).appendingPathExtension("jsonl")
         let bytes = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         let file = File(id: id, bytes: bytes, createdAt: Int(Date().timeIntervalSince1970),
-                        filename: id + ".jsonl", purpose: "batch")
+                        filename: id + ".jsonl", purpose: "batch_output", expiresAt: expiresAt)
         files[id] = file
         try persist()
+        if let expiresAt {
+            Task { [weak self] in
+                let delay = max(0, expiresAt - Int(Date().timeIntervalSince1970))
+                try? await Task.sleep(for: .seconds(delay))
+                await self?.expire(id)
+            }
+        }
         return file
     }
 
     public func get(_ id: String) -> File? {
         if let file = files[id] {
+            if let expiresAt = file.expiresAt, expiresAt <= Int(Date().timeIntervalSince1970) {
+                return nil
+            }
             let output = url(for: id).appendingPathExtension("jsonl")
             if FileManager.default.fileExists(atPath: output.path) {
-                return generatedFile(id: id, url: output, fallbackBytes: file.bytes)
+                return generatedFile(id: id, url: output, fallback: file)
             }
             return file
         }
         let output = url(for: id).appendingPathExtension("jsonl")
         guard FileManager.default.fileExists(atPath: output.path) else { return nil }
-        return generatedFile(id: id, url: output, fallbackBytes: 0)
+        return generatedFile(id: id, url: output, fallback: nil)
     }
 
     public func list(order: String = "desc", purpose: String? = nil) -> [File] {
@@ -100,7 +112,7 @@ public actor BatchFileStore {
     }
 
     public func contents(_ id: String) throws -> Data? {
-        guard files[id] != nil || FileManager.default.fileExists(atPath: url(for: id).appendingPathExtension("jsonl").path) else { return nil }
+        guard get(id) != nil else { return nil }
         let direct = url(for: id)
         let output = direct.appendingPathExtension("jsonl")
         return try Data(contentsOf: FileManager.default.fileExists(atPath: direct.path) ? direct : output)
@@ -116,14 +128,14 @@ public actor BatchFileStore {
         try handle.write(contentsOf: line)
         metadata = File(id: metadata.id, bytes: metadata.bytes + line.count,
                         createdAt: metadata.createdAt, filename: metadata.filename,
-                        purpose: metadata.purpose)
+                        purpose: metadata.purpose, expiresAt: metadata.expiresAt)
         files[id] = metadata
         try persist()
     }
 
     private func write(filename: String, purpose: String, contents: Data) throws -> File {
         let id = "file-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-        let file = File(id: id, bytes: contents.count, createdAt: Int(Date().timeIntervalSince1970), filename: filename, purpose: purpose)
+        let file = File(id: id, bytes: contents.count, createdAt: Int(Date().timeIntervalSince1970), filename: filename, purpose: purpose, expiresAt: nil)
         try contents.write(to: url(for: id), options: .atomic)
         files[id] = file
         try persist()
@@ -132,12 +144,18 @@ public actor BatchFileStore {
 
     private func url(for id: String) -> URL { directory.appendingPathComponent(id) }
 
-    private func generatedFile(id: String, url: URL, fallbackBytes: Int) -> File {
+    private func generatedFile(id: String, url: URL, fallback: File?) -> File {
         let values = try? url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
-        let bytes = values?.fileSize ?? fallbackBytes
-        let createdAt = Int((values?.creationDate ?? Date()).timeIntervalSince1970)
+        let bytes = values?.fileSize ?? fallback?.bytes ?? 0
+        let createdAt = Int((values?.creationDate ?? fallback.map { Date(timeIntervalSince1970: TimeInterval($0.createdAt)) } ?? Date()).timeIntervalSince1970)
         return File(id: id, bytes: bytes, createdAt: createdAt,
-                    filename: id + ".jsonl", purpose: "batch_output")
+                    filename: id + ".jsonl", purpose: "batch_output", expiresAt: fallback?.expiresAt)
+    }
+
+    private func expire(_ id: String) {
+        files.removeValue(forKey: id)
+        try? FileManager.default.removeItem(at: url(for: id).appendingPathExtension("jsonl"))
+        try? persist()
     }
 
     private func persist() throws {
