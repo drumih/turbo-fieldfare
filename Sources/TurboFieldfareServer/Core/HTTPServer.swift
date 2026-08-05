@@ -124,6 +124,11 @@ public actor TurboFieldfareHTTPServer {
     }
 }
 
+private struct BatchInputValidationError: Error {
+    let error: ServerRequestError
+    let line: Int?
+}
+
 private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
@@ -286,16 +291,16 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                         }
                         do {
                             requests = try self.decodeBatchInput(input)
-                        } catch let error as ServerRequestError {
+                        } catch let error as BatchInputValidationError {
                             let snapshot = await self.batches.createFailed(
                                 modelID: self.modelID,
                                 inputFileID: create.inputFileID,
                                 completionWindow: create.completionWindow,
                                 metadata: create.metadata,
-                                error: .init(code: error.envelope.error.code,
-                                             message: error.envelope.error.message,
-                                             param: error.envelope.error.param,
-                                             line: nil))
+                                error: .init(code: error.error.envelope.error.code,
+                                             message: error.error.envelope.error.message,
+                                             param: error.error.envelope.error.param,
+                                             line: error.line))
                             self.writeCodable(box.value, status: .ok, snapshot)
                             return
                         }
@@ -333,22 +338,26 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             enum CodingKeys: String, CodingKey { case customID = "custom_id", method, url, body } }
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.split(whereSeparator: \.isNewline)
-        guard !lines.isEmpty else { throw ServerRequestError.invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value") }
-        guard lines.count <= 50_000 else { throw ServerRequestError.invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value") }
+        guard !lines.isEmpty else { throw BatchInputValidationError(error: .invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value"), line: nil) }
+        guard lines.count <= 50_000 else { throw BatchInputValidationError(error: .invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value"), line: nil) }
         var ids = Set<String>()
         return try lines.enumerated().map { index, line in
-            guard let lineData = String(line).data(using: .utf8) else { throw ServerRequestError.invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value") }
+            guard let lineData = String(line).data(using: .utf8) else { throw BatchInputValidationError(error: .invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value"), line: index + 1) }
             let item: Line
             do { item = try JSONDecoder().decode(Line.self, from: lineData) }
-            catch { throw ServerRequestError.invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value") }
+            catch { throw BatchInputValidationError(error: .invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1) }
             guard !item.customID.isEmpty, item.customID.utf8.count <= 512 else {
-                throw ServerRequestError.invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value")
+                throw BatchInputValidationError(error: .invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value"), line: index + 1)
             }
             guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
-                throw ServerRequestError.invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value")
+                throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
             }
-            guard item.body.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value") }
-            return BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID))
+            guard item.body.stream != true else { throw BatchInputValidationError(error: .invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value"), line: index + 1) }
+            do {
+                return BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID))
+            } catch let error as ServerRequestError {
+                throw BatchInputValidationError(error: error, line: index + 1)
+            }
         }
     }
 

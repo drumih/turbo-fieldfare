@@ -709,7 +709,9 @@ struct HTTPServerTests {
         #expect(batch["status"] as? String == "failed")
         let errors = try #require(batch["errors"] as? [String: Any])
         #expect(errors["object"] as? String == "list")
-        #expect(!(try #require(errors["data"] as? [[String: Any]])).isEmpty)
+        let data = try #require(errors["data"] as? [[String: Any]])
+        #expect(!(data).isEmpty)
+        #expect(data[0]["line"] as? Int == 1)
         try await server.shutdown()
     }
 
