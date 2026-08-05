@@ -554,6 +554,14 @@ struct HTTPServerTests {
         #expect(lines[0].contains("\"custom_id\":\"first\""))
         #expect(lines.allSatisfy { $0.contains("\"status_code\":200") })
 
+        var reuseOutput = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        reuseOutput.httpMethod = "POST"
+        reuseOutput.setValue("application/json", forHTTPHeaderField: "content-type")
+        reuseOutput.httpBody = Data(#"{"input_file_id":"\#(try #require(outputFileID))","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (reuseData, reuseResponse) = try await URLSession.shared.data(for: reuseOutput)
+        #expect((reuseResponse as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: reuseData, as: UTF8.self).contains("input_file_id"))
+
         try await server.shutdown()
     }
 

@@ -290,8 +290,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             }
                             outputExpiresAfterSeconds = outputExpiresAfter.seconds
                         }
-                        guard let input = try await self.files.contents(create.inputFileID) else {
-                            throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
+                        guard let inputFile = await self.files.get(create.inputFileID),
+                              inputFile.purpose == "batch",
+                              let input = try await self.files.contents(create.inputFileID) else {
+                            throw ServerRequestError.invalid(message: "input_file_id must reference a file with purpose=batch", param: "input_file_id", code: "invalid_value")
                         }
                         switch self.decodeBatchInput(input) {
                         case .success(let decoded):
