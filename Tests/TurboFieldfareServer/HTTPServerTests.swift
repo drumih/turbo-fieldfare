@@ -536,9 +536,9 @@ struct HTTPServerTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(status == "completed")
-        let output = try String(contentsOf: outputDirectory
-            .appendingPathComponent(try #require(outputFileID))
-            .appendingPathExtension("jsonl"), encoding: .utf8)
+        let outputData = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(try #require(outputFileID))/content")!).0
+        let output = String(decoding: outputData, as: UTF8.self)
         let lines = output.split(separator: "\n")
         #expect(lines.count == 2)
         #expect(lines[0].contains("\"custom_id\":\"first\""))
@@ -604,6 +604,9 @@ struct HTTPServerTests {
         #expect((fileResponse as? HTTPURLResponse)?.statusCode == 200)
         let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
         let fileID = try #require(file["id"] as? String)
+        let files = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files")!).0
+        #expect((try #require(JSONSerialization.jsonObject(with: files) as? [String: Any]))["data"] as? [[String: Any]] != nil)
         var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
         create.httpMethod = "POST"
         create.setValue("application/json", forHTTPHeaderField: "content-type")

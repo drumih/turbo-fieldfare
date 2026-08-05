@@ -224,10 +224,14 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             handleBatchJob(body: body, context: context)
         case (.POST, "/v1/files"):
             handleFileUpload(head: head, body: body, context: context)
+        case (.GET, "/v1/files"):
+            handleFileList(context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/files/") && uri.hasSuffix("/content"):
             handleFileContent(id: String(uri.dropFirst("/v1/files/".count).dropLast("/content".count)), context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/files/"):
             handleFileStatus(id: String(uri.dropFirst("/v1/files/".count)), context: context)
+        case (.DELETE, let uri) where uri.hasPrefix("/v1/files/"):
+            handleFileDelete(id: String(uri.dropFirst("/v1/files/".count)), context: context)
         case (.GET, "/v1/batches"):
             handleBatchList(uri: head.uri, context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/batches/"):
@@ -370,6 +374,20 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private func handleFileStatus(id: String, context: ChannelHandlerContext) {
         let box = SendableContext(context)
         activeTask = childChannels.startTask { guard let file = await self.files.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, file) }
+    }
+
+    private func handleFileList(context: ChannelHandlerContext) {
+        struct List: Encodable { let object = "list"; let data: [BatchFileStore.File] }
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { self.writeCodable(box.value, status: .ok, List(data: await self.files.list())) }
+    }
+
+    private func handleFileDelete(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { do {
+            guard try await self.files.delete(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }
+            self.writeJSON(box.value, status: .ok, object: ["id": id, "object": "file", "deleted": true])
+        } catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not delete file", code: "internal_error")) } }
     }
 
     private func handleFileContent(id: String, context: ChannelHandlerContext) {
