@@ -226,22 +226,6 @@ This formats messages in the same way as the Mac app. The CLI response limit
 is set with `--max-new`, which defaults to 1,024 tokens. The Mac app can
 generate until the selected context window is full.
 
-#### Raw completion
-
-`--prompt` is available for raw completion and reproducible comparisons. It
-passes the text directly to the model without chat formatting. Use
-`--messages-file` for instruction-response conversations.
-
-```bash
-swift run -c release TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
-  --prompt "The capital of France is" \
-  --max-new 64 \
-  --temperature 0
-```
-
-This example deliberately requests a short greedy completion.
-
 Common generation options include `--max-context`, `--temperature`, `--top-k`,
 `--top-p`, `--repetition-penalty`, `--seed`, and repeatable `--stop` strings.
 The public CLI uses production runtime defaults. Run the following command for
