@@ -743,6 +743,7 @@ struct HTTPServerTests {
             from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
         let finalObject = try #require(JSONSerialization.jsonObject(with: final) as? [String: Any])
         let errorFileID = try #require(finalObject["error_file_id"] as? String)
+        #expect(finalObject["output_file_id"] is NSNull || finalObject["output_file_id"] == nil)
         let output = try String(contentsOf: outputDirectory.appendingPathComponent(errorFileID)
             .appendingPathExtension("jsonl"), encoding: .utf8)
         #expect(output.contains("\"custom_id\":\"will-fail\""))

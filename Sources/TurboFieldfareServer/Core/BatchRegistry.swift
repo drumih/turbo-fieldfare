@@ -92,8 +92,8 @@ public actor BatchRegistry {
         let metadata: [String: String]?
         let createdAt: Int
         let total: Int
-        let outputFileID: String
-        let outputURL: URL
+        var outputFileID: String?
+        var outputURL: URL?
         var errorFileID: String?
         var errorURL: URL?
         var completed = 0
@@ -125,11 +125,8 @@ public actor BatchRegistry {
                        completionWindow: String? = nil,
                        metadata: [String: String]? = nil) throws -> Snapshot {
         let id = "batch_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-        let outputFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
-        let outputURL = outputDirectory.appendingPathComponent(outputFileID).appendingPathExtension("jsonl")
         try FileManager.default.createDirectory(at: outputDirectory,
                                                 withIntermediateDirectories: true)
-        try Data().write(to: outputURL, options: .withoutOverwriting)
 
         let created = Int(Date().timeIntervalSince1970)
         jobs[id] = Job(status: .validating,
@@ -139,8 +136,6 @@ public actor BatchRegistry {
                        metadata: metadata,
                        createdAt: created,
                        total: requests.count,
-                       outputFileID: outputFileID,
-                       outputURL: outputURL,
                        expiresAt: completionWindow == "24h" ? created + 86_400 : nil)
         let task = Task { [weak self] in
             guard let self else { return }
@@ -219,7 +214,14 @@ public actor BatchRegistry {
                            completion: ServerCompletion,
                            modelID: String) throws {
         guard var job = jobs[id] else { return }
-        try appendSuccess(to: job.outputURL,
+        if job.outputFileID == nil {
+            let outputFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let outputURL = outputDirectory.appendingPathComponent(outputFileID).appendingPathExtension("jsonl")
+            try Data().write(to: outputURL, options: .withoutOverwriting)
+            job.outputFileID = outputFileID
+            job.outputURL = outputURL
+        }
+        try appendSuccess(to: job.outputURL!,
                           customID: customID,
                           completion: completion,
                           modelID: modelID)
