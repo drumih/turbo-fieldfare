@@ -337,11 +337,15 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         struct Line: Decodable { let customID: String; let method: String; let url: String; let body: OpenAIChatRequest
             enum CodingKeys: String, CodingKey { case customID = "custom_id", method, url, body } }
         let text = String(decoding: data, as: UTF8.self)
-        let lines = text.split(whereSeparator: \.isNewline)
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        if lines.last?.isEmpty == true { lines.removeLast() }
         guard !lines.isEmpty else { throw BatchInputValidationError(error: .invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value"), line: nil) }
         guard lines.count <= 50_000 else { throw BatchInputValidationError(error: .invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value"), line: nil) }
         var ids = Set<String>()
         return try lines.enumerated().map { index, line in
+            guard !line.isEmpty else {
+                throw BatchInputValidationError(error: .invalid(message: "JSONL request line must not be empty", param: "input_file_id", code: "invalid_value"), line: index + 1)
+            }
             guard let lineData = String(line).data(using: .utf8) else { throw BatchInputValidationError(error: .invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value"), line: index + 1) }
             let item: Line
             do { item = try JSONDecoder().decode(Line.self, from: lineData) }
