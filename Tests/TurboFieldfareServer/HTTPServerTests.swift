@@ -660,7 +660,7 @@ struct HTTPServerTests {
         var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
         create.httpMethod = "POST"
         create.setValue("application/json", forHTTPHeaderField: "content-type")
-        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h","output_expires_after":{"anchor":"created_at","seconds":3600}}"#.utf8)
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h","metadata":{"source":"http-test"},"output_expires_after":{"anchor":"created_at","seconds":3600}}"#.utf8)
         let (batchData, batchResponse) = try await URLSession.shared.data(for: create)
         #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
         let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
@@ -668,6 +668,7 @@ struct HTTPServerTests {
         #expect(batch["model"] as? String == "test-model")
         #expect(batch["input_file_id"] as? String == fileID)
         #expect(batch["completion_window"] as? String == "24h")
+        #expect((batch["metadata"] as? [String: Any])?["source"] as? String == "http-test")
         #expect((batch["request_counts"] as? [String: Any])?["total"] as? Int == 2)
         #expect(batch["errors"] is NSNull || batch["errors"] == nil)
         #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
