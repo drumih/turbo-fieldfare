@@ -20,15 +20,32 @@ public actor BatchRegistry {
         public let object = "batch"
         public let status: Status
         public let endpoint: String
+        public let inputFileID: String?
+        public let completionWindow: String?
         public let createdAt: Int
+        public let inProgressAt: Int?
+        public let completedAt: Int?
+        public let failedAt: Int?
+        public let cancellingAt: Int?
+        public let cancelledAt: Int?
         public let requestCounts: Counts
         public let outputFileID: String
+        public let errorFileID: String?
+        public let metadata: [String: String]?
 
         enum CodingKeys: String, CodingKey {
-            case id, object, status, endpoint
+            case id, object, status, endpoint, metadata
+            case inputFileID = "input_file_id"
+            case completionWindow = "completion_window"
             case createdAt = "created_at"
+            case inProgressAt = "in_progress_at"
+            case completedAt = "completed_at"
+            case failedAt = "failed_at"
+            case cancellingAt = "cancelling_at"
+            case cancelledAt = "cancelled_at"
             case requestCounts = "request_counts"
             case outputFileID = "output_file_id"
+            case errorFileID = "error_file_id"
         }
     }
 
@@ -56,6 +73,9 @@ public actor BatchRegistry {
     private struct Job {
         var status: Status
         let endpoint: String
+        let inputFileID: String?
+        let completionWindow: String?
+        let metadata: [String: String]?
         let createdAt: Int
         let total: Int
         let outputFileID: String
@@ -63,6 +83,11 @@ public actor BatchRegistry {
         var completed = 0
         var failed = 0
         var task: Task<Void, Never>?
+        var inProgressAt: Int?
+        var completedAt: Int?
+        var failedAt: Int?
+        var cancellingAt: Int?
+        var cancelledAt: Int?
     }
 
     private let outputDirectory: URL
@@ -76,7 +101,10 @@ public actor BatchRegistry {
     public func create(requests: [BatchRequest],
                        backend: any ServerInferenceBackend,
                        coordinator: ServerCoordinator,
-                       modelID: String) throws -> Snapshot {
+                       modelID: String,
+                       inputFileID: String? = nil,
+                       completionWindow: String? = nil,
+                       metadata: [String: String]? = nil) throws -> Snapshot {
         let id = "batch_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let outputFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
         let outputURL = outputDirectory.appendingPathComponent(outputFileID).appendingPathExtension("jsonl")
@@ -87,6 +115,9 @@ public actor BatchRegistry {
         let created = Int(Date().timeIntervalSince1970)
         jobs[id] = Job(status: .validating,
                        endpoint: "/v1/chat/completions",
+                       inputFileID: inputFileID,
+                       completionWindow: completionWindow,
+                       metadata: metadata,
                        createdAt: created,
                        total: requests.count,
                        outputFileID: outputFileID,
@@ -146,6 +177,7 @@ public actor BatchRegistry {
         guard var job = jobs[id] else { return nil }
         guard job.status == .validating || job.status == .inProgress else { return snapshot(id) }
         job.status = .cancelling
+        job.cancellingAt = Int(Date().timeIntervalSince1970)
         job.task?.cancel()
         jobs[id] = job
         return snapshot(id)
@@ -154,6 +186,7 @@ public actor BatchRegistry {
     private func start(_ id: String) {
         guard var job = jobs[id], job.status == .validating else { return }
         job.status = .inProgress
+        job.inProgressAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
     }
 
@@ -184,12 +217,14 @@ public actor BatchRegistry {
     private func cancelled(_ id: String) {
         guard var job = jobs[id] else { return }
         job.status = .cancelled
+        job.cancelledAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
     }
 
     private func finish(_ id: String) {
         guard var job = jobs[id], job.status != .cancelled else { return }
-        job.status = job.failed == 0 ? .completed : .failed
+        job.status = .completed
+        job.completedAt = Int(Date().timeIntervalSince1970)
         jobs[id] = job
     }
 
@@ -198,11 +233,20 @@ public actor BatchRegistry {
         return Snapshot(id: id,
                         status: job.status,
                         endpoint: job.endpoint,
+                        inputFileID: job.inputFileID,
+                        completionWindow: job.completionWindow,
                         createdAt: job.createdAt,
+                        inProgressAt: job.inProgressAt,
+                        completedAt: job.completedAt,
+                        failedAt: job.failedAt,
+                        cancellingAt: job.cancellingAt,
+                        cancelledAt: job.cancelledAt,
                         requestCounts: .init(total: job.total,
                                              completed: job.completed,
                                              failed: job.failed),
-                        outputFileID: job.outputFileID)
+                        outputFileID: job.outputFileID,
+                        errorFileID: nil,
+                        metadata: job.metadata)
     }
 
     private func appendSuccess(to url: URL,

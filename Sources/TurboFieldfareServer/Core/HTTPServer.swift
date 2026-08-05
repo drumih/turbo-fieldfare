@@ -249,6 +249,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 do {
                     let decoded = try? JSONDecoder().decode(OpenAIBatchCreateRequest.self, from: Data(bytes))
                     let requests: [BatchRequest]
+                    var inputFileID: String?
+                    var completionWindow: String?
+                    var metadata: [String: String]?
                     if let create = decoded {
                         guard create.endpoint == "/v1/chat/completions" else {
                             throw ServerRequestError.invalid(message: "only /v1/chat/completions batches are supported", param: "endpoint", code: "unsupported_value")
@@ -260,6 +263,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
                         }
                         requests = try self.decodeBatchInput(input)
+                        inputFileID = create.inputFileID
+                        completionWindow = create.completionWindow
+                        metadata = create.metadata
                     } else {
                         let legacy = try JSONDecoder().decode(LegacyOpenAIChatBatchRequest.self, from: Data(bytes))
                         guard !legacy.requests.isEmpty else { throw ServerRequestError.invalid(message: "requests must not be empty", param: "requests", code: "invalid_value") }
@@ -271,7 +277,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                     let snapshot = try await self.batches.create(requests: requests,
                                                                  backend: self.backend,
                                                                  coordinator: self.coordinator,
-                                                                 modelID: self.modelID)
+                                                                 modelID: self.modelID,
+                                                                 inputFileID: inputFileID,
+                                                                 completionWindow: completionWindow,
+                                                                 metadata: metadata)
                     _ = try await self.files.registerBatchOutput(snapshot.outputFileID)
                     self.writeCodable(box.value, status: .ok, snapshot)
                 } catch let error as ServerRequestError {

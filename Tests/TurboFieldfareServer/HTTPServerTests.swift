@@ -588,7 +588,10 @@ struct HTTPServerTests {
         create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
         let (batchData, batchResponse) = try await URLSession.shared.data(for: create)
         #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
-        #expect((try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any]))["object"] as? String == "batch")
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        #expect(batch["object"] as? String == "batch")
+        #expect(batch["input_file_id"] as? String == fileID)
+        #expect(batch["completion_window"] as? String == "24h")
         try await server.shutdown()
     }
 
@@ -700,10 +703,10 @@ struct HTTPServerTests {
             let data = try await URLSession.shared.data(
                 from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
             status = try #require((JSONSerialization.jsonObject(with: data) as? [String: Any])?["status"] as? String)
-            if status == "failed" { break }
+            if status == "completed" { break }
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(status == "failed")
+        #expect(status == "completed")
         let output = try String(contentsOf: outputDirectory.appendingPathComponent(outputFileID)
             .appendingPathExtension("jsonl"), encoding: .utf8)
         #expect(output.contains("\"custom_id\":\"will-fail\""))
