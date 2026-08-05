@@ -819,6 +819,38 @@ struct HTTPServerTests {
         #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
+    @Test func batchRejectsMoreThanFiftyThousandJSONLRequests() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchLimitTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "batch-limit-boundary"
+        let line = #"{"custom_id":"row","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let jsonl = String(repeating: line, count: 50_001)
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, uploadResponse) = try await URLSession.shared.data(for: upload)
+        #expect((uploadResponse as? HTTPURLResponse)?.statusCode == 200)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (batchData, response) = try await URLSession.shared.data(for: create)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        let errors = try #require(batch["errors"] as? [String: Any])
+        let errorsData = try #require(errors["data"] as? [[String: Any]])
+        #expect(errorsData[0]["message"] as? String == "batch input may contain at most 50,000 requests")
+        try await server.shutdown()
+    }
+
     @Test func batchListPaginatesWithAfterCursor() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
