@@ -13,6 +13,7 @@ public actor TurboFieldfareHTTPServer {
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
     private let batches: BatchRegistry
+    private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
     private let childChannels = ChildChannelRegistry()
     private var channel: Channel?
@@ -28,7 +29,10 @@ public actor TurboFieldfareHTTPServer {
         self.modelID = modelID
         self.backend = backend
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
-        self.batches = batchOutputDirectory.map(BatchRegistry.init(outputDirectory:)) ?? BatchRegistry()
+        let batchDirectory = batchOutputDirectory ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("TurboFieldfare/batches", isDirectory: true)
+        self.batches = BatchRegistry(outputDirectory: batchDirectory)
+        self.files = BatchFileStore(directory: batchDirectory)
         self.heartbeatInterval = heartbeatInterval
     }
 
@@ -37,6 +41,7 @@ public actor TurboFieldfareHTTPServer {
         let backend = self.backend
         let coordinator = self.coordinator
         let batches = self.batches
+        let files = self.files
         let heartbeatInterval = self.heartbeatInterval
         let childChannels = self.childChannels
         let bootstrap = ServerBootstrap(group: group)
@@ -53,6 +58,7 @@ public actor TurboFieldfareHTTPServer {
                         backend: backend,
                         coordinator: coordinator,
                         batches: batches,
+                        files: files,
                         heartbeatInterval: heartbeatInterval,
                         childChannels: childChannels))
                 }
@@ -122,6 +128,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
     private let batches: BatchRegistry
+    private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
     private let childChannels: ChildChannelRegistry
     private var head: HTTPRequestHead?
@@ -133,12 +140,14 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
          backend: any ServerInferenceBackend,
          coordinator: ServerCoordinator,
          batches: BatchRegistry,
+         files: BatchFileStore,
          heartbeatInterval: TimeAmount,
          childChannels: ChildChannelRegistry) {
         self.modelID = modelID
         self.backend = backend
         self.coordinator = coordinator
         self.batches = batches
+        self.files = files
         self.heartbeatInterval = heartbeatInterval
         self.childChannels = childChannels
     }
@@ -209,13 +218,19 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 return
             }
             handleBatchJob(body: body, context: context)
+        case (.POST, "/v1/files"):
+            handleFileUpload(head: head, body: body, context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/files/") && uri.hasSuffix("/content"):
+            handleFileContent(id: String(uri.dropFirst("/v1/files/".count).dropLast("/content".count)), context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/files/"):
+            handleFileStatus(id: String(uri.dropFirst("/v1/files/".count)), context: context)
         case (.GET, "/v1/batches"):
             handleBatchList(uri: head.uri, context: context)
         case (.GET, let uri) where uri.hasPrefix("/v1/batches/"):
             handleBatchStatus(uri: uri, context: context)
         case (.POST, let uri) where uri.hasPrefix("/v1/batches/") && uri.hasSuffix("/cancel"):
             handleBatchCancel(uri: uri, context: context)
-        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/batches"):
+        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/batches"), (_, "/v1/files"):
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -229,21 +244,38 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private func handleBatchJob(body: ByteBuffer, context: ChannelHandlerContext) {
         do {
             let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
-            let envelope = try JSONDecoder().decode(OpenAIChatBatchRequest.self, from: Data(bytes))
-            guard !envelope.requests.isEmpty else { throw ServerRequestError.invalid(message: "requests must not be empty", param: "requests", code: "invalid_value") }
-            let requests = try envelope.requests.enumerated().map { index, item -> BatchRequest in
-                guard item.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "requests.stream", code: "unsupported_value") }
-                return BatchRequest(customID: item.customID ?? "request-\(index)",
-                                    request: try OpenAIRequestValidator.validate(item, modelID: modelID))
-            }
             let box = SendableContext(context)
             activeTask = childChannels.startTask {
                 do {
+                    let decoded = try? JSONDecoder().decode(OpenAIBatchCreateRequest.self, from: Data(bytes))
+                    let requests: [BatchRequest]
+                    if let create = decoded {
+                        guard create.endpoint == "/v1/chat/completions" else {
+                            throw ServerRequestError.invalid(message: "only /v1/chat/completions batches are supported", param: "endpoint", code: "unsupported_value")
+                        }
+                        guard create.completionWindow == "24h" else {
+                            throw ServerRequestError.invalid(message: "only completion_window=24h is supported", param: "completion_window", code: "unsupported_value")
+                        }
+                        guard let input = try await self.files.contents(create.inputFileID) else {
+                            throw ServerRequestError.invalid(message: "input file not found", param: "input_file_id", code: "invalid_value")
+                        }
+                        requests = try self.decodeBatchInput(input)
+                    } else {
+                        let legacy = try JSONDecoder().decode(LegacyOpenAIChatBatchRequest.self, from: Data(bytes))
+                        guard !legacy.requests.isEmpty else { throw ServerRequestError.invalid(message: "requests must not be empty", param: "requests", code: "invalid_value") }
+                        requests = try legacy.requests.enumerated().map { index, item in
+                            guard item.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "requests.stream", code: "unsupported_value") }
+                            return BatchRequest(customID: item.customID ?? "request-\(index)", request: try OpenAIRequestValidator.validate(item, modelID: self.modelID))
+                        }
+                    }
                     let snapshot = try await self.batches.create(requests: requests,
                                                                  backend: self.backend,
                                                                  coordinator: self.coordinator,
                                                                  modelID: self.modelID)
+                    _ = try await self.files.registerBatchOutput(snapshot.outputFileID)
                     self.writeCodable(box.value, status: .ok, snapshot)
+                } catch let error as ServerRequestError {
+                    self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
                 } catch {
                     self.handleAsyncError(
                         error,
@@ -255,6 +287,78 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             }
         } catch let error as ServerRequestError { writeError(context, status: error == .unknownModel ? .notFound : .badRequest, error.envelope) }
         catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")) }
+    }
+
+    private func decodeBatchInput(_ data: Data) throws -> [BatchRequest] {
+        struct Line: Decodable { let customID: String; let method: String; let url: String; let body: OpenAIChatRequest
+            enum CodingKeys: String, CodingKey { case customID = "custom_id", method, url, body } }
+        let text = String(decoding: data, as: UTF8.self)
+        let lines = text.split(whereSeparator: \.isNewline)
+        guard !lines.isEmpty else { throw ServerRequestError.invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value") }
+        var ids = Set<String>()
+        return try lines.enumerated().map { index, line in
+            guard let lineData = String(line).data(using: .utf8) else { throw ServerRequestError.invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value") }
+            let item: Line
+            do { item = try JSONDecoder().decode(Line.self, from: lineData) }
+            catch { throw ServerRequestError.invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value") }
+            guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
+                throw ServerRequestError.invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value")
+            }
+            guard item.body.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value") }
+            return BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID))
+        }
+    }
+
+    private func handleFileUpload(head: HTTPRequestHead, body: ByteBuffer, context: ChannelHandlerContext) {
+        do {
+            guard let contentType = head.headers.first(name: "content-type"),
+                  let boundary = contentType.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { $0.hasPrefix("boundary=") })?.dropFirst("boundary=".count) else {
+                throw ServerRequestError.invalid(message: "content-type must be multipart/form-data", param: nil, code: "unsupported_media_type")
+            }
+            let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
+            let parsed = try parseMultipart(Data(bytes), boundary: String(boundary).trimmingCharacters(in: CharacterSet(charactersIn: "\"")))
+            let box = SendableContext(context)
+            activeTask = childChannels.startTask { do {
+                let file = try await self.files.create(filename: parsed.filename, purpose: parsed.purpose, contents: parsed.contents)
+                self.writeCodable(box.value, status: .ok, file)
+            } catch let error as ServerRequestError { self.writeError(box.value, status: .badRequest, error.envelope) }
+              catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not store file", code: "internal_error")) } }
+        } catch let error as ServerRequestError { writeError(context, status: .badRequest, error.envelope) }
+          catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed multipart request", code: "invalid_request_error")) }
+    }
+
+    private func parseMultipart(_ data: Data, boundary: String) throws -> (filename: String, purpose: String, contents: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+        let parts = text.components(separatedBy: "--\(boundary)")
+        var purpose: String?
+        var filename: String?
+        var contents: Data?
+        for rawPart in parts {
+            let part = rawPart.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n-"))
+            guard let range = part.range(of: "\r\n\r\n") else { continue }
+            let headers = String(part[..<range.lowerBound])
+            var value = String(part[range.upperBound...])
+            if value.hasSuffix("\r\n") { value.removeLast(2) }
+            if headers.contains("name=\"purpose\"") { purpose = value }
+            if headers.contains("name=\"file\"") {
+                filename = headers.components(separatedBy: "filename=\"").dropFirst().first?.components(separatedBy: "\"").first
+                contents = Data(value.utf8)
+            }
+        }
+        guard let purpose, let filename, let contents else {
+            throw ServerRequestError.invalid(message: "multipart request requires file and purpose", param: nil, code: "invalid_value")
+        }
+        return (filename, purpose, contents)
+    }
+
+    private func handleFileStatus(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let file = await self.files.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, file) }
+    }
+
+    private func handleFileContent(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { do { guard let data = try await self.files.contents(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeRaw(box.value, status: .ok, contentType: "application/jsonl", data: data) } catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not read file", code: "internal_error")) } }
     }
 
     private func handleBatchList(uri: String, context: ChannelHandlerContext) {
@@ -628,6 +732,21 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             contextBox.value.write(self.wrapOutboundOut(.head(
                 HTTPResponseHead(version: .http1_1, status: status, headers: headers))),
                 promise: nil)
+            var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
+    }
+
+    private func writeRaw(_ context: ChannelHandlerContext, status: HTTPResponseStatus,
+                          contentType: String, data: Data) {
+        let contextBox = SendableContext(context)
+        context.eventLoop.execute {
+            var headers = HTTPHeaders()
+            headers.add(name: "content-type", value: contentType)
+            headers.add(name: "content-length", value: "\(data.count)")
+            contextBox.value.write(self.wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))), promise: nil)
             var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count)
             buffer.writeBytes(data)
             contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)

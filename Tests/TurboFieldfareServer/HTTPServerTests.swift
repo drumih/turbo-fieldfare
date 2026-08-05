@@ -564,6 +564,34 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func batchAcceptsOpenAIFileAndJSONLContract() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "batch-test-boundary"
+        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, fileResponse) = try await URLSession.shared.data(for: upload)
+        #expect((fileResponse as? HTTPURLResponse)?.statusCode == 200)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (batchData, batchResponse) = try await URLSession.shared.data(for: create)
+        #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect((try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any]))["object"] as? String == "batch")
+        try await server.shutdown()
+    }
+
     @Test func batchListPaginatesWithAfterCursor() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",

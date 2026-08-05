@@ -173,11 +173,23 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     }
 }
 
-/// A small, local-only batch envelope. Requests are deliberately executed in
-/// order by the single model-owning server; this endpoint is not the hosted
-/// OpenAI Batch API.
-public struct OpenAIChatBatchRequest: Codable, Equatable, Sendable {
-    public let requests: [OpenAIChatRequest]
+public struct OpenAIBatchCreateRequest: Codable, Equatable, Sendable {
+    public let inputFileID: String
+    public let endpoint: String
+    public let completionWindow: String
+    public let metadata: [String: String]?
+
+    enum CodingKeys: String, CodingKey {
+        case inputFileID = "input_file_id"
+        case endpoint
+        case completionWindow = "completion_window"
+        case metadata
+    }
+}
+
+/// Deprecated local convenience envelope retained during migration to Files + Batch JSONL.
+struct LegacyOpenAIChatBatchRequest: Codable, Sendable {
+    let requests: [OpenAIChatRequest]
 }
 
 public struct OpenAIUsage: Codable, Equatable, Sendable {
