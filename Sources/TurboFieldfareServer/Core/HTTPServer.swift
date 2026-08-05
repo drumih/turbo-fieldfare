@@ -235,6 +235,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             }
             handleBatchJob(body: body, context: context)
         case (.POST, "/v1/files"):
+            guard head.headers.first(name: "content-type")?
+                .lowercased().hasPrefix("multipart/form-data") == true else {
+                writeError(context, status: .unsupportedMediaType,
+                           OpenAIErrorEnvelope(message: "content-type must be multipart/form-data",
+                                               code: "unsupported_media_type"))
+                return
+            }
             handleFileUpload(head: head, body: body, context: context)
         case (.GET, "/v1/files"):
             handleFileList(uri: head.uri, context: context)

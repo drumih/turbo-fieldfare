@@ -566,6 +566,21 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func fileUploadRequiresMultipartContentType() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{}".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 415)
+        #expect(String(decoding: data, as: UTF8.self).contains("unsupported_media_type"))
+        try await server.shutdown()
+    }
+
     @Test func batchRejectsStreamingItems() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
