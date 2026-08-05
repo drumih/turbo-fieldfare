@@ -754,6 +754,35 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func batchFilesAreDiscardedOnServerRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareRestartBatchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                             backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let firstChannel = try await first.start(port: 0)
+        let firstPort = try #require(firstChannel.localAddress?.port)
+        let boundary = "restart-batch-boundary"
+        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(firstPort)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, _) = try await URLSession.shared.data(for: upload)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        try await first.shutdown()
+
+        let second = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let secondChannel = try await second.start(port: 0)
+        let secondPort = try #require(secondChannel.localAddress?.port)
+        let (_, response) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(secondPort)/v1/files/\(fileID)")!)
+        #expect((response as? HTTPURLResponse)?.statusCode == 404)
+        try await second.shutdown()
+    }
+
     @Test func batchListPaginatesWithAfterCursor() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
