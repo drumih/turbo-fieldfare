@@ -52,7 +52,8 @@ public enum Posix {
     }
 
     public static func ftruncate(_ fd: Int32, path: String, size: UInt64) throws {
-        if Darwin.ftruncate(fd, off_t(size)) != 0 {
+        let checkedSize = try checkedOffT(size, path: path, operation: "ftruncate")
+        if Darwin.ftruncate(fd, checkedSize) != 0 {
             throw RepackError.ftruncateFailed(path: path, errno: errno)
         }
     }
@@ -60,11 +61,14 @@ public enum Posix {
     public static func pwriteAll(fd: Int32, path: String,
                                  buf: UnsafeRawPointer, count: Int,
                                  offset: UInt64) throws {
+        let checkedOffset = try checkedRangeOffset(
+            offset: offset, count: count, path: path, operation: "pwrite")
         var remaining = count
-        var off = off_t(offset)
+        var off = checkedOffset
         var ptr = buf
         while remaining > 0 {
             let n = pwrite(fd, ptr, remaining, off)
+            if n < 0, errno == EINTR { continue }
             if n <= 0 {
                 throw RepackError.pwriteShort(path: path, expected: count,
                                               wrote: count - remaining, errno: errno)
@@ -78,11 +82,14 @@ public enum Posix {
     public static func preadAll(fd: Int32, path: String,
                                 buf: UnsafeMutableRawPointer, count: Int,
                                 offset: UInt64) throws {
+        let checkedOffset = try checkedRangeOffset(
+            offset: offset, count: count, path: path, operation: "pread")
         var remaining = count
-        var off = off_t(offset)
+        var off = checkedOffset
         var ptr = buf
         while remaining > 0 {
             let n = pread(fd, ptr, remaining, off)
+            if n < 0, errno == EINTR { continue }
             if n <= 0 {
                 throw RepackError.preadShort(path: path, expected: count,
                                              got: count - remaining, errno: errno)
@@ -97,6 +104,33 @@ public enum Posix {
         if Darwin.fsync(fd) != 0 {
             throw RepackError.fsyncFailed(path: path, errno: errno)
         }
+    }
+
+    private static func checkedOffT(_ value: UInt64,
+                                    path: String,
+                                    operation: String) throws -> off_t {
+        guard value <= UInt64(Int64.max) else {
+            throw RepackError.configurationInvalid(
+                detail: "\(operation) value \(value) is not representable for \(path)")
+        }
+        return off_t(value)
+    }
+
+    private static func checkedRangeOffset(offset: UInt64,
+                                           count: Int,
+                                           path: String,
+                                           operation: String) throws -> off_t {
+        guard count >= 0 else {
+            throw RepackError.configurationInvalid(
+                detail: "\(operation) count \(count) is invalid for \(path)")
+        }
+        let count64 = UInt64(count)
+        let (end, overflow) = offset.addingReportingOverflow(count64)
+        guard !overflow, end <= UInt64(Int64.max) else {
+            throw RepackError.configurationInvalid(
+                detail: "\(operation) range \(offset)+\(count64) is not representable for \(path)")
+        }
+        return try checkedOffT(offset, path: path, operation: operation)
     }
 
     public static func fsyncDirectory(_ path: String) throws {
@@ -168,18 +202,8 @@ public enum Posix {
         do {
             try data.withUnsafeBytes { raw in
                 guard let base = raw.baseAddress else { return }
-                var offset = 0
-                while offset < raw.count {
-                    let count = write(fd, base.advanced(by: offset), raw.count - offset)
-                    if count <= 0 {
-                        throw RepackError.pwriteShort(
-                            path: temporary,
-                            expected: raw.count,
-                            wrote: offset,
-                            errno: errno)
-                    }
-                    offset += count
-                }
+                try pwriteAll(fd: fd, path: temporary,
+                              buf: base, count: raw.count, offset: 0)
             }
             try fsync(fd, path: temporary)
             try rename(from: temporary, to: path)
@@ -191,10 +215,23 @@ public enum Posix {
         }
     }
 
-    public static func readBoundedData(_ path: String, maximumBytes: UInt64) throws -> Data {
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    public static func readBoundedData(_ path: String,
+                                       maximumBytes: UInt64) throws -> Data {
+        try readBoundedData(
+            path, maximumBytes: maximumBytes, followCallerSymlink: false)
+    }
+
+    package static func readBoundedData(_ path: String,
+                                        maximumBytes: UInt64,
+                                        followCallerSymlink: Bool) throws -> Data {
+        let noFollow = followCallerSymlink ? 0 : O_NOFOLLOW
+        let fd = open(path, O_RDONLY | O_NONBLOCK | noFollow | O_CLOEXEC)
         if fd < 0 { throw RepackError.fileOpenFailed(path: path, errno: errno) }
         defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            throw RepackError.fileStatFailed(path: path, errno: errno == 0 ? EINVAL : errno)
+        }
         let size = try fileSize(fd: fd, path: path)
         guard size <= maximumBytes, size <= UInt64(Int.max) else {
             throw RepackError.installStateCorrupt(

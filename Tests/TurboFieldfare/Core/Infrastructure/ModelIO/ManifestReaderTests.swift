@@ -1,8 +1,21 @@
 import Testing
 import Foundation
+import Darwin
 @testable import TurboFieldfare
 
 @Suite struct ManifestReaderTests {
+
+    @Test func rejectsManifestFIFOWithoutBlocking() throws {
+        let (dir, toy) = try Self.writeToyManifest()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let manifest = dir.appendingPathComponent("manifest.json")
+        try FileManager.default.removeItem(at: manifest)
+        #expect(mkfifo(manifest.path, 0o600) == 0)
+
+        #expect(throws: ModelError.self) {
+            try ManifestReader.load(directoryURL: dir, expecting: toy)
+        }
+    }
 
     /// Build a manifest dictionary for a 2-layer toy ArchConfig and write it
     /// into a temp directory. Returns the directory URL and the toy config.
@@ -248,20 +261,17 @@ import Foundation
         }
     }
 
-    @Test func missingLayerFileThrowsMissingFile() throws {
+    @Test func defersPackedLayerFilenamesToLayoutValidation() throws {
         let files: [String: [String: Any]] = [
             "model_weights.bin": ["size": 1024, "sha256": String(repeating: "0", count: 64)],
             "packed_experts/layout.json": ["size": 1024, "sha256": String(repeating: "0", count: 64)],
-            // intentionally do not list layer_0.bin or layer_1.bin
+            "packed_experts/experts_a.bin": ["size": 16384, "sha256": String(repeating: "0", count: 64)],
+            "packed_experts/experts_b.bin": ["size": 16384, "sha256": String(repeating: "0", count: 64)],
         ]
         let (dir, toy) = try Self.writeToyManifest(filesOverride: files)
         defer { try? FileManager.default.removeItem(at: dir) }
-        #expect {
-            _ = try ManifestReader.load(directoryURL: dir, expecting: toy)
-        } throws: { error in
-            if case ModelError.missingFile = error { return true }
-            return false
-        }
+        let manifest = try ManifestReader.load(directoryURL: dir, expecting: toy)
+        #expect(manifest.files["packed_experts/experts_a.bin"] != nil)
     }
 
     @Test func acceptsZeroPaddedLayerFilenames() throws {

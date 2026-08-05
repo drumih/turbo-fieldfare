@@ -1,6 +1,8 @@
 import Testing
 import Foundation
+import Darwin
 @testable import TurboFieldfare
+@testable import TurboFieldfareFormat
 @testable import TurboFieldfareRepackCore
 
 @Suite struct ResidentIndexTests {
@@ -28,11 +30,8 @@ import Foundation
             nameOffsets.append(UInt32(stringTableBase + cursor))
             cursor += n.utf8.count
         }
-        let rawIndexBytes = stringTableBase + stringTable.count
-        // Writer rounds the index region up to 16 KB; we keep the test snug
-        // (no padding) since the parser only needs indexSize ≥ that minimum.
-        let indexBytes = rawIndexBytes
-        let residentBytes = 64
+        let indexBytes = Int(GTurboFormatV1.alignmentBytes)
+        let residentBytes = 96
 
         let entries: [ResidentEntry] = [
             ResidentEntry(
@@ -47,7 +46,7 @@ import Foundation
             ResidentEntry(
                 name: names[1], dtype: 0,
                 logicalShape4: [256, 64, 0, 0],
-                fileOffset: UInt64(indexBytes) + 64, sizeBytes: 0,
+                fileOffset: UInt64(indexBytes) + 64, sizeBytes: 32,
                 scaleOffset: 0, scaleSize: 0,
                 biasOffset:  0, biasSize:  0,
                 quantSpec: nil,
@@ -90,6 +89,7 @@ import Foundation
         let e1 = try #require(parsed.entries[names[1]])
         #expect(e1.shape.0 == 256 && e1.shape.1 == 64)
         #expect(e1.fileOffset == UInt64(indexBytes) + 64)
+        #expect(e1.sizeBytes == 32)
         #expect(e1.scaleSize == 0 && e1.biasSize == 0)
     }
 
@@ -103,6 +103,93 @@ import Foundation
         } throws: { error in
             if case ModelError.indexCorrupt = error { return true }
             return false
+        }
+    }
+
+    @Test func acceptsIndexRegionExactlyAtMetadataCap() throws {
+        let cap = ResidentIndexReader.defaultMaxBytes
+        var data = Data(repeating: 0, count: Int(cap))
+        data.withUnsafeMutableBytes {
+            GTurboBinary.writeIndexHeader(
+                into: $0.baseAddress!, indexSize: cap,
+                residentSize: 0, entryCount: 0)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-index-cap-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+        let parsed = try ResidentIndexReader.load(fileURL: url)
+        #expect(parsed.header.indexSize == cap)
+        #expect(parsed.entries.isEmpty)
+    }
+
+    @Test func rejectsIndexRegionAboveMetadataCapBeforeAllocation() throws {
+        let claimed = ResidentIndexReader.defaultMaxBytes + 1
+        var data = Data(repeating: 0, count: GTurboBinary.indexHeaderBytes)
+        data.withUnsafeMutableBytes {
+            GTurboBinary.writeIndexHeader(
+                into: $0.baseAddress!, indexSize: claimed,
+                residentSize: 0, entryCount: 0)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-index-over-cap-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+        #expect {
+            try ResidentIndexReader.load(fileURL: url)
+        } throws: { error in
+            guard case ModelError.indexCorrupt(let detail) = error else { return false }
+            return detail.contains("metadata cap")
+        }
+    }
+
+    @Test func rejectsIndexSizeSmallerThanHeader() throws {
+        var data = Data(repeating: 0, count: GTurboBinary.indexHeaderBytes)
+        data.withUnsafeMutableBytes {
+            GTurboBinary.writeIndexHeader(
+                into: $0.baseAddress!, indexSize: UInt64(GTurboBinary.indexHeaderBytes - 1),
+                residentSize: 0, entryCount: 0)
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-index-small-header-\(UUID().uuidString).bin")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try data.write(to: url)
+        #expect(throws: ModelError.self) {
+            try ResidentIndexReader.load(fileURL: url)
+        }
+    }
+
+    @Test func callerSelectedSymlinkToRegularIndexStillLoads() throws {
+        let indexSize = Int(GTurboFormatV1.alignmentBytes)
+        var data = Data(repeating: 0, count: indexSize)
+        data.withUnsafeMutableBytes {
+            GTurboBinary.writeIndexHeader(
+                into: $0.baseAddress!, indexSize: UInt64(indexSize),
+                residentSize: 0, entryCount: 0)
+        }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-index-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("target.bin")
+        let alias = directory.appendingPathComponent("alias.bin")
+        try data.write(to: target)
+        #expect(symlink(target.path, alias.path) == 0)
+        let parsed = try ResidentIndexReader.load(fileURL: alias)
+        #expect(parsed.header.entryCount == 0)
+    }
+
+    @Test func symlinkToFIFOIsRejectedWithoutReading() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-index-fifo-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fifo = directory.appendingPathComponent("index.fifo")
+        let alias = directory.appendingPathComponent("alias.bin")
+        #expect(mkfifo(fifo.path, 0o600) == 0)
+        #expect(symlink(fifo.path, alias.path) == 0)
+        #expect(throws: ModelError.self) {
+            try ResidentIndexReader.load(fileURL: alias)
         }
     }
 

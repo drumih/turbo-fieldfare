@@ -15,6 +15,16 @@ public enum Sha256Verifier {
         }
         defer { close(fd) }
 
+        return try hashFile(fileDescriptor: fd, displayName: fileURL.path,
+                            chunkBytes: chunkBytes)
+    }
+
+    package static func hashFile(fileDescriptor fd: Int32,
+                                 displayName: String,
+                                 chunkBytes: Int = 1 << 20) throws -> String {
+        guard chunkBytes > 0 else {
+            throw ModelError.indexCorrupt(detail: "SHA-256 chunk size must be positive")
+        }
         var ctx = CC_SHA256_CTX()
         CC_SHA256_Init(&ctx)
         var buf = [UInt8](repeating: 0, count: chunkBytes)
@@ -23,8 +33,9 @@ public enum Sha256Verifier {
                 return read(fd, raw.baseAddress!, chunkBytes)
             }
             if got == 0 { break }
+            if got < 0, errno == EINTR { continue }
             if got < 0 {
-                throw ModelError.posixFailed(call: "read", errno: errno)
+                throw ModelError.posixFailed(call: "read(\(displayName))", errno: errno)
             }
             buf.withUnsafeBytes { raw in
                 _ = CC_SHA256_Update(&ctx, raw.baseAddress!, CC_LONG(got))
@@ -59,6 +70,15 @@ public enum Sha256Verifier {
                                   named name: String,
                                   expectedHex: String) throws {
         let actual = try hashFile(at: fileURL)
+        if actual.lowercased() != expectedHex.lowercased() {
+            throw ModelError.checksumMismatch(file: name)
+        }
+    }
+
+    package static func verifyFile(fileDescriptor fd: Int32,
+                                   named name: String,
+                                   expectedHex: String) throws {
+        let actual = try hashFile(fileDescriptor: fd, displayName: name)
         if actual.lowercased() != expectedHex.lowercased() {
             throw ModelError.checksumMismatch(file: name)
         }

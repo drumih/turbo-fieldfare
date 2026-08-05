@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Metal
+import Darwin
 @testable import TurboFieldfare
 
 @Suite struct ResidentBufferTests {
@@ -52,5 +53,20 @@ import Metal
                 fromByteOffset: i, as: UInt8.self)
             #expect(got == UInt8(0x80 | (i & 0x7F)), "byte \(i)")
         }
+    }
+
+    @Test func followsCallerSelectedSymlinkToRegularFile() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-resident-symlink-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let target = directory.appendingPathComponent("target.bin")
+        let alias = directory.appendingPathComponent("alias.bin")
+        try Data(repeating: 0x5A, count: 64).write(to: target)
+        #expect(symlink(target.path, alias.path) == 0)
+        let resident = try ResidentBuffer(
+            fileURL: alias, fileOffset: 0, residentSize: 64, device: device)
+        #expect(resident.buffer.contents().load(as: UInt8.self) == 0x5A)
     }
 }

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import Metal
 @testable import TurboFieldfare
+@testable import TurboFieldfareFormat
 @testable import TurboFieldfareRepackCore
 
 @Suite struct ModelLoaderTests {
@@ -15,7 +16,7 @@ import Metal
     /// 8 experts, hidden 64, vocab 1024. Resident contains the embedding
     /// (alias: lmHead), final norm, and the tiny layer-resident tensors needed
     /// to construct `RealForwardRunner` in unit tests.
-    static func writeToySynthetic() throws -> URL {
+    static func writeToySynthetic(includeQuant: Bool = true) throws -> URL {
         let toy = ArchConfig.gemma4Toy()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("gturbo-toy-\(UUID().uuidString)")
@@ -34,16 +35,16 @@ import Metal
 
         let d = toy.hiddenSize
         let f = toy.intermediateSize
-        let embedSize = UInt64(toy.vocabSize * toy.hiddenSize)
+        let embedSize = UInt64(toy.vocabSize * toy.hiddenSize / 2)
         let bf16DBytes = UInt64(d * MemoryLayout<UInt16>.stride)
 
-        func int4AffineSpec(_ name: String, rows: Int, cols: Int) -> ResidentSpec {
+        func affineSpec(_ name: String, rows: Int, cols: Int, bits: Int) -> ResidentSpec {
             let groups = (cols + Quantization.groupSize - 1) / Quantization.groupSize
             let auxBytes = UInt64(rows * groups * MemoryLayout<UInt16>.stride)
             return ResidentSpec(name: name,
                                 dtype: 0,
                                 shape: [UInt32(rows), UInt32(cols), 0, 0],
-                                weightBytes: UInt64(rows * cols),
+                                weightBytes: UInt64(rows * cols * bits / 8),
                                 scaleBytes: auxBytes,
                                 biasBytes: auxBytes)
         }
@@ -140,22 +141,26 @@ import Metal
                 weightBytes: bf16DBytes,
                 scaleBytes: 0,
                 biasBytes: 0))
-            specs.append(int4AffineSpec(
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).self_attn.q_proj.weight",
                 rows: qDim,
-                cols: d))
-            specs.append(int4AffineSpec(
+                cols: d,
+                bits: 4))
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).self_attn.k_proj.weight",
                 rows: kvDim,
-                cols: d))
-            specs.append(int4AffineSpec(
+                cols: d,
+                bits: 4))
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).self_attn.v_proj.weight",
                 rows: kvDim,
-                cols: d))
-            specs.append(int4AffineSpec(
+                cols: d,
+                bits: 4))
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).self_attn.o_proj.weight",
                 rows: d,
-                cols: qDim))
+                cols: qDim,
+                bits: 4))
             specs.append(ResidentSpec(
                 name: "language_model.model.layers.\(L).post_attention_layernorm.weight",
                 dtype: 1,
@@ -191,18 +196,21 @@ import Metal
                 weightBytes: UInt64(headDim * MemoryLayout<UInt16>.stride),
                 scaleBytes: 0,
                 biasBytes: 0))
-            specs.append(int4AffineSpec(
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).mlp.gate_proj.weight",
                 rows: f,
-                cols: d))
-            specs.append(int4AffineSpec(
+                cols: d,
+                bits: 4))
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).mlp.up_proj.weight",
                 rows: f,
-                cols: d))
-            specs.append(int4AffineSpec(
+                cols: d,
+                bits: 4))
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).mlp.down_proj.weight",
                 rows: d,
-                cols: f))
+                cols: f,
+                bits: 4))
             specs.append(ResidentSpec(
                 name: "language_model.model.layers.\(L).post_feedforward_layernorm_1.weight",
                 dtype: 1,
@@ -238,10 +246,11 @@ import Metal
                 weightBytes: bf16DBytes,
                 scaleBytes: 0,
                 biasBytes: 0))
-            specs.append(int4AffineSpec(
+            specs.append(affineSpec(
                 "language_model.model.layers.\(L).router.proj.weight",
                 rows: toy.numExperts,
-                cols: d))
+                cols: d,
+                bits: 8))
             specs.append(ResidentSpec(
                 name: "language_model.model.layers.\(L).router.per_expert_scale",
                 dtype: 1,
@@ -263,12 +272,19 @@ import Metal
             nameAbsOffsets.append(UInt32(stringTableBase + cursor))
             cursor += n.utf8.count
         }
-        let indexBytes = UInt64(stringTableBase + stringTable.count)
+        let rawIndexBytes = UInt64(stringTableBase + stringTable.count)
+        let alignment = GTurboFormatV1.alignmentBytes
+        let indexBytes = ((rawIndexBytes + alignment - 1) / alignment) * alignment
 
         var entries: [ResidentEntry] = []
         entries.reserveCapacity(specs.count)
         var payloadCursor = indexBytes
         for spec in specs {
+            let payloadAlignment: UInt64 = spec.dtype == 0
+                ? UInt64(MemoryLayout<UInt32>.alignment)
+                : UInt64(MemoryLayout<UInt16>.alignment)
+            payloadCursor = ((payloadCursor + payloadAlignment - 1) / payloadAlignment)
+                * payloadAlignment
             let weightOffset = payloadCursor
             let scaleOffset = spec.scaleBytes > 0 ? weightOffset + spec.weightBytes : 0
             let biasOffset = spec.biasBytes > 0 ? scaleOffset + spec.scaleBytes : 0
@@ -423,7 +439,16 @@ import Metal
             "hiddenActivation": toy.hiddenActivation,
             "fullAttentionLayerMask": toy.fullAttentionLayerMask.map { Int($0) },
         ]
-        let manifestRoot: [String: Any] = [
+        func quantSlot(_ weightBits: Int) -> [String: Any] {
+            [
+                "weightBits": weightBits,
+                "scheme": "affine",
+                "scaleType": "BF16",
+                "biasType": "BF16",
+                "groupSize": Quantization.groupSize,
+            ]
+        }
+        var manifestRoot: [String: Any] = [
             "magic": "GTURBO",
             "versionMajor": 1,
             "versionMinor": 0,
@@ -435,6 +460,15 @@ import Metal
             "numLayers": toy.numLayers,
             "expertStride": expertStride,
         ]
+        if includeQuant {
+            manifestRoot["quant"] = [
+                "embedding": quantSlot(4),
+                "attention": quantSlot(4),
+                "router": quantSlot(8),
+                "sharedExpert": quantSlot(4),
+                "routedExpert": quantSlot(4),
+            ]
+        }
         let manifestData = try JSONSerialization.data(withJSONObject: manifestRoot,
             options: [.sortedKeys, .withoutEscapingSlashes])
         try manifestData.write(to: dir.appendingPathComponent("manifest.json"))

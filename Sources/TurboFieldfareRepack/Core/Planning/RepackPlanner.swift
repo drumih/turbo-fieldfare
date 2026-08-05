@@ -1,9 +1,10 @@
 import Foundation
+import TurboFieldfareFormat
 
 /// On-disk page alignment unit for `.gturbo` files. Fixed at 16 KB regardless
 /// of host page size — the format is the contract, not the kernel.
 enum Layout {
-    static let pageBytes: UInt64 = 16_384
+    static let pageBytes = GTurboFormatV1.alignmentBytes
 }
 
 // MARK: - Plan data types
@@ -291,7 +292,7 @@ enum RepackPlanner {
                 fileCursor = bOff + bSize
 
                 entries.append(ResidentEntry(
-                    name: name, dtype: 0,
+                    name: name, dtype: GTurboFormatV1.DType.u32.rawValue,
                     logicalShape4: padTo4(logical),
                     fileOffset: wOff, sizeBytes: wSize,
                     scaleOffset: sOff, scaleSize: sSize,
@@ -371,21 +372,21 @@ enum RepackPlanner {
             let biasesLogical = Array(b.shape.dropFirst())
 
             let wSlice = PerExpertTensorSlice(
-                role: role, component: "weights", dtype: 0,
+                role: role, component: "weights", dtype: GTurboFormatV1.DType.u32.rawValue,
                 logicalShape: logicalPerExpert,
                 offsetInExpertBlob: blobCursor, sizeInExpertBlob: perExpertWeightSize,
                 sourceOffsetPerExpert: perExpertWeightSize, sourceTensor: w,
                 bitsForWeights: spec.bits)
             blobCursor += perExpertWeightSize
             let sSlice = PerExpertTensorSlice(
-                role: role, component: "scales", dtype: 1,
+                role: role, component: "scales", dtype: GTurboFormatV1.DType.bf16.rawValue,
                 logicalShape: scalesLogical,
                 offsetInExpertBlob: blobCursor, sizeInExpertBlob: perExpertScaleSize,
                 sourceOffsetPerExpert: perExpertScaleSize, sourceTensor: s,
                 bitsForWeights: nil)
             blobCursor += perExpertScaleSize
             let bSlice = PerExpertTensorSlice(
-                role: role, component: "biases", dtype: 1,
+                role: role, component: "biases", dtype: GTurboFormatV1.DType.bf16.rawValue,
                 logicalShape: biasesLogical,
                 offsetInExpertBlob: blobCursor, sizeInExpertBlob: perExpertBiasSize,
                 sourceOffsetPerExpert: perExpertBiasSize, sourceTensor: b,

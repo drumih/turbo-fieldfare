@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import Darwin
+import TurboFieldfareFormat
 
 public struct ModelLoadStats: Sendable {
     public var manifestSha256Nanos: UInt64
@@ -40,6 +41,7 @@ public struct Model {
     let packedExpertsLayout: PackedExpertsLayout
     let manifest: Manifest
     let directoryURL: URL
+    let modelDirectory: GTurboModelDirectory
 
     /// Lazy state. Held inside a reference box so `Model` can stay a struct
     /// while still letting accessors mutate layer state via a serial queue.
@@ -64,7 +66,8 @@ public struct Model {
          residentIndex: ResidentIndex,
          packedExpertsLayout: PackedExpertsLayout,
          manifest: Manifest,
-         directoryURL: URL) {
+         directoryURL: URL,
+         modelDirectory: GTurboModelDirectory) {
         self.device = device
         self.config = config
         self.streamingMode = streamingMode
@@ -75,6 +78,7 @@ public struct Model {
         self.packedExpertsLayout = packedExpertsLayout
         self.manifest = manifest
         self.directoryURL = directoryURL
+        self.modelDirectory = modelDirectory
         self.streamersBox = StreamersBox(numLayers: packedExpertsLayout.numLayers)
         self.streamersQueue = DispatchQueue(label: "turbo-fieldfare.expert-streamers")
     }
@@ -193,11 +197,31 @@ public struct Model {
             throw ModelError.tensorNotFound(name: name)
         }
         let residentFileOffset = residentIndex.header.indexSize
-        let relativeOffset = entry.fileOffset - residentFileOffset
-        let scaleRel: UInt64 = entry.scaleSize > 0
-            ? entry.scaleOffset - residentFileOffset : 0
-        let biasRel: UInt64 = entry.biasSize > 0
-            ? entry.biasOffset - residentFileOffset : 0
+        func checkedRelativeOffset(_ absolute: UInt64,
+                                   size: UInt64,
+                                   field: String) throws -> UInt64 {
+            if size == 0 {
+                guard absolute == 0 else {
+                    throw ModelError.indexCorrupt(detail: "\(name).\(field) has an absent nonzero offset")
+                }
+                return 0
+            }
+            guard absolute >= residentFileOffset else {
+                throw ModelError.indexCorrupt(detail: "\(name).\(field) precedes the resident payload")
+            }
+            let relative = absolute - residentFileOffset
+            guard relative <= residentIndex.header.residentSize,
+                  size <= residentIndex.header.residentSize - relative else {
+                throw ModelError.indexCorrupt(detail: "\(name).\(field) exceeds the resident payload")
+            }
+            return relative
+        }
+        let relativeOffset = try checkedRelativeOffset(
+            entry.fileOffset, size: entry.sizeBytes, field: "weights")
+        let scaleRel = try checkedRelativeOffset(
+            entry.scaleOffset, size: entry.scaleSize, field: "scales")
+        let biasRel = try checkedRelativeOffset(
+            entry.biasOffset, size: entry.biasSize, field: "biases")
         return TensorView(
             buffer: residentBuffer.buffer,
             offset: relativeOffset,
@@ -224,7 +248,7 @@ public struct Model {
             scaleOffset: 0, scaleLength: 0,
             biasOffset:  0, biasLength:  0,
             shape: (UInt32(L), UInt32(E), 0, 0),
-            dtype: 0)
+            dtype: GTurboFormatV1.DType.u32.rawValue)
     }
 
     /// Open layer L's file + verify SHA, idempotent.
@@ -251,24 +275,27 @@ public struct Model {
         let url = directoryURL
             .appendingPathComponent("packed_experts")
             .appendingPathComponent(basename)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw ModelError.missingFile(name: "packed_experts/\(basename)")
-        }
+        let manifestRel = "packed_experts/\(basename)"
+        let layerFD = try modelDirectory.openFile(manifestRel)
+        defer { close(layerFD) }
         if !streamersBox.layerVerified[L] {
-            let manifestRel = "packed_experts/\(basename)"
             guard let entry = manifest.files[manifestRel] else {
                 throw ModelError.missingFile(name: manifestRel)
             }
+            let actualSize = try modelDirectory.fileSize(
+                fileDescriptor: layerFD, relativePath: manifestRel)
+            guard actualSize == entry.size else {
+                throw ModelError.tensorSizeMismatch(
+                    name: manifestRel, expected: entry.size, actual: actualSize)
+            }
             switch integrityPolicy {
             case .fullSha256:
-                try Sha256Verifier.verifyFile(at: url, named: manifestRel,
+                try Sha256Verifier.verifyFile(fileDescriptor: layerFD,
+                                              named: manifestRel,
                                               expectedHex: entry.sha256)
             case .sizeCheckTrustedReceipt:
-                try Self.verifyTrustedReceiptFileSize(url: url,
-                                                      relativePath: manifestRel,
-                                                      expectedSize: entry.size)
+                break
             }
-            streamersBox.layerVerified[L] = true
         }
         let streamSize = UInt64(packedExpertsLayout.expertsPerLayer)
             * packedExpertsLayout.expertStride
@@ -288,7 +315,9 @@ public struct Model {
             layout: layout,
             device: device,
             slotCount: slotCount,
-            cachePolicy: expertCachePolicy)
+            cachePolicy: expertCachePolicy,
+            fileDescriptor: layerFD)
+        streamersBox.layerVerified[L] = true
     }
 
     /// Test hook: how many layer files have been opened so far.
@@ -315,20 +344,34 @@ extension Model {
             loadStats?.pointee = stats
         }
         let resolvedIntegrityPolicy = integrityPolicy ?? .fullSha256
-
-        let manifestURL = directoryURL.appendingPathComponent("manifest.json")
-        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw ModelError.partialInstall(path: directoryURL.path)
-        }
+        let modelDirectory = try GTurboModelDirectory(rootURL: directoryURL)
+        let manifestFD: Int32
+        do { manifestFD = try modelDirectory.openFile("manifest.json") }
+        catch ModelError.missingFile { throw ModelError.partialInstall(path: directoryURL.path) }
+        defer { close(manifestFD) }
+        let manifestData = try modelDirectory.readMetadata(
+            fileDescriptor: manifestFD, relativePath: "manifest.json",
+            maxBytes: ManifestReader.defaultMaxBytes)
+        let manifestSize = UInt64(manifestData.count)
         let manifestShaStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        let manifestSha = try Sha256Verifier.hashFile(at: manifestURL)
+        let manifestSha = Sha256Verifier.hashData(manifestData)
         stats.manifestSha256Nanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - manifestShaStart
-        let manifestSize = try Self.fileSize(at: manifestURL,
-                                             relativePath: "manifest.json")
         let receipt: VerifiedInstallReceipt?
         if resolvedIntegrityPolicy == .sizeCheckTrustedReceipt {
             let receiptStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-            let loadedReceipt = try VerifiedInstallReceiptReader.load(directoryURL: directoryURL)
+            let receiptFD: Int32
+            do {
+                receiptFD = try modelDirectory.openFile(VerifiedInstallReceiptReader.fileName)
+            } catch ModelError.missingFile {
+                throw ModelError.trustedReceiptInvalid(
+                    detail: "\(VerifiedInstallReceiptReader.fileName) is missing")
+            }
+            defer { close(receiptFD) }
+            let receiptData = try modelDirectory.readMetadata(
+                fileDescriptor: receiptFD,
+                relativePath: VerifiedInstallReceiptReader.fileName,
+                maxBytes: VerifiedInstallReceiptReader.defaultMaxBytes)
+            let loadedReceipt = try VerifiedInstallReceiptReader.decode(data: receiptData)
             try VerifiedInstallReceiptReader.validateManifestBinding(
                 loadedReceipt,
                 directoryURL: directoryURL,
@@ -339,8 +382,8 @@ extension Model {
             receipt = nil
         }
 
-        let manifest = try ManifestReader.load(directoryURL: directoryURL,
-                                               expecting: expecting)
+        let manifest = try ManifestReader.decode(
+            data: manifestData, expecting: expecting)
         if let receipt {
             let receiptStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             try VerifiedInstallReceiptReader.validate(receipt,
@@ -353,51 +396,78 @@ extension Model {
 
         // Verify the small, always-touched files before mapping model data.
         let weightsURL = directoryURL.appendingPathComponent("model_weights.bin")
-        let layoutURL  = directoryURL
-            .appendingPathComponent("packed_experts")
-            .appendingPathComponent("layout.json")
         guard let weightsEntry = manifest.files["model_weights.bin"] else {
             throw ModelError.missingFile(name: "model_weights.bin")
         }
         guard let layoutEntry = manifest.files["packed_experts/layout.json"] else {
             throw ModelError.missingFile(name: "packed_experts/layout.json")
         }
+        let weightsFD = try modelDirectory.openFile("model_weights.bin")
+        defer { close(weightsFD) }
+        let layoutFD = try modelDirectory.openFile("packed_experts/layout.json")
+        defer { close(layoutFD) }
+        let layoutData = try modelDirectory.readMetadata(
+            fileDescriptor: layoutFD, relativePath: "packed_experts/layout.json",
+            maxBytes: PackedExpertsLayoutReader.defaultMaxBytes)
+        guard UInt64(layoutData.count) == layoutEntry.size else {
+            throw ModelError.tensorSizeMismatch(
+                name: "packed_experts/layout.json",
+                expected: layoutEntry.size,
+                actual: UInt64(layoutData.count))
+        }
+        let weightsSize = try modelDirectory.fileSize(
+            fileDescriptor: weightsFD, relativePath: "model_weights.bin")
+        guard weightsSize == weightsEntry.size else {
+            throw ModelError.tensorSizeMismatch(
+                name: "model_weights.bin",
+                expected: weightsEntry.size,
+                actual: weightsSize)
+        }
         let eagerShaStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        try Sha256Verifier.verifyFile(at: weightsURL, named: "model_weights.bin",
+        try Sha256Verifier.verifyFile(fileDescriptor: weightsFD,
+                                      named: "model_weights.bin",
                                       expectedHex: weightsEntry.sha256)
-        try Sha256Verifier.verifyFile(at: layoutURL, named: "packed_experts/layout.json",
-                                      expectedHex: layoutEntry.sha256)
+        guard Sha256Verifier.hashData(layoutData).lowercased()
+                == layoutEntry.sha256.lowercased() else {
+            throw ModelError.checksumMismatch(file: "packed_experts/layout.json")
+        }
         stats.eagerSha256Nanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - eagerShaStart
 
-        let residentIndex = try ResidentIndexReader.load(fileURL: weightsURL)
+        let layout = try PackedExpertsLayoutReader.decode(data: layoutData,
+                                                          manifest: manifest)
+        if resolvedIntegrityPolicy == .sizeCheckTrustedReceipt {
+            let receiptStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            try validateTrustedReceiptLayerLayout(modelDirectory: modelDirectory,
+                                                  manifest: manifest,
+                                                  layout: layout)
+            stats.receiptValidationNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - receiptStart
+        }
+
+        let residentIndex = try ResidentIndexReader.load(
+            fileDescriptor: weightsFD, displayPath: "model_weights.bin")
+        try validateRuntimeSchema(residentIndex: residentIndex,
+                                  layout: layout,
+                                  manifest: manifest,
+                                  config: expecting)
 
         // The resident index must account for the complete weights file.
-        let attrs = try FileManager.default.attributesOfItem(atPath: weightsURL.path)
-        if let fileSize = attrs[.size] as? UInt64 {
-            let expected = residentIndex.header.indexSize + residentIndex.header.residentSize
-            if fileSize != expected {
-                throw ModelError.indexCorrupt(detail: """
-                    model_weights.bin size \(fileSize) != indexSize \
-                    \(residentIndex.header.indexSize) + residentSize \
-                    \(residentIndex.header.residentSize) = \(expected)
-                    """)
-            }
+        let fileSize = weightsSize
+        let (expectedSize, overflow) = residentIndex.header.indexSize
+            .addingReportingOverflow(residentIndex.header.residentSize)
+        if overflow || fileSize != expectedSize {
+            throw ModelError.indexCorrupt(detail: """
+                model_weights.bin size \(fileSize) != indexSize \
+                \(residentIndex.header.indexSize) + residentSize \
+                \(residentIndex.header.residentSize) = \(expectedSize)
+                """)
         }
 
         let residentBuffer = try ResidentBuffer(
             fileURL: weightsURL,
             fileOffset: residentIndex.header.indexSize,
             residentSize: residentIndex.header.residentSize,
-            device: device)
-
-        let layout = try PackedExpertsLayoutReader.load(directoryURL: directoryURL)
-        if resolvedIntegrityPolicy == .sizeCheckTrustedReceipt {
-            let receiptStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-            try validateTrustedReceiptLayerLayout(directoryURL: directoryURL,
-                                                  manifest: manifest,
-                                                  layout: layout)
-            stats.receiptValidationNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - receiptStart
-        }
+            device: device,
+            fileDescriptor: weightsFD)
 
         return Model(
             device: device,
@@ -409,89 +479,247 @@ extension Model {
             residentIndex: residentIndex,
             packedExpertsLayout: layout,
             manifest: manifest,
-            directoryURL: directoryURL)
+            directoryURL: directoryURL,
+            modelDirectory: modelDirectory)
     }
 
-    private static func verifyTrustedReceiptFileSize(url: URL,
-                                                     relativePath: String,
-                                                     expectedSize: UInt64) throws {
-        let actualSize = try fileSize(at: url, relativePath: relativePath)
-        guard actualSize == expectedSize else {
-            throw ModelError.trustedReceiptInvalid(
-                detail: "\(relativePath) size \(actualSize) != \(expectedSize)")
-        }
-    }
-
-    private static func fileSize(at url: URL, relativePath: String) throws -> UInt64 {
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard let sizeValue = attrs[.size] else {
-            throw ModelError.trustedReceiptInvalid(detail: "missing size for \(relativePath)")
-        }
-        let actualSize: UInt64
-        if let number = sizeValue as? NSNumber {
-            actualSize = number.uint64Value
-        } else if let value = sizeValue as? UInt64 {
-            actualSize = value
-        } else if let value = sizeValue as? Int {
-            actualSize = UInt64(value)
-        } else {
-            throw ModelError.trustedReceiptInvalid(detail: "invalid size for \(relativePath)")
-        }
-        return actualSize
-    }
-
-    private static func validateTrustedReceiptLayerLayout(directoryURL: URL,
+    private static func validateTrustedReceiptLayerLayout(modelDirectory: GTurboModelDirectory,
                                                           manifest: Manifest,
                                                           layout: PackedExpertsLayout) throws {
-        let pageSize = UInt64(getpagesize())
-        guard layout.expertStride % pageSize == 0 else {
-            throw ModelError.trustedReceiptInvalid(
-                detail: "expertStride \(layout.expertStride) is not page-aligned")
-        }
-        guard layout.numLayers == manifest.numLayers,
-              layout.expertsPerLayer == manifest.expertsPerLayer,
-              layout.expertStride == manifest.expertStride else {
-            throw ModelError.trustedReceiptInvalid(detail: "layout does not match manifest dimensions")
-        }
         for layer in layout.layers {
-            guard layer.layer >= 0 && layer.layer < manifest.numLayers else {
-                throw ModelError.trustedReceiptInvalid(detail: "layout layer out of range")
-            }
             let relativePath = "packed_experts/\(layer.file)"
             guard let manifestEntry = manifest.files[relativePath] else {
                 throw ModelError.trustedReceiptInvalid(detail: "manifest missing \(relativePath)")
             }
-            let expectedSize = UInt64(layout.expertsPerLayer) * layout.expertStride
-            guard manifestEntry.size == expectedSize else {
+            let actualSize: UInt64
+            do {
+                let fd = try modelDirectory.openFile(relativePath)
+                defer { close(fd) }
+                actualSize = try modelDirectory.fileSize(
+                    fileDescriptor: fd, relativePath: relativePath)
+            }
+            guard actualSize == manifestEntry.size else {
                 throw ModelError.trustedReceiptInvalid(
-                    detail: "\(relativePath) manifest size \(manifestEntry.size) != \(expectedSize)")
+                    detail: "\(relativePath) size \(actualSize) != \(manifestEntry.size)")
             }
-            let url = directoryURL
-                .appendingPathComponent("packed_experts")
-                .appendingPathComponent(layer.file)
-            let actualSize = try fileSize(at: url, relativePath: relativePath)
-            guard actualSize == expectedSize else {
-                throw ModelError.trustedReceiptInvalid(
-                    detail: "\(relativePath) size \(actualSize) != \(expectedSize)")
+        }
+    }
+
+    static func validateRuntimeSchema(residentIndex: ResidentIndex,
+                                      layout: PackedExpertsLayout,
+                                      manifest: Manifest,
+                                      config: ArchConfig) throws {
+        guard let quant = manifest.quant else {
+            throw ModelError.indexCorrupt(
+                detail: "manifest.quant is required by the executable runtime schema")
+        }
+
+        func checkedMultiply(_ lhs: UInt64, _ rhs: UInt64, field: String) throws -> UInt64 {
+            let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+            guard !overflow else {
+                throw ModelError.indexCorrupt(detail: "\(field) byte count overflows UInt64")
             }
-            guard layer.experts.count == layout.expertsPerLayer else {
-                throw ModelError.trustedReceiptInvalid(detail: "\(relativePath) expert count mismatch")
+            return value
+        }
+
+        func checkedIntMultiply(_ lhs: Int, _ rhs: Int, field: String) throws -> Int {
+            let (value, overflow) = lhs.multipliedReportingOverflow(by: rhs)
+            guard !overflow else {
+                throw ModelError.indexCorrupt(detail: "\(field) dimension overflows Int")
             }
-            for expert in layer.experts {
-                guard expert.size == layout.expertStride else {
-                    throw ModelError.trustedReceiptInvalid(
-                        detail: "\(relativePath) expert \(expert.expert) size mismatch")
-                }
-                guard expert.offset % pageSize == 0 else {
-                    throw ModelError.trustedReceiptInvalid(
-                        detail: "\(relativePath) expert \(expert.expert) offset is not page-aligned")
-                }
-                guard expert.offset <= actualSize,
-                      expert.size <= actualSize - expert.offset else {
-                    throw ModelError.trustedReceiptInvalid(
-                        detail: "\(relativePath) expert \(expert.expert) range exceeds file size")
+            return value
+        }
+
+        func dimensions(_ rows: Int, _ columns: Int, field: String) throws -> (UInt32, UInt32) {
+            guard let r = UInt32(exactly: rows), let c = UInt32(exactly: columns),
+                  r > 0, c > 0 else {
+                throw ModelError.indexCorrupt(detail: "\(field) has invalid dimensions")
+            }
+            return (r, c)
+        }
+
+        func requireBF16(_ name: String, count: Int) throws {
+            guard let entry = residentIndex.entries[name] else {
+                throw ModelError.indexCorrupt(detail: "missing required resident tensor \(name)")
+            }
+            guard let logicalCount = UInt32(exactly: count), logicalCount > 0 else {
+                throw ModelError.indexCorrupt(detail: "\(name) has invalid dimensions")
+            }
+            let expectedBytes = try checkedMultiply(
+                UInt64(logicalCount), UInt64(MemoryLayout<UInt16>.size), field: name)
+            guard entry.dtype == GTurboFormatV1.DType.bf16.rawValue,
+                  entry.shape.0 == logicalCount,
+                  entry.shape.1 == 0, entry.shape.2 == 0, entry.shape.3 == 0,
+                  entry.sizeBytes == expectedBytes,
+                  entry.scaleOffset == 0, entry.scaleSize == 0,
+                  entry.biasOffset == 0, entry.biasSize == 0,
+                  entry.fileOffset % UInt64(MemoryLayout<UInt16>.alignment) == 0 else {
+                throw ModelError.indexCorrupt(detail: "\(name) does not match the required BF16 schema")
+            }
+        }
+
+        func affineSizes(rows: Int,
+                         columns: Int,
+                         slot: ManifestQuantSlot,
+                         field: String) throws -> (shape: (UInt32, UInt32), weight: UInt64, aux: UInt64) {
+            let shape = try dimensions(rows, columns, field: field)
+            guard slot.weightBits == 4 || slot.weightBits == 8,
+                  slot.groupSize > 0,
+                  columns % slot.groupSize == 0 else {
+                throw ModelError.indexCorrupt(detail: "\(field) has unsupported affine quantization")
+            }
+            let elements = try checkedMultiply(UInt64(rows), UInt64(columns), field: field)
+            let bitCount = try checkedMultiply(elements, UInt64(slot.weightBits), field: field)
+            guard bitCount % 8 == 0 else {
+                throw ModelError.indexCorrupt(detail: "\(field) packed byte count is fractional")
+            }
+            let groups = UInt64(columns / slot.groupSize)
+            let auxElements = try checkedMultiply(UInt64(shape.0), groups, field: field)
+            let auxBytes = try checkedMultiply(
+                auxElements, UInt64(MemoryLayout<UInt16>.size), field: field)
+            return (shape, bitCount / 8, auxBytes)
+        }
+
+        func requireAffine(_ name: String,
+                           rows: Int,
+                           columns: Int,
+                           slot: ManifestQuantSlot) throws {
+            guard let entry = residentIndex.entries[name] else {
+                throw ModelError.indexCorrupt(detail: "missing required resident tensor \(name)")
+            }
+            let expected = try affineSizes(
+                rows: rows, columns: columns, slot: slot, field: name)
+            let primaryAlignment: UInt64 = slot.weightBits == 4
+                ? UInt64(MemoryLayout<UInt16>.alignment)
+                : 1
+            guard entry.dtype == GTurboFormatV1.DType.u32.rawValue,
+                  entry.shape.0 == expected.shape.0,
+                  entry.shape.1 == expected.shape.1,
+                  entry.shape.2 == 0, entry.shape.3 == 0,
+                  entry.sizeBytes == expected.weight,
+                  entry.scaleSize == expected.aux,
+                  entry.biasSize == expected.aux,
+                  entry.fileOffset % primaryAlignment == 0,
+                  entry.scaleOffset % UInt64(MemoryLayout<UInt16>.alignment) == 0,
+                  entry.biasOffset % UInt64(MemoryLayout<UInt16>.alignment) == 0 else {
+                throw ModelError.indexCorrupt(
+                    detail: "\(name) affine metadata mismatch: dtype=\(entry.dtype), shape=[\(entry.shape.0),\(entry.shape.1),\(entry.shape.2),\(entry.shape.3)], bytes=\(entry.sizeBytes), scales=\(entry.scaleSize), biases=\(entry.biasSize), expected shape=[\(expected.shape.0),\(expected.shape.1),0,0], bytes=\(expected.weight), aux=\(expected.aux)")
+            }
+        }
+
+        try requireAffine(
+            "language_model.model.embed_tokens.weight",
+            rows: config.vocabSize,
+            columns: config.hiddenSize,
+            slot: quant.embedding)
+        try requireBF16("language_model.model.norm.weight", count: config.hiddenSize)
+
+        for layer in 0..<config.numLayers {
+            let prefix = "language_model.model.layers.\(layer)"
+            let isFull = config.fullAttentionLayerMask[layer] != 0
+            let headDimension = isFull ? config.fullHeadDim : config.headDim
+            let kvHeads = isFull ? config.numFullKVHeads : config.numKVHeads
+            let queryDimension = try checkedIntMultiply(
+                config.numHeads, headDimension, field: "layer \(layer) query")
+            let kvDimension = try checkedIntMultiply(
+                kvHeads, headDimension, field: "layer \(layer) key/value")
+
+            for name in [
+                "input_layernorm.weight",
+                "post_attention_layernorm.weight",
+                "pre_feedforward_layernorm.weight",
+                "pre_feedforward_layernorm_2.weight",
+                "post_feedforward_layernorm_1.weight",
+                "post_feedforward_layernorm_2.weight",
+                "post_feedforward_layernorm.weight",
+                "router.scale",
+            ] {
+                try requireBF16("\(prefix).\(name)", count: config.hiddenSize)
+            }
+            try requireBF16("\(prefix).self_attn.q_norm.weight", count: headDimension)
+            try requireBF16("\(prefix).self_attn.k_norm.weight", count: headDimension)
+            try requireBF16("\(prefix).router.per_expert_scale", count: config.numExperts)
+            try requireBF16("\(prefix).layer_scalar", count: 1)
+
+            try requireAffine("\(prefix).self_attn.q_proj.weight",
+                              rows: queryDimension, columns: config.hiddenSize,
+                              slot: quant.attention)
+            try requireAffine("\(prefix).self_attn.k_proj.weight",
+                              rows: kvDimension, columns: config.hiddenSize,
+                              slot: quant.attention)
+            if !isFull {
+                try requireAffine("\(prefix).self_attn.v_proj.weight",
+                                  rows: kvDimension, columns: config.hiddenSize,
+                                  slot: quant.attention)
+            }
+            try requireAffine("\(prefix).self_attn.o_proj.weight",
+                              rows: config.hiddenSize, columns: queryDimension,
+                              slot: quant.attention)
+            try requireAffine("\(prefix).mlp.gate_proj.weight",
+                              rows: config.intermediateSize, columns: config.hiddenSize,
+                              slot: quant.sharedExpert)
+            try requireAffine("\(prefix).mlp.up_proj.weight",
+                              rows: config.intermediateSize, columns: config.hiddenSize,
+                              slot: quant.sharedExpert)
+            try requireAffine("\(prefix).mlp.down_proj.weight",
+                              rows: config.hiddenSize, columns: config.intermediateSize,
+                              slot: quant.sharedExpert)
+            try requireAffine("\(prefix).router.proj.weight",
+                              rows: config.numExperts, columns: config.hiddenSize,
+                              slot: quant.router)
+        }
+
+        let routedShapes: [(String, Int, Int)] = [
+            ("gate", config.moeIntermediateSize, config.hiddenSize),
+            ("up", config.moeIntermediateSize, config.hiddenSize),
+            ("down", config.hiddenSize, config.moeIntermediateSize),
+        ]
+        for layer in layout.layers {
+            guard let reference = layer.experts.first else {
+                throw ModelError.indexCorrupt(
+                    detail: "routed layer \(layer.layer) has no experts")
+            }
+            for (role, rows, columns) in routedShapes {
+                let sizes = try affineSizes(
+                    rows: rows, columns: columns,
+                    slot: quant.routedExpert,
+                    field: "routed layer \(layer.layer) \(role)")
+                let expectedRoles: [(String, String, [UInt32], Int?, UInt64, UInt64)] = [
+                    (role, "U32", [sizes.shape.0, sizes.shape.1],
+                     quant.routedExpert.weightBits, sizes.weight,
+                     UInt64(MemoryLayout<UInt32>.alignment)),
+                    ("\(role)_scales", "BF16",
+                     [sizes.shape.0, UInt32(columns / quant.routedExpert.groupSize)],
+                     nil, sizes.aux, UInt64(MemoryLayout<UInt16>.alignment)),
+                    ("\(role)_biases", "BF16",
+                     [sizes.shape.0, UInt32(columns / quant.routedExpert.groupSize)],
+                     nil, sizes.aux, UInt64(MemoryLayout<UInt16>.alignment)),
+                ]
+                for (name, dtype, shape, bits, size, alignment) in expectedRoles {
+                    guard let expected = reference.subTensors[name] else {
+                        throw ModelError.indexCorrupt(
+                            detail: "routed layer \(layer.layer) is missing role \(name)")
+                    }
+                    let (end, overflow) = expected.offset.addingReportingOverflow(expected.size)
+                    guard expected.dtype == dtype,
+                          expected.shape == shape,
+                          expected.bits == bits,
+                          expected.size == size,
+                          expected.offset % alignment == 0,
+                          !overflow,
+                          end <= reference.size,
+                          end <= UInt64(UInt32.max) + 1 else {
+                        throw ModelError.indexCorrupt(
+                            detail: "routed layer \(layer.layer) role \(name) does not match the required schema")
+                    }
+                    for expert in layer.experts.dropFirst()
+                        where expert.subTensors[name] != expected {
+                        throw ModelError.indexCorrupt(
+                            detail: "routed layer \(layer.layer) role \(name) metadata differs across experts")
+                    }
                 }
             }
         }
     }
+
 }
