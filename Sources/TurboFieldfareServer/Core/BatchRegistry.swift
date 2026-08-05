@@ -288,7 +288,7 @@ public actor BatchRegistry {
                            modelID: String) async throws {
         guard var job = jobs[id] else { return }
         if job.outputFileID == nil {
-            let outputFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+            let outputFileID = "file-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let outputURL = outputDirectory.appendingPathComponent(outputFileID).appendingPathExtension("jsonl")
             try Data().write(to: outputURL, options: .withoutOverwriting)
             job.outputFileID = outputFileID
@@ -311,7 +311,7 @@ public actor BatchRegistry {
         guard var job = jobs[id] else { return }
         do {
             if job.errorFileID == nil {
-                let errorFileID = "file_" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+                let errorFileID = "file-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
                 let errorURL = outputDirectory.appendingPathComponent(errorFileID).appendingPathExtension("jsonl")
                 try Data().write(to: errorURL, options: .withoutOverwriting)
                 job.errorFileID = errorFileID

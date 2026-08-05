@@ -538,6 +538,7 @@ struct HTTPServerTests {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(status == "completed")
+        #expect(outputFileID?.hasPrefix("file-") == true)
         #expect((usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int == 0)
         let outputData = try await URLSession.shared.data(
             from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(try #require(outputFileID))/content")!).0
