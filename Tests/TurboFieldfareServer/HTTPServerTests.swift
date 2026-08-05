@@ -628,7 +628,8 @@ struct HTTPServerTests {
         let channel = try await server.start(port: 0)
         let port = try #require(channel.localAddress?.port)
         let boundary = "batch-test-boundary"
-        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n" +
+            #"{"custom_id":"row-2","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"again"}]}}"# + "\n"
         let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
         var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
         upload.httpMethod = "POST"
@@ -652,6 +653,7 @@ struct HTTPServerTests {
         #expect(batch["model"] as? String == "test-model")
         #expect(batch["input_file_id"] as? String == fileID)
         #expect(batch["completion_window"] as? String == "24h")
+        #expect((batch["request_counts"] as? [String: Any])?["total"] as? Int == 2)
         #expect(batch["errors"] is NSNull || batch["errors"] == nil)
         #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
         let batchID = try #require(batch["id"] as? String)
@@ -671,6 +673,9 @@ struct HTTPServerTests {
             from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(output)")!).0
         let outputObject = try #require(JSONSerialization.jsonObject(with: outputFile) as? [String: Any])
         #expect((outputObject["expires_at"] as? Int ?? 0) > (outputObject["created_at"] as? Int ?? 0))
+        let outputLines = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(output)/content")!).0
+        #expect(String(decoding: outputLines, as: UTF8.self).split(separator: "\n").count == 2)
         try await server.shutdown()
     }
 
