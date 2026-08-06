@@ -3,15 +3,18 @@ import TurboFieldfareRepackCore
 
 private let usage = """
 Usage:
-  TurboFieldfareRepack --output <model.gturbo> [--overwrite] [--resume]
+  TurboFieldfareRepack --output <model.gturbo> [--overwrite] [--resume] [--repo-id <owner/repo>] [--revision <ref>]
   TurboFieldfareRepack --discard-partial --output <model.gturbo>
   TurboFieldfareRepack --verify-install --input-gturbo <model.gturbo>
   TurboFieldfareRepack --help
 
-The installer streams the supported Gemma 4 checkpoint from Hugging Face and
-repackages it without materializing the source checkpoint on disk. Set HF_TOKEN
-only if Hugging Face requests authentication. A cancelled or interrupted
-download can be continued with --resume or removed with --discard-partial.
+The installer streams a Gemma 4 checkpoint from Hugging Face and repackages
+it without materializing the source checkpoint on disk. By default the
+installer uses the curated, pinned source. Use --repo-id and optionally
+--revision to target an alternative Hugging Face repo (for example the
+QAT variant). Set HF_TOKEN only if Hugging Face requests authentication. A
+cancelled or interrupted download can be continued with --resume or removed
+with --discard-partial.
 """
 
 private struct Arguments {
@@ -21,6 +24,10 @@ private struct Arguments {
     var discardPartial = false
     var verifyInstall = false
     var inputGTurbo: String?
+    /// Optional override to fetch from a different Hugging Face repo (owner/repo)
+    var repoID: String?
+    /// Optional revision (branch, tag, or commit). If omitted and repoID is set, defaults to "main".
+    var revision: String?
 
     static func parse(_ values: [String]) throws -> Arguments {
         var parsed = Arguments()
@@ -42,14 +49,17 @@ private struct Arguments {
             case "--verify-install":
                 parsed.verifyInstall = true
                 index += 1
-            case "--output", "--input-gturbo":
+            case "--output", "--input-gturbo", "--repo-id", "--revision":
                 guard index + 1 < values.count else {
                     throw ParseError.missingValue(flag)
                 }
-                if flag == "--output" {
-                    parsed.output = values[index + 1]
-                } else {
-                    parsed.inputGTurbo = values[index + 1]
+                let value = values[index + 1]
+                switch flag {
+                case "--output": parsed.output = value
+                case "--input-gturbo": parsed.inputGTurbo = value
+                case "--repo-id": parsed.repoID = value
+                case "--revision": parsed.revision = value
+                default: break
                 }
                 index += 2
             default:
@@ -147,14 +157,33 @@ private func run(_ values: [String]) async -> Int32 {
     }
 
     guard let output = arguments.output else { return 2 }
-    let options = SupportedModelSource.installOptions(
-        outputDirectory: URL(fileURLWithPath: output),
-        overwrite: arguments.overwrite,
-        token: ProcessInfo.processInfo.environment["HF_TOKEN"],
-        resume: arguments.resume)
+
+    // If the user provided a custom Hugging Face repo or revision, use that.
+    // This enables installing alternative checkpoints such as QAT variants.
+    let options: RemoteStreamingRepackOptions
+    if let repoID = arguments.repoID {
+        let revision = arguments.revision ?? "main"
+        options = RemoteStreamingRepackOptions(
+            repoID: repoID,
+            revision: revision,
+            outputDir: URL(fileURLWithPath: output).path,
+            token: ProcessInfo.processInfo.environment["HF_TOKEN"],
+            requireKnownSource: false,
+            minFreeReserveBytes: SupportedModelSource.reserveBytes,
+            overwrite: arguments.overwrite,
+            resume: arguments.resume)
+    } else {
+        options = SupportedModelSource.installOptions(
+            outputDirectory: URL(fileURLWithPath: output),
+            overwrite: arguments.overwrite,
+            token: ProcessInfo.processInfo.environment["HF_TOKEN"],
+            resume: arguments.resume)
+    }
+
     do {
         let result = try await RemoteStreamingRepacker(options: options).run()
-        print("Installed \(SupportedModelSource.displayName)")
+        let installedName = arguments.repoID == nil ? SupportedModelSource.displayName : "Custom: \(options.repoID)@\(options.revision)"
+        print("Installed \(installedName)")
         print("Source revision: \(result.resolvedCommit)")
         print("Model: \(result.outputDir)")
         return 0
