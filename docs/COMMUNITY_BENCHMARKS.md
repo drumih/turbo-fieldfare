@@ -141,6 +141,9 @@ all affect decode speed.
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 61 / 511 | 7.802 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 430 / 669 | 7.173 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 3,015 / 604 | 6.093 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #94](https://github.com/drumih/turbo-fieldfare/issues/94) | M1 Mac mini | 16 GB | Internal 512 GB SSD | 61 / 511 | 6.754 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #94](https://github.com/drumih/turbo-fieldfare/issues/94) | M1 Mac mini | 16 GB | Internal 512 GB SSD | 430 / 669 | 6.265 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #94](https://github.com/drumih/turbo-fieldfare/issues/94) | M1 Mac mini | 16 GB | Internal 512 GB SSD | 3,015 / 604 | 5.570 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 61 / 511 | 9.477 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 430 / 669 | 8.576 tok/s | One submitted run |
 | [Felix Li](https://github.com/dt1dr) · [issue #37](https://github.com/drumih/turbo-fieldfare/issues/37) | M1 Pro MacBook Pro | 16 GB | Internal SSD | 3,015 / 604 | 7.805 tok/s | One submitted run |
@@ -156,6 +159,9 @@ all affect decode speed.
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 61 / 516 | 19.09 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 430 / 780 | 16.50 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 3,015 / 617 | 13.88 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 61 / 516 | 10.847 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 430 / 780 | 9.878 tok/s | One submitted run |
+| [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 3,015 / 617 | 8.658 tok/s | One submitted run |
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 61 / 516 | 11.38 tok/s | Median of five runs |
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 430 / 780 | 8.43 tok/s | Median of five runs |
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 3,015 / 617 | 8.58 tok/s | Median of five runs |
