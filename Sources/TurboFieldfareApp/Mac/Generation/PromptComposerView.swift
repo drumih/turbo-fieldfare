@@ -51,11 +51,12 @@ struct PromptComposerView: View {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
                     // padding, no vertical inset.
-                    Text("Prompt")
+                    Text("Ask anything…")
                         .font(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
     }
@@ -81,13 +82,14 @@ struct PromptComposerView: View {
         Button {
             showingPromptTips.toggle()
         } label: {
-            Label("Prompt tips", systemImage: "questionmark.circle")
-                .labelStyle(.iconOnly)
+            Image(systemName: "questionmark.circle")
                 .frame(width: 28, height: 28)
                 .contentShape(Circle())
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)
+        .accessibilityLabel("Prompt tips")
+        .accessibilityHint("Shows guidance for writing effective prompts")
         .help("Prompt tips")
         .popover(isPresented: $showingPromptTips,
                  attachmentAnchor: .point(.top),
@@ -133,25 +135,27 @@ struct PromptComposerView: View {
             Button {
                 model.clearOutput()
             } label: {
-                Label("Clear output", systemImage: "trash")
-                    .labelStyle(.iconOnly)
+                Image(systemName: "trash")
                     .frame(width: 28, height: 28)
                     .contentShape(Circle())
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Clear output")
+            .accessibilityHint("Removes the conversation transcript and last-run metrics")
             .help("Clear output")
         } else if !model.isRunning && !model.promptText.isEmpty {
             Button {
                 model.promptText = ""
                 promptFocused = true
             } label: {
-                Label("Clear prompt", systemImage: "xmark.circle.fill")
-                    .labelStyle(.iconOnly)
+                Image(systemName: "xmark.circle.fill")
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 28, height: 28)
                     .contentShape(Circle())
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Clear prompt")
+            .accessibilityHint("Clears the prompt editor")
             .help("Clear prompt")
         }
     }

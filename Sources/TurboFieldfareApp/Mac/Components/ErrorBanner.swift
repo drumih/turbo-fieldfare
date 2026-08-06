@@ -18,13 +18,14 @@ struct ErrorBanner: View {
                 Button {
                     model.error = nil
                 } label: {
-                    Label("Dismiss error", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "xmark")
                         .font(.caption.weight(.semibold))
                         .frame(width: 28, height: 28)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss error")
+                .help("Dismiss error")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

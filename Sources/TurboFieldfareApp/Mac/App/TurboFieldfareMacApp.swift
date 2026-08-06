@@ -59,16 +59,16 @@ struct TurboFieldfareMacApp: App {
                     .disabled(!model.canUnloadModel)
             }
             CommandMenu("Settings") {
-                Picker("Send Message With", selection: newlineShortcutBinding) {
+                Picker("Send with", selection: newlineShortcutBinding) {
                     ForEach(AppNewlineShortcut.sendMessageOptions) { shortcut in
                         Text(shortcut.sendMessageLabel).tag(shortcut)
                     }
                 }
-                Picker("Prompt Examples", selection: showPromptExamplesBinding) {
+                Picker("Prompt examples", selection: showPromptExamplesBinding) {
                     Text("Show").tag(true)
                     Text("Hide").tag(false)
                 }
-                Picker("After Sending", selection: sentPromptBehaviorBinding) {
+                Picker("After sending", selection: sentPromptBehaviorBinding) {
                     ForEach(AppSentPromptBehavior.allCases) { behavior in
                         Text(behavior.settingsLabel).tag(behavior)
                     }

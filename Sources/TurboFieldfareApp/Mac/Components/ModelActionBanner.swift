@@ -20,6 +20,7 @@ struct ModelActionBanner: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .accessibilityLabel(buttonTitle(for: action))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

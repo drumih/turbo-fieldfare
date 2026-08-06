@@ -100,7 +100,7 @@ struct OutputPaneView: View {
         .accessibilityLabel(responseCopyFeedbackID == nil
                             ? "Copy response"
                             : "Response copied")
-        .accessibilityHint("Copies only the generated answer")
+        .accessibilityHint("Copies only the generated assistant reply")
         .help(responseCopyFeedbackID == nil
               ? "Copy response"
               : "Response copied")
@@ -109,9 +109,9 @@ struct OutputPaneView: View {
     private var emptyPlaceholderContent: some View {
         VStack(spacing: 8) {
             if !needsModelLoad {
-                Text("Choose a predefined example or write your own prompt.")
+                Text("Choose an example below or write your own prompt.")
                     .font(.headline)
-                Text("Describe the goal, relevant context, and any constraints.")
+                Text("Describe the goal, relevant context, and any constraints. Then press Generate.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -483,9 +483,9 @@ private struct TranscriptPreview: View {
         Image(systemName: "cube.transparent")
             .font(.title2)
             .foregroundStyle(.quaternary)
-        Text("Choose a predefined example or write your own prompt.")
+        Text("Choose an example below or write your own prompt.")
             .font(.headline)
-        Text("Describe the goal, relevant context, and any constraints.")
+        Text("Describe the goal, relevant context, and any constraints. Then press Generate.")
             .foregroundStyle(.secondary)
     }
     .frame(width: 720, height: 420)

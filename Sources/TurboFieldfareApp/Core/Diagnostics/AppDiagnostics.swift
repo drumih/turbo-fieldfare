@@ -9,6 +9,19 @@ public enum AppStopReason: String, Equatable, Sendable {
     case endOfTurn
     case stopString
     case toolCalls
+
+    /// Short user-facing label for HUD and Last run (not the wire rawValue).
+    public var displayLabel: String {
+        switch self {
+        case .maxTokens: return "length limit"
+        case .cancelled: return "cancelled"
+        case .failed: return "error"
+        case .eos: return "end of sequence"
+        case .endOfTurn: return "finished"
+        case .stopString: return "stop sequence"
+        case .toolCalls: return "tool call"
+        }
+    }
 }
 
 public struct AppRunnerDiagnostics: Equatable, Sendable {

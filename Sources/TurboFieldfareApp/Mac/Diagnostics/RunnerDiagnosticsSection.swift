@@ -11,7 +11,7 @@ struct RunnerDiagnosticsSection: View {
                 DiagnosticRow("Settings", diagnostics.runtimeOptions.resultSummary, multiline: true)
                 DiagnosticRow("Prompt tokens", diagnostics.promptTokenCount.map(String.init) ?? "unknown")
                 DiagnosticRow("Output tokens", "\(diagnostics.generatedTokens)")
-                DiagnosticRow("Stop", diagnostics.stopReason.rawValue)
+                DiagnosticRow("Stop", diagnostics.stopReason.displayLabel)
 
                 groupLabel("Performance")
                 DiagnosticRow("Prompt prefill", MetricFormat.seconds(diagnostics.prefillSeconds))
@@ -21,8 +21,14 @@ struct RunnerDiagnosticsSection: View {
                         "\(MetricFormat.rate(prefillRate)) tok/s",
                         help: "Prompt tokens divided by prefill time. Compare runs with similar prompt lengths and settings; short prompts include proportionally more fixed overhead.")
                 }
-                DiagnosticRow("First token wait", MetricFormat.seconds(diagnostics.timeToFirstTokenSeconds))
-                DiagnosticRow("Request TTFT", MetricFormat.seconds(diagnostics.requestStartTimeToFirstTokenSeconds))
+                DiagnosticRow(
+                    "First token wait",
+                    MetricFormat.seconds(diagnostics.timeToFirstTokenSeconds),
+                    help: "Time from the end of prompt prefill until the first generated token.")
+                DiagnosticRow(
+                    "Time to first token",
+                    MetricFormat.seconds(diagnostics.requestStartTimeToFirstTokenSeconds),
+                    help: "Time from starting the request through prefill until the first generated token.")
                 DiagnosticRow("Decode duration", MetricFormat.seconds(diagnostics.decodeSeconds))
                 DiagnosticRow("Decode rate", "\(MetricFormat.rate(diagnostics.tokensPerSecond)) tok/s")
                 DiagnosticRow("Peak memory", MetricFormat.memory(diagnostics.peakMemoryBytes))

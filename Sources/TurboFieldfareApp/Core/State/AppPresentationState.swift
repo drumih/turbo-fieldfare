@@ -120,8 +120,11 @@ public struct AppPresentationState: Equatable, Sendable {
                             severity: .error)
             }
             if case .insufficientSpace(let requirement) = snapshot.installReadiness {
+                let shortfall = ByteCountFormatter.string(
+                    fromByteCount: Int64(clamping: requirement.shortfallBytes),
+                    countStyle: .file)
                 return Self(label: "Not enough storage",
-                            detail: "\(requirement.shortfallBytes) bytes more required",
+                            detail: "\(shortfall) more required",
                             severity: .warning)
             }
             if case .checking = snapshot.installReadiness {
@@ -174,7 +177,7 @@ public struct AppPresentationState: Equatable, Sendable {
 
         if case .ready = snapshot.loadState {
             if let reason = snapshot.lastStopReason {
-                return Self(label: "Done · \(reason.rawValue)", severity: .success,
+                return Self(label: "Done · \(reason.displayLabel)", severity: .success,
                             secondaryAction: .unload)
             }
             return Self(label: "Ready", severity: .success, secondaryAction: .unload)

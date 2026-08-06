@@ -223,9 +223,9 @@ public final class AppModel {
         case (false, true):
             return "You:\n\(outputPromptText)"
         case (true, false):
-            return "Answer:\n\(response)"
+            return "Assistant:\n\(response)"
         case (false, false):
-            return "You:\n\(outputPromptText)\n\nAnswer:\n\(response)"
+            return "You:\n\(outputPromptText)\n\nAssistant:\n\(response)"
         }
     }
 

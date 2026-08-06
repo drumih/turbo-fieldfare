@@ -63,9 +63,11 @@ struct PromptExamplesView: View {
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(.separator.opacity(0.35), lineWidth: 0.5)
             }
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(preset.title)
             .accessibilityValue(preset.prompt)
-            .accessibilityHint("Copies this prompt into the prompt editor")
+            .accessibilityHint("Inserts this example into the prompt editor")
+            .accessibilityAddTraits(.isButton)
         }
     }
 
