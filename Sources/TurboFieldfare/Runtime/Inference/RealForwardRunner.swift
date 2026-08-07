@@ -940,10 +940,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                         hiddenStrideElements: UInt32(D))
 
                     cb.commit()
-                    waitForCompletion(cb)
-                    if let error = cb.error {
-                        throw error
-                    }
+                    try waitForCompletion(cb)
 
                     let routeCount = t * cfg.topKExperts
                     let idPtr = scratch.routeIDs.contents()
@@ -1008,10 +1005,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                            d: UInt32(D),
                                            eps: eps)
                     sharedCB.commit()
-                    waitForCompletion(sharedCB)
-                    if let error = sharedCB.error {
-                        throw error
-                    }
+                    try waitForCompletion(sharedCB)
 
                     let metadata = try prefillGroupedMoE.makeStreamedMetadataBuffers(
                         device: ctx.device,
@@ -1028,11 +1022,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     func drainOldestPendingTile() throws {
                         guard !pendingTiles.isEmpty else { return }
                         let pending = pendingTiles.removeFirst()
-                        withExtendedLifetime((pending.fetch, pending.argumentBuffer)) {
-                            waitForCompletion(pending.commandBuffer)
-                        }
-                        if let error = pending.commandBuffer.error {
-                            throw error
+                        try withExtendedLifetime((pending.fetch, pending.argumentBuffer)) {
+                            try waitForCompletion(pending.commandBuffer)
                         }
                         if !pending.fetch.plannedMissSlots.isEmpty {
                             try tileLifetime.complete(tileIndex: pending.tileIndex)
@@ -1182,11 +1173,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                             eps: eps,
                                             layerScalar: Quantization.bf16ToFloat(scalarBits))
                     tailCB.commit()
-                    withExtendedLifetime(metadata) {
-                        waitForCompletion(tailCB)
-                    }
-                    if let error = tailCB.error {
-                        throw error
+                    try withExtendedLifetime(metadata) {
+                        try waitForCompletion(tailCB)
                     }
                     if L + 1 < cfg.numLayers {
                         guard let nextCB = ctx.queue.makeCommandBuffer() else {
@@ -1239,10 +1227,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                  rmsEps: eps)
             }
             finalCB.commit()
-            waitForCompletion(finalCB)
-            if let error = finalCB.error {
-                throw error
-            }
+            try waitForCompletion(finalCB)
             if outputMode == .greedyIfAvailable, useFusedGreedyHead {
                 lastGreedyToken = greedyTokenBuf.contents().load(as: UInt32.self)
             }
@@ -1279,30 +1264,23 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         var pendingRoutedCommand: PendingRoutedCommand?
 
         func finishPendingRoutedCommand(_ pending: PendingRoutedCommand,
-                                        waitIfNeeded: Bool) {
+                                        waitIfNeeded: Bool) throws {
             if waitIfNeeded {
-                func wait(_ cb: MTLCommandBuffer) {
-                    waitForCompletion(cb)
-                }
                 if let sharedCB = pending.sharedCB {
-                    wait(sharedCB)
+                    waitUntilCompleted(sharedCB)
                 }
                 if let phase1HitCB = pending.phase1HitCB {
-                    wait(phase1HitCB)
+                    waitUntilCompleted(phase1HitCB)
                 }
-                wait(pending.cb)
-            } else if let err = pending.cb.error {
-                print("CB error: \(err)")
+                waitUntilCompleted(pending.cb)
             }
             if let sharedCB = pending.sharedCB {
-                if let err = sharedCB.error {
-                    print("CB error: \(err)")
-                }
+                try Self.checkCommandBufferError(sharedCB.error)
             }
-            if let phase1HitCB = pending.phase1HitCB,
-               let err = phase1HitCB.error {
-                print("CB error: \(err)")
+            if let phase1HitCB = pending.phase1HitCB {
+                try Self.checkCommandBufferError(phase1HitCB.error)
             }
+            try Self.checkCommandBufferError(pending.cb.error)
             totalCb2Nanos &+= pending.encodeAndCommitNanos
         }
 
@@ -1314,7 +1292,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         // Embed lookup + sqrt(H) fused.
         let emb = model.embedding
         do {
-            runSync { cb in
+            try runSync { cb in
                 embedInt4.encode(commandBuffer: cb,
                                  table:  emb.buffer, tableOffset:  Int(emb.offset),
                                  scales: emb.buffer, scalesOffset: Int(emb.scaleOffset),
@@ -1491,12 +1469,13 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             gRouter(cb)
             cb.commit()
             let tWait = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-            waitForCompletion(cb)
+            waitUntilCompleted(cb)
             let waitNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tWait
             if let pending = pendingRoutedCommand {
-                finishPendingRoutedCommand(pending, waitIfNeeded: false)
+                try finishPendingRoutedCommand(pending, waitIfNeeded: false)
                 pendingRoutedCommand = nil
             }
+            try Self.checkCommandBufferError(cb.error)
             totalCb1Nanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tCb1Start - waitNanos
 
             // CPU readback to fetch routed-expert blobs from disk.
@@ -1714,7 +1693,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             continue
         }
         if let pending = pendingRoutedCommand {
-            finishPendingRoutedCommand(pending, waitIfNeeded: true)
+            try finishPendingRoutedCommand(pending, waitIfNeeded: true)
             pendingRoutedCommand = nil
         }
 
@@ -1750,11 +1729,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             let useFusedHeadForThisToken = useFusedGreedyHead && outputMode == .greedyIfAvailable
             let tHead = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             if useFusedHeadForThisToken {
-                runSync(gFusionHead)
+                try runSync(gFusionHead)
                 totalHeadFusedNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tHead
                 lastGreedyToken = greedyTokenBuf.contents().load(as: UInt32.self)
             } else {
-                runSync { cb in
+                try runSync { cb in
                     gFinalNorm(cb)
                     gLmHead(cb)
                 }
@@ -1765,20 +1744,25 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         kv?.advance()
     }
 
-    private func runSync(_ body: (MTLCommandBuffer) -> Void) {
+    private func runSync(_ body: (MTLCommandBuffer) -> Void) throws {
         let cb = ctx.queue.makeCommandBuffer()!
         body(cb)
         cb.commit()
-        cb.waitUntilCompleted()
-        if let err = cb.error {
-            print("CB error: \(err)")
-        }
+        try waitForCompletion(cb)
     }
 
-    private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) {
+    private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
+        waitUntilCompleted(cb)
+        try Self.checkCommandBufferError(cb.error)
+    }
+
+    private nonisolated func waitUntilCompleted(_ cb: MTLCommandBuffer) {
         cb.waitUntilCompleted()
-        if let err = cb.error {
-            print("CB error: \(err)")
+    }
+
+    nonisolated static func checkCommandBufferError(_ error: (any Error)?) throws {
+        if let error {
+            throw error
         }
     }
 
