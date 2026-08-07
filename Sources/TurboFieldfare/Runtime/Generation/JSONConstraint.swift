@@ -8,9 +8,11 @@ import Foundation
 /// UTF-8 continuation bytes, so a codepoint split across two tokens is
 /// accepted byte by byte.
 ///
-/// The grammar is RFC 8259 JSON with one permissive edge: `\uXXXX` escapes are
-/// validated as four hex digits without pairing surrogates. Root may be any
-/// JSON value. A root-level bare number is the one case where "complete"
+/// The grammar is RFC 8259 JSON with surrogate pairing enforced in `\uXXXX`
+/// escapes: a high surrogate must be followed immediately by `\u` + a low
+/// surrogate, and a lone low surrogate is rejected — Foundation's JSON
+/// parsers refuse lone surrogates, so allowing them would break the
+/// decodable-output guarantee. Root may be any JSON value. A root-level bare number is the one case where "complete"
 /// cannot be decided without lookahead (more digits may follow); `canStop`
 /// reports it as stoppable while `isComplete` stays false until a terminator
 /// byte lands.
@@ -61,7 +63,9 @@ public struct JSONByteAutomaton: Sendable, Equatable {
         case expectColon
         case inString(isKey: Bool, utf8: UTF8Pending?)
         case stringEscape(isKey: Bool)
-        case stringUnicode(isKey: Bool, remaining: Int)
+        case stringUnicode(isKey: Bool, remaining: Int, value: UInt16, expectLow: Bool)
+        // A completed high surrogate owes exactly `\` + `u` + a low escape.
+        case stringHighSurrogate(isKey: Bool, sawBackslash: Bool)
         case inNumber(NumberPhase)
         case inLiteral([UInt8])   // remaining bytes of true/false/null
         case afterValue
@@ -144,17 +148,41 @@ public struct JSONByteAutomaton: Sendable, Equatable {
                 mode = .inString(isKey: isKey, utf8: nil)
                 return true
             case UInt8(ascii: "u"):
-                mode = .stringUnicode(isKey: isKey, remaining: 4)
+                mode = .stringUnicode(isKey: isKey, remaining: 4, value: 0, expectLow: false)
                 return true
             default:
                 return false
             }
 
-        case .stringUnicode(let isKey, let remaining):
-            guard isHexDigit(byte) else { return false }
-            mode = remaining == 1
-                ? .inString(isKey: isKey, utf8: nil)
-                : .stringUnicode(isKey: isKey, remaining: remaining - 1)
+        case .stringUnicode(let isKey, let remaining, let value, let expectLow):
+            guard let digit = hexValue(byte) else { return false }
+            let accumulated = value << 4 | UInt16(digit)
+            if remaining > 1 {
+                mode = .stringUnicode(isKey: isKey, remaining: remaining - 1,
+                                      value: accumulated, expectLow: expectLow)
+                return true
+            }
+            let isHigh = (0xD800...0xDBFF).contains(accumulated)
+            let isLow = (0xDC00...0xDFFF).contains(accumulated)
+            if expectLow {
+                guard isLow else { return false }
+                mode = .inString(isKey: isKey, utf8: nil)
+                return true
+            }
+            if isLow { return false }               // lone low surrogate
+            mode = isHigh
+                ? .stringHighSurrogate(isKey: isKey, sawBackslash: false)
+                : .inString(isKey: isKey, utf8: nil)
+            return true
+
+        case .stringHighSurrogate(let isKey, let sawBackslash):
+            if !sawBackslash {
+                guard byte == UInt8(ascii: "\\") else { return false }
+                mode = .stringHighSurrogate(isKey: isKey, sawBackslash: true)
+                return true
+            }
+            guard byte == UInt8(ascii: "u") else { return false }
+            mode = .stringUnicode(isKey: isKey, remaining: 4, value: 0, expectLow: true)
             return true
 
         case .inNumber(let phase):
@@ -289,10 +317,13 @@ public struct JSONByteAutomaton: Sendable, Equatable {
         byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
     }
 
-    private func isHexDigit(_ byte: UInt8) -> Bool {
-        (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
-            || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
-            || (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(byte)
+    private func hexValue(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): return byte - UInt8(ascii: "0")
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): return byte - UInt8(ascii: "a") + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): return byte - UInt8(ascii: "A") + 10
+        default: return nil
+        }
     }
 }
 

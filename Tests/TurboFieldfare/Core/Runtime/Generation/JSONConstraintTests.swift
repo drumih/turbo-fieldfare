@@ -404,3 +404,74 @@ import Foundation
         #expect(assembler.push([UInt8(ascii: "b")]) == "b")
     }
 }
+
+/// Surrogate pairing in \uXXXX escapes: Foundation's JSON parsers reject
+/// lone surrogates, so the automaton must too.
+@Suite struct JSONAutomatonSurrogateTests {
+
+    private func feed(_ automaton: inout JSONByteAutomaton, _ text: String) -> Bool {
+        for byte in Array(text.utf8) {
+            guard automaton.consume(byte) else { return false }
+        }
+        return true
+    }
+
+    private func step(_ automaton: inout JSONByteAutomaton, _ byte: UInt8) -> Bool {
+        automaton.consume(byte)
+    }
+
+    @Test func pairedSurrogatesAccepted() {
+        var automaton = JSONByteAutomaton()
+        // Escaped pair for U+1F600 (😀): high \ud83d + low \ude00.
+        #expect(feed(&automaton, "{\"s\": \"\\ud83d\\ude00\"}"))
+        #expect(automaton.isComplete)
+    }
+
+    @Test func loneHighSurrogateCannotCloseString() {
+        var automaton = JSONByteAutomaton()
+        #expect(feed(&automaton, #"{"s": "\ud800"#))
+        // After a high surrogate only `\` is legal — not a quote, not text.
+        #expect(!step(&automaton, UInt8(ascii: "\"")))
+        #expect(!step(&automaton, UInt8(ascii: "a")))
+        #expect(step(&automaton, UInt8(ascii: "\\")))
+        // …and after the backslash, only `u`.
+        #expect(!step(&automaton, UInt8(ascii: "n")))
+        #expect(step(&automaton, UInt8(ascii: "u")))
+    }
+
+    @Test func loneLowSurrogateRejectedAtFinalDigit() {
+        var automaton = JSONByteAutomaton()
+        #expect(feed(&automaton, #"{"s": "\udc0"#))
+        #expect(!step(&automaton, UInt8(ascii: "0")))
+        // A non-surrogate completion from the same prefix stays legal:
+        // \udc0 can't be saved, but the rejection must not corrupt state —
+        // hex digits beyond the range are equally rejected…
+        #expect(!step(&automaton, UInt8(ascii: "f")))
+    }
+
+    @Test func highSurrogateFollowedByNonLowEscapeRejected() {
+        var automaton = JSONByteAutomaton()
+        #expect(feed(&automaton, #"{"s": "\ud800\u004"#))
+        #expect(!step(&automaton, UInt8(ascii: "1")))   // A is not low
+        #expect(!step(&automaton, UInt8(ascii: "0")))
+    }
+
+    @Test func highSurrogateFollowedByHighRejected() {
+        var automaton = JSONByteAutomaton()
+        // The verdict lands on the fourth hex digit: \ud80_ can only be a
+        // high surrogate, which is not a valid pair completion.
+        #expect(feed(&automaton, #"{"s": "\ud800\ud80"#))
+        #expect(!step(&automaton, UInt8(ascii: "0")))
+        // A proper pair from scratch works: \ud800 + \udc00 = U+10000.
+        var paired = JSONByteAutomaton()
+        #expect(feed(&paired, "{\"s\": \"\\ud800\\udc00\"}"))
+        #expect(paired.isComplete)
+    }
+
+    @Test func nonSurrogateEscapesUnaffected() {
+        var automaton = JSONByteAutomaton()
+        // \u00e9 (é) and \ud7ff (last scalar before the surrogate range).
+        #expect(feed(&automaton, "{\"s\": \"\\u00e9\\ud7ff\"}"))
+        #expect(automaton.isComplete)
+    }
+}

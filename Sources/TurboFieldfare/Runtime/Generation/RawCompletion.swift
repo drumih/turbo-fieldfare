@@ -219,7 +219,11 @@ public func runRawCompletion(producer: any LogitProducer,
         uncommittedBoundaryTokenIDs = [tokenID]
 
         if tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID) {
-            if tokenID == tokenizer.endOfTurnID {
+            if jsonFilter != nil {
+                // Grammar-gated stops always mean "the JSON may end here";
+                // .toolCalls/.endOfTurn semantics don't apply to forced JSON.
+                reason = .eos
+            } else if tokenID == tokenizer.endOfTurnID {
                 reason = .endOfTurn
             } else if tokenID == tokenizer.toolResponseID {
                 reason = .toolCalls
