@@ -174,6 +174,9 @@ all affect decode speed.
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 61 / 516 | 33.379 tok/s | High Power mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 430 / 780 | 30.614 tok/s | High Power mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 3,015 / 617 | 25.230 tok/s | High Power mode |
+| [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 61 / 497 | 37.426 tok/s | One submitted run |
+| [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 430 / 721 | 34.194 tok/s | One submitted run |
+| [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 3,015 / 610 | 31.485 tok/s | One submitted run |
 
 These submissions use the public community prompts and generate until the end
 of the model turn. Compare rows only when the prompt and generated-token counts
