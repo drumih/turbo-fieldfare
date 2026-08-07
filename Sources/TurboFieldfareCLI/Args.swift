@@ -12,6 +12,7 @@ public struct Args: Equatable, Sendable {
     public var repetitionPenalty: Float
     public var seed: UInt64?
     public var stops: [String]
+    public var forceJSON: Bool
     public var quiet: Bool
     public var expertCacheSlots: Int
     public var expertCachePolicy: RuntimeExpertCachePolicy
@@ -30,6 +31,7 @@ public struct Args: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stops: [String] = [],
+                forceJSON: Bool = false,
                 quiet: Bool = false,
                 expertCacheSlots: Int = RuntimeConfiguration.production.expertCacheSlots,
                 expertCachePolicy: RuntimeExpertCachePolicy = RuntimeConfiguration.production.expertCachePolicy,
@@ -47,6 +49,7 @@ public struct Args: Equatable, Sendable {
         self.repetitionPenalty = repetitionPenalty
         self.seed = seed
         self.stops = stops
+        self.forceJSON = forceJSON
         self.quiet = quiet
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
@@ -98,6 +101,8 @@ extension Args {
       --repetition-penalty <f>   Repetition penalty (default 1.0).
       --seed <uint64>            Deterministic sampling seed (default off).
       --stop <string>            Stop substring (repeatable).
+      --force-json               Constrain decoding to grammar-valid JSON;
+                                 EOS is forced when the root value closes.
       --quiet                    Suppress the timing footer.
       --expert-cache-slots <n>   Expert-cache slots: 8, 16, 24, or 32 (default 16).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
@@ -146,6 +151,7 @@ extension Args {
         var repetitionPenalty: Float = 1.0
         var seed: UInt64?
         var stops: [String] = []
+        var forceJSON = false
         var quiet = false
         let runtimeDefaults = RuntimeConfiguration.production
         var expertCacheSlots = runtimeDefaults.expertCacheSlots
@@ -213,6 +219,9 @@ extension Args {
                 seed = parsed
             case "--stop":
                 stops.append(try takeValue(argv, &index, flag: flag))
+            case "--force-json":
+                forceJSON = true
+                index += 1
             case "--expert-cache-slots":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value),
@@ -272,6 +281,7 @@ extension Args {
                              repetitionPenalty: repetitionPenalty,
                              seed: seed,
                              stops: stops,
+                             forceJSON: forceJSON,
                              quiet: quiet,
                              expertCacheSlots: expertCacheSlots,
                              expertCachePolicy: expertCachePolicy,

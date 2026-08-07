@@ -62,9 +62,10 @@ public struct RawCompletionScratch: @unchecked Sendable {
 extension GenerationConfig {
     /// A pure-greedy config can use the fused head's GPU argmax
     /// (`RealForwardRunner.lastGreedyToken`) instead of sampling from the
-    /// logits buffer. Anything else needs real logits.
+    /// logits buffer. Anything else — including JSON-constrained decoding,
+    /// which must inspect and veto candidates — needs real logits.
     public var isPureGreedy: Bool {
-        temperature == 0 && repetitionPenalty == 1
+        temperature == 0 && repetitionPenalty == 1 && !forceJSON
     }
 
 }
@@ -174,6 +175,7 @@ public func runRawCompletion(producer: any LogitProducer,
 
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
+    let jsonFilter = config.forceJSON ? JSONTokenFilter(tokenizer: tokenizer) : nil
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
     var reason: StopReason = .maxTokens
@@ -189,13 +191,15 @@ public func runRawCompletion(producer: any LogitProducer,
                 tokenID = Int32(bitPattern: token)
             case .logitsWritten:
                 tokenID = try sampleOnce(scratch: scratch, context: context,
-                                         history: history, config: config, position: generated)
+                                         history: history, config: config, position: generated,
+                                         jsonFilter: jsonFilter)
             }
         } else if fusedGreedy {
             tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
             tokenID = try sampleOnce(scratch: scratch, context: context,
-                                     history: history, config: config, position: generated)
+                                     history: history, config: config, position: generated,
+                                     jsonFilter: jsonFilter)
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
@@ -216,6 +220,13 @@ public func runRawCompletion(producer: any LogitProducer,
         let delta = detok.push(tokenID)
         let visible = stopMatcher.push(delta)
         onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
+
+        if let jsonFilter, jsonFilter.isComplete {
+            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            if !tail.isEmpty { onProgress(.tail(tail)) }
+            reason = .eos
+            break
+        }
 
         let hitStopString = stopMatcher.isStopped || shouldStop()
         let hitMax = generated >= config.maxNewTokens
@@ -245,12 +256,53 @@ public func runRawCompletion(producer: any LogitProducer,
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
-                        history: [Int32], config: GenerationConfig, position: Int) throws -> Int32 {
+                        history: [Int32], config: GenerationConfig, position: Int,
+                        jsonFilter: JSONTokenFilter? = nil) throws -> Int32 {
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
                            outToken: scratch.outToken)
     cb.commit(); cb.waitUntilCompleted()
     try checkCommandBufferError(cb.error)
-    return Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
+    let sampled = Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
+    guard let jsonFilter, !jsonFilter.tryAccept(sampled) else { return sampled }
+    return try grammarFallbackToken(scratch: scratch, filter: jsonFilter)
+}
+
+/// The GPU-sampled token broke the JSON grammar. `scratch.probs` (shared
+/// storage, written by the completed softcap+softmax pass) is walked in
+/// probability order — first automaton-accepted token wins. A capped
+/// candidate set covers the common case; the full vocabulary is scanned only
+/// if every high-probability candidate is grammar-invalid.
+private func grammarFallbackToken(scratch: RawCompletionScratch,
+                                  filter: JSONTokenFilter) throws -> Int32 {
+    let vocab = scratch.sampler.vocab
+    let probs = scratch.probs.contents().bindMemory(to: Float16.self, capacity: vocab)
+
+    var top: [(id: Int32, p: Float16)] = []
+    top.reserveCapacity(257)
+    var floor: Float16 = 0
+    for id in 0..<vocab {
+        let p = probs[id]
+        guard p > floor else { continue }
+        top.append((Int32(id), p))
+        if top.count > 256 {
+            let minIndex = top.indices.min { top[$0].p < top[$1].p }!
+            top.remove(at: minIndex)
+            floor = top.min { $0.p < $1.p }!.p
+        }
+    }
+    top.sort { $0.p > $1.p }
+    for candidate in top where filter.tryAccept(candidate.id) {
+        return candidate.id
+    }
+
+    let remaining = (0..<vocab)
+        .map { (id: Int32($0), p: probs[$0]) }
+        .sorted { $0.p > $1.p }
+    for candidate in remaining where filter.tryAccept(candidate.id) {
+        return candidate.id
+    }
+    throw GeneratorError.invalidGenerationConfig(
+        "force-json: no token in the vocabulary can extend the JSON document")
 }

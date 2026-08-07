@@ -52,7 +52,8 @@ public func run(args: Args,
             repetitionPenalty: args.repetitionPenalty,
             seed: args.seed,
             stopStrings: args.stops,
-            extraStopTokens: [])
+            extraStopTokens: [],
+            forceJSON: args.forceJSON)
         let runtime = try args.resolvedRuntimeConfiguration(
             forceLogitsHead: !config.isPureGreedy)
 
