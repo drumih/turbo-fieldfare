@@ -19,6 +19,12 @@ enum MetalError: Error, CustomStringConvertible {
     }
 }
 
+func checkCommandBufferError(_ error: (any Error)?) throws {
+    if let error {
+        throw error
+    }
+}
+
 public struct MetalFunctionConstant: Hashable, Sendable {
     public enum Value: Hashable, Sendable {
         case bool(Bool)

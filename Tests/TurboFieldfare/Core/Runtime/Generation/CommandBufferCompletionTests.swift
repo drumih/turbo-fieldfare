@@ -2,16 +2,16 @@ import Testing
 
 @testable import TurboFieldfare
 
-@Suite struct RealForwardRunnerTests {
+@Suite struct CommandBufferCompletionTests {
     private enum SyntheticCommandBufferError: Error, Equatable {
         case failed
     }
 
     @Test func commandBufferErrorsArePropagated() throws {
-        try RealForwardRunner.checkCommandBufferError(nil)
+        try checkCommandBufferError(nil)
 
         do {
-            try RealForwardRunner.checkCommandBufferError(SyntheticCommandBufferError.failed)
+            try checkCommandBufferError(SyntheticCommandBufferError.failed)
             Issue.record("expected command-buffer error")
         } catch let error as SyntheticCommandBufferError {
             #expect(error == .failed)

@@ -1275,12 +1275,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 waitUntilCompleted(pending.cb)
             }
             if let sharedCB = pending.sharedCB {
-                try Self.checkCommandBufferError(sharedCB.error)
+                try checkCommandBufferError(sharedCB.error)
             }
             if let phase1HitCB = pending.phase1HitCB {
-                try Self.checkCommandBufferError(phase1HitCB.error)
+                try checkCommandBufferError(phase1HitCB.error)
             }
-            try Self.checkCommandBufferError(pending.cb.error)
+            try checkCommandBufferError(pending.cb.error)
             totalCb2Nanos &+= pending.encodeAndCommitNanos
         }
 
@@ -1475,7 +1475,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 try finishPendingRoutedCommand(pending, waitIfNeeded: false)
                 pendingRoutedCommand = nil
             }
-            try Self.checkCommandBufferError(cb.error)
+            try checkCommandBufferError(cb.error)
             totalCb1Nanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tCb1Start - waitNanos
 
             // CPU readback to fetch routed-expert blobs from disk.
@@ -1753,17 +1753,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
 
     private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
         waitUntilCompleted(cb)
-        try Self.checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb.error)
     }
 
     private nonisolated func waitUntilCompleted(_ cb: MTLCommandBuffer) {
         cb.waitUntilCompleted()
-    }
-
-    nonisolated static func checkCommandBufferError(_ error: (any Error)?) throws {
-        if let error {
-            throw error
-        }
     }
 
 }
