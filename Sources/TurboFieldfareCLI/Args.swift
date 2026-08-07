@@ -103,6 +103,7 @@ extension Args {
       --stop <string>            Stop substring (repeatable).
       --force-json               Constrain decoding to grammar-valid JSON;
                                  EOS is forced when the root value closes.
+                                 Incompatible with --stop
       --quiet                    Suppress the timing footer.
       --expert-cache-slots <n>   Expert-cache slots: 8, 16, 24, or 32 (default 16).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
@@ -265,6 +266,9 @@ extension Args {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
         }
         if prompt == nil && messagesFile == nil { throw ArgsError.modeMissing }
+        if forceJSON && !stops.isEmpty {
+            throw ArgsError.mutuallyExclusive("--force-json", "--stop")
+        }
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw ArgsError.invalidValue(
                 flag: "--top-p",

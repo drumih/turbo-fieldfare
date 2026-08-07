@@ -61,6 +61,10 @@ public struct GenerationConfig: Sendable {
             throw GeneratorError.invalidGenerationConfig(
                 "topP below one requires topK; full-vocabulary nucleus sampling is not implemented")
         }
+        if forceJSON, !stopStrings.isEmpty {
+            throw GeneratorError.invalidGenerationConfig(
+                "stopStrings are incompatible with forceJSON; the grammar owns termination")
+        }
     }
 
 }

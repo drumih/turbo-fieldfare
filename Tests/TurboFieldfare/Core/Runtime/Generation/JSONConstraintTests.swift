@@ -189,8 +189,10 @@ import Foundation
         14: "}",
         15: "Hola",
         16: "▁no",
-        17: "<0xF0>",       // first byte of a 4-byte emoji
+        17: "<0xF0>",       // 4-byte emoji, one byte-fallback token per byte
         18: "<0x9F>",
+        23: "<0x87>",
+        24: "<0xA6>",
         19: "<unused12>",
         20: "",
         21: "▁",
@@ -231,15 +233,30 @@ import Foundation
         #expect(filter.isComplete)
     }
 
-    @Test func byteFallbackPairInsideString() {
+    @Test func byteFallbackSequenceInsideString() {
         let filter = makeFilter()
         #expect(filter.tryAccept(10))   // {"
-        // Raw UTF-8 lead + continuation bytes are valid string content.
-        #expect(filter.tryAccept(17))
-        #expect(filter.tryAccept(18))
-        // …but not outside a string: close key/value, then reject at "}".
+        // A 4-byte emoji arriving one byte-fallback token at a time.
+        #expect(filter.tryAccept(17))   // F0 lead
+        // Mid-sequence, closing the key is forbidden (would leave broken UTF-8)…
+        #expect(!filter.tryAccept(12))  // ":
+        #expect(filter.tryAccept(18))   // 9F
+        #expect(filter.tryAccept(23))   // 87
+        #expect(filter.tryAccept(24))   // A6 — sequence complete
+        // …now it isn't.
         #expect(filter.tryAccept(12))   // ":
+        // A raw lead byte outside a string is never valid JSON.
         #expect(!filter.tryAccept(17))
+    }
+
+    @Test func lastAcceptedBytesTracksCommittedToken() {
+        let filter = makeFilter()
+        #expect(filter.tryAccept(10))               // {"
+        #expect(filter.lastAcceptedBytes == Array("{\"".utf8))
+        #expect(filter.tryAccept(11))               // urgencia (key content)
+        #expect(filter.lastAcceptedBytes == Array("urgencia".utf8))
+        #expect(filter.tryAccept(21))               // "▁" → mapped to a space
+        #expect(filter.lastAcceptedBytes == Array(" ".utf8))
     }
 
     @Test func markerAndEmptyPiecesBlocked() {
@@ -261,5 +278,129 @@ import Foundation
         #expect(filter.tryAccept(13))   // ▁"alta" still accepted from same state
         #expect(filter.tryAccept(14))   // }
         #expect(filter.isComplete)
+    }
+}
+
+/// UTF-8 structural validation inside strings: the automaton must reject any
+/// byte sequence that would leave the emitted document undecodable.
+@Suite struct JSONAutomatonUTF8Tests {
+
+    private func stringOpen() -> JSONByteAutomaton {
+        var automaton = JSONByteAutomaton()
+        for byte in Array("{\"k\": \"".utf8) {
+            precondition(automaton.consume(byte))
+        }
+        return automaton
+    }
+
+    private func step(_ automaton: inout JSONByteAutomaton, _ byte: UInt8) -> Bool {
+        automaton.consume(byte)
+    }
+
+    @Test func validSequencesAccepted() {
+        for text in ["é", "ñandú", "€", "🇦🇷", "\u{10FFFF}", "日本語"] {
+            var automaton = stringOpen()
+            for byte in Array(text.utf8) {
+                #expect(step(&automaton, byte), "byte of \(text) rejected")
+            }
+            #expect(step(&automaton, UInt8(ascii: "\"")))
+        }
+    }
+
+    @Test func bareContinuationRejected() {
+        var automaton = stringOpen()
+        #expect(!step(&automaton, 0x80))
+        #expect(!step(&automaton, 0xBF))
+    }
+
+    @Test func leadFollowedByNonContinuationRejected() {
+        var automaton = stringOpen()
+        #expect(step(&automaton, 0xC3))
+        #expect(!step(&automaton, UInt8(ascii: "a")))
+        #expect(!step(&automaton, 0xC3))          // another lead: also invalid
+    }
+
+    @Test func quoteAndEscapeMidSequenceRejected() {
+        var automaton = stringOpen()
+        #expect(step(&automaton, 0xF0))
+        #expect(step(&automaton, 0x9F))
+        #expect(!step(&automaton, UInt8(ascii: "\"")))
+        #expect(!step(&automaton, UInt8(ascii: "\\")))
+        // Completing the sequence re-enables both.
+        #expect(step(&automaton, 0x87))
+        #expect(step(&automaton, 0xA6))
+        #expect(step(&automaton, UInt8(ascii: "\"")))
+    }
+
+    @Test func invalidLeadBytesRejected() {
+        for lead: UInt8 in [0xC0, 0xC1, 0xF5, 0xFE, 0xFF] {
+            var automaton = stringOpen()
+            #expect(!step(&automaton, lead), "lead \(lead) must be rejected")
+        }
+    }
+
+    @Test func surrogateAndRangeBoundaries() {
+        // ED 9F BF (U+D7FF, last before surrogates) is legal; ED A0 is not.
+        var legal = stringOpen()
+        #expect(step(&legal, 0xED))
+        #expect(step(&legal, 0x9F))
+        #expect(step(&legal, 0xBF))
+        var surrogate = stringOpen()
+        #expect(step(&surrogate, 0xED))
+        #expect(!step(&surrogate, 0xA0))
+        // F4 8F is legal (up to U+10FFFF); F4 90 overflows.
+        var top = stringOpen()
+        #expect(step(&top, 0xF4))
+        #expect(step(&top, 0x8F))
+        var beyond = stringOpen()
+        #expect(step(&beyond, 0xF4))
+        #expect(!step(&beyond, 0x90))
+        // E0 80 would be overlong.
+        var overlong = stringOpen()
+        #expect(step(&overlong, 0xE0))
+        #expect(!step(&overlong, 0x80))
+    }
+
+    @Test func multibyteOutsideStringsRejected() {
+        var automaton = JSONByteAutomaton()
+        #expect(!step(&automaton, 0xC3))
+    }
+}
+
+/// The byte-stream assembler that replaces detokenizer text under forceJSON.
+@Suite struct UTF8StreamAssemblerTests {
+
+    @Test func asciiPassesThrough() {
+        var assembler = UTF8StreamAssembler()
+        #expect(assembler.push(Array("{\"a\": 1".utf8)) == "{\"a\": 1")
+        #expect(assembler.push(Array("}".utf8)) == "}")
+        #expect(assembler.flush() == "")
+    }
+
+    @Test func splitCodepointHeldUntilComplete() {
+        var assembler = UTF8StreamAssembler()
+        #expect(assembler.push([0xF0, 0x9F]) == "")
+        #expect(assembler.push([0x87]) == "")
+        #expect(assembler.push([0xA6, 0x21]) == "\u{1F1E6}!")
+        #expect(assembler.flush() == "")
+    }
+
+    @Test func completeTailEmittedOnPush() {
+        var assembler = UTF8StreamAssembler()
+        #expect(assembler.push(Array("é".utf8)) == "é")
+    }
+
+    @Test func mixedAsciiAndPendingSequence() {
+        var assembler = UTF8StreamAssembler()
+        #expect(assembler.push([UInt8(ascii: "\""), 0xC3]) == "\"")
+        #expect(assembler.push([0xA9, UInt8(ascii: "\"")]) == "é\"")
+    }
+
+    @Test func flushDropsIncompleteTail() {
+        var assembler = UTF8StreamAssembler()
+        #expect(assembler.push([UInt8(ascii: "a"), 0xE2, 0x82]) == "a")
+        #expect(assembler.flush() == "")
+        // After flush the pending tail is gone for good.
+        #expect(assembler.push([UInt8(ascii: "b")]) == "b")
     }
 }

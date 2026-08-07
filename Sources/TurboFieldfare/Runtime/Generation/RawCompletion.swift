@@ -28,6 +28,9 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    /// Times the JSON grammar vetoed the GPU-sampled token and the
+    /// probability-ordered fallback chose instead. 0 unless `forceJSON`.
+    public var grammarVetoes: Int = 0
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -175,11 +178,22 @@ public func runRawCompletion(producer: any LogitProducer,
 
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
-    let jsonFilter = config.forceJSON ? JSONTokenFilter(tokenizer: tokenizer) : nil
+    let jsonFilter = config.forceJSON
+        ? JSONTokenFilter(tokenizer: tokenizer, extraStopIDs: config.extraStopTokens)
+        : nil
+    var jsonAssembler = UTF8StreamAssembler()
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
     var reason: StopReason = .maxTokens
     var uncommittedBoundaryTokenIDs: [Int32] = []
+
+    // Under forceJSON the emitted text is the automaton-validated byte stream,
+    // NOT detokenizer output: the library decode applies `cleanUp` (` ,`→`,`)
+    // and drops undecodable byte-fallback tails, either of which would desync
+    // what the grammar guaranteed from what the caller receives.
+    func flushTail() -> String {
+        jsonFilter != nil ? jsonAssembler.flush() : detok.flush()
+    }
 
     while true {
         try Task.checkCancellation()
@@ -212,17 +226,22 @@ public func runRawCompletion(producer: any LogitProducer,
             } else {
                 reason = .eos
             }
-            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             break
         }
 
-        let delta = detok.push(tokenID)
+        let delta: String
+        if let jsonFilter {
+            delta = jsonAssembler.push(jsonFilter.lastAcceptedBytes)
+        } else {
+            delta = detok.push(tokenID)
+        }
         let visible = stopMatcher.push(delta)
         onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
 
         if let jsonFilter, jsonFilter.isComplete {
-            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             reason = .eos
             break
@@ -231,7 +250,7 @@ public func runRawCompletion(producer: any LogitProducer,
         let hitStopString = stopMatcher.isStopped || shouldStop()
         let hitMax = generated >= config.maxNewTokens
         if hitStopString || hitMax {
-            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             reason = hitStopString ? .stopString : .maxTokens
             break
@@ -252,7 +271,8 @@ public func runRawCompletion(producer: any LogitProducer,
                            reason: reason,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
-                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
+                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+                           grammarVetoes: jsonFilter?.vetoCount ?? 0)
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
@@ -266,6 +286,7 @@ private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
     try checkCommandBufferError(cb.error)
     let sampled = Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
     guard let jsonFilter, !jsonFilter.tryAccept(sampled) else { return sampled }
+    jsonFilter.noteVeto()
     return try grammarFallbackToken(scratch: scratch, filter: jsonFilter)
 }
 

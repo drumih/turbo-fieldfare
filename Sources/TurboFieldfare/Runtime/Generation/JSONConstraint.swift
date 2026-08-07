@@ -14,6 +14,11 @@ import Foundation
 /// cannot be decided without lookahead (more digits may follow); `canStop`
 /// reports it as stoppable while `isComplete` stays false until a terminator
 /// byte lands.
+///
+/// Inside strings the automaton validates UTF-8 sequence structure (lead and
+/// continuation ranges per the WHATWG table, rejecting overlongs, surrogates
+/// and > U+10FFFF), so a document it completes is always decodable text — a
+/// grammar-driven fallback can never splice invalid bytes into a string.
 public struct JSONByteAutomaton: Sendable, Equatable {
     /// Containers deeper than this are rejected; matches llama.cpp's default
     /// guard against runaway nesting.
@@ -40,13 +45,21 @@ public struct JSONByteAutomaton: Sendable, Equatable {
 
     private enum Container: Equatable { case object, array }
 
+    /// Mid-UTF-8-sequence state inside a string: how many continuation bytes
+    /// are still owed, and the constrained range for the first of them (E0,
+    /// ED, F0 and F4 leads restrict it; nil means the generic 0x80...0xBF).
+    private struct UTF8Pending: Equatable {
+        var remaining: Int
+        var first: ClosedRange<UInt8>?
+    }
+
     private enum Mode: Equatable {
         case expectValue
         case expectValueOrClose   // right after '['
         case expectKeyOrClose     // right after '{'
         case expectKey            // after ',' inside an object
         case expectColon
-        case inString(isKey: Bool)
+        case inString(isKey: Bool, utf8: UTF8Pending?)
         case stringEscape(isKey: Bool)
         case stringUnicode(isKey: Bool, remaining: Int)
         case inNumber(NumberPhase)
@@ -84,13 +97,13 @@ public struct JSONByteAutomaton: Sendable, Equatable {
 
         case .expectKeyOrClose:
             if isWhitespace(byte) { return true }
-            if byte == UInt8(ascii: "\"") { mode = .inString(isKey: true); return true }
+            if byte == UInt8(ascii: "\"") { mode = .inString(isKey: true, utf8: nil); return true }
             if byte == UInt8(ascii: "}") { return closeContainer() }
             return false
 
         case .expectKey:
             if isWhitespace(byte) { return true }
-            if byte == UInt8(ascii: "\"") { mode = .inString(isKey: true); return true }
+            if byte == UInt8(ascii: "\"") { mode = .inString(isKey: true, utf8: nil); return true }
             return false
 
         case .expectColon:
@@ -98,7 +111,14 @@ public struct JSONByteAutomaton: Sendable, Equatable {
             if byte == UInt8(ascii: ":") { mode = .expectValue; return true }
             return false
 
-        case .inString(let isKey):
+        case .inString(let isKey, let utf8):
+            if let pending = utf8 {
+                guard (pending.first ?? 0x80...0xBF).contains(byte) else { return false }
+                let rest = pending.remaining - 1
+                mode = .inString(isKey: isKey,
+                                 utf8: rest == 0 ? nil : UTF8Pending(remaining: rest, first: nil))
+                return true
+            }
             switch byte {
             case UInt8(ascii: "\""):
                 mode = isKey ? .expectColon : endedValueMode()
@@ -108,7 +128,11 @@ public struct JSONByteAutomaton: Sendable, Equatable {
                 return true
             case 0x00..<0x20:
                 return false
+            case 0x20...0x7F:
+                return true
             default:
+                guard let pending = Self.utf8Lead(byte) else { return false }
+                mode = .inString(isKey: isKey, utf8: pending)
                 return true
             }
 
@@ -117,7 +141,7 @@ public struct JSONByteAutomaton: Sendable, Equatable {
             case UInt8(ascii: "\""), UInt8(ascii: "\\"), UInt8(ascii: "/"),
                  UInt8(ascii: "b"), UInt8(ascii: "f"), UInt8(ascii: "n"),
                  UInt8(ascii: "r"), UInt8(ascii: "t"):
-                mode = .inString(isKey: isKey)
+                mode = .inString(isKey: isKey, utf8: nil)
                 return true
             case UInt8(ascii: "u"):
                 mode = .stringUnicode(isKey: isKey, remaining: 4)
@@ -129,7 +153,7 @@ public struct JSONByteAutomaton: Sendable, Equatable {
         case .stringUnicode(let isKey, let remaining):
             guard isHexDigit(byte) else { return false }
             mode = remaining == 1
-                ? .inString(isKey: isKey)
+                ? .inString(isKey: isKey, utf8: nil)
                 : .stringUnicode(isKey: isKey, remaining: remaining - 1)
             return true
 
@@ -173,7 +197,7 @@ public struct JSONByteAutomaton: Sendable, Equatable {
     private mutating func startValue(_ byte: UInt8) -> Bool {
         switch byte {
         case UInt8(ascii: "\""):
-            mode = .inString(isKey: false)
+            mode = .inString(isKey: false, utf8: nil)
         case UInt8(ascii: "{"):
             guard stack.count < Self.maxDepth else { return false }
             stack.append(.object)
@@ -242,6 +266,25 @@ public struct JSONByteAutomaton: Sendable, Equatable {
         }
     }
 
+    /// WHATWG UTF-8 lead-byte table: continuation count owed plus the
+    /// restricted range for the first continuation where the lead demands one
+    /// (rejects overlongs, surrogates and codepoints past U+10FFFF). Returns
+    /// nil for bytes that cannot start a sequence (bare continuations, C0/C1,
+    /// F5...FF).
+    private static func utf8Lead(_ byte: UInt8) -> UTF8Pending? {
+        switch byte {
+        case 0xC2...0xDF: return UTF8Pending(remaining: 1, first: nil)
+        case 0xE0:        return UTF8Pending(remaining: 2, first: 0xA0...0xBF)
+        case 0xE1...0xEC: return UTF8Pending(remaining: 2, first: nil)
+        case 0xED:        return UTF8Pending(remaining: 2, first: 0x80...0x9F)
+        case 0xEE...0xEF: return UTF8Pending(remaining: 2, first: nil)
+        case 0xF0:        return UTF8Pending(remaining: 3, first: 0x90...0xBF)
+        case 0xF1...0xF3: return UTF8Pending(remaining: 3, first: nil)
+        case 0xF4:        return UTF8Pending(remaining: 3, first: 0x80...0x8F)
+        default:          return nil
+        }
+    }
+
     private func isWhitespace(_ byte: UInt8) -> Bool {
         byte == 0x20 || byte == 0x09 || byte == 0x0A || byte == 0x0D
     }
@@ -272,7 +315,7 @@ public final class JSONTokenFilter {
     private var byteCache: [Int32: [UInt8]] = [:]
     private var blockedCache: Set<Int32> = []
 
-    public convenience init(tokenizer: GFTokenizer) {
+    public convenience init(tokenizer: GFTokenizer, extraStopIDs: Set<Int32> = []) {
         let underlying = tokenizer.tokenizer
         self.init(
             pieceLookup: { underlying.convertIdToToken(Int($0)) },
@@ -280,7 +323,7 @@ public final class JSONTokenFilter {
                          tokenizer.toolCallStartID, tokenizer.toolCallEndID,
                          tokenizer.toolResponseID, tokenizer.toolResponseEndID,
                          tokenizer.channelStartID, tokenizer.channelEndID],
-            stopIDs: tokenizer.stopTokenIDs)
+            stopIDs: tokenizer.stopTokenIDs.union(extraStopIDs))
     }
 
     public init(pieceLookup: @escaping PieceLookup,
@@ -293,17 +336,37 @@ public final class JSONTokenFilter {
 
     public var isComplete: Bool { automaton.isComplete }
 
+    /// Times the grammar rejected the sampled token, forcing the
+    /// probability-ordered fallback. Recorded by the generation loop.
+    public private(set) var vetoCount = 0
+
+    public func noteVeto() { vetoCount += 1 }
+
+    /// Raw bytes of the last content token `tryAccept` committed (empty for
+    /// an accepted stop token). The generation loop emits THESE bytes instead
+    /// of detokenizer text under forceJSON: the detokenizer's `cleanUp` pass
+    /// (` ,` → `,` — swift-transformers defaults it on) and its strict flush
+    /// of byte-fallback tails can both drop grammar-validated bytes, breaking
+    /// the valid-JSON guarantee at the output while the automaton believes it
+    /// held.
+    public private(set) var lastAcceptedBytes: [UInt8] = []
+
     /// True when the token may be emitted next: stop tokens pass only where
     /// EOS would leave valid JSON; content tokens pass when every byte
     /// advances the automaton (committed on success).
     public func tryAccept(_ id: Int32) -> Bool {
-        if stopIDs.contains(id) { return automaton.canStop }
+        if stopIDs.contains(id) {
+            guard automaton.canStop else { return false }
+            lastAcceptedBytes = []
+            return true
+        }
         guard let bytes = bytes(for: id), !bytes.isEmpty else { return false }
         var candidate = automaton
         for byte in bytes {
             guard candidate.consume(byte) else { return false }
         }
         automaton = candidate
+        lastAcceptedBytes = bytes
         return true
     }
 
@@ -343,11 +406,60 @@ public final class JSONTokenFilter {
     }
 
     /// Whole-piece `<...>` shapes (e.g. `<unused12>`, `<start_of_image>`) are
-    /// added tokens the detokenizer strips; never let them through.
+    /// added tokens that signal a derailed generation; never let them through.
+    /// This also blocks the vocab's ~97 legitimate single-piece HTML tags
+    /// (`<td>`, `<div>`) — accepted cost: the model can still spell them from
+    /// smaller pieces.
     private static func looksLikeMarker(_ token: String) -> Bool {
         guard token.count > 2, token.hasPrefix("<"), token.hasSuffix(">") else {
             return false
         }
         return !token.dropFirst().dropLast().contains { $0 == "<" || $0 == ">" }
+    }
+}
+
+/// Reassembles the grammar-validated byte stream into printable `String`
+/// deltas, holding back a trailing UTF-8 sequence a token boundary split.
+/// The automaton guarantees the bytes are structurally valid UTF-8, so the
+/// only incomplete point is the tail.
+public struct UTF8StreamAssembler: Sendable {
+    private var pending: [UInt8] = []
+
+    public init() {}
+
+    public mutating func push(_ bytes: [UInt8]) -> String {
+        pending.append(contentsOf: bytes)
+        let cut = Self.completePrefixLength(pending)
+        guard cut > 0 else { return "" }
+        let out = String(decoding: pending[..<cut], as: UTF8.self)
+        pending.removeFirst(cut)
+        return out
+    }
+
+    /// Truncation by max-new can end mid-codepoint; the incomplete tail is
+    /// dropped (mirrors the detokenizer). A COMPLETE document never loses
+    /// bytes here — the automaton refuses to close a string mid-sequence.
+    public mutating func flush() -> String {
+        defer { pending = [] }
+        let cut = Self.completePrefixLength(pending)
+        return cut > 0 ? String(decoding: pending[..<cut], as: UTF8.self) : ""
+    }
+
+    private static func completePrefixLength(_ bytes: [UInt8]) -> Int {
+        var i = bytes.count
+        var trailing = 0
+        while i > 0, trailing < 3, bytes[i - 1] & 0xC0 == 0x80 {
+            i -= 1
+            trailing += 1
+        }
+        guard i > 0 else { return bytes.count }
+        let needed: Int
+        switch bytes[i - 1] {
+        case 0xC2...0xDF: needed = 1
+        case 0xE0...0xEF: needed = 2
+        case 0xF0...0xF4: needed = 3
+        default: return bytes.count   // ASCII tail: nothing pending
+        }
+        return trailing >= needed ? bytes.count : i - 1
     }
 }
