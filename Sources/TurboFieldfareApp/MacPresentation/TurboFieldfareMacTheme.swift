@@ -62,4 +62,26 @@ public extension View {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
         }
     }
+
+    /// Label metrics for compact titled secondary controls (Tips, Clear, etc.).
+    func turboQuietControlLabel() -> some View {
+        labelStyle(.titleAndIcon)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .contentShape(Capsule())
+    }
+
+    /// Chrome for compact secondary controls next to primary actions.
+    func turboQuietControlChrome() -> some View {
+        buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+            .background {
+                Capsule()
+                    .fill(Color.primary.opacity(0.06))
+                    .overlay {
+                        Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                    }
+            }
+    }
 }

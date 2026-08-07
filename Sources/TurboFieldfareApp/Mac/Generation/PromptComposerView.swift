@@ -115,21 +115,9 @@ struct PromptComposerView: View {
             showingPromptTips.toggle()
         } label: {
             Label("Tips", systemImage: "questionmark.circle")
-                .labelStyle(.titleAndIcon)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .contentShape(Capsule())
+                .turboQuietControlLabel()
         }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.primary)
-        .background {
-            Capsule()
-                .fill(Color.primary.opacity(0.06))
-                .overlay {
-                    Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
-                }
-        }
+        .turboQuietControlChrome()
         .accessibilityLabel("Prompt tips")
         .accessibilityHint("Shows guidance for writing effective prompts")
         .help("Prompt tips")
@@ -178,21 +166,9 @@ struct PromptComposerView: View {
                 model.clearOutput()
             } label: {
                 Label("Clear", systemImage: "trash")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .contentShape(Capsule())
+                    .turboQuietControlLabel()
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.primary)
-            .background {
-                Capsule()
-                    .fill(Color.primary.opacity(0.06))
-                    .overlay {
-                        Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
-                    }
-            }
+            .turboQuietControlChrome()
             .accessibilityLabel("Clear output")
             .accessibilityHint("Removes the conversation transcript and last-run metrics")
             .help("Clear output")
@@ -202,22 +178,10 @@ struct PromptComposerView: View {
                 promptFocused = true
             } label: {
                 Label("Clear", systemImage: "xmark.circle.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption.weight(.medium))
                     .symbolRenderingMode(.hierarchical)
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .contentShape(Capsule())
+                    .turboQuietControlLabel()
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.primary)
-            .background {
-                Capsule()
-                    .fill(Color.primary.opacity(0.06))
-                    .overlay {
-                        Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
-                    }
-            }
+            .turboQuietControlChrome()
             .accessibilityLabel("Clear prompt")
             .accessibilityHint("Clears the prompt editor")
             .help("Clear prompt")
