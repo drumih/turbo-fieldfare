@@ -325,8 +325,10 @@ import Testing
     @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() {
         let model = AppModel(client: MockInferenceClient(),
                              installer: MockModelInstallerClient())
-        let oldURL = FileManager.default.temporaryDirectory.appendingPathComponent("old.gturbo")
-        let newURL = FileManager.default.temporaryDirectory.appendingPathComponent("new.gturbo")
+        let testDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("app-model-path-\(UUID().uuidString)", isDirectory: true)
+        let oldURL = testDirectory.appendingPathComponent("old.gturbo")
+        let newURL = testDirectory.appendingPathComponent("new.gturbo")
         model.modelPathText = oldURL.path
         model.loadState = .ready(modelDirectory: oldURL, loadSeconds: 1)
         model.diagnostics = AppDiagnostics(
