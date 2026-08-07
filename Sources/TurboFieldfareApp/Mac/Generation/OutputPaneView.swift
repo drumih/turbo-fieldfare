@@ -67,33 +67,53 @@ struct OutputPaneView: View {
             showsPrefillPlaceholder: model.isRunning
                 && model.outputResponsePlainText.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(TurboFieldfareMacTheme.elevatedSurface.opacity(0.72))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                    }
+            }
             .overlay(alignment: .topTrailing) {
                 if !model.isRunning && !model.outputResponsePlainText.isEmpty {
                     copyResponseButton
-                        .padding(8)
+                        .padding(12)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
     }
 
     private var copyResponseButton: some View {
         Button {
             copyResponse()
         } label: {
-            Image(systemName: responseCopyFeedbackID == nil
-                  ? "doc.on.doc"
-                  : "checkmark.circle.fill")
-                .font(.callout.weight(.medium))
-                .contentTransition(.symbolEffect(.replace))
+            Label(
+                responseCopyFeedbackID == nil ? "Copy" : "Copied",
+                systemImage: responseCopyFeedbackID == nil
+                    ? "doc.on.doc"
+                    : "checkmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .contentShape(Capsule())
                 .foregroundStyle(responseCopyFeedbackID == nil
-                                 ? Color.secondary
+                                 ? Color.primary
                                  : TurboFieldfareMacTheme.accentColor)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle().stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                .background {
+                    Capsule()
+                        .fill(TurboFieldfareMacTheme.elevatedSurface)
+                        .overlay {
+                            Capsule().stroke(
+                                responseCopyFeedbackID == nil
+                                    ? TurboFieldfareMacTheme.fieldBorder
+                                    : TurboFieldfareMacTheme.accentColor.opacity(0.7),
+                                lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -188,7 +208,15 @@ private struct EmptyPlaceholderIcon: View {
     var body: some View {
         Image(systemName: systemName)
             .font(.title2)
-            .foregroundStyle(.quaternary)
+            .foregroundStyle(.secondary)
+            .frame(width: 48, height: 48)
+            .background {
+                Circle()
+                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                    .overlay {
+                        Circle().stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                    }
+            }
             .accessibilityHidden(true)
     }
 }

@@ -5,7 +5,7 @@ struct ModelStatusBadge: View {
     let model: AppModel
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             statusDot
             Text("Gemma 4 26B")
                 .font(.callout.weight(.semibold))
@@ -27,6 +27,14 @@ struct ModelStatusBadge: View {
     }
 
     private func dot(_ color: Color) -> some View {
-        Circle().fill(color).frame(width: 8, height: 8).accessibilityHidden(true)
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.22))
+                .frame(width: 14, height: 14)
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+        }
+        .accessibilityHidden(true)
     }
 }

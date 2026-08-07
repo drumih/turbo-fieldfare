@@ -34,14 +34,22 @@ struct GenerateControl: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .background(TurboFieldfareMacTheme.accentColor, in: .capsule)
-        .overlay {
-            Capsule().stroke(.white.opacity(0.16), lineWidth: 0.5)
+        .foregroundStyle(model.canRun ? Color.white : Color.primary.opacity(0.55))
+        .background {
+            Capsule()
+                .fill(model.canRun
+                      ? TurboFieldfareMacTheme.accentColor
+                      : Color.primary.opacity(0.08))
+                .overlay {
+                    Capsule().stroke(
+                        model.canRun
+                            ? Color.white.opacity(0.16)
+                            : TurboFieldfareMacTheme.fieldBorder,
+                        lineWidth: 1)
+                }
         }
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!model.canRun)
-        .opacity(model.canRun ? 1 : 0.62)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Generate")
         .accessibilityValue(shortcutHint)

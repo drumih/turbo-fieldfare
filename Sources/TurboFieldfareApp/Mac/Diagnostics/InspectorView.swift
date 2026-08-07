@@ -1,5 +1,6 @@
 import AppKit
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct InspectorView: View {
@@ -15,8 +16,9 @@ struct InspectorView: View {
             RunnerDiagnosticsSection(diagnostics: model.diagnostics)
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // Keep system grouped form backgrounds so rows/fields separate from chrome.
+        .scrollContentBackground(.automatic)
+        .background(TurboFieldfareMacTheme.elevatedSurface.opacity(0.35))
     }
 
     private var modelSection: some View {
@@ -131,9 +133,9 @@ struct InspectorView: View {
             LabeledContent("Temperature") {
                 HStack(spacing: 8) {
                     Slider(value: $model.temperature, in: 0...2, step: 0.05)
-                    Text(model.temperature, format: .number.precision(.fractionLength(2)))
-                        .monospacedDigit()
-                        .frame(width: 36, alignment: .trailing)
+                    numericChip(
+                        model.temperature,
+                        format: .number.precision(.fractionLength(2)))
                 }
             }
             Text("0 uses deterministic greedy decoding. Higher values make sampling more varied.")
@@ -144,7 +146,18 @@ struct InspectorView: View {
             if model.topKEnabled {
                 LabeledContent("K value") {
                     Stepper(value: $model.topK, in: 1...256, step: 1) {
-                        Text("\(model.topK)").monospacedDigit()
+                        Text("\(model.topK)")
+                            .monospacedDigit()
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                                    }
+                            }
                     }
                     .fixedSize()
                 }
@@ -161,14 +174,31 @@ struct InspectorView: View {
                 LabeledContent("P value") {
                     HStack(spacing: 8) {
                         Slider(value: $model.topP, in: 0.01...1, step: 0.01)
-                        Text(model.topP, format: .number.precision(.fractionLength(2)))
-                            .monospacedDigit()
-                            .frame(width: 36, alignment: .trailing)
+                        numericChip(
+                            model.topP,
+                            format: .number.precision(.fractionLength(2)))
                     }
                 }
             }
         }
         .disabled(model.isRunning || model.loadState.isLoading)
+    }
+
+    private func numericChip<F: FormatStyle>(_ value: Double, format: F) -> some View
+    where F.FormatInput == Double, F.FormatOutput == String {
+        Text(value, format: format)
+            .monospacedDigit()
+            .frame(minWidth: 40, alignment: .trailing)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                    }
+            }
     }
 
     private var runtimeSection: some View {
@@ -191,9 +221,10 @@ struct InspectorView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if model.hasStaleLoadedRuntime {
-                Text("Reload required")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Label("Reload required before generating", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TurboFieldfareMacTheme.warningEmphasis)
+                    .accessibilityLabel("Reload required before generating")
             }
         }
         .disabled(model.isRunning || model.loadState.isLoading)

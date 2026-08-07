@@ -29,10 +29,11 @@ struct StatusHUDView: View {
         .padding(.vertical, 10)
         .background {
             Capsule()
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(TurboFieldfareMacTheme.elevatedSurface)
                 .overlay {
-                    Capsule().stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                    Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
                 }
+                .shadow(color: .black.opacity(0.05), radius: 6, y: 1)
         }
         .gesture(WindowDragGesture())
     }
@@ -76,12 +77,13 @@ private struct PhaseLabel: View {
                 Circle().fill(TurboFieldfareMacTheme.accentColor).frame(width: 7, height: 7)
                 Text(label).contentTransition(.opacity)
             case .quiet(let label):
+                // Status also appears under the model name; keep a compact quiet cue.
                 Text(label)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.primary.opacity(0.72))
                     .contentTransition(.opacity)
             }
         }
-        .font(.caption.weight(.medium))
+        .font(.caption.weight(.semibold))
         .lineLimit(1)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Model status")

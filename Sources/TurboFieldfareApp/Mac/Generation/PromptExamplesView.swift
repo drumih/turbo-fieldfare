@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct PromptExamplesView: View {
@@ -23,14 +24,7 @@ struct PromptExamplesView: View {
             }
         }
         .padding(14)
-        .background {
-            RoundedRectangle(cornerRadius: 18)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18)
-                        .stroke(.separator.opacity(0.5), lineWidth: 0.5)
-                }
-        }
+        .turboElevatedCard(cornerRadius: 18)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
         .accessibilityElement(children: .contain)
     }
@@ -58,10 +52,13 @@ struct PromptExamplesView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .background(.quaternary.opacity(0.25), in: .rect(cornerRadius: 12))
-            .overlay {
+            .background {
                 RoundedRectangle(cornerRadius: 12)
-                    .stroke(.separator.opacity(0.35), lineWidth: 0.5)
+                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                    }
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(preset.title)

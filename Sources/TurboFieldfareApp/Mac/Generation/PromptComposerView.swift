@@ -9,18 +9,28 @@ struct PromptComposerView: View {
     @State private var showingPromptTips = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Prompt")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if promptFocused {
+                    Text(shortcutCaption)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+            }
             editor
             footer
         }
         .padding(14)
-        .background {
-            RoundedRectangle(cornerRadius: 22)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 22)
-                        .stroke(.separator.opacity(0.5), lineWidth: 0.5)
-                }
+        .turboElevatedCard(cornerRadius: 22)
+        .onChange(of: model.loadState.isReady) { _, isReady in
+            if isReady && model.promptText.isEmpty {
+                promptFocused = true
+            }
         }
     }
 
@@ -29,6 +39,8 @@ struct PromptComposerView: View {
             .accessibilityLabel("Prompt")
             .font(.body)
             .scrollContentBackground(.hidden)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
             .focused($promptFocused)
             .onKeyPress(.return, phases: [.down, .repeat]) { keyPress in
                 switch PromptSubmissionPolicy.decision(
@@ -46,15 +58,27 @@ struct PromptComposerView: View {
                     return .ignored
                 }
             }
+            .frame(minHeight: editorHeight, maxHeight: 160)
             .frame(height: editorHeight)
+            .background {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                promptFocused
+                                    ? TurboFieldfareMacTheme.fieldBorderFocused
+                                    : TurboFieldfareMacTheme.fieldBorder,
+                                lineWidth: promptFocused ? 1.5 : 1)
+                    }
+            }
             .overlay(alignment: .topLeading) {
                 if model.promptText.isEmpty {
-                    // Matches the NSTextView text origin: 5pt line fragment
-                    // padding, no vertical inset.
                     Text("Ask anything…")
                         .font(.body)
-                        .foregroundStyle(.tertiary)
-                        .padding(.leading, 5)
+                        .foregroundStyle(TurboFieldfareMacTheme.fieldPlaceholder)
+                        .padding(.leading, 13)
+                        .padding(.top, 8)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }
@@ -66,7 +90,15 @@ struct PromptComposerView: View {
     }
 
     private var editorHeight: CGFloat {
-        model.promptText.isEmpty ? 46 : 84
+        // Larger empty hit target so the field is easy to find and click.
+        model.promptText.isEmpty ? 64 : 96
+    }
+
+    private var shortcutCaption: String {
+        switch model.newlineShortcut {
+        case .return: return "⌘↩ to generate"
+        case .shiftReturn: return "↩ to generate · ⇧↩ for newline"
+        }
     }
 
     private var footer: some View {
@@ -82,12 +114,22 @@ struct PromptComposerView: View {
         Button {
             showingPromptTips.toggle()
         } label: {
-            Image(systemName: "questionmark.circle")
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
+            Label("Tips", systemImage: "questionmark.circle")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .contentShape(Capsule())
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
+        .background {
+            Capsule()
+                .fill(Color.primary.opacity(0.06))
+                .overlay {
+                    Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                }
+        }
         .accessibilityLabel("Prompt tips")
         .accessibilityHint("Shows guidance for writing effective prompts")
         .help("Prompt tips")
@@ -135,11 +177,22 @@ struct PromptComposerView: View {
             Button {
                 model.clearOutput()
             } label: {
-                Image(systemName: "trash")
-                    .frame(width: 28, height: 28)
-                    .contentShape(Circle())
+                Label("Clear", systemImage: "trash")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .contentShape(Capsule())
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+            .background {
+                Capsule()
+                    .fill(Color.primary.opacity(0.06))
+                    .overlay {
+                        Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                    }
+            }
             .accessibilityLabel("Clear output")
             .accessibilityHint("Removes the conversation transcript and last-run metrics")
             .help("Clear output")
@@ -148,12 +201,23 @@ struct PromptComposerView: View {
                 model.promptText = ""
                 promptFocused = true
             } label: {
-                Image(systemName: "xmark.circle.fill")
+                Label("Clear", systemImage: "xmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.medium))
                     .symbolRenderingMode(.hierarchical)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Circle())
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .contentShape(Capsule())
             }
             .buttonStyle(.borderless)
+            .foregroundStyle(.primary)
+            .background {
+                Capsule()
+                    .fill(Color.primary.opacity(0.06))
+                    .overlay {
+                        Capsule().stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                    }
+            }
             .accessibilityLabel("Clear prompt")
             .accessibilityHint("Clears the prompt editor")
             .help("Clear prompt")
