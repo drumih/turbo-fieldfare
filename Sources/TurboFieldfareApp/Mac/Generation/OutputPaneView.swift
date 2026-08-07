@@ -129,9 +129,10 @@ struct OutputPaneView: View {
     private var emptyPlaceholderContent: some View {
         VStack(spacing: 8) {
             if !needsModelLoad {
-                Text("Choose an example below or write your own prompt.")
+                Text(emptyReadyHeadline)
                     .font(.headline)
-                Text("Describe the goal, relevant context, and any constraints. Then press Generate.")
+                    .multilineTextAlignment(.center)
+                Text(emptyReadyDetail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -168,6 +169,32 @@ struct OutputPaneView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Matches what the chrome actually offers: examples only appear when the
+    /// prompt is empty and the examples toggle is on.
+    private var showsPromptExamplesInChrome: Bool {
+        model.promptText.isEmpty && model.showPromptExamples && !model.isRunning
+    }
+
+    private var emptyReadyHeadline: String {
+        if showsPromptExamplesInChrome {
+            return "Choose an example below or write your own prompt."
+        }
+        if model.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Write a prompt below to get started."
+        }
+        return "Your prompt is ready."
+    }
+
+    private var emptyReadyDetail: String {
+        if showsPromptExamplesInChrome {
+            return "Describe the goal, relevant context, and any constraints. Then press Generate."
+        }
+        if model.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Describe the goal, relevant context, and any constraints. Then press Generate."
+        }
+        return "Edit it if you like, then press Generate."
     }
 
     private var needsModelLoad: Bool {
@@ -511,7 +538,7 @@ private struct TranscriptPreview: View {
         Image(systemName: "cube.transparent")
             .font(.title2)
             .foregroundStyle(.quaternary)
-        Text("Choose an example below or write your own prompt.")
+        Text("Write a prompt below to get started.")
             .font(.headline)
         Text("Describe the goal, relevant context, and any constraints. Then press Generate.")
             .foregroundStyle(.secondary)

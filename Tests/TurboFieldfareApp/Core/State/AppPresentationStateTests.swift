@@ -133,8 +133,15 @@ import Testing
         var snapshot = Self.installedSnapshot(loadState: ready)
         snapshot.lastStopReason = .endOfTurn
         let state = AppPresentationState.resolve(snapshot)
-        #expect(state.label == "Done · finished")
+        // Normal end-of-turn is just "Done" — not "Done · finished".
+        #expect(state.label == "Done")
         #expect(!state.label.contains("endOfTurn"))
+        #expect(!state.label.contains("finished"))
+
+        snapshot.lastStopReason = .maxTokens
+        let lengthLimited = AppPresentationState.resolve(snapshot)
+        #expect(lengthLimited.label == "Done · length limit")
+        #expect(!lengthLimited.label.contains("maxTokens"))
     }
 
     @Test func insufficientSpaceUsesFormattedShortfall() {

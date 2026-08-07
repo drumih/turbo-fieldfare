@@ -2,6 +2,14 @@ import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct AppDiagnosticsTests {
+    @Test func stopReasonDisplayLabelsAreHumanReadable() {
+        #expect(AppStopReason.endOfTurn.displayLabel == "complete")
+        #expect(AppStopReason.maxTokens.displayLabel == "length limit")
+        #expect(AppStopReason.cancelled.displayLabel == "cancelled")
+        #expect(!AppStopReason.endOfTurn.displayLabel.contains("endOfTurn"))
+        #expect(AppStopReason.endOfTurn.displayLabel != "finished")
+    }
+
     @Test func requestStartTTFTAddsPrefillAndPostPrefillWait() {
         let diagnostics = AppDiagnostics(
             generatedTokens: 1,

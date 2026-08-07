@@ -177,8 +177,11 @@ public struct AppPresentationState: Equatable, Sendable {
 
         if case .ready = snapshot.loadState {
             if let reason = snapshot.lastStopReason {
-                return Self(label: "Done · \(reason.displayLabel)", severity: .success,
-                            secondaryAction: .unload)
+                // Normal completion is just "Done"; only unusual stops need a reason.
+                let label = reason == .endOfTurn
+                    ? "Done"
+                    : "Done · \(reason.displayLabel)"
+                return Self(label: label, severity: .success, secondaryAction: .unload)
             }
             return Self(label: "Ready", severity: .success, secondaryAction: .unload)
         }

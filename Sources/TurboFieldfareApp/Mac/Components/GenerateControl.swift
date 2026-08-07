@@ -54,6 +54,7 @@ struct GenerateControl: View {
         .accessibilityLabel("Generate")
         .accessibilityValue(shortcutHint)
         .accessibilityHint(generateAccessibilityHint)
+        .accessibilityAddTraits(.isButton)
         .help(generateHelp)
     }
 

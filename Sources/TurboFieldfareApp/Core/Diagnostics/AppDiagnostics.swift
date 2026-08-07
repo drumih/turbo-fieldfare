@@ -17,7 +17,7 @@ public enum AppStopReason: String, Equatable, Sendable {
         case .cancelled: return "cancelled"
         case .failed: return "error"
         case .eos: return "end of sequence"
-        case .endOfTurn: return "finished"
+        case .endOfTurn: return "complete"
         case .stopString: return "stop sequence"
         case .toolCalls: return "tool call"
         }

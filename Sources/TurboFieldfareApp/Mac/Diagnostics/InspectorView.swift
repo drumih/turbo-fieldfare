@@ -89,7 +89,7 @@ struct InspectorView: View {
                 }
             }
             Toggle("Show prompt examples", isOn: showPromptExamplesBinding)
-            Text("Send with controls Return versus Command-Return. Prompt examples appear when the prompt is empty.")
+            Text("Send with chooses whether Return or Command-Return generates. Prompt examples appear when the prompt is empty.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
