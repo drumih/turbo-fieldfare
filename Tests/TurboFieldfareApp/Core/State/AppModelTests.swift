@@ -323,7 +323,8 @@ import Testing
 
     @MainActor
     @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() {
-        let model = AppModel(client: MockInferenceClient())
+        let model = AppModel(client: MockInferenceClient(),
+                             installer: MockModelInstallerClient())
         let oldURL = FileManager.default.temporaryDirectory.appendingPathComponent("old.gturbo")
         let newURL = FileManager.default.temporaryDirectory.appendingPathComponent("new.gturbo")
         model.modelPathText = oldURL.path
