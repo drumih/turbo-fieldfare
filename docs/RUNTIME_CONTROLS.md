@@ -1,8 +1,8 @@
 # Runtime controls
 
-The Mac app exposes generation and runtime controls in its fixed right
-settings pane. FP16 is the fixed KV format. Generation settings apply to the
-next request; load-time settings require a reload.
+The Mac app and CLI expose generation and runtime controls. The app keeps them
+in its fixed right settings pane. FP16 is the fixed KV format. Generation
+settings apply to the next request; app load-time settings require a reload.
 
 ## Generation controls
 
@@ -24,23 +24,26 @@ benchmark protocol.
 
 ## Runtime settings
 
-| Control | Values | Production default | Effect |
-| --- | --- | --- | --- |
-| Expert-cache slots | 8, 16, 24, 32 | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. |
-| Prompt prefill | On, off | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
-| RDADVISE | Off, Default, Bounded, Adaptive | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
+| Control | Mac values | CLI flag | Production default | Effect |
+| --- | --- | --- | --- | --- |
+| Expert-cache slots | 8, 16, 24, 32 | `--expert-cache-slots` | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. Chunked prefill requires at least 16 slots. |
+| Expert-cache policy | LFU | `--expert-cache-policy lfu\|lru` | LFU | Chooses which expert is evicted when the cache is full. |
+| Prompt prefill | On, off | `--prefill on\|off` | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
+| Prefill chunk size | 128 | `--prefill-chunk-tokens 32\|64\|128` | 128 | Sets the number of prompt tokens processed by each chunked-prefill step. It has no effect while prefill is off. |
+| RDADVISE | Off, Default, Bounded, Adaptive | `--rdadvise off\|default\|bounded\|adaptive` | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
 
-Changing context length, expert-cache slots, or RDADVISE requires a reload.
-Some sampling changes also require a reload because greedy and sampled
+In the app, changing context length, expert-cache slots, or RDADVISE requires a
+reload. Some sampling changes also require a reload because greedy and sampled
 generation use different output-head paths. Prompt-prefill settings apply to
-each request and do not require a reload.
+each request and do not require a reload. Each CLI invocation loads a new model
+process, so its selected runtime settings apply immediately.
 
 ## Run an experiment
 
 1. Start from 4K context, 16 expert-cache slots, prefill on, and RDADVISE off.
 2. Keep the prompt and generation controls fixed.
 3. Record a baseline after a warmup.
-4. Change one runtime control and reload the model.
+4. Change one runtime control and reload the app model, or start a new CLI run.
 5. Compare prompt prefill, request TTFT, decode rate, peak memory, and I/O per
    token over repeated runs.
 6. Restore the production defaults when the experiment ends.

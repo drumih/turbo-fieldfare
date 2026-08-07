@@ -53,7 +53,7 @@ public func run(args: Args,
             seed: args.seed,
             stopStrings: args.stops,
             extraStopTokens: [])
-        let runtime = RuntimeConfiguration(
+        let runtime = try args.resolvedRuntimeConfiguration(
             forceLogitsHead: !config.isPureGreedy)
 
         guard MTLCreateSystemDefaultDevice() != nil else {
