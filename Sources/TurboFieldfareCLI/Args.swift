@@ -1,3 +1,14 @@
+import TurboFieldfare
+
+/// Prefill chunk selection. `.fixed` must name an allowed size;
+/// `.auto` resolves to the smallest allowed size covering the prompt,
+/// which minimizes routed-expert re-reads (expert I/O scales with
+/// prompt_tokens / chunk_tokens).
+public enum PrefillChunkChoice: Equatable, Sendable {
+    case fixed(Int)
+    case auto
+}
+
 public struct Args: Equatable, Sendable {
     public var model: String
     public var prompt: String?
@@ -11,6 +22,7 @@ public struct Args: Equatable, Sendable {
     public var seed: UInt64?
     public var stops: [String]
     public var quiet: Bool
+    public var prefillChunk: PrefillChunkChoice
 
     public init(model: String,
                 prompt: String? = nil,
@@ -23,7 +35,8 @@ public struct Args: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stops: [String] = [],
-                quiet: Bool = false) {
+                quiet: Bool = false,
+                prefillChunk: PrefillChunkChoice = .fixed(128)) {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -36,6 +49,7 @@ public struct Args: Equatable, Sendable {
         self.seed = seed
         self.stops = stops
         self.quiet = quiet
+        self.prefillChunk = prefillChunk
     }
 }
 
@@ -81,6 +95,11 @@ extension Args {
       --repetition-penalty <f>  Repetition penalty (default 1.0).
       --seed <uint64>           Deterministic sampling seed (default off).
       --stop <string>           Stop substring (repeatable).
+      --prefill-chunk <n|auto>  Prefill chunk tokens (default 128). Larger
+                                chunks cut routed-expert re-reads during
+                                prompt processing; auto sizes the chunk to
+                                the prompt. Allowed: 32, 64, 128, 256, 512,
+                                1024, 2048, 4096.
       --quiet                   Suppress the timing footer.
       --help                    Show this message.
     """
@@ -98,6 +117,7 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var quiet = false
+        var prefillChunk = PrefillChunkChoice.fixed(128)
 
         var index = 0
         while index < argv.count {
@@ -105,6 +125,17 @@ extension Args {
             switch flag {
             case "--help":
                 throw ArgsError.helpRequested
+            case "--prefill-chunk":
+                let value = try takeValue(argv, &index, flag: flag)
+                if value == "auto" {
+                    prefillChunk = .auto
+                } else if let parsed = Int(value),
+                          RuntimeConfiguration.allowedPrefillChunkTokens
+                              .contains(parsed) {
+                    prefillChunk = .fixed(parsed)
+                } else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
             case "--quiet":
                 quiet = true
                 index += 1
@@ -184,7 +215,8 @@ extension Args {
                     repetitionPenalty: repetitionPenalty,
                     seed: seed,
                     stops: stops,
-                    quiet: quiet)
+                    quiet: quiet,
+                    prefillChunk: prefillChunk)
     }
 
     private static func takeValue(_ argv: [String],

@@ -168,7 +168,14 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
         case chunked
     }
 
-    public static let maxChunkTokens = 128
+    /// Largest supported prefill chunk. Chunked prefill re-reads each
+    /// layer's routed experts once per chunk, so expert I/O scales with
+    /// prompt_tokens / chunk_tokens: measured on Qwen 3.6 (M5, 2,940-token
+    /// long-synthesis case), chunk 128 reads 228 GB and chunk 4096 reads
+    /// 18 GB -- one sequential sweep of the expert files, the floor.
+    /// Scratch and the FP16 KV ring scale with the CONFIGURED chunk, not
+    /// this cap, so installations that keep the 128 default see no change.
+    public static let maxChunkTokens = 4096
 
     public let mode: Mode
     public let chunkTokens: Int

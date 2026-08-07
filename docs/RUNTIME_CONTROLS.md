@@ -29,8 +29,11 @@ benchmark protocol.
 | Expert-cache slots | 8, 16, 24, 32 | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. |
 | Prompt prefill | On, off | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
 | RDADVISE | Off, Default, Bounded, Adaptive | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
+| Prefill chunk tokens | 32, 64, 128, 256, 512, 1024, 2048, 4096, or auto (CLI `--prefill-chunk`) | 128 | Tokens processed per prefill chunk. Larger chunks re-read the routed experts fewer times, which lowers prefill I/O and time. `auto` picks the smallest allowed size that covers the whole prompt. Larger chunks use more prefill scratch memory, and on sliding-window models more KV ring memory. |
 
-Changing context length, expert-cache slots, or RDADVISE requires a reload.
+The prefill chunk size is a CLI control; the Mac app uses the default.
+Changing context length, expert-cache slots, RDADVISE, or the prefill chunk
+size requires a reload.
 Some sampling changes also require a reload because greedy and sampled
 generation use different output-head paths. Prompt-prefill settings apply to
 each request and do not require a reload.
