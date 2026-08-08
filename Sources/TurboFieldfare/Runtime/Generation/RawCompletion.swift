@@ -197,9 +197,6 @@ public func runRawCompletion(producer: any LogitProducer,
         ? JSONTokenFilter(tokenizer: tokenizer, extraStopIDs: config.extraStopTokens)
         : nil
     let grammar: (any TokenGrammarFilter)? = jsonFilter ?? toolFilter
-    let grammarExhausted = jsonFilter != nil
-        ? "force-json: no token in the vocabulary can extend the JSON document"
-        : "tool-call grammar: no token in the vocabulary can extend the tool call"
     var jsonAssembler = UTF8StreamAssembler()
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
@@ -211,28 +208,53 @@ public func runRawCompletion(producer: any LogitProducer,
     // and drops undecodable byte-fallback tails, either of which would desync
     // what the grammar guaranteed from what the caller receives.
     func flushTail() -> String {
-        jsonFilter != nil ? jsonAssembler.flush() : detok.flush()
+        if jsonFilter != nil { return jsonAssembler.flush() }
+        // Inside an open `<|tool_call>` region the byte-fallback pieces the
+        // detokenizer is holding back are raw bytes of an argument — the `é`
+        // tail of a path — not assistant prose. The region dies with the
+        // generation and is never decoded, so those bytes are not text anyone
+        // may show: dropping them is the whole point of holding them back.
+        if toolFilter?.isInsideCall == true { return "" }
+        return detok.flush()
     }
 
     while true {
         try Task.checkCancellation()
 
-        let tokenID: Int32
+        let sampled: Int32?
         if generated == 0, let seed = prefillSeed {
             switch seed {
             case .greedyToken(let token):
-                tokenID = Int32(bitPattern: token)
+                sampled = Int32(bitPattern: token)
             case .logitsWritten:
-                tokenID = try sampleOnce(scratch: scratch, context: context,
+                sampled = try sampleOnce(scratch: scratch, context: context,
                                          history: history, config: config, position: generated,
-                                         grammar: grammar, exhaustedMessage: grammarExhausted)
+                                         grammar: grammar)
             }
         } else if fusedGreedy {
-            tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
+            sampled = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
-            tokenID = try sampleOnce(scratch: scratch, context: context,
+            sampled = try sampleOnce(scratch: scratch, context: context,
                                      history: history, config: config, position: generated,
-                                     grammar: grammar, exhaustedMessage: grammarExhausted)
+                                     grammar: grammar)
+        }
+        // The grammar admits no token at all. Under the tool-call grammar that
+        // is the region byte cap: at `GemmaToolCallParser.maximumBytes` every
+        // token overflows it and `<tool_call|>` cannot close an argument object
+        // that is still open, so the region can only be abandoned. That is the
+        // budget running out inside a call, which the caller already handles —
+        // report it as such instead of failing the whole request. Force-json
+        // has no bounded region to abandon: there, an empty vocabulary is a
+        // real configuration failure.
+        guard let tokenID = sampled else {
+            guard toolFilter != nil else {
+                throw GeneratorError.invalidGenerationConfig(
+                    "force-json: no token in the vocabulary can extend the JSON document")
+            }
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
+            if !tail.isEmpty { onProgress(.tail(tail)) }
+            reason = .maxTokens
+            break
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
@@ -300,10 +322,11 @@ public func runRawCompletion(producer: any LogitProducer,
                            toolNameVetoes: toolFilter?.nameVetoCount ?? 0)
 }
 
+/// nil when the active grammar accepts nothing: the caller decides whether that
+/// ends the generation or fails it.
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
                         history: [Int32], config: GenerationConfig, position: Int,
-                        grammar: (any TokenGrammarFilter)?,
-                        exhaustedMessage: String) throws -> Int32 {
+                        grammar: (any TokenGrammarFilter)?) throws -> Int32? {
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
@@ -313,18 +336,17 @@ private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
     let sampled = Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
     guard let grammar, !grammar.tryAccept(sampled) else { return sampled }
     grammar.noteVeto()
-    return try grammarFallbackToken(scratch: scratch, filter: grammar,
-                                    exhaustedMessage: exhaustedMessage)
+    return grammarFallbackToken(scratch: scratch, filter: grammar)
 }
 
 /// The GPU-sampled token broke the active grammar. `scratch.probs` (shared
 /// storage, written by the completed softcap+softmax pass) is walked in
 /// probability order — first grammar-accepted token wins. A capped candidate
 /// set covers the common case; the full vocabulary is scanned only if every
-/// high-probability candidate is grammar-invalid.
+/// high-probability candidate is grammar-invalid. nil when the sweep comes back
+/// empty: the grammar has painted itself into a corner.
 private func grammarFallbackToken(scratch: RawCompletionScratch,
-                                  filter: any TokenGrammarFilter,
-                                  exhaustedMessage: String) throws -> Int32 {
+                                  filter: any TokenGrammarFilter) -> Int32? {
     let vocab = scratch.sampler.vocab
     let probs = scratch.probs.contents().bindMemory(to: Float16.self, capacity: vocab)
 
@@ -352,5 +374,5 @@ private func grammarFallbackToken(scratch: RawCompletionScratch,
     for candidate in remaining where filter.tryAccept(candidate.id) {
         return candidate.id
     }
-    throw GeneratorError.invalidGenerationConfig(exhaustedMessage)
+    return nil
 }

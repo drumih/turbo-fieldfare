@@ -195,6 +195,65 @@ struct ServerPromptCacheTests {
         #expect(cache.entry == nil)
     }
 
+    /// A tool call cut off by the completion budget answers 200 with
+    /// `finish_reason: "length"`, but its KV ends inside a `<|tool_call>` the
+    /// response never revealed. The client continues from the transcript it
+    /// received — which cannot contain that call — so the entry has to be
+    /// refused: a hit would resume generation inside an invisible call.
+    @Test func kvEndingInsideAnOpenToolCallIsNeverPublished() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "first"),
+        ])
+        let prompt = tokenizer.encode(
+            try tokenizer.applyChatTemplate(initial.messages),
+            addBOS: false)
+        // `Sure.<|tool_call>call:read{path:<|"|>` — the budget ran out with the
+        // path argument half spelled.
+        let generated = tokenizer.encode("Sure.", addBOS: false)
+            + [tokenizer.toolCallStartID]
+            + tokenizer.encode("call:read{path:", addBOS: false)
+            + [tokenizer.escapeTokenID]
+        let cut = rawResult(
+            prompt: prompt,
+            kvBacked: prompt + generated,
+            boundary: try #require(tokenizer.encode("/tmp", addBOS: false).first),
+            reason: .maxTokens)
+        let continuation = request(messages: initial.messages + [
+            GFTokenizer.Message(role: .assistant, content: "Sure."),
+            GFTokenizer.Message(role: .user, content: "go on"),
+        ])
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(continuation.messages),
+            addBOS: false)
+        var cache = ServerPromptCache()
+
+        // Nothing else about the turn stops it: as a plain length stop it is a
+        // textbook text continuation, which is exactly why the region has to be
+        // reported separately.
+        cache.publish(domain: domain, request: initial, content: "Sure.",
+                      calls: [], result: cut)
+        guard case .hit(let effective, _) = cache.match(
+            domain: domain,
+            request: continuation,
+            renderedPromptIDs: rendered,
+            tokenizer: tokenizer) else {
+            Issue.record("expected the unguarded entry to hit")
+            return
+        }
+        #expect(effective.contains(tokenizer.toolCallStartID))
+        #expect(!rendered.contains(tokenizer.toolCallStartID))
+
+        cache.publish(domain: domain, request: initial, content: "Sure.",
+                      calls: [], result: cut, toolRegionOpen: true)
+        #expect(cache.entry == nil)
+        #expect(cache.match(
+            domain: domain,
+            request: continuation,
+            renderedPromptIDs: rendered,
+            tokenizer: tokenizer) == .miss)
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = []

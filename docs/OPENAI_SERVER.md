@@ -185,7 +185,11 @@ Consequences worth knowing:
   what the decoder needs to return `C:\Users`.
 - Numbers are written out (`100000`, not `1e5`).
 - A call cut off by `max_completion_tokens` returns `finish_reason: "length"`
-  with whatever was decoded before it, instead of failing the request.
+  with whatever was decoded before it, instead of failing the request. The
+  unfinished call is dropped whole: no fragment of its arguments appears in
+  `content`, and the turn is never cached, so the next request re-prefills
+  instead of resuming inside a call the response never showed. A string
+  argument that reaches the 256 KiB limit ends the same way.
 
 Use `--tool-call-grammar off` to restore the unconstrained token stream. The
 flag is a rollback control: with it off the server generates exactly the tokens

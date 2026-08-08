@@ -680,7 +680,15 @@ public actor ServerModelSession: ServerInferenceBackend {
                 content: content,
                 calls: calls,
                 result: result,
-                stopStringFiltered: stopMatcher.isStopped)
+                stopStringFiltered: stopMatcher.isStopped,
+                toolRegionOpen: truncatedByBudget)
+        }
+        if truncatedByBudget {
+            // The cache refused the entry above; the KV it would have described
+            // must go too. It ends inside a call this response did not reveal,
+            // so nothing may resume from it — same disposal the pre-constraint
+            // 500 got from the `completed` guard, without the 500.
+            runner.reset()
         }
         completed = true
         return ServerCompletion(

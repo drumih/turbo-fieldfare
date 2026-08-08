@@ -43,15 +43,23 @@ struct ServerPromptCache: Sendable {
         entry = nil
     }
 
+    /// Records the turn as the prefix the next request may resume from. Only a
+    /// turn the client can reproduce from what it received qualifies, so the
+    /// entry is refused for an unsafe stop, for a filtered stop string, and —
+    /// `toolRegionOpen` — for a KV that ends inside a `<|tool_call>` region the
+    /// generation never closed: the client's history cannot contain a call the
+    /// response never revealed, so resuming there would silently continue one.
     mutating func publish(
         domain: ServerPromptCacheDomain,
         request: ValidatedChatRequest,
         content: String,
         calls: [ParsedToolCall],
         result: RawDecodeResult,
-        stopStringFiltered: Bool = false
+        stopStringFiltered: Bool = false,
+        toolRegionOpen: Bool = false
     ) {
-        guard result.kvPosition == result.kvBackedTokenIDs.count,
+        guard !toolRegionOpen,
+              result.kvPosition == result.kvBackedTokenIDs.count,
               !result.kvBackedTokenIDs.isEmpty,
               result.uncommittedBoundaryTokenIDs.count == 1,
               !stopStringFiltered,

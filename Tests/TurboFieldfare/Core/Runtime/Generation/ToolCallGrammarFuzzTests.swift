@@ -316,6 +316,52 @@ import TurboFieldfareValidationSupport
         #expect(coverage.bodiesWithMultibyteScalar >= 1)
     }
 
+    /// The walks stop at 96 steps, so they never come within three orders of
+    /// magnitude of the 256 KiB region cap — which is why property 2 above
+    /// reads as "the scan is never empty" when the truth is "never empty below
+    /// the cap". At the cap it IS empty, unavoidably: every token overflows it
+    /// and `<tool_call|>` cannot close a string that is still open. That state
+    /// is the one dead end the grammar has, and it is admissible only because
+    /// `runRawCompletion` reads it as the budget running out inside a call —
+    /// hence the `isInsideCall` assertion, which is what routes it to the
+    /// `.maxTokens` stop instead of a failed request.
+    @Test func theRegionByteCapIsTheGrammarsOnlyDeadEnd() {
+        let filler: Int32 = 9_000
+        let opening = #"call:read{path:<|"|>"#
+        let chunk = (GemmaToolCallParser.maximumBytes - opening.utf8.count) / 4
+        #expect(opening.utf8.count + 4 * chunk == GemmaToolCallParser.maximumBytes)
+
+        func fill(_ count: Int) -> ToolCallTokenFilter {
+            let filter = ToolCallTokenFilter(
+                pieceLookup: { $0 == filler ? String(repeating: "a", count: chunk)
+                                            : Self.pieces[$0] },
+                markers: Self.markerIDs,
+                allowedNames: Self.declaredNames)
+            for id in [Self.markerIDs.toolCallStart, Self.id("call:"), Self.id("read"),
+                       Self.id("{"), Self.id("path"), Self.id(":"), Self.markerIDs.escape] {
+                #expect(filter.tryAccept(id))
+            }
+            for step in 0..<count {
+                #expect(filter.tryAccept(filler), "filler \(step) did not fit under the cap")
+            }
+            return filter
+        }
+
+        // One filler short of the cap the sweep still finds a move, so the cap
+        // is what closes the door and not the argument shape.
+        let roomy = fill(3)
+        #expect(Self.ids.contains { roomy.tryAccept($0) })
+
+        let stuck = fill(4)
+        #expect(!Self.ids.contains { stuck.tryAccept($0) })
+        #expect(!stuck.tryAccept(filler))
+        #expect(stuck.isInsideCall)
+    }
+
+    private static func id(_ piece: String) -> Int32 {
+        pieces.first { $0.value == piece }!.key
+    }
+
     /// Seeds that previously exposed a bug stay pinned as ordinary cases.
     @Test(arguments: [0, 1, 2, 3, 7, 42, 4_999])
     func pinnedSeedsReplayCleanly(index: Int) {
