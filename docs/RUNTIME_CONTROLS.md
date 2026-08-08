@@ -15,6 +15,7 @@ The Mac app and CLI expose these generation controls:
 | Temperature | 0...2 in 0.05 steps | `--temperature` | 0.2 | `0` is greedy; positive values sample. |
 | Top-K | Off or 1...256 | `--top-k` | 64 | Keeps at most K candidates. CLI `0` turns it off. |
 | Top-P | Off or 0.01...1 | `--top-p` | 0.95 | Applies nucleus truncation before Top-K and is effective only while Top-K is enabled. |
+| Forced JSON | CLI only | `--force-json` | Off | Constrains decoding to grammar-valid JSON (RFC 8259); the sampler can only pick tokens a byte-level JSON automaton accepts. Cannot be combined with `--stop`. |
 
 With positive temperature, a CLI Top-P below `1` requires Top-K between `1`
 and `256`. To disable both truncation controls, pass `--top-k 0 --top-p 1`.
