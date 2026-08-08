@@ -31,8 +31,21 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         self.idGenerator = idGenerator
     }
 
-    public func consume(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
+    /// `validatedBody` carries the grammar-approved bytes of the region this
+    /// token closed. When present the parse runs on THOSE bytes instead of
+    /// `decode(_:skipSpecialTokens:)`: the library decode applies `cleanUp`
+    /// (` ,` → `,`, ` 's` → `'s`; swift-transformers defaults it on and this
+    /// tokenizer's config does not disable it), which silently rewrites string
+    /// arguments.
+    public func consume(tokenID: Int32,
+                        delta: String,
+                        validatedBody: [UInt8]? = nil) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw GemmaToolCallParserError.malformed }
+        // NOTE: the channel markers are checked before the tool-region
+        // accumulation below, so a marker inside a region is swallowed instead
+        // of reaching the parser. That is a real gap (upstream issue #84), but
+        // reordering would change behaviour with the constraint off; with the
+        // constraint on the filter vetoes those markers before they get here.
         if tokenID == tokenizer.channelStartID {
             label = ""
             channel = .label
@@ -56,7 +69,8 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                 throw GemmaToolCallParserError.malformed
             }
             toolTokens = nil
-            let text = tokenizer.decode(tokens, skipSpecialTokens: false)
+            let text = validatedBody.map { String(decoding: $0, as: UTF8.self) }
+                ?? tokenizer.decode(tokens, skipSpecialTokens: false)
             do {
                 let call = try GemmaToolCallParser().parse(
                     text, allowedTools: allowedTools, id: idGenerator())
@@ -76,6 +90,9 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         }
         if var tokens = toolTokens {
             tokens.append(tokenID)
+            // NOTE: a token-count cap, not a byte cap — deliberately left alone
+            // because tightening it would change behaviour with the constraint
+            // off. The tool-call filter caps the real byte count.
             guard tokens.count * MemoryLayout<Int32>.size <= GemmaToolCallParser.maximumBytes else {
                 failed = true
                 throw GemmaToolCallParserError.oversized
@@ -110,4 +127,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     }
 
     public var hasToolCalls: Bool { emittedCalls > 0 }
+
+    /// A `<|tool_call>` region is open: the generation was cut before it closed.
+    public var hasOpenToolRegion: Bool { toolTokens != nil }
 }

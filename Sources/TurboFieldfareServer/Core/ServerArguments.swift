@@ -7,6 +7,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let maxContext: Int
     public let queueLimit: Int
     public let promptCacheMode: ServerPromptCacheMode
+    public let toolCallGrammar: ServerToolCallGrammarMode
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
@@ -18,6 +19,9 @@ public struct ServerArguments: Equatable, Sendable {
       --queue-limit <count>  Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                              Prompt KV reuse mode (default single-prefix).
+      --tool-call-grammar <on|off>
+                             Constrain <|tool_call> blocks to the Gemma
+                             tool-call grammar (default on).
       --help                 Show this help.
     """
 
@@ -28,6 +32,7 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var toolCallGrammar: ServerToolCallGrammarMode = .on
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -67,6 +72,12 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--tool-call-grammar":
+                guard let parsed = ServerToolCallGrammarMode(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--tool-call-grammar must be on or off")
+                }
+                toolCallGrammar = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -77,7 +88,8 @@ public struct ServerArguments: Equatable, Sendable {
                                modelID: modelID,
                                maxContext: maxContext,
                                queueLimit: queueLimit,
-                               promptCacheMode: promptCacheMode)
+                               promptCacheMode: promptCacheMode,
+                               toolCallGrammar: toolCallGrammar)
     }
 }
 

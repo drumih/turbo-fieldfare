@@ -95,6 +95,30 @@ struct OpenAIValidationTests {
         }
     }
 
+    /// The validator accepts hyphens, so the decoder has to as well: the chat
+    /// template renders the declared name verbatim into `call:<name>{`.
+    @Test func hyphenatedToolNameSurvivesValidationAndDecoding() throws {
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[{"role":"user","content":"x"}],
+          "tools":[{
+            "type":"function",
+            "function":{"name":"resolve-library-id","parameters":{"type":"object"}}
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let names = Set(validated.tools.map(\.name))
+        #expect(names == ["resolve-library-id"])
+        let call = try GemmaToolCallParser().parse(
+            #"call:resolve-library-id{name:<|"|>swift<|"|>}"#,
+            allowedTools: names,
+            id: "call_test")
+        #expect(call.name == "resolve-library-id")
+    }
+
     @Test func acceptsLeadingSystemAndDeveloperGuidance() throws {
         let data = Data(#"""
         {"model":"m","messages":[
@@ -449,6 +473,44 @@ struct GemmaToolCallTests {
         #expect(parsed.argumentsJSON.contains(#""note":"a\b\f""#))
     }
 
+    /// The library decode runs swift-transformers' `cleanUp` pass, which
+    /// rewrites ` ,` → `,` and ` 's` → `'s` — inside a string argument that is
+    /// silent corruption. Grammar-validated bytes bypass it.
+    @Test func validatedBodyBypassesDetokenizerCleanUp() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let body = #"call:read{path:<|"|>a , b 's c<|"|>}"#
+        let decoder = StructuredAssistantDecoder(
+            tokenizer: tokenizer, allowedTools: ["read"], idGenerator: { "call_fixed" })
+        #expect(try decoder.consume(tokenID: tokenizer.toolCallStartID, delta: "").isEmpty)
+        #expect(decoder.hasOpenToolRegion)
+        for id in tokenizer.encode(body, addBOS: false) {
+            #expect(try decoder.consume(tokenID: id, delta: "").isEmpty)
+        }
+        let events = try decoder.consume(tokenID: tokenizer.toolCallEndID,
+                                         delta: "",
+                                         validatedBody: Array(body.utf8))
+        #expect(!decoder.hasOpenToolRegion)
+        guard case .toolCall(let call)? = events.first else {
+            Issue.record("expected a tool call, got \(events)")
+            return
+        }
+        #expect(call.arguments == .object(["path": .string("a , b 's c")]))
+
+        // Without the validated bytes the same token stream loses the spaces.
+        let plain = StructuredAssistantDecoder(
+            tokenizer: tokenizer, allowedTools: ["read"], idGenerator: { "call_fixed" })
+        _ = try plain.consume(tokenID: tokenizer.toolCallStartID, delta: "")
+        for id in tokenizer.encode(body, addBOS: false) {
+            _ = try plain.consume(tokenID: id, delta: "")
+        }
+        let cleaned = try plain.consume(tokenID: tokenizer.toolCallEndID, delta: "")
+        guard case .toolCall(let corrupted)? = cleaned.first else {
+            Issue.record("expected a tool call, got \(cleaned)")
+            return
+        }
+        #expect(corrupted.arguments != call.arguments)
+    }
+
     @Test func suppressesThoughtBlockAndExposesTextAfterChannelClose() async throws {
         let tokenizer = try await GFTokenizer.load()
         let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
@@ -488,6 +550,27 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.toolCallGrammar == .on)
+    }
+
+    @Test func parsesToolCallGrammarModeAndRejectsUnknownMode() throws {
+        let off = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--tool-call-grammar", "off",
+        ])
+        #expect(off.toolCallGrammar == .off)
+        let on = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--tool-call-grammar", "on",
+        ])
+        #expect(on.toolCallGrammar == .on)
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--tool-call-grammar", "strict",
+            ])
+        }
+        #expect(ServerArguments.usage.contains("--tool-call-grammar"))
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {

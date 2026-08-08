@@ -85,7 +85,12 @@ private struct Parser {
         let start = index
         while index < characters.count {
             let character = characters[index]
-            guard character.isLetter || character.isNumber || character == "_" else { break }
+            // Matches OpenAIToolName.isValid, which the server already accepts:
+            // hyphens are legal in OpenAI tool names, and the chat template
+            // renders the name verbatim into the call, so a narrower identifier
+            // alphabet makes every hyphenated tool undecodable.
+            guard character.isLetter || character.isNumber
+                    || character == "_" || character == "-" else { break }
             index += 1
         }
         guard index > start else { throw GemmaToolCallParserError.malformed }
@@ -171,12 +176,20 @@ private struct Parser {
         try consume("\"")
         var result = ""
         while !isAtEnd {
-            if take("\"") { return result }
-            if take("\\") {
+            // `take` skips whitespace before matching, which silently swallowed
+            // every space, tab and newline inside the string: `"/tmp/a b c"`
+            // decoded as `/tmp/abc`. Inside a string no character is a
+            // delimiter to skip past.
+            let character = characters[index]
+            if character == "\"" {
+                index += 1
+                return result
+            }
+            index += 1
+            if character == "\\" {
                 result += try escapedFragment()
             } else {
-                result.append(characters[index])
-                index += 1
+                result.append(character)
             }
         }
         throw GemmaToolCallParserError.malformed

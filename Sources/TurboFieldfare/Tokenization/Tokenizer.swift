@@ -42,6 +42,10 @@ public struct GFTokenizer: @unchecked Sendable {
     public let toolResponseEndID: Int32
     public let channelStartID: Int32
     public let channelEndID: Int32
+    /// `<|"|>`, the template's `escape_token`: the string delimiter inside a
+    /// tool-call argument body, and the one marker-shaped piece the tool-call
+    /// grammar must let through verbatim.
+    public let escapeTokenID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
 
@@ -117,7 +121,8 @@ public struct GFTokenizer: @unchecked Sendable {
               let toolCallEnd = tokenizer.convertTokenToId("<tool_call|>"),
               let toolResponseEnd = tokenizer.convertTokenToId("<tool_response|>"),
               let channelStart = tokenizer.convertTokenToId("<|channel>"),
-              let channelEnd = tokenizer.convertTokenToId("<channel|>") else {
+              let channelEnd = tokenizer.convertTokenToId("<channel|>"),
+              let escape = tokenizer.convertTokenToId("<|\"|>") else {
             throw GFTokenizerError.missingSpecialToken("Gemma tool/channel markers")
         }
 
@@ -131,6 +136,7 @@ public struct GFTokenizer: @unchecked Sendable {
         self.toolResponseEndID = Int32(toolResponseEnd)
         self.channelStartID = Int32(channelStart)
         self.channelEndID = Int32(channelEnd)
+        self.escapeTokenID = Int32(escape)
         self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
         self.vocabSize = 262_144
     }

@@ -439,33 +439,58 @@ import Foundation
         #expect(step(&automaton, UInt8(ascii: "u")))
     }
 
-    @Test func loneLowSurrogateRejectedAtFinalDigit() {
+    @Test func loneLowSurrogateRejectedAsEarlyAsPossible() {
         var automaton = JSONByteAutomaton()
-        #expect(feed(&automaton, #"{"s": "\udc0"#))
-        #expect(!step(&automaton, UInt8(ascii: "0")))
-        // A non-surrogate completion from the same prefix stays legal:
-        // \udc0 can't be saved, but the rejection must not corrupt state —
-        // hex digits beyond the range are equally rejected…
-        #expect(!step(&automaton, UInt8(ascii: "f")))
+        #expect(feed(&automaton, #"{"s": "\ud"#))
+        // Every completion of `\udc` is a lone low surrogate, so the verdict
+        // lands here instead of two digits later. Waiting would park the
+        // automaton on a prefix no byte can extend, and the grammar-driven
+        // fallback would have nothing left to pick.
+        for dead in "cdef" {
+            #expect(!step(&automaton, dead.asciiValue!))
+        }
+        // Prefixes that can still reach a non-surrogate stay open.
+        #expect(step(&automaton, UInt8(ascii: "7")))
+        #expect(feed(&automaton, "ff\"}"))
+        #expect(automaton.isComplete)
     }
 
-    @Test func highSurrogateFollowedByNonLowEscapeRejected() {
+    @Test func pairCompletionIsPrunedToTheLowSurrogateRange() {
         var automaton = JSONByteAutomaton()
-        #expect(feed(&automaton, #"{"s": "\ud800\u004"#))
-        #expect(!step(&automaton, UInt8(ascii: "1")))   // A is not low
+        #expect(feed(&automaton, #"{"s": "\ud800\u"#))
+        // Only DC...DF can still land on a low surrogate.
         #expect(!step(&automaton, UInt8(ascii: "0")))
+        #expect(step(&automaton, UInt8(ascii: "d")))
+        #expect(!step(&automaton, UInt8(ascii: "8")))   // D8xx is high, not low
+        #expect(step(&automaton, UInt8(ascii: "c")))
+        #expect(feed(&automaton, "00\"}"))
+        #expect(automaton.isComplete)
     }
 
-    @Test func highSurrogateFollowedByHighRejected() {
-        var automaton = JSONByteAutomaton()
-        // The verdict lands on the fourth hex digit: \ud80_ can only be a
-        // high surrogate, which is not a valid pair completion.
-        #expect(feed(&automaton, #"{"s": "\ud800\ud80"#))
-        #expect(!step(&automaton, UInt8(ascii: "0")))
-        // A proper pair from scratch works: \ud800 + \udc00 = U+10000.
-        var paired = JSONByteAutomaton()
-        #expect(feed(&paired, "{\"s\": \"\\ud800\\udc00\"}"))
-        #expect(paired.isComplete)
+    /// No `\uXXXX` prefix may be a dead end. This is the escape-level form of
+    /// the guarantee the tool-call fuzz asserts globally: a state the fallback
+    /// scan cannot leave turns a generation into a thrown error.
+    @Test func noEscapePrefixIsADeadEnd() {
+        let digits = Array("0123456789abcdef".utf8)
+        for opening in [#"{"s": "\u"#, #"{"s": "\ud800\u"#] {
+            var root = JSONByteAutomaton()
+            #expect(feed(&root, opening))
+            var frontier = [root]
+            for _ in 0..<4 {
+                var next: [JSONByteAutomaton] = []
+                for state in frontier {
+                    var reachable = false
+                    for digit in digits {
+                        var candidate = state
+                        guard candidate.consume(digit) else { continue }
+                        reachable = true
+                        next.append(candidate)
+                    }
+                    #expect(reachable, "dead escape prefix after \(opening)")
+                }
+                frontier = next
+            }
+        }
     }
 
     @Test func nonSurrogateEscapesUnaffected() {

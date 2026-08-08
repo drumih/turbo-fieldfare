@@ -89,6 +89,32 @@ struct StructuredOutputDiagnosticsTests {
         }
     }
 
+    /// The grammar's veto counters ride along with the existing evidence: a
+    /// failure that still happens with the constraint on means the grammar has
+    /// a hole, and the counters say how hard it was fighting the model.
+    @Test func vetoCountersAreReportedInTheLogLine() {
+        var result = makeResult()
+        result.toolGrammarVetoes = 7
+        result.toolNameVetoes = 3
+        let diagnostics = StructuredOutputFailureDiagnostics(
+            renderedPromptIDs: [8, 10, 11, 12],
+            effectivePromptIDs: [10, 11, 12],
+            result: result,
+            maxCompletionTokens: 8,
+            decodedCalls: 0,
+            visibleBytes: 0,
+            stopStringMatched: false,
+            toolStartID: 48,
+            toolEndID: 49,
+            toolResponseID: 102,
+            toolResponseEndID: 103)
+        #expect(diagnostics.toolGrammarVetoes == 7)
+        #expect(diagnostics.toolNameVetoes == 3)
+        #expect(diagnostics.logDescription.contains("tool_grammar_vetoes=7"))
+        #expect(diagnostics.logDescription.contains("tool_name_vetoes=3"))
+        #expect(makeDiagnostics().logDescription.contains("tool_grammar_vetoes=0"))
+    }
+
     @Test func tokenHashUsesUInt32LittleEndianBytes() {
         let tokens: [Int32] = [1, -1]
         #expect(StructuredOutputFailureDiagnostics.i32leSHA256([tokens[...]])
@@ -102,11 +128,8 @@ struct StructuredOutputDiagnosticsTests {
         #expect(!diagnostics.prefillAccountingMatches)
     }
 
-    private func makeDiagnostics(prefillTokens: Int = 3)
-        -> StructuredOutputFailureDiagnostics {
-        let renderedPrompt: [Int32] = [8, 10, 11, 12]
-        let effectivePrompt: [Int32] = [10, 11, 12]
-        let result = RawDecodeResult(
+    private func makeResult(prefillTokens: Int = 3) -> RawDecodeResult {
+        RawDecodeResult(
             prefillTokens: prefillTokens,
             cachedPromptTokens: 1,
             computedPrefillTokens: 2,
@@ -115,8 +138,15 @@ struct StructuredOutputDiagnosticsTests {
             decodeSeconds: 0,
             reason: .toolCalls,
             kvPosition: 5,
-            kvBackedTokenIDs: effectivePrompt + [20, 21],
+            kvBackedTokenIDs: [10, 11, 12, 20, 21],
             uncommittedBoundaryTokenIDs: [102])
+    }
+
+    private func makeDiagnostics(prefillTokens: Int = 3)
+        -> StructuredOutputFailureDiagnostics {
+        let renderedPrompt: [Int32] = [8, 10, 11, 12]
+        let effectivePrompt: [Int32] = [10, 11, 12]
+        let result = makeResult(prefillTokens: prefillTokens)
         return StructuredOutputFailureDiagnostics(
             renderedPromptIDs: renderedPrompt,
             effectivePromptIDs: effectivePrompt,

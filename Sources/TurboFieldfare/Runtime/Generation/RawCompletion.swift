@@ -31,6 +31,12 @@ public struct RawDecodeResult: Sendable {
     /// Times the JSON grammar vetoed the GPU-sampled token and the
     /// probability-ordered fallback chose instead. 0 unless `forceJSON`.
     public var grammarVetoes: Int = 0
+    /// Times the tool-call grammar vetoed the GPU-sampled token. 0 unless the
+    /// tool-call constraint ran.
+    public var toolGrammarVetoes: Int = 0
+    /// Of those, the ones where the rejected token died while the function name
+    /// was still being spelled — the model wanted a tool that was not declared.
+    public var toolNameVetoes: Int = 0
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -90,15 +96,24 @@ public func runRawCompletion(producer: any LogitProducer,
                              scratch: RawCompletionScratch,
                              prefillConfig: PrefillRuntimeConfig = .defaultChunked,
                              start: RawCompletionStart = .reset,
+                             toolFilter: ToolCallTokenFilter? = nil,
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
+    // The two grammars speak different languages about the same token stream;
+    // there is no meaningful intersection to enforce.
+    guard !(config.forceJSON && toolFilter != nil) else {
+        throw GeneratorError.invalidGenerationConfig(
+            "forceJSON and the tool-call grammar cannot constrain the same generation")
+    }
     guard !promptIds.isEmpty else {
         throw GeneratorError.emptyPrompt
     }
     let fusedRunner = producer as? RealForwardRunner
     let fusedGreedy = fusedRunner?.usesFusedGreedyHead == true
-    guard !fusedGreedy || config.isPureGreedy else {
+    // A constrained decode has to see and veto candidates, which the fused
+    // head's GPU argmax never surfaces.
+    guard !fusedGreedy || (config.isPureGreedy && toolFilter == nil) else {
         throw PrefillError.unsupportedPrefillSeed(
             "the fused-head producer cannot serve this sampling configuration; use a logits head")
     }
@@ -181,6 +196,10 @@ public func runRawCompletion(producer: any LogitProducer,
     let jsonFilter = config.forceJSON
         ? JSONTokenFilter(tokenizer: tokenizer, extraStopIDs: config.extraStopTokens)
         : nil
+    let grammar: (any TokenGrammarFilter)? = jsonFilter ?? toolFilter
+    let grammarExhausted = jsonFilter != nil
+        ? "force-json: no token in the vocabulary can extend the JSON document"
+        : "tool-call grammar: no token in the vocabulary can extend the tool call"
     var jsonAssembler = UTF8StreamAssembler()
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
@@ -206,14 +225,14 @@ public func runRawCompletion(producer: any LogitProducer,
             case .logitsWritten:
                 tokenID = try sampleOnce(scratch: scratch, context: context,
                                          history: history, config: config, position: generated,
-                                         jsonFilter: jsonFilter)
+                                         grammar: grammar, exhaustedMessage: grammarExhausted)
             }
         } else if fusedGreedy {
             tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
             tokenID = try sampleOnce(scratch: scratch, context: context,
                                      history: history, config: config, position: generated,
-                                     jsonFilter: jsonFilter)
+                                     grammar: grammar, exhaustedMessage: grammarExhausted)
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
@@ -276,12 +295,15 @@ public func runRawCompletion(producer: any LogitProducer,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
                            uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
-                           grammarVetoes: jsonFilter?.vetoCount ?? 0)
+                           grammarVetoes: jsonFilter?.vetoCount ?? 0,
+                           toolGrammarVetoes: toolFilter?.vetoCount ?? 0,
+                           toolNameVetoes: toolFilter?.nameVetoCount ?? 0)
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
                         history: [Int32], config: GenerationConfig, position: Int,
-                        jsonFilter: JSONTokenFilter? = nil) throws -> Int32 {
+                        grammar: (any TokenGrammarFilter)?,
+                        exhaustedMessage: String) throws -> Int32 {
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
@@ -289,18 +311,20 @@ private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
     cb.commit(); cb.waitUntilCompleted()
     try checkCommandBufferError(cb.error)
     let sampled = Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
-    guard let jsonFilter, !jsonFilter.tryAccept(sampled) else { return sampled }
-    jsonFilter.noteVeto()
-    return try grammarFallbackToken(scratch: scratch, filter: jsonFilter)
+    guard let grammar, !grammar.tryAccept(sampled) else { return sampled }
+    grammar.noteVeto()
+    return try grammarFallbackToken(scratch: scratch, filter: grammar,
+                                    exhaustedMessage: exhaustedMessage)
 }
 
-/// The GPU-sampled token broke the JSON grammar. `scratch.probs` (shared
+/// The GPU-sampled token broke the active grammar. `scratch.probs` (shared
 /// storage, written by the completed softcap+softmax pass) is walked in
-/// probability order — first automaton-accepted token wins. A capped
-/// candidate set covers the common case; the full vocabulary is scanned only
-/// if every high-probability candidate is grammar-invalid.
+/// probability order — first grammar-accepted token wins. A capped candidate
+/// set covers the common case; the full vocabulary is scanned only if every
+/// high-probability candidate is grammar-invalid.
 private func grammarFallbackToken(scratch: RawCompletionScratch,
-                                  filter: JSONTokenFilter) throws -> Int32 {
+                                  filter: any TokenGrammarFilter,
+                                  exhaustedMessage: String) throws -> Int32 {
     let vocab = scratch.sampler.vocab
     let probs = scratch.probs.contents().bindMemory(to: Float16.self, capacity: vocab)
 
@@ -328,6 +352,5 @@ private func grammarFallbackToken(scratch: RawCompletionScratch,
     for candidate in remaining where filter.tryAccept(candidate.id) {
         return candidate.id
     }
-    throw GeneratorError.invalidGenerationConfig(
-        "force-json: no token in the vocabulary can extend the JSON document")
+    throw GeneratorError.invalidGenerationConfig(exhaustedMessage)
 }
