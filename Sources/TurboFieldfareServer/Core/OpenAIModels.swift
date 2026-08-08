@@ -79,11 +79,18 @@ public struct OpenAIChatMessage: Codable, Equatable, Sendable {
     public let toolCalls: [OpenAIToolCall]?
     public let toolCallID: String?
     public let name: String?
+    /// Reasoning-channel text returned with an assistant message
+    /// (K3 thinking; ignored by the Gemma path).
+    ///
+    /// No default value: a `let` with a default is skipped by the
+    /// synthesized Decodable conformance.
+    public let reasoningContent: String?
 
     enum CodingKeys: String, CodingKey {
         case role, content, name
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case reasoningContent = "reasoning_content"
     }
 }
 
@@ -155,6 +162,10 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     public let logprobs: Bool?
     public let presencePenalty: Float?
     public let frequencyPenalty: Float?
+    /// OpenAI-style reasoning effort (`low`/`high`/`max` on K3; ignored by
+    /// the Gemma path). No default value: a `let` with a default is skipped
+    /// by the synthesized Decodable conformance.
+    public let reasoningEffort: String?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
@@ -168,6 +179,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case repetitionPenalty = "repetition_penalty"
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
+        case reasoningEffort = "reasoning_effort"
     }
 }
 
@@ -250,6 +262,25 @@ public struct ValidatedChatRequest: Sendable {
     public let includeUsage: Bool
     public let generationConfig: GenerationConfig
     public let maximumCompletionTokens: Int
+    /// K3-shaped request payload; non-nil only when the K3 request validator
+    /// produced this request. The Gemma fields above are empty in that case.
+    public let k3: K3ValidatedChat?
+
+    public init(messages: [GFTokenizer.Message],
+                tools: [GFTokenizer.FunctionDefinition],
+                stream: Bool,
+                includeUsage: Bool,
+                generationConfig: GenerationConfig,
+                maximumCompletionTokens: Int,
+                k3: K3ValidatedChat? = nil) {
+        self.messages = messages
+        self.tools = tools
+        self.stream = stream
+        self.includeUsage = includeUsage
+        self.generationConfig = generationConfig
+        self.maximumCompletionTokens = maximumCompletionTokens
+        self.k3 = k3
+    }
 }
 
 private enum OpenAIToolName {

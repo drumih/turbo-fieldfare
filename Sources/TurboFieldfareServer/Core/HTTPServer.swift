@@ -5,12 +5,21 @@ import NIOPosix
 import Synchronization
 import TurboFieldfare
 
+/// Which request validator the HTTP layer runs before handing a request to
+/// the backend. `.gemma` is the default and leaves the Gemma path untouched;
+/// `.k3` pairs with `K3ServerModelSession` on v2 bundles.
+public enum ServerRequestValidation: Sendable {
+    case gemma
+    case k3
+}
+
 public actor TurboFieldfareHTTPServer {
     public static let maximumBodyBytes = 1_048_576
 
     private let group: MultiThreadedEventLoopGroup
     private let modelID: String
     private let backend: any ServerInferenceBackend
+    private let requestValidation: ServerRequestValidation
     private let coordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
     private let childChannels = ChildChannelRegistry()
@@ -20,11 +29,13 @@ public actor TurboFieldfareHTTPServer {
     public init(modelID: String,
                 queueLimit: Int,
                 backend: any ServerInferenceBackend,
+                requestValidation: ServerRequestValidation = .gemma,
                 heartbeatInterval: TimeAmount = .seconds(5),
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
         self.modelID = modelID
         self.backend = backend
+        self.requestValidation = requestValidation
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
         self.heartbeatInterval = heartbeatInterval
     }
@@ -32,6 +43,7 @@ public actor TurboFieldfareHTTPServer {
     public func start(port: Int) async throws -> Channel {
         let modelID = self.modelID
         let backend = self.backend
+        let requestValidation = self.requestValidation
         let coordinator = self.coordinator
         let heartbeatInterval = self.heartbeatInterval
         let childChannels = self.childChannels
@@ -47,6 +59,7 @@ public actor TurboFieldfareHTTPServer {
                     channel.pipeline.addHandler(ServerHTTPHandler(
                         modelID: modelID,
                         backend: backend,
+                        requestValidation: requestValidation,
                         coordinator: coordinator,
                         heartbeatInterval: heartbeatInterval,
                         childChannels: childChannels))
@@ -115,6 +128,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     private let modelID: String
     private let backend: any ServerInferenceBackend
+    private let requestValidation: ServerRequestValidation
     private let coordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
     private let childChannels: ChildChannelRegistry
@@ -125,11 +139,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     init(modelID: String,
          backend: any ServerInferenceBackend,
+         requestValidation: ServerRequestValidation,
          coordinator: ServerCoordinator,
          heartbeatInterval: TimeAmount,
          childChannels: ChildChannelRegistry) {
         self.modelID = modelID
         self.backend = backend
+        self.requestValidation = requestValidation
         self.coordinator = coordinator
         self.heartbeatInterval = heartbeatInterval
         self.childChannels = childChannels
@@ -208,7 +224,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         do {
             let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
             let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(bytes))
-            let request = try OpenAIRequestValidator.validate(decoded, modelID: modelID)
+            let request: ValidatedChatRequest
+            switch requestValidation {
+            case .gemma:
+                request = try OpenAIRequestValidator.validate(decoded, modelID: modelID)
+            case .k3:
+                request = try K3RequestValidator.validate(decoded, modelID: modelID)
+            }
             let responseID = "chatcmpl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let created = Int(Date().timeIntervalSince1970)
             let contextBox = SendableContext(context)
@@ -262,6 +284,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                         contextBox.value,
                                         self.chunk(id: responseID, created: created,
                                                    delta: ["content": text],
+                                                   finishReason: nil))
+                                case .reasoning(let text):
+                                    self.writeStreamChunk(
+                                        contextBox.value,
+                                        self.chunk(id: responseID, created: created,
+                                                   delta: ["reasoning_content": text],
                                                    finishReason: nil))
                                 case .toolCall(let call):
                                     self.writeToolCall(contextBox.value,
@@ -320,6 +348,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             "role": "assistant",
             "content": encodedContent,
         ]
+        if let reasoning = completion.reasoningContent, !reasoning.isEmpty {
+            message["reasoning_content"] = reasoning
+        }
         if !completion.toolCalls.isEmpty {
             message["tool_calls"] = completion.toolCalls.map(toolCallObject)
         }

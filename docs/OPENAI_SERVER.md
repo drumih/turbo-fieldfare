@@ -124,16 +124,18 @@ Keep the client context setting at or below the server's `--max-context`.
 
 ## Prompt reuse
 
-Single-prefix KV reuse is on by default. Send the complete message history with
-every request. When a request continues the retained conversation exactly, the
-server reuses the verified KV prefix and reports the number of reused tokens in:
+Single-prefix state reuse is on by default. Send the complete message history
+with every request. When a request continues the retained conversation exactly,
+the server reuses the verified prefix and reports the number of reused tokens in:
 
 ```text
 usage.prompt_tokens_details.cached_tokens
 ```
 
 The server retains one prefix. A different or incompatible history replaces
-it. Use `--prompt-cache-mode off` to disable reuse.
+it. Gemma retains its KV state; K3 retains the full recurrent KDA/conv state,
+active MLA rows, last logits, and routing-predictor history. Both paths require
+exact token-prefix identity. Use `--prompt-cache-mode off` to disable reuse.
 
 ## Tool calls
 
@@ -189,3 +191,29 @@ watch memory pressure.
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not
 prompt text, tool arguments, headers, or request bodies.
+
+## Kimi K3 bundles
+
+When `--model` points at a `.gturbo` **v2** bundle (Kimi K3), the server probes
+the manifest and serves the K3 engine instead of Gemma. Differences from the
+Gemma behavior above:
+
+- The model id defaults to the bundle's manifest id (for example `Kimi-K3`);
+  `--model-id` still overrides.
+- Requests accept an optional `reasoning_effort` field (`"low"`, `"high"`, or
+  `"max"`; anything else is a 400). Thinking is always on; assistant responses
+  carry `reasoning_content` alongside `content`, and streamed reasoning arrives
+  as `reasoning_content` deltas. Multi-turn clients must send prior assistant
+  turns back with both `reasoning_content` and `tool_calls` intact — dropping
+  them degrades the model (upstream serving requirement).
+- `tool_choice` accepts `"auto"`, `"none"`, and `"required"`.
+- The `stop` field is rejected with a 400 for K3 (token-level stop only);
+  `max_tokens`/`max_completion_tokens` work as usual. Generation stops at the
+  model's `<|end_of_msg|>` token.
+- Single-prefix state reuse is enabled by default. K3 snapshots the recurrent
+  KDA/conv state, active MLA cache rows, last logits, and routing-predictor
+  history; a token mismatch falls back to a full prefill. Hits report their
+  exact reused count in `cached_tokens`. Use `--prompt-cache-mode off` to
+  disable it.
+- Decode speed is SSD-bound: plan for roughly 0.3–1 tok/s and size client
+  timeouts accordingly. Prefill uses the chunked NAX path by default.

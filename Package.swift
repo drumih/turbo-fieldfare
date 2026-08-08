@@ -1,5 +1,19 @@
 // swift-tools-version: 6.2
 import PackageDescription
+import Foundation
+
+// `#Preview` macros expand through the PreviewsMacros plugin, which ships only
+// with Xcode. On hosts with Command Line Tools but no Xcode the app target
+// fails to compile, so previews are gated behind TF_PREVIEWS: auto-enabled
+// when an Xcode installation is present, overridable via the TF_PREVIEWS
+// environment variable ("1"/"0").
+let tfPreviewsEnabled: Bool = {
+    if let forced = ProcessInfo.processInfo.environment["TF_PREVIEWS"] {
+        return forced == "1"
+    }
+    return FileManager.default.fileExists(atPath: "/Applications/Xcode.app/Contents/Developer")
+        || FileManager.default.fileExists(atPath: "/Applications/Xcode-beta.app/Contents/Developer")
+}()
 
 let package = Package(
     name: "TurboFieldfare",
@@ -99,7 +113,8 @@ let package = Package(
             path: "Sources/TurboFieldfareApp/Mac",
             resources: [
                 .copy("Resources/turbofieldfare-app-icon.png"),
-            ]
+            ],
+            swiftSettings: tfPreviewsEnabled ? [.define("TF_PREVIEWS")] : []
         ),
         .target(
             name: "TurboFieldfareValidationSupport",
@@ -120,7 +135,8 @@ let package = Package(
         .testTarget(
             name: "TurboFieldfareTestsCore",
             dependencies: ["TurboFieldfare", "TurboFieldfareValidationSupport", "TurboFieldfareRepackCore", "TurboFieldfareCLICore"],
-            path: "Tests/TurboFieldfare/Core"
+            path: "Tests/TurboFieldfare/Core",
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "TurboFieldfareRepackTests",

@@ -1,0 +1,3 @@
+[
+  {"role": "user", "content": "Explain why chunked prefill reduces time to first token while keeping memory bounded."}
+]

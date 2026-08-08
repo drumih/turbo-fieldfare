@@ -488,6 +488,7 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.modelVerification == "full-sha256")
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {
@@ -505,6 +506,20 @@ struct ServerArgumentTests {
             try ServerArguments.parse([
                 "--model", "model.gturbo",
                 "--prompt-cache-mode", "many",
+            ])
+        }
+    }
+
+    @Test func parsesModelVerificationPolicy() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--model-verification", "trusted-install",
+        ])
+        #expect(arguments.modelVerification == "trusted-install")
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--model-verification", "skip",
             ])
         }
     }

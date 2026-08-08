@@ -151,6 +151,25 @@ public enum Posix {
         }
     }
 
+    /// Create a copy-on-write clone. There is deliberately no byte-copy
+    /// fallback: the expert-reuse workflow's disk bound depends on cloning.
+    public static func cloneFile(from source: String, to destination: String) throws {
+        guard try entryKind(source) == .regular else {
+            throw RepackError.installPathUnsafe(
+                path: source, detail: "clone source is not a regular file")
+        }
+        guard try entryKind(destination) == .absent else {
+            throw RepackError.installPathUnsafe(
+                path: destination, detail: "clone destination already exists")
+        }
+        if Darwin.clonefile(source, destination, UInt32(CLONE_NOFOLLOW)) != 0 {
+            throw RepackError.cloneFailed(from: source, to: destination, errno: errno)
+        }
+        let descriptor = try openReadNoFollow(destination)
+        defer { close(descriptor) }
+        try fsync(descriptor, path: destination)
+    }
+
     public static func mkdirP(_ path: String) throws {
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

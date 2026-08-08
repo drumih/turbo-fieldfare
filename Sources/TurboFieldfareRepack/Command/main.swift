@@ -4,6 +4,9 @@ import TurboFieldfareRepackCore
 private let usage = """
 Usage:
   TurboFieldfareRepack --output <model.gturbo> [--overwrite] [--resume]
+  TurboFieldfareRepack --output <model.gturbo> --model-family kimi-k3 [--trunk-quant int4|int8]
+  TurboFieldfareRepack --output <existing-k3.gturbo> --model-family kimi-k3 \\
+    --trunk-quant int8 --reuse-existing-experts [--resume]
   TurboFieldfareRepack --discard-partial --output <model.gturbo>
   TurboFieldfareRepack --verify-install --input-gturbo <model.gturbo>
   TurboFieldfareRepack --help
@@ -12,6 +15,14 @@ The installer streams the supported Gemma 4 checkpoint from Hugging Face and
 repackages it without materializing the source checkpoint on disk. Set HF_TOKEN
 only if Hugging Face requests authentication. A cancelled or interrupted
 download can be continued with --resume or removed with --discard-partial.
+
+--model-family kimi-k3 installs the pinned moonshotai/Kimi-K3 checkpoint
+instead, quantizing the BF16 trunk to affine-g64 (int4 default, or int8) and
+copying the MXFP4 routed experts verbatim.
+
+--reuse-existing-experts upgrades an existing verified K3 bundle in place:
+its expert files are APFS-cloned into a sibling partial bundle, only the trunk
+source ranges are downloaded, and the completed bundle is atomically swapped.
 """
 
 private struct Arguments {
@@ -21,6 +32,9 @@ private struct Arguments {
     var discardPartial = false
     var verifyInstall = false
     var inputGTurbo: String?
+    var modelFamily: String?
+    var trunkQuant: String?
+    var reuseExistingExperts = false
 
     static func parse(_ values: [String]) throws -> Arguments {
         var parsed = Arguments()
@@ -42,14 +56,21 @@ private struct Arguments {
             case "--verify-install":
                 parsed.verifyInstall = true
                 index += 1
-            case "--output", "--input-gturbo":
+            case "--reuse-existing-experts":
+                parsed.reuseExistingExperts = true
+                index += 1
+            case "--output", "--input-gturbo", "--model-family", "--trunk-quant":
                 guard index + 1 < values.count else {
                     throw ParseError.missingValue(flag)
                 }
                 if flag == "--output" {
                     parsed.output = values[index + 1]
-                } else {
+                } else if flag == "--input-gturbo" {
                     parsed.inputGTurbo = values[index + 1]
+                } else if flag == "--model-family" {
+                    parsed.modelFamily = values[index + 1]
+                } else {
+                    parsed.trunkQuant = values[index + 1]
                 }
                 index += 2
             default:
@@ -60,11 +81,32 @@ private struct Arguments {
         guard !(parsed.resume && parsed.discardPartial) else {
             throw ParseError.invalidMode("--resume and --discard-partial are mutually exclusive")
         }
+        if let family = parsed.modelFamily,
+           family != "gemma" && family != "kimi-k3" {
+            throw ParseError.invalidMode("unknown model family: \(family)")
+        }
+        if parsed.trunkQuant != nil, parsed.modelFamily != "kimi-k3" {
+            throw ParseError.invalidMode("--trunk-quant requires --model-family kimi-k3")
+        }
+        if let quant = parsed.trunkQuant, K3TrunkQuant(rawValue: quant) == nil {
+            throw ParseError.invalidMode("unknown trunk quantization: \(quant)")
+        }
+        if parsed.reuseExistingExperts {
+            guard parsed.modelFamily == "kimi-k3" else {
+                throw ParseError.invalidMode(
+                    "--reuse-existing-experts requires --model-family kimi-k3")
+            }
+            guard parsed.trunkQuant != nil else {
+                throw ParseError.invalidMode(
+                    "--reuse-existing-experts requires an explicit --trunk-quant")
+            }
+        }
         if parsed.discardPartial {
             guard parsed.output != nil else {
                 throw ParseError.missingRequired("--output")
             }
-            guard parsed.inputGTurbo == nil, !parsed.overwrite, !parsed.verifyInstall else {
+            guard parsed.inputGTurbo == nil, !parsed.overwrite, !parsed.verifyInstall,
+                  !parsed.reuseExistingExperts else {
                 throw ParseError.invalidMode("--discard-partial only accepts --output")
             }
             return parsed
@@ -73,7 +115,8 @@ private struct Arguments {
             guard parsed.inputGTurbo != nil else {
                 throw ParseError.missingRequired("--input-gturbo")
             }
-            guard parsed.output == nil, !parsed.overwrite, !parsed.resume else {
+            guard parsed.output == nil, !parsed.overwrite, !parsed.resume,
+                  !parsed.reuseExistingExperts else {
                 throw ParseError.invalidMode("verification accepts only --input-gturbo")
             }
         } else {
@@ -147,6 +190,46 @@ private func run(_ values: [String]) async -> Int32 {
     }
 
     guard let output = arguments.output else { return 2 }
+    if arguments.modelFamily == "kimi-k3" {
+        let trunkQuant = arguments.trunkQuant.flatMap(K3TrunkQuant.init(rawValue:)) ?? .int4
+        let options = K3SupportedModelSource.installOptions(
+            outputDirectory: URL(fileURLWithPath: output),
+            overwrite: arguments.overwrite || arguments.reuseExistingExperts,
+            token: ProcessInfo.processInfo.environment["HF_TOKEN"],
+            resume: arguments.resume,
+            trunkQuant: trunkQuant)
+        let effectiveOptions = arguments.reuseExistingExperts
+            ? K3RemoteStreamingRepackOptions(
+                repoID: options.repoID,
+                revision: options.revision,
+                outputDir: options.outputDir,
+                token: options.token,
+                requireKnownSource: options.requireKnownSource,
+                trunkQuant: options.trunkQuant,
+                copyAuditPath: options.copyAuditPath,
+                rangeChunkBytes: options.rangeChunkBytes,
+                writeTileBytes: options.writeTileBytes,
+                minFreeReserveBytes: options.minFreeReserveBytes,
+                overwrite: true,
+                resume: options.resume,
+                reuseExpertsFrom: output,
+                dryRunSpaceCheck: options.dryRunSpaceCheck,
+                downloadSession: options.downloadSession,
+                baseURL: options.baseURL,
+                rangeRetryAttempts: options.rangeRetryAttempts,
+                retryBaseDelayNs: options.retryBaseDelayNs)
+            : options
+        do {
+            let result = try await K3RemoteStreamingRepacker(options: effectiveOptions).run()
+            print("Installed \(K3SupportedModelSource.displayName)")
+            print("Source revision: \(result.resolvedCommit)")
+            print("Model: \(result.outputDir)")
+            return 0
+        } catch {
+            printError("install failed: \(error)")
+            return 1
+        }
+    }
     let options = SupportedModelSource.installOptions(
         outputDirectory: URL(fileURLWithPath: output),
         overwrite: arguments.overwrite,

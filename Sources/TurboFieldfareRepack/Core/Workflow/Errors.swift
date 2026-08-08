@@ -8,6 +8,7 @@ public enum RepackError: Error, CustomStringConvertible {
     case preadShort(path: String, expected: Int, got: Int, errno: Int32)
     case mmapFailed(path: String, errno: Int32)
     case renameFailed(from: String, to: String, errno: Int32)
+    case cloneFailed(from: String, to: String, errno: Int32)
     case fsyncFailed(path: String, errno: Int32)
     case mkdirFailed(path: String, errno: Int32)
     case installBusy(path: String)
@@ -60,6 +61,8 @@ public enum RepackError: Error, CustomStringConvertible {
             return "pread(\(p)) short: expected \(exp), got \(got), errno \(e)"
         case .mmapFailed(let p, let e):         return "mmap(\(p)) failed: errno \(e)"
         case .renameFailed(let a, let b, let e):return "rename(\(a) -> \(b)) failed: errno \(e)"
+        case .cloneFailed(let a, let b, let e):
+            return "APFS clone(\(a) -> \(b)) failed: errno \(e)"
         case .fsyncFailed(let p, let e):        return "fsync(\(p)) failed: errno \(e)"
         case .mkdirFailed(let p, let e):        return "mkdir(\(p)) failed: errno \(e)"
         case .installBusy(let p):

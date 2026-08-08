@@ -460,7 +460,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     }
 }
 
-#if DEBUG
+#if DEBUG && TF_PREVIEWS
 private struct TranscriptPreview: View {
     let response: String
     let isTerminal: Bool

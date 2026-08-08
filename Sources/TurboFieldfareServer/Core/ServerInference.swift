@@ -5,6 +5,9 @@ import TurboFieldfare
 public enum ServerInferenceEvent: Equatable, Sendable {
     case content(String)
     case toolCall(ParsedToolCall)
+    /// Reasoning-channel text delta (K3 thinking turns only; the Gemma path
+    /// never emits this).
+    case reasoning(String)
 }
 
 public struct ServerCompletion: Equatable, Sendable {
@@ -12,15 +15,19 @@ public struct ServerCompletion: Equatable, Sendable {
     public let toolCalls: [ParsedToolCall]
     public let finishReason: String
     public let usage: OpenAIUsage
+    /// Full reasoning-channel text (K3 thinking turns; nil on the Gemma path).
+    public let reasoningContent: String?
 
     public init(content: String,
                 toolCalls: [ParsedToolCall],
                 finishReason: String,
-                usage: OpenAIUsage) {
+                usage: OpenAIUsage,
+                reasoningContent: String? = nil) {
         self.content = content
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
+        self.reasoningContent = reasoningContent
     }
 }
 
@@ -388,7 +395,8 @@ public actor ServerModelSession: ServerInferenceBackend {
 
     public static func load(modelDirectory: URL,
                             maxContext: Int,
-                            promptCacheMode: ServerPromptCacheMode = .singlePrefix) async throws -> ServerModelSession {
+                            promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+                            integrityPolicy: ModelIntegrityPolicy = .fullSha256) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
             throw GFTokenizerError.missingToolTemplate
@@ -405,7 +413,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             device: context.device,
             streamingMode: .pread(slotCount: runtime.expertCacheSlots),
             expertCachePolicy: runtime.modelExpertCachePolicy,
-            integrityPolicy: .fullSha256)
+            integrityPolicy: integrityPolicy)
         let runner = try RealForwardRunner(model: model,
                                            context: context,
                                            maxContext: maxContext,

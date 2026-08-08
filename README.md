@@ -317,6 +317,51 @@ TurboFieldfare currently includes:
 Current scope is text-only inference from the pinned Gemma 4 26B-A4B
 instruction checkpoint on Apple Silicon Macs with at least 8 GB of RAM.
 
+### Kimi K3 (`.gturbo` v2)
+
+This fork adds a second engine: **Kimi K3** (2.78T-parameter MoE — 69 Kimi
+Delta Attention layers + 24 NoPE MLA layers, 896 experts with top-16 routing
+through a 3584-wide latent bottleneck, Attention Residuals) running on a
+128 GB Apple Silicon Mac. The 1.447 TB of routed experts stay in their native
+MXFP4 format on SSD and stream through bounded, throughput-tuned,
+whole-expert `pread` jobs (Darwin `F_NOCACHE` in the production K3 auto
+profile) with temporal prediction prefetch; the ~32 GB trunk (int4/int8 affine) stays
+resident; prefill uses the M5 Neural Accelerator through Metal 4 tensor ops.
+Expect roughly 0.3–1 tok/s decode — a batch/research runtime, not interactive
+chat. The server can retain one exact K3 prefix by snapshotting its recurrent
+and MLA state; cache hits are reported through `cached_tokens`. Read
+[docs/KIMI_K3_EVALUATION.md](docs/KIMI_K3_EVALUATION.md) for the
+feasibility math and the MLX-vs-GGUF evaluation,
+[docs/K3_DATAFLOW.md](docs/K3_DATAFLOW.md) for the exact architecture
+contract, and `AGENTS.md` for the repack/CLI/server commands.
+
+K3 defaults differ from Gemma: greedy sampling, a 64-token CLI response cap,
+32-token chunked prefill, one contiguous read per expert, and an online worker
+choice among 1/2/4. Override them with `--temperature`, `--max-new`,
+`--prefill-chunk`, `--expert-io-splits`, `--expert-io-workers`, and
+`--expert-io-cache`. A completed bundle with `verified-install.json` may use
+`--model-verification trusted-install` to skip per-layer 15.7 GB hashes; the
+default remains `full-sha256`.
+
+To move an existing verified K3 bundle between the int4 and int8 trunk
+profiles without allocating or downloading a second 1.447 TB expert payload:
+
+```bash
+swift run -c release TurboFieldfareRepack \
+  --output scratch/kimi-k3.gturbo \
+  --model-family kimi-k3 \
+  --trunk-quant int8 \
+  --reuse-existing-experts
+```
+
+This mode requires APFS cloning. It validates the existing manifest and
+`verified-install.json`, clones the immutable MXFP4 layer files copy-on-write,
+downloads only the BF16 trunk ranges, validates the completed sibling bundle,
+then uses an atomic directory swap. Cancellation before promotion keeps the
+old bundle intact; resume with the same command plus `--resume`. There is no
+byte-copy fallback when cloning is unavailable because that would invalidate
+the bounded disk-space guarantee.
+
 ### Future work
 
 - Build iPhone and iPad apps, then measure inference speed and memory use on
