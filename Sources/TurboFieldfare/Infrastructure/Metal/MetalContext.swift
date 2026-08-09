@@ -115,9 +115,7 @@ public final class MetalContext: @unchecked Sendable {
             combined += "\n// ==== \(name).metal ====\n" + src + "\n"
         }
         do {
-            let opts = MTLCompileOptions()
-            // The MPP prefill path requires MSL 4.0 tensor operations.
-            opts.languageVersion = .version4_0
+            let opts = makeCompileOptions()
             return try device.makeLibrary(source: combined, options: opts)
         } catch {
             throw MetalError.libraryCompileFailed("\(error)")
@@ -130,13 +128,25 @@ public final class MetalContext: @unchecked Sendable {
             throw MetalError.missingShaderResource(module)
         }
         let src = try String(contentsOf: url, encoding: .utf8)
-        let opts = MTLCompileOptions()
-        opts.languageVersion = .version4_0
+        let opts = makeCompileOptions()
         do {
             return try device.makeLibrary(source: src, options: opts)
         } catch {
             throw MetalError.libraryCompileFailed("\(error)")
         }
+    }
+
+    private static func makeCompileOptions() -> MTLCompileOptions {
+        let options = MTLCompileOptions()
+        if #available(macOS 26.0, iOS 26.0, *) {
+            // MSL 4 exposes the optional MPP tensor paths. The same sources
+            // guard those kernels with __HAVE_TENSOR__ so older systems compile
+            // the production Metal 3.2 fallbacks instead.
+            options.languageVersion = .version4_0
+        } else {
+            options.languageVersion = .version3_2
+        }
+        return options
     }
 
     public func pipeline(_ name: String) throws -> MTLComputePipelineState {
