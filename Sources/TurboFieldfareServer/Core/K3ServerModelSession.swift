@@ -59,6 +59,12 @@ public actor K3ServerModelSession: ServerInferenceBackend {
         maxContext: Int,
         prefillMode: K3PrefillMode = .chunked(chunkTokens: 32),
         promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+        prefetchPolicy: K3ExpertPrefetchPolicy = .off,
+        residentExpertCacheBytes: UInt64 = 0,
+        expertShardRoots: [URL] = [],
+        ioWorkers: K3ExpertIOWorkers = .adaptive,
+        ioSplits: Int = K3ExpertStreaming.defaultIOSplits,
+        ioCachePolicy: K3ExpertIOCachePolicy = .automatic,
         integrityPolicy: ModelIntegrityPolicy = .fullSha256
     ) throws -> K3ServerModelSession {
         let tokenizer = try K3Tokenizer(vocabURL: bundleURL
@@ -67,6 +73,13 @@ public actor K3ServerModelSession: ServerInferenceBackend {
             .appendingPathComponent("tiktoken.model"))
         let engine = try K3Engine.load(bundleURL: bundleURL,
                                        maxContext: maxContext,
+                                       prefetchPolicy: prefetchPolicy,
+                                       ioSplits: ioSplits,
+                                       ioWorkers: ioWorkers,
+                                       ioCachePolicy: ioCachePolicy,
+                                       residentExpertCacheBytes:
+                                        residentExpertCacheBytes,
+                                       expertShardRoots: expertShardRoots,
                                        integrityPolicy: integrityPolicy)
         return K3ServerModelSession(engine: engine,
                                     tokenizer: tokenizer,

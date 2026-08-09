@@ -488,7 +488,53 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.prefillChunk == 32)
+        #expect(arguments.expertPredict == "off")
+        #expect(arguments.expertCacheGiB == 0)
+        #expect(arguments.expertShardRoots.isEmpty)
+        #expect(arguments.expertIOWorkers == "auto")
+        #expect(arguments.expertIOSplits == 1)
+        #expect(arguments.expertIOCache == "auto")
         #expect(arguments.modelVerification == "full-sha256")
+    }
+
+    @Test func parsesK3DiskRuntimeControlsAndLargeContext() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--max-context", "262144",
+            "--prefill-chunk", "64",
+            "--expert-predict", "selective",
+            "--expert-cache-gib", "24",
+            "--expert-shard-root", "/Volumes/a/k3",
+            "--expert-shard-root", "/Volumes/b/k3",
+            "--expert-io-workers", "4",
+            "--expert-io-splits", "1",
+            "--expert-io-cache", "uncached",
+        ])
+        #expect(arguments.maxContext == 262_144)
+        #expect(arguments.prefillChunk == 64)
+        #expect(arguments.expertPredict == "selective")
+        #expect(arguments.expertCacheGiB == 24)
+        #expect(arguments.expertShardRoots == ["/Volumes/a/k3", "/Volumes/b/k3"])
+        #expect(arguments.expertIOWorkers == "4")
+        #expect(arguments.expertIOSplits == 1)
+        #expect(arguments.expertIOCache == "uncached")
+    }
+
+    @Test func rejectsInvalidK3DiskRuntimeControls() {
+        for pair in [
+            ["--max-context", "1048576"],
+            ["--prefill-chunk", "16"],
+            ["--expert-predict", "maybe"],
+            ["--expert-cache-gib", "65"],
+            ["--expert-io-workers", "0"],
+            ["--expert-io-splits", "3"],
+            ["--expert-io-cache", "cached"],
+        ] {
+            #expect(throws: ServerArgumentError.self) {
+                try ServerArguments.parse(["--model", "model.gturbo"] + pair)
+            }
+        }
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {

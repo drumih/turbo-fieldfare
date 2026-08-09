@@ -1,11 +1,14 @@
-swift run -c release TurboFieldfareCLI \
+.build/release/TurboFieldfareCLI \
   --model scratch/kimi-k3.gturbo \
   --messages-file messages.json \
   --no-thinking \
   --temperature 0 \
   --max-new 64 \
+  --max-context 262144 \
   --prefill chunked \
   --prefill-chunk 32 \
+  --expert-predict off \
+  --expert-cache-gib 16 \
   --expert-io-workers auto \
   --expert-io-splits 1 \
   --expert-io-cache uncached \

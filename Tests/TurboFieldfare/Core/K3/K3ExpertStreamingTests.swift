@@ -7,9 +7,9 @@ import Metal
 
 /// `K3ExpertStreaming` against synthetic per-layer expert files with known
 /// byte patterns: split-pread chunk correctness, prediction hit/miss
-/// accounting across two tokens, bank ping-pong never overwriting in-use
-/// slots, and the stats counters. No model bundle involved — the designated
-/// initializer takes a layer-file provider.
+/// accounting across two tokens, transient-bank ping-pong, direct-resident
+/// layer banks, and the stats counters. No model bundle involved — the
+/// designated initializer takes a layer-file provider.
 @Suite struct K3ExpertStreamingTests {
 
     static let pageSize = 16 * 1024
@@ -79,7 +79,8 @@ import Metal
                              policy: K3ExpertPrefetchPolicy,
                              slotsPerBank: Int = 4,
                              ioSplits: Int = 4,
-                             ioWorkers: K3ExpertIOWorkers = .adaptive) throws
+                             ioWorkers: K3ExpertIOWorkers = .adaptive,
+                             residentCacheBudgetBytes: UInt64 = 0) throws
         -> K3ExpertStreaming {
         let device = try #require(MTLCreateSystemDefaultDevice())
         return try K3ExpertStreaming(
@@ -91,6 +92,7 @@ import Metal
             slotsPerBank: slotsPerBank,
             ioSplits: ioSplits,
             ioWorkers: ioWorkers,
+            residentCacheBudgetBytes: residentCacheBudgetBytes,
             layerFileProvider: provider(files))
     }
 
@@ -145,6 +147,68 @@ import Metal
         streamer.endLayer(batch)
     }
 
+    /// Logical experts alternate between two physical files. The selected
+    /// top-k order still resolves exact bytes while the bounded pool receives
+    /// jobs carrying two independent descriptors (the runtime shape used by
+    /// multi-SSD expert stripes).
+    @Test func stripedExpertLocationsReadAcrossDescriptors() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("k3-striped-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let layer = 1
+        let expertsPerLayer = 8
+        var paths: [URL] = []
+        for shard in 0..<2 {
+            let experts = stride(from: shard, to: expertsPerLayer, by: 2)
+            var bytes: [UInt8] = []
+            for expert in experts {
+                bytes += Self.expectedBlob(
+                    layer: layer, expert: expert, stride: Self.stride4)
+            }
+            let url = directory.appendingPathComponent("shard_\(shard).bin")
+            try Data(bytes).write(to: url)
+            paths.append(url)
+        }
+        let fds = try paths.map { url -> Int32 in
+            let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+            guard fd >= 0 else {
+                throw StreamerError.openFailed(path: url.path, errno: errno)
+            }
+            return fd
+        }
+        let locations = (0..<expertsPerLayer).map { expert in
+            K3ExpertLayerFile.Location(
+                fileDescriptor: fds[expert % 2],
+                offset: UInt64((expert / 2) * Self.stride4))
+        }
+        let file = K3ExpertLayerFile(
+            layer: layer,
+            path: "striped://test/layer/1",
+            expertsPerLayer: expertsPerLayer,
+            expertStride: UInt64(Self.stride4),
+            expertLocations: locations)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let streamer = try K3ExpertStreaming(
+            device: device,
+            expertStride: UInt64(Self.stride4),
+            expertsPerLayer: expertsPerLayer,
+            moeLayers: [layer],
+            policy: .off,
+            slotsPerBank: 4,
+            ioSplits: 1,
+            ioWorkers: .fixed(2),
+            layerFileProvider: { _ in file })
+
+        let experts = [7, 0, 5, 2]
+        let batch = try streamer.beginLayer(layer, actualExperts: experts)
+        Self.verifyBatch(batch, layer: layer, experts: experts, stride: Self.stride4)
+        streamer.endLayer(batch)
+        #expect(streamer.stats().demandMisses == 4)
+        #expect(streamer.stats().peakConcurrentReads <= 2)
+    }
+
     @Test func fixedWorkerPoolBoundsConcurrentPreads() throws {
         let files = try Self.writeFiles(layers: [1], expertsPerLayer: 4,
                                         stride: Self.stride4)
@@ -194,6 +258,20 @@ import Metal
         #expect(Set(observed) == Set([1, 2, 4]))
         #expect(tuner.isComplete)
         #expect(tuner.selectedWorkers == 4)
+    }
+
+    @Test func defaultPolicyUsesOnDemandReads() throws {
+        let files = try Self.writeFiles(layers: [1], expertsPerLayer: 2,
+                                        stride: Self.stride4)
+        defer { try? FileManager.default.removeItem(at: files.directory) }
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let streamer = try K3ExpertStreaming(
+            device: device,
+            expertStride: UInt64(files.stride),
+            expertsPerLayer: files.expertsPerLayer,
+            moeLayers: files.layers,
+            layerFileProvider: Self.provider(files))
+        #expect(streamer.policy == .off)
     }
 
     @Test func explicitUncachedModeAppliesToExpertDescriptors() throws {
@@ -345,6 +423,164 @@ import Metal
         #expect(stats.demandBytes == UInt64(2 * Self.stride4))
     }
 
+    /// Selective mode waits for two observations, then prefetches no more
+    /// than four experts that survived in both routes. The remaining experts
+    /// are exact demand reads, so a bad or incomplete prediction is harmless.
+    @Test func selectivePredictionCapsStableIntersectionAtFour() throws {
+        let files = try Self.writeFiles(layers: [1, 2, 3], expertsPerLayer: 8,
+                                        stride: Self.stride4)
+        defer { try? FileManager.default.removeItem(at: files.directory) }
+        let streamer = try Self.makeStreamer(files: files, policy: .selective,
+                                             slotsPerBank: 6)
+        let stable = [0, 1, 2, 3, 4, 5]
+
+        // Tokens A and B establish two-route history. The layer-3 wrap at
+        // the end of token B schedules four stable experts for token C.
+        for _ in 0..<2 {
+            for layer in [1, 2, 3] {
+                let batch = try streamer.beginLayer(layer, actualExperts: stable)
+                Self.verifyBatch(batch, layer: layer, experts: stable,
+                                 stride: Self.stride4)
+                streamer.recordRouting(layer0: layer, experts: stable)
+                streamer.endLayer(batch)
+            }
+        }
+        let before = streamer.stats()
+        #expect(before.prefetchesIssued == 4)
+
+        for layer in [1, 2, 3] {
+            let batch = try streamer.beginLayer(layer, actualExperts: stable)
+            Self.verifyBatch(batch, layer: layer, experts: stable,
+                             stride: Self.stride4)
+            streamer.recordRouting(layer0: layer, experts: stable)
+            streamer.endLayer(batch)
+        }
+        let stats = streamer.stats()
+        #expect(stats.demandHits == 12)
+        #expect(stats.demandMisses == 42)
+        #expect(stats.prefetchesIssued == 16)
+        #expect(stats.prefetchBytes == UInt64(16 * Self.stride4))
+    }
+
+    /// A complete resident layer bank is itself the Metal compute buffer.
+    /// The second visit reuses exact packed bytes in place: no SSD read, hit
+    /// copy, or miss-population copy is permitted.
+    @Test func directResidentBankReusesExactBytesWithoutCopies() throws {
+        let files = try Self.writeFiles(layers: [1], expertsPerLayer: 4,
+                                        stride: Self.stride4)
+        defer { try? FileManager.default.removeItem(at: files.directory) }
+        let cacheBytes = UInt64(4 * Self.stride4)
+        let streamer = try Self.makeStreamer(
+            files: files,
+            policy: .off,
+            slotsPerBank: 4,
+            residentCacheBudgetBytes: cacheBytes)
+        let experts = [0, 1, 2, 3]
+
+        let cold = try streamer.beginLayer(1, actualExperts: experts)
+        Self.verifyBatch(cold, layer: 1, experts: experts, stride: Self.stride4)
+        #expect(streamer.directResidentMetalViewCount() == 1)
+        streamer.endLayer(cold)
+        #expect(streamer.directResidentMetalViewCount() == 0)
+        var stats = streamer.stats()
+        #expect(stats.demandMisses == 4)
+        #expect(stats.residentCacheEntries == 4)
+        #expect(stats.residentCachePopulateBytes == 0)
+        #expect(stats.residentCacheCopyBytes == 0)
+
+        // The same layer returns the same fixed compute bank.
+        let warm = try streamer.beginLayer(1, actualExperts: experts)
+        Self.verifyBatch(warm, layer: 1, experts: experts, stride: Self.stride4)
+        #expect(streamer.directResidentMetalViewCount() == 1)
+        streamer.endLayer(warm)
+        #expect(streamer.directResidentMetalViewCount() == 0)
+        stats = streamer.stats()
+        #expect(stats.demandMisses == 4)
+        #expect(stats.demandHits == 4)
+        #expect(stats.residentCacheHits == 4)
+        #expect(stats.residentCacheMisses == 4)
+        #expect(stats.residentCacheCopyBytes == 0)
+        #expect(stats.residentCachePopulateBytes == 0)
+        #expect(stats.demandBytes == cacheBytes)
+
+        streamer.resetStats()
+        stats = streamer.stats()
+        #expect(stats.residentCacheEntries == 4)
+        #expect(stats.residentCacheCapacity == 4)
+        #expect(stats.residentCacheBytes == cacheBytes)
+        #expect(stats.residentCacheHits == 0)
+    }
+
+    @Test func directResidentBankReadsOnlyChangedExperts() throws {
+        let files = try Self.writeFiles(layers: [1], expertsPerLayer: 6,
+                                        stride: Self.stride4)
+        defer { try? FileManager.default.removeItem(at: files.directory) }
+        let streamer = try Self.makeStreamer(
+            files: files,
+            policy: .off,
+            slotsPerBank: 4,
+            residentCacheBudgetBytes: UInt64(4 * Self.stride4))
+
+        let first = try streamer.beginLayer(1, actualExperts: [0, 1, 2, 3])
+        Self.verifyBatch(first, layer: 1, experts: [0, 1, 2, 3],
+                         stride: Self.stride4)
+        streamer.endLayer(first)
+        let second = try streamer.beginLayer(1, actualExperts: [2, 3, 4, 5])
+        Self.verifyBatch(second, layer: 1, experts: [2, 3, 4, 5],
+                         stride: Self.stride4)
+        streamer.endLayer(second)
+
+        let stats = streamer.stats()
+        #expect(stats.demandHits == 2)
+        #expect(stats.demandMisses == 6)
+        #expect(stats.demandBytes == UInt64(6 * Self.stride4))
+        #expect(stats.residentCacheHits == 2)
+        #expect(stats.residentCacheMisses == 6)
+        #expect(stats.residentCacheCopyBytes == 0)
+        #expect(stats.residentCachePopulateBytes == 0)
+    }
+
+    /// Resident budgets are allocated only as complete per-layer banks. This
+    /// keeps every returned batch in one MTLBuffer, matching the production
+    /// kernel contract, while layers outside the budget use transient banks.
+    @Test func residentBudgetUsesWholeLayerBanks() throws {
+        let files = try Self.writeFiles(layers: [1, 2, 3], expertsPerLayer: 4,
+                                        stride: Self.stride4)
+        defer { try? FileManager.default.removeItem(at: files.directory) }
+        let layerBytes = UInt64(4 * Self.stride4)
+        let streamer = try Self.makeStreamer(
+            files: files,
+            policy: .off,
+            slotsPerBank: 4,
+            residentCacheBudgetBytes: layerBytes * 2 + UInt64(Self.stride4))
+
+        var stats = streamer.stats()
+        #expect(stats.residentCacheCapacity == 8)
+        #expect(stats.residentCacheBytes == layerBytes * 2)
+        // Two fixed resident banks plus one transient bank for the last layer.
+        #expect(streamer.slotPoolBytes == 3 * Int(layerBytes))
+        #expect(streamer.slotPoolAllocationCount() == 1)
+
+        for _ in 0..<2 {
+            for layer in files.layers {
+                let batch = try streamer.beginLayer(layer, actualExperts: [0, 1, 2, 3])
+                Self.verifyBatch(batch, layer: layer, experts: [0, 1, 2, 3],
+                                 stride: Self.stride4)
+                streamer.endLayer(batch)
+            }
+        }
+        stats = streamer.stats()
+        #expect(stats.residentCacheHits == 8)
+        #expect(stats.residentCacheMisses == 8)
+        #expect(stats.residentCacheEntries == 8)
+        #expect(stats.residentCacheCopyBytes == 0)
+        #expect(stats.residentCachePopulateBytes == 0)
+        // The sole transient layer also remains in place between tokens, so
+        // all three layers avoid their second demand read in this fixture.
+        #expect(stats.demandHits == 12)
+        #expect(stats.demandMisses == 12)
+    }
+
     /// `off` policy: no prefetch traffic at all; with three layers the bank
     /// parity flips between tokens so every visit demand-reads.
     @Test func offPolicyReadsEverythingOnDemand() throws {
@@ -371,14 +607,16 @@ import Metal
         #expect(stats.bytesRead == stats.demandBytes)
     }
 
-    /// Slot-pool memory math: two banks x slots x stride.
+    /// Slot-pool memory math: an off-policy one-layer fixture needs one bank;
+    /// canonical zero-cache K3 still has 92 layers and therefore two.
     @Test func slotPoolMemoryMath() throws {
         let files = try Self.writeFiles(layers: [1], expertsPerLayer: 2,
                                    stride: Self.stride4)
         defer { try? FileManager.default.removeItem(at: files.directory) }
         let streamer = try Self.makeStreamer(files: files, policy: .off,
                                         slotsPerBank: 2)
-        #expect(streamer.slotPoolBytes == 2 * 2 * Self.stride4)
+        #expect(streamer.slotPoolBytes == 2 * Self.stride4)
+        #expect(streamer.slotPoolAllocationCount() == 1)
         // Canonical K3: 2 x 16 x 17,547,264 B = 561,512,448 B (~535.5 MiB).
         #expect(2 * 16 * Int(KimiK3FormatProfile.expertStride) == 561_512_448)
         #expect(KimiK3FormatProfile.expertStride % UInt64(Self.pageSize) == 0)

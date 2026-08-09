@@ -1,3 +1,6 @@
 [
-  {"role": "user", "content": "Explain why chunked prefill reduces time to first token while keeping memory bounded."}
+  {
+    "role": "user",
+    "content": "다이나믹 프로그래밍으로 피보나치 수열을 Swift로 구현해줘. 시간과 공간 복잡도도 간단히 설명해줘."
+  }
 ]

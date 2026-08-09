@@ -550,9 +550,17 @@ final class K3ForwardRunner {
                 numHeads: UInt32(c.mlaNumHeads), latent: UInt32(L),
                 nope: UInt32(c.mlaQKNopeHeadDim), vHead: UInt32(c.mlaVHeadDim))
         }
+        cb.label = "k3.load.mlaPlaneExpansion"
         cb.commit()
         cb.waitUntilCompleted()
-        if let error = cb.error { throw MetalError.libraryCompileFailed("\(error)") }
+        if let error = cb.error {
+            throw MetalError.libraryCompileFailed(
+                "K3 load-time MLA plane expansion failed "
+                    + "(metalAllocated=\(context.device.currentAllocatedSize) "
+                    + "recommendedWorkingSet="
+                    + "\(context.device.recommendedMaxWorkingSetSize); "
+                    + "check iogpu.wired_limit_mb after reboot): \(error)")
+        }
     }
 
     // MARK: - Per-token forward

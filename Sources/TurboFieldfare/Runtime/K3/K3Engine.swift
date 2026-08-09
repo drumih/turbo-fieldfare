@@ -32,13 +32,13 @@ public final class K3PrefixSnapshot: @unchecked Sendable {
     fileprivate let engineID: UUID
     fileprivate let state: K3StateSnapshot
     fileprivate let logits: MTLBuffer
-    fileprivate let predictions: [Int: [Int]]
+    fileprivate let predictions: K3RoutingPredictionState
 
     fileprivate init(engineID: UUID,
                      tokenIDs: [Int32],
                      state: K3StateSnapshot,
                      logits: MTLBuffer,
-                     predictions: [Int: [Int]]) {
+                     predictions: K3RoutingPredictionState) {
         self.engineID = engineID
         self.tokenIDs = tokenIDs
         self.state = state
@@ -164,11 +164,13 @@ public final class K3Engine {
                             device: MTLDevice? = nil,
                             maxContext: Int,
                             expecting: K3ArchConfig = .kimiK3,
-                            prefetchPolicy: K3ExpertPrefetchPolicy = .predict,
+                            prefetchPolicy: K3ExpertPrefetchPolicy = .off,
                             slotsPerBank: Int = K3ExpertStreaming.defaultSlotsPerBank,
                             ioSplits: Int = K3ExpertStreaming.defaultIOSplits,
                             ioWorkers: K3ExpertIOWorkers = .adaptive,
                             ioCachePolicy: K3ExpertIOCachePolicy = .automatic,
+                            residentExpertCacheBytes: UInt64 = 0,
+                            expertShardRoots: [URL] = [],
                             integrityPolicy: ModelIntegrityPolicy? = nil,
                             prefillForceFallback: Bool = false) throws -> K3Engine {
         let context = try MetalContext()
@@ -179,12 +181,37 @@ public final class K3Engine {
                                      integrityPolicy: integrityPolicy)
         let state = try K3State(device: dev, config: model.config,
                                 maxContext: maxContext)
-        let streaming = try K3ExpertStreaming(model: model,
-                                              policy: prefetchPolicy,
-                                              slotsPerBank: slotsPerBank,
-                                              ioSplits: ioSplits,
-                                              ioWorkers: ioWorkers,
-                                              ioCachePolicy: ioCachePolicy)
+        let streaming: K3ExpertStreaming
+        if expertShardRoots.isEmpty {
+            streaming = try K3ExpertStreaming(
+                model: model,
+                policy: prefetchPolicy,
+                slotsPerBank: slotsPerBank,
+                ioSplits: ioSplits,
+                ioWorkers: ioWorkers,
+                ioCachePolicy: ioCachePolicy,
+                residentCacheBudgetBytes: residentExpertCacheBytes)
+        } else {
+            let shardStore = try K3ExpertShardStore(
+                rootURLs: expertShardRoots,
+                model: model,
+                // The base bundle's trusted receipt does not cover external
+                // roots. Until shard receipts exist, authenticate every
+                // striped payload instead of silently extending that trust.
+                integrityPolicy: .fullSha256)
+            streaming = try K3ExpertStreaming(
+                device: model.device,
+                expertStride: model.expertsLayout.expertStride,
+                expertsPerLayer: model.expertsLayout.expertsPerLayer,
+                moeLayers: model.config.moeLayers0.sorted(),
+                policy: prefetchPolicy,
+                slotsPerBank: slotsPerBank,
+                ioSplits: ioSplits,
+                ioWorkers: ioWorkers,
+                ioCachePolicy: ioCachePolicy,
+                residentCacheBudgetBytes: residentExpertCacheBytes,
+                layerFileProvider: { try shardStore.layerFile($0) })
+        }
         let runner = try K3ForwardRunner(model: model, context: context,
                                          state: state, streaming: streaming)
         return try K3Engine(model: model, context: context, maxContext: maxContext,

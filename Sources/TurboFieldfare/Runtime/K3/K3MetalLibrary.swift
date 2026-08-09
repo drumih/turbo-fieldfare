@@ -121,7 +121,8 @@ final class K3MetalLibrary: @unchecked Sendable {
         do {
             return try device.makeLibrary(source: source, options: options)
         } catch {
-            throw MetalError.libraryCompileFailed("\(error)")
+            throw MetalError.libraryCompileFailed(
+                "K3 separate Metal module \(module) failed: \(error)")
         }
     }
 
@@ -153,7 +154,8 @@ final class K3MetalLibrary: @unchecked Sendable {
         do {
             library = try device.makeLibrary(source: combined, options: options)
         } catch {
-            throw MetalError.libraryCompileFailed("\(error)")
+            throw MetalError.libraryCompileFailed(
+                "K3 combined decode Metal library failed: \(error)")
         }
         lock.lock()
         if let existing = entries[id] {

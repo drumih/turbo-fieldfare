@@ -7,6 +7,16 @@ import TurboFieldfareFormat
 /// the caller (the expert-streaming engine). `fileDescriptor` is a dup the
 /// caller must close; the model keeps its own handle for re-verification.
 public struct K3ExpertLayerFile: Sendable {
+    public struct Location: Sendable {
+        public let fileDescriptor: Int32
+        public let offset: UInt64
+
+        public init(fileDescriptor: Int32, offset: UInt64) {
+            self.fileDescriptor = fileDescriptor
+            self.offset = offset
+        }
+    }
+
     /// 0-based layer id.
     public let layer: Int
     public let path: String
@@ -16,6 +26,11 @@ public struct K3ExpertLayerFile: Sendable {
     /// Absolute byte offset of each expert blob inside the file, keyed by
     /// logical expert id (the v2 layout permits a physical-rank permutation).
     public let expertOffsets: [UInt64]
+    /// Physical location for each logical expert. The ordinary v2 layout
+    /// repeats one descriptor with different offsets; an external striped
+    /// store may point experts at different descriptors without changing the
+    /// packed blob contract.
+    public let expertLocations: [Location]
 
     public init(layer: Int, path: String, fileDescriptor: Int32,
                 expertsPerLayer: Int, expertStride: UInt64,
@@ -26,6 +41,22 @@ public struct K3ExpertLayerFile: Sendable {
         self.expertsPerLayer = expertsPerLayer
         self.expertStride = expertStride
         self.expertOffsets = expertOffsets
+        self.expertLocations = expertOffsets.map {
+            Location(fileDescriptor: fileDescriptor, offset: $0)
+        }
+    }
+
+    public init(layer: Int, path: String,
+                expertsPerLayer: Int, expertStride: UInt64,
+                expertLocations: [Location]) {
+        precondition(expertLocations.count == expertsPerLayer)
+        self.layer = layer
+        self.path = path
+        self.fileDescriptor = expertLocations.first?.fileDescriptor ?? -1
+        self.expertsPerLayer = expertsPerLayer
+        self.expertStride = expertStride
+        self.expertOffsets = expertLocations.map(\.offset)
+        self.expertLocations = expertLocations
     }
 }
 
@@ -300,7 +331,16 @@ public struct K3Model {
                 expertStride: expertsLayout.expertStride,
                 expertOffsets: offsets)
             layerFilesBox.descriptors[layer0] = descriptor
-            return descriptor
+            let dupFD = fcntl(fd, F_DUPFD_CLOEXEC, 0)
+            guard dupFD >= 0 else {
+                throw ModelError.posixFailed(
+                    call: "fcntl(F_DUPFD_CLOEXEC)", errno: errno)
+            }
+            return K3ExpertLayerFile(
+                layer: layer0, path: path, fileDescriptor: dupFD,
+                expertsPerLayer: expertsLayout.expertsPerLayer,
+                expertStride: expertsLayout.expertStride,
+                expertOffsets: offsets)
         }
     }
 

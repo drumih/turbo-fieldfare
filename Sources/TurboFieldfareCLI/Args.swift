@@ -2,6 +2,8 @@ public struct Args: Equatable, Sendable {
     public var model: String
     public var prompt: String?
     public var messagesFile: String?
+    /// K3-only JSONL batch input. Each row has `prompt` or `messages`.
+    public var batchFile: String?
     public var maxNew: Int
     /// Tracks CLI intent so K3 can use its own operational default without
     /// changing Gemma's established public default.
@@ -21,6 +23,11 @@ public struct Args: Equatable, Sendable {
     public var prefill: String
     public var prefillChunk: Int
     public var expertPredict: Bool
+    public var expertPredictSelective: Bool
+    /// Exact per-layer direct-resident RAM banks; zero disables them.
+    public var expertCacheGiB: Int
+    /// External striped expert roots, one `expert-shard.json` per SSD.
+    public var expertShardRoots: [String]
     /// `auto` or a fixed bounded worker count (`1...32`).
     public var expertIOWorkers: String
     /// Page-aligned subreads per expert. The K3 default is one whole-expert read.
@@ -36,6 +43,7 @@ public struct Args: Equatable, Sendable {
     public init(model: String,
                 prompt: String? = nil,
                 messagesFile: String? = nil,
+                batchFile: String? = nil,
                 maxNew: Int = 1_024,
                 maxNewExplicit: Bool = false,
                 maxContext: Int = 4096,
@@ -51,7 +59,10 @@ public struct Args: Equatable, Sendable {
                 noThinking: Bool = false,
                 prefill: String = "chunked",
                 prefillChunk: Int = 32,
-                expertPredict: Bool = true,
+                expertPredict: Bool = false,
+                expertPredictSelective: Bool = false,
+                expertCacheGiB: Int = 0,
+                expertShardRoots: [String] = [],
                 expertIOWorkers: String = "auto",
                 expertIOSplits: Int = 1,
                 expertIOCache: String = "auto",
@@ -61,6 +72,7 @@ public struct Args: Equatable, Sendable {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
+        self.batchFile = batchFile
         self.maxNew = maxNew
         self.maxNewExplicit = maxNewExplicit
         self.maxContext = maxContext
@@ -77,6 +89,9 @@ public struct Args: Equatable, Sendable {
         self.prefill = prefill
         self.prefillChunk = prefillChunk
         self.expertPredict = expertPredict
+        self.expertPredictSelective = expertPredictSelective
+        self.expertCacheGiB = expertCacheGiB
+        self.expertShardRoots = expertShardRoots
         self.expertIOWorkers = expertIOWorkers
         self.expertIOSplits = expertIOSplits
         self.expertIOCache = expertIOCache
@@ -103,7 +118,8 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
         case .invalidValue(let flag, let value): return "invalid value for \(flag): \(value)"
         case .requiredMissing(let flag): return "required flag missing: \(flag)"
         case .mutuallyExclusive(let a, let b): return "\(a) and \(b) are mutually exclusive"
-        case .modeMissing: return "one of --prompt or --messages-file is required"
+        case .modeMissing:
+            return "one of --prompt, --messages-file, or --batch-file is required"
         }
     }
 }
@@ -112,12 +128,13 @@ extension Args {
     public static let usage = """
     TurboFieldfareCLI — Gemma 4 26B-A4B text generation
 
-    usage: TurboFieldfareCLI --model <dir> (--prompt <string> | --messages-file <path>) [options]
+    usage: TurboFieldfareCLI --model <dir> (--prompt <string> | --messages-file <path> | --batch-file <path>) [options]
 
     required:
       --model <dir>             Path to a .gturbo model directory.
       --prompt <string>         Raw-completion prompt.
       --messages-file <path>    JSON chat messages with role and content fields.
+      --batch-file <path>       K3 JSONL jobs; each row contains prompt or messages.
 
     options:
       --max-new <int>           Generated-token limit (default 1024).
@@ -137,7 +154,9 @@ extension Args {
       --prefill <mode>          Prompt prefill: serial or chunked (default chunked).
       --prefill-chunk <int>     Chunked-prefill chunk tokens: 32, 64, 128, or 256
                                 (K3 default 32).
-      --expert-predict <on|off> Predictive expert prefetch (default on).
+      --expert-predict <mode>   off, selective, or on/full (default off).
+      --expert-cache-gib <n>   Exact direct-resident expert banks, 0...64 GiB (default 0).
+      --expert-shard-root <p>  External striped expert root (repeat for every shard).
       --expert-io-workers <n>   Bounded pread workers: auto or 1...32
                                 (default auto; measures 1, 2, and 4).
       --expert-io-splits <n>    Page-aligned reads per expert: 1, 2, 4, or 8
@@ -156,6 +175,7 @@ extension Args {
         var model: String?
         var prompt: String?
         var messagesFile: String?
+        var batchFile: String?
         var maxNew = 1_024
         var maxNewExplicit = false
         var maxContext = 4096
@@ -171,7 +191,10 @@ extension Args {
         var noThinking = false
         var prefill = "chunked"
         var prefillChunk = 32
-        var expertPredict = true
+        var expertPredict = false
+        var expertPredictSelective = false
+        var expertCacheGiB = 0
+        var expertShardRoots: [String] = []
         var expertIOWorkers = "auto"
         var expertIOSplits = 1
         var expertIOCache = "auto"
@@ -217,10 +240,23 @@ extension Args {
                 prefillChunk = parsed
             case "--expert-predict":
                 let value = try takeValue(argv, &index, flag: flag)
-                guard let parsed = ["on": true, "off": false][value] else {
+                guard ["on", "full", "selective", "off"].contains(value) else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
-                expertPredict = parsed
+                expertPredict = value != "off"
+                expertPredictSelective = value == "selective"
+            case "--expert-cache-gib":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value), (0...64).contains(parsed) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                expertCacheGiB = parsed
+            case "--expert-shard-root":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard !value.isEmpty else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                expertShardRoots.append(value)
             case "--expert-io-workers":
                 let value = try takeValue(argv, &index, flag: flag)
                 if value != "auto" {
@@ -253,6 +289,8 @@ extension Args {
                 prompt = try takeValue(argv, &index, flag: flag)
             case "--messages-file":
                 messagesFile = try takeValue(argv, &index, flag: flag)
+            case "--batch-file":
+                batchFile = try takeValue(argv, &index, flag: flag)
             case "--max-new":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value), parsed > 0 else {
@@ -308,7 +346,15 @@ extension Args {
         if prompt != nil && messagesFile != nil {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
         }
-        if prompt == nil && messagesFile == nil { throw ArgsError.modeMissing }
+        if prompt != nil && batchFile != nil {
+            throw ArgsError.mutuallyExclusive("--prompt", "--batch-file")
+        }
+        if messagesFile != nil && batchFile != nil {
+            throw ArgsError.mutuallyExclusive("--messages-file", "--batch-file")
+        }
+        let modes = [prompt != nil, messagesFile != nil, batchFile != nil]
+            .filter { $0 }.count
+        if modes == 0 { throw ArgsError.modeMissing }
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw ArgsError.invalidValue(
                 flag: "--top-p",
@@ -317,6 +363,7 @@ extension Args {
         return Args(model: model,
                     prompt: prompt,
                     messagesFile: messagesFile,
+                    batchFile: batchFile,
                     maxNew: maxNew,
                     maxNewExplicit: maxNewExplicit,
                     maxContext: maxContext,
@@ -333,6 +380,9 @@ extension Args {
                     prefill: prefill,
                     prefillChunk: prefillChunk,
                     expertPredict: expertPredict,
+                    expertPredictSelective: expertPredictSelective,
+                    expertCacheGiB: expertCacheGiB,
+                    expertShardRoots: expertShardRoots,
                     expertIOWorkers: expertIOWorkers,
                     expertIOSplits: expertIOSplits,
                     expertIOCache: expertIOCache,

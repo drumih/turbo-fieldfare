@@ -6,8 +6,11 @@ import Metal
 public enum K3ExpertPrefetchPolicy: String, Sendable {
     /// Pure on-demand: every selected expert is read inside `beginLayer`.
     case off
-    /// Temporal prediction (default): last token's routing per MoE layer is
-    /// prefetched into the idle bank during the current layer's I/O wait.
+    /// Prefetch at most four experts that survived in the same layer for two
+    /// consecutive tokens. Misses always fall back to exact demand reads.
+    case selective
+    /// Experimental temporal prediction: last token's routing per MoE layer
+    /// is prefetched into the idle bank during the current layer's I/O wait.
     case predict
 }
 
@@ -29,6 +32,11 @@ public enum K3ExpertIOCachePolicy: String, Sendable, Equatable {
     case automatic = "auto"
     case buffered
     case uncached
+}
+
+struct K3RoutingPredictionState: Sendable {
+    var latest: [Int: [Int]]
+    var previous: [Int: [Int]]
 }
 
 /// Small online tuner for the bounded expert-I/O worker pool. Throughput is
@@ -117,8 +125,7 @@ struct K3ExpertIOAutotuner: Sendable {
 /// Counters for the streaming diagnostics (CLI/HUD). All counts are cumulative
 /// since init or the last `resetStats()`.
 public struct K3ExpertStreamingStats: Sendable, Equatable {
-    /// Selected experts already resident in the serving bank (prediction hits
-    /// or lucky reuse).
+    /// Selected experts served without SSD I/O (bank or resident-cache hits).
     public var demandHits: UInt64 = 0
     /// Selected experts read on demand inside `beginLayer`.
     public var demandMisses: UInt64 = 0
@@ -132,6 +139,16 @@ public struct K3ExpertStreamingStats: Sendable, Equatable {
     public var prefetchSkippedCold: UInt64 = 0
     public var demandBytes: UInt64 = 0
     public var prefetchBytes: UInt64 = 0
+    /// Exact direct-resident bank activity. Cache hits are also included in
+    /// `demandHits`. The copy counters remain part of the diagnostics contract
+    /// and stay zero: SSD misses land directly in the Metal compute buffer.
+    public var residentCacheHits: UInt64 = 0
+    public var residentCacheMisses: UInt64 = 0
+    public var residentCacheCopyBytes: UInt64 = 0
+    public var residentCachePopulateBytes: UInt64 = 0
+    public var residentCacheEntries: Int = 0
+    public var residentCacheCapacity: Int = 0
+    public var residentCacheBytes: UInt64 = 0
     /// Chunked-prefill expert bytes read through the shared bounded pool.
     public var prefillBytes: UInt64 = 0
     /// Successful bounded I/O batches and their aggregate wall time.
@@ -152,10 +169,15 @@ public struct K3ExpertStreamingStats: Sendable, Equatable {
     public var hitRate: Double {
         demandTotal == 0 ? 0 : Double(demandHits) / Double(demandTotal)
     }
+    public var residentCacheHitRate: Double {
+        let total = residentCacheHits + residentCacheMisses
+        return total == 0 ? 0 : Double(residentCacheHits) / Double(total)
+    }
 }
 
-/// One layer's worth of resident experts: the bank buffer plus, per selected
-/// expert (in request order), the byte offset of its slot inside `buffer`.
+/// One layer's served experts: the current short-lived Metal bank view plus,
+/// per selected expert (in request order), the byte offset of its slot inside
+/// `buffer`.
 /// Bind directly into the `K3MoE` phase kernels (`experts` + `slotOffsets`).
 /// `@unchecked Sendable` matches `TensorView`: the `MTLBuffer` is thread-safe.
 public struct K3ExpertBatch: @unchecked Sendable {
@@ -163,24 +185,30 @@ public struct K3ExpertBatch: @unchecked Sendable {
     public let bankIndex: Int
     public let buffer: MTLBuffer
     public let slotOffsets: [UInt64]
+    /// Keeps a direct-resident bank's raw bytes alive while Metal consumes the
+    /// bytesNoCopy wrapper. The wrapper itself is intentionally short-lived
+    /// so all 92 resident banks do not consume the GPU working-set budget.
+    private let storageOwner: AnyObject?
 
-    public init(layer: Int, bankIndex: Int, buffer: MTLBuffer, slotOffsets: [UInt64]) {
+    public init(layer: Int, bankIndex: Int, buffer: MTLBuffer, slotOffsets: [UInt64],
+                storageOwner: AnyObject? = nil) {
         self.layer = layer
         self.bankIndex = bankIndex
         self.buffer = buffer
         self.slotOffsets = slotOffsets
+        self.storageOwner = storageOwner
     }
 }
 
 /// SSD streaming engine for K3 routed experts (docs/KIMI_K3_EVALUATION.md §5):
 ///
-/// - **Global slot pool**: 2 banks × `slotsPerBank` slots, each slot exactly
-///   one expert blob (`expertStride` bytes, 16 KB-aligned). Slots are generic
-///   across layers — a slot's content is keyed `(layer, expert)`, and a bank
-///   serves whichever MoE layer is currently decoding. Each bank is ONE
-///   `posix_memalign`'d region wrapped in ONE bytesNoCopy shared `MTLBuffer`
-///   so a layer's 16 experts bind as buffer + UInt64 offsets (the `K3MoE`
-///   production binding).
+/// - **Direct resident banks**: a configured cache budget is divided into
+///   complete `slotsPerBank` aligned RAM banks and assigned to MoE layers.
+///   Selected expert bytes persist in RAM across tokens. The current layer
+///   alone receives a temporary bytesNoCopy Metal view, so hits require no
+///   cache-to-bank copy and misses `pread` directly into the slot the `K3MoE`
+///   kernels consume. Layers outside the budget share one or two transient
+///   banks, preserving the zero-cache streaming behavior.
 /// - **Bounded pread fanout**: by default every selected K3 expert is one
 ///   17.5 MB `pread`; optional `ioSplits` keep page-aligned subreads available
 ///   for explicit A/B tests. The jobs are drained by a fixed or online-tuned
@@ -190,8 +218,8 @@ public struct K3ExpertBatch: @unchecked Sendable {
 ///   top-16 for the token; at `beginLayer(L)` the serving bank is expected to
 ///   hold the predicted set already (prefetched during the previous layer),
 ///   misses are demand-read, and — during the same I/O window — the next MoE
-///   layer's predicted set is prefetched into the OTHER bank. Banks ping-pong
-///   per MoE layer visit.
+///   layer's predicted set is prefetched into that layer's fixed resident bank
+///   or the next transient bank.
 ///
 /// GPU-safety contract: a bank's bytes may be consumed by in-flight GPU work
 /// until the runner calls `endLayer(_:)` (e.g. from the consuming command
@@ -218,15 +246,49 @@ public final class K3ExpertStreaming: @unchecked Sendable {
     public let ioCachePolicy: K3ExpertIOCachePolicy
     public let expertStride: UInt64
     public let expertsPerLayer: Int
+    public let residentCacheBytes: UInt64
     /// Sorted 0-based MoE layer ids (the visit order of `beginLayer`).
     public let moeLayers: [Int]
 
     private let layerFileProvider: (Int) throws -> K3ExpertLayerFile
     private let ioQueue: DispatchQueue
 
-    private final class Bank {
+    /// One page-aligned allocation sliced into every transient and resident
+    /// bank. Keeping the 24 GiB production cache in one VM region avoids the
+    /// large-allocation fragmentation caused by one ~268 MiB allocation per
+    /// MoE layer. Banks and in-flight batches retain this owner, so a
+    /// short-lived bytesNoCopy view can never outlive its raw storage.
+    private final class BankArena {
         let pointer: UnsafeMutableRawPointer
-        let buffer: MTLBuffer
+        let byteCount: Int
+
+        init(byteCount: Int) throws {
+            var raw: UnsafeMutableRawPointer?
+            let result = posix_memalign(
+                &raw, K3ExpertStreaming.slotAlignment, byteCount)
+            guard result == 0, let pointer = raw else {
+                throw StreamerError.allocFailed(errno: result)
+            }
+            self.pointer = pointer
+            self.byteCount = byteCount
+        }
+
+        deinit { free(pointer) }
+    }
+
+    private final class Bank {
+        /// Retains the single backing allocation while this slice or one of
+        /// its Metal views is alive.
+        let arena: BankArena
+        let pointer: UnsafeMutableRawPointer
+        let byteCount: Int
+        let label: String
+        let isDirectResident: Bool
+        /// Direct-resident payloads stay in ordinary unified RAM. This
+        /// bytesNoCopy Metal view exists only for the current GPU batch; an
+        /// always-live view per layer exhausted the M5 Max GPU working set at
+        /// 24 GiB alongside the int8 trunk and 256K state.
+        var buffer: MTLBuffer?
         var slotLayer: [Int32]    // -1 = empty
         var slotExpert: [Int32]
         /// True between `beginLayer` returning this bank and `endLayer`.
@@ -234,19 +296,53 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         var prefetchGroup: DispatchGroup?
         var prefetchError: Error?
 
-        init(pointer: UnsafeMutableRawPointer, buffer: MTLBuffer, slots: Int) {
+        init(arena: BankArena, pointer: UnsafeMutableRawPointer,
+             byteCount: Int, label: String,
+             slots: Int, isDirectResident: Bool) {
+            self.arena = arena
             self.pointer = pointer
-            self.buffer = buffer
+            self.byteCount = byteCount
+            self.label = label
+            self.isDirectResident = isDirectResident
             self.slotLayer = [Int32](repeating: -1, count: slots)
             self.slotExpert = [Int32](repeating: -1, count: slots)
         }
+
+        func materializeBuffer(device: MTLDevice) throws -> MTLBuffer {
+            if let buffer { return buffer }
+            guard let buffer = device.makeBuffer(
+                bytesNoCopy: pointer,
+                length: byteCount,
+                options: .storageModeShared,
+                deallocator: { _, _ in })
+            else {
+                throw StreamerError.bufferWrapFailed
+            }
+            buffer.label = label
+            self.buffer = buffer
+            return buffer
+        }
+
+        func releaseBufferAfterUse() {
+            if isDirectResident { buffer = nil }
+        }
     }
 
+    private let device: MTLDevice
     private var banks: [Bank]
+    /// Bank indices shared by layers outside the direct-resident budget.
+    private let transientBankIndices: [Int]
+    /// Fixed Metal compute bank for layers covered by the resident budget.
+    private let residentBankByLayer: [Int: Int]
+    private let residentCacheCapacity: Int
     private var layerFiles: [Int: K3ExpertLayerFile] = [:]
     private var predictions: [Int: [Int]] = [:]
+    private var previousPredictions: [Int: [Int]] = [:]
     private var visitCount = 0
     private var statsStorage = K3ExpertStreamingStats()
+    /// Protected by `statsLock`; avoids scanning slot arrays while async
+    /// prefetch publishes keys into a different resident bank.
+    private var residentEntryCountStorage = 0
     private let statsLock = NSLock()
     private var ioTuner: K3ExpertIOAutotuner
     private let ioTunerLock = NSLock()
@@ -257,11 +353,12 @@ public final class K3ExpertStreaming: @unchecked Sendable {
     /// Production initializer: layer files come from the model (lazy open +
     /// verify on first touch).
     public convenience init(model: K3Model,
-                            policy: K3ExpertPrefetchPolicy = .predict,
+                            policy: K3ExpertPrefetchPolicy = .off,
                             slotsPerBank: Int = K3ExpertStreaming.defaultSlotsPerBank,
                             ioSplits: Int = K3ExpertStreaming.defaultIOSplits,
                             ioWorkers: K3ExpertIOWorkers = .adaptive,
-                            ioCachePolicy: K3ExpertIOCachePolicy = .automatic) throws {
+                            ioCachePolicy: K3ExpertIOCachePolicy = .automatic,
+                            residentCacheBudgetBytes: UInt64 = 0) throws {
         try self.init(
             device: model.device,
             expertStride: model.expertsLayout.expertStride,
@@ -272,6 +369,7 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             ioSplits: ioSplits,
             ioWorkers: ioWorkers,
             ioCachePolicy: ioCachePolicy,
+            residentCacheBudgetBytes: residentCacheBudgetBytes,
             layerFileProvider: { try model.expertLayerFile($0) })
     }
 
@@ -280,11 +378,12 @@ public final class K3ExpertStreaming: @unchecked Sendable {
                 expertStride: UInt64,
                 expertsPerLayer: Int,
                 moeLayers: [Int],
-                policy: K3ExpertPrefetchPolicy = .predict,
+                policy: K3ExpertPrefetchPolicy = .off,
                 slotsPerBank: Int = K3ExpertStreaming.defaultSlotsPerBank,
                 ioSplits: Int = K3ExpertStreaming.defaultIOSplits,
                 ioWorkers: K3ExpertIOWorkers = .adaptive,
                 ioCachePolicy: K3ExpertIOCachePolicy = .automatic,
+                residentCacheBudgetBytes: UInt64 = 0,
                 layerFileProvider: @escaping (Int) throws -> K3ExpertLayerFile) throws {
         precondition(expertStride > 0
                         && expertStride % UInt64(K3ExpertStreaming.slotAlignment) == 0,
@@ -306,6 +405,7 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         self.expertStride = expertStride
         self.expertsPerLayer = expertsPerLayer
         self.moeLayers = moeLayers
+        self.device = device
         self.layerFileProvider = layerFileProvider
         self.ioQueue = DispatchQueue(label: "turbo-fieldfare.k3-expert-io",
                                      qos: .userInitiated,
@@ -317,38 +417,81 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             || (ioCachePolicy == .automatic && expertStride >= 16 * 1024 * 1024)
 
         let bankBytes = slotsPerBank * Int(expertStride)
+        let boundedBudget = min(residentCacheBudgetBytes, UInt64(Int.max))
+        let residentLayerCount = min(
+            moeLayers.count,
+            Int(boundedBudget / UInt64(bankBytes)))
+        let residentLayers = Array(moeLayers.prefix(residentLayerCount))
+        let transientLayerCount = moeLayers.count - residentLayerCount
+        let transientCount: Int
+        if transientLayerCount == 0 {
+            transientCount = 0
+        } else if policy == .off {
+            transientCount = min(2, transientLayerCount)
+        } else {
+            // Prediction may target the same sole non-resident layer while
+            // its current GPU batch is live, so retain the second ping-pong
+            // destination even when only one layer is outside the budget.
+            transientCount = 2
+        }
+        let bankCount = transientCount + residentLayerCount
+        let (arenaBytes, arenaOverflow) = bankBytes.multipliedReportingOverflow(
+            by: bankCount)
+        guard !arenaOverflow else {
+            throw StreamerError.allocFailed(errno: ENOMEM)
+        }
+        let arena = try BankArena(byteCount: arenaBytes)
         var banks: [Bank] = []
-        for index in 0..<2 {
-            var raw: UnsafeMutableRawPointer?
-            let result = posix_memalign(&raw, K3ExpertStreaming.slotAlignment, bankBytes)
-            guard result == 0, let pointer = raw else {
-                throw StreamerError.allocFailed(errno: result)
-            }
-            nonisolated(unsafe) let capturedPointer = pointer
-            guard let buffer = device.makeBuffer(
-                bytesNoCopy: pointer,
-                length: bankBytes,
-                options: .storageModeShared,
-                deallocator: { _, _ in free(capturedPointer) })
-            else {
-                free(pointer)
-                throw StreamerError.bufferWrapFailed
-            }
-            buffer.label = "k3.experts.bank\(index)"
-            banks.append(Bank(pointer: pointer, buffer: buffer, slots: slotsPerBank))
+        banks.reserveCapacity(bankCount)
+        var transientBankIndices: [Int] = []
+        var residentBankByLayer: [Int: Int] = [:]
+
+        func allocateBank(label: String, isDirectResident: Bool) -> Bank {
+            let pointer = arena.pointer.advanced(by: banks.count * bankBytes)
+            return Bank(arena: arena, pointer: pointer,
+                        byteCount: bankBytes, label: label,
+                        slots: slotsPerBank, isDirectResident: isDirectResident)
+        }
+
+        for index in 0..<transientCount {
+            transientBankIndices.append(banks.count)
+            banks.append(allocateBank(
+                label: "k3.experts.transient\(index)", isDirectResident: false))
+        }
+        for layer in residentLayers {
+            residentBankByLayer[layer] = banks.count
+            banks.append(allocateBank(
+                label: "k3.experts.layer\(layer)", isDirectResident: true))
         }
         self.banks = banks
+        self.transientBankIndices = transientBankIndices
+        self.residentBankByLayer = residentBankByLayer
+        self.residentCacheCapacity = residentLayerCount * slotsPerBank
+        self.residentCacheBytes = UInt64(residentLayerCount * bankBytes)
         self.statsStorage.ioCacheMode = self.uncachedIOEnabled
             ? K3ExpertIOCachePolicy.uncached.rawValue
             : K3ExpertIOCachePolicy.buffered.rawValue
+        self.statsStorage.residentCacheCapacity = self.residentCacheCapacity
+        self.statsStorage.residentCacheBytes = self.residentCacheBytes
     }
 
     deinit {
-        for file in layerFiles.values { close(file.fileDescriptor) }
+        var closed = Set<Int32>()
+        for file in layerFiles.values {
+            for location in file.expertLocations
+                where closed.insert(location.fileDescriptor).inserted {
+                close(location.fileDescriptor)
+            }
+        }
     }
 
-    /// Total slot-pool bytes (both banks).
-    public var slotPoolBytes: Int { 2 * slotsPerBank * Int(expertStride) }
+    /// Total direct-resident and transient Metal slot-pool bytes.
+    public var slotPoolBytes: Int { banks.count * slotsPerBank * Int(expertStride) }
+
+    /// Test/diagnostic hook: all bank slices must share one raw allocation.
+    func slotPoolAllocationCount() -> Int {
+        Set(banks.map { ObjectIdentifier($0.arena) }).count
+    }
 
     // MARK: - Per-layer service
 
@@ -368,11 +511,10 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             precondition(expert >= 0 && expert < expertsPerLayer,
                          "expert id \(expert) out of range")
         }
-        let bankIndex = visitCount & 1
+        let bankIndex = servingBankIndex(for: layer0, visit: visitCount)
         let bank = banks[bankIndex]
-        let other = banks[bankIndex ^ 1]
         precondition(!bank.liveBatch,
-                     "bank \(bankIndex) still serves layer-visit \(visitCount - 2); "
+                     "bank \(bankIndex) still serves an earlier layer visit; "
                         + "call endLayer(_:) before re-entering it")
 
         // The prefetch for this layer was scheduled during the previous visit.
@@ -385,23 +527,38 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             }
         }
 
+        // Materialize only this bank's Metal view. Resident payloads for all
+        // other layers remain ordinary RAM and therefore do not reserve the
+        // GPU working set while the int8 trunk/KV cache are active.
+        let buffer = try bank.materializeBuffer(device: device)
         let file = try layerFile(for: layer0)
         let assigned = assignSlots(bank: bank, layer: layer0, experts: actualExperts)
-        var hits = 0
+        let bankHits = assigned.lazy.filter(\.wasHit).count
+        let isDirectResident = residentBankByLayer[layer0] == bankIndex
+        let cacheHits = isDirectResident ? bankHits : 0
         var missJobs: [(expert: Int, slot: Int)] = []
         for (index, slot) in assigned.enumerated() where !slot.wasHit {
             missJobs.append((actualExperts[index], slot.slot))
         }
-        for slot in assigned where slot.wasHit { hits += 1 }
+        let cacheMisses = isDirectResident ? missJobs.count : 0
 
         // Demand reads, waited. Update keys only after the bytes landed.
         if !missJobs.isEmpty {
             try readJobs(missJobs.map { (file: file, expert: $0.expert,
                                          destination: bank.pointer.advanced(
                                             by: $0.slot * Int(expertStride))) })
+            var newResidentEntries = 0
             for job in missJobs {
+                if isDirectResident && bank.slotExpert[job.slot] < 0 {
+                    newResidentEntries += 1
+                }
                 bank.slotLayer[job.slot] = Int32(layer0)
                 bank.slotExpert[job.slot] = Int32(job.expert)
+            }
+            if newResidentEntries > 0 {
+                statsLock.lock()
+                residentEntryCountStorage += newResidentEntries
+                statsLock.unlock()
             }
         }
 
@@ -410,26 +567,29 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         var prefetchIssued = 0
         var skippedBusy = 0
         var skippedCold = 0
-        if policy == .predict, let next = nextMoELayer(after: layer0) {
-            if let predicted = predictions[next] {
-                if other.liveBatch || other.prefetchGroup != nil {
+        if policy != .off, let next = nextMoELayer(after: layer0) {
+            if let predicted = predictionCandidates(layer: next), !predicted.isEmpty {
+                let targetIndex = servingBankIndex(for: next, visit: visitCount + 1)
+                let target = banks[targetIndex]
+                if targetIndex == bankIndex
+                    || target.liveBatch || target.prefetchGroup != nil {
                     skippedBusy = predicted.count
                 } else {
                     let nextFile = try layerFile(for: next)
-                    let jobs = planPrefetch(bank: other, file: nextFile,
+                    let jobs = planPrefetch(bank: target, file: nextFile,
                                             predicted: predicted)
                     prefetchIssued = jobs.count
                     if !jobs.isEmpty {
                         let group = DispatchGroup()
-                        other.prefetchGroup = group
-                        other.prefetchError = nil
+                        target.prefetchGroup = group
+                        target.prefetchError = nil
                         nonisolated(unsafe) let jobs = jobs
-                        nonisolated(unsafe) let other = other
+                        nonisolated(unsafe) let target = target
                         ioQueue.async(group: group) { [self] in
                             do {
-                                try readJobsSync(jobs, bank: other)
+                                try readJobsSync(jobs, bank: target)
                             } catch {
-                                other.prefetchError = error
+                                target.prefetchError = error
                             }
                         }
                     }
@@ -440,9 +600,12 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         }
 
         statsLock.lock()
-        statsStorage.demandHits &+= UInt64(hits)
+        statsStorage.demandHits &+= UInt64(bankHits)
         statsStorage.demandMisses &+= UInt64(missJobs.count)
         statsStorage.demandBytes &+= UInt64(missJobs.count) &* expertStride
+        statsStorage.residentCacheHits &+= UInt64(cacheHits)
+        statsStorage.residentCacheMisses &+= UInt64(cacheMisses)
+        statsStorage.residentCacheEntries = residentEntryCountStorage
         statsStorage.prefetchesIssued &+= UInt64(prefetchIssued)
         statsStorage.prefetchBytes &+= UInt64(prefetchIssued) &* expertStride
         statsStorage.prefetchSkippedBankBusy &+= UInt64(skippedBusy)
@@ -454,36 +617,45 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         return K3ExpertBatch(
             layer: layer0,
             bankIndex: bankIndex,
-            buffer: bank.buffer,
-            slotOffsets: assigned.map { UInt64($0.slot) * expertStride })
+            buffer: buffer,
+            slotOffsets: assigned.map { UInt64($0.slot) * expertStride },
+            storageOwner: bank)
     }
 
     /// Release the batch's bank after its consuming GPU work completed.
     public func endLayer(_ batch: K3ExpertBatch) {
-        precondition(banks[batch.bankIndex].liveBatch,
+        let bank = banks[batch.bankIndex]
+        precondition(bank.liveBatch,
                      "endLayer without a live batch on bank \(batch.bankIndex)")
-        banks[batch.bankIndex].liveBatch = false
+        bank.liveBatch = false
+        bank.releaseBufferAfterUse()
     }
 
     /// Record layer `layer0`'s actual routing for this token; it becomes the
     /// prediction prefetched on the NEXT token.
     public func recordRouting(layer0: Int, experts: [Int]) {
+        if let latest = predictions[layer0] {
+            previousPredictions[layer0] = latest
+        }
         predictions[layer0] = experts
     }
 
     /// Forget all predictions (fresh conversation, diagnostics).
     public func resetPrediction() {
         predictions.removeAll()
+        previousPredictions.removeAll()
     }
 
     /// Snapshot only the semantic-free routing predictor. Expert bank bytes
     /// remain an opportunistic cache and are never required for correctness.
-    func capturePredictions() -> [Int: [Int]] { predictions }
+    func capturePredictions() -> K3RoutingPredictionState {
+        K3RoutingPredictionState(latest: predictions, previous: previousPredictions)
+    }
 
     /// Restore predictor history at a prefix boundary. Any read scheduled by
     /// a previous run is joined first; a failed speculative read is discarded
     /// and will degrade to a demand read on the next visit.
-    func restorePredictions(_ restored: [Int: [Int]]) {
+    func restorePredictions(_ restored: K3RoutingPredictionState) {
         for bank in banks {
             precondition(!bank.liveBatch,
                          "cannot restore predictions while a GPU batch is live")
@@ -491,7 +663,8 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             bank.prefetchGroup = nil
             bank.prefetchError = nil
         }
-        predictions = restored
+        predictions = restored.latest
+        previousPredictions = restored.previous
     }
 
     public func stats() -> K3ExpertStreamingStats {
@@ -513,6 +686,9 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         statsStorage.ioTuningObservations = tuning.observations
         statsStorage.ioTuningComplete = tuning.complete
         statsStorage.ioCacheMode = ioCacheMode
+        statsStorage.residentCacheEntries = residentEntryCountStorage
+        statsStorage.residentCacheCapacity = residentCacheCapacity
+        statsStorage.residentCacheBytes = residentCacheBytes
         statsLock.unlock()
     }
 
@@ -533,13 +709,36 @@ public final class K3ExpertStreaming: @unchecked Sendable {
         statsLock.unlock()
     }
 
+    /// The same verified provider used by decode. Chunked prefill must route
+    /// through this accessor so external expert stripes apply to both paths.
+    func expertLayerFileForPrefill(_ layer: Int) throws -> K3ExpertLayerFile {
+        try layerFile(for: layer)
+    }
+
     /// Test hook: `(layer, expert)` currently keyed in a bank's slots.
     public func bankContents(_ bankIndex: Int) -> [(layer: Int32, expert: Int32)] {
         let bank = banks[bankIndex]
         return Array(zip(bank.slotLayer, bank.slotExpert))
     }
 
+    /// Test-only diagnostic: direct banks must not retain Metal buffer views
+    /// after their consuming batch completes. Their raw expert bytes remain
+    /// resident in ordinary RAM.
+    func directResidentMetalViewCount() -> Int {
+        banks.lazy.filter { $0.isDirectResident && $0.buffer != nil }.count
+    }
+
     // MARK: - Slot planning
+
+    /// A resident layer always returns its fixed Metal bank. Layers outside
+    /// the configured budget retain the original bounded streaming behavior
+    /// by alternating through the transient pool in visit order.
+    private func servingBankIndex(for layer: Int, visit: Int) -> Int {
+        if let resident = residentBankByLayer[layer] { return resident }
+        precondition(!transientBankIndices.isEmpty,
+                     "non-resident layer requires a transient expert bank")
+        return transientBankIndices[visit % transientBankIndices.count]
+    }
 
     /// Hits keep their slots; misses take slots whose content is NOT in the
     /// actual set (stale or predicted-but-unused). `slotsPerBank >= topK`
@@ -602,22 +801,41 @@ public final class K3ExpertStreaming: @unchecked Sendable {
                     destination: UnsafeMutableRawPointer)] = []
         var reserved = [Bool](repeating: false, count: slotsPerBank)
         let layer = file.layer
+        var missing: [Int] = []
+        // Reserve every predicted expert already present before choosing any
+        // eviction targets. Otherwise an early miss could overwrite a later
+        // prediction that was already resident in this direct layer bank.
         for expert in distinct {
-            var resident = false
+            var residentSlot = -1
             for slot in 0..<slotsPerBank
                 where bank.slotLayer[slot] == Int32(layer)
-                    && bank.slotExpert[slot] == Int32(expert) {
-                // Keep the resident copy; mark it reserved so it is not
-                // overwritten by a later job in this same batch.
-                if !reserved[slot] { reserved[slot] = true }
-                resident = true
+                    && bank.slotExpert[slot] == Int32(expert)
+                    && !reserved[slot] {
+                residentSlot = slot
                 break
             }
-            if resident { continue }
+            if residentSlot >= 0 {
+                reserved[residentSlot] = true
+            } else {
+                missing.append(expert)
+            }
+        }
+        let predictedSet = Set(distinct)
+        for expert in missing {
             var target = -1
             for slot in 0..<slotsPerBank where !reserved[slot] {
-                target = slot
-                break
+                let holdsPrediction = bank.slotLayer[slot] == Int32(layer)
+                    && predictedSet.contains(Int(bank.slotExpert[slot]))
+                if !holdsPrediction {
+                    target = slot
+                    break
+                }
+            }
+            if target == -1 {
+                for slot in 0..<slotsPerBank where !reserved[slot] {
+                    target = slot
+                    break
+                }
             }
             guard target != -1 else { break }
             reserved[target] = true
@@ -644,21 +862,24 @@ public final class K3ExpertStreaming: @unchecked Sendable {
     private func configureCachePolicy(for file: K3ExpertLayerFile) throws {
         filePolicyLock.lock()
         defer { filePolicyLock.unlock() }
-        guard uncachedIOEnabled,
-              !configuredFileDescriptors.contains(file.fileDescriptor) else { return }
-        if fcntl(file.fileDescriptor, F_NOCACHE, 1) == 0 {
-            configuredFileDescriptors.insert(file.fileDescriptor)
-            return
+        guard uncachedIOEnabled else { return }
+        let descriptors = Set(file.expertLocations.map(\.fileDescriptor))
+        for descriptor in descriptors
+            where !configuredFileDescriptors.contains(descriptor) {
+            if fcntl(descriptor, F_NOCACHE, 1) == 0 {
+                configuredFileDescriptors.insert(descriptor)
+                continue
+            }
+            let failure = errno
+            if ioCachePolicy == .automatic {
+                uncachedIOEnabled = false
+                statsLock.lock()
+                statsStorage.ioCacheMode = K3ExpertIOCachePolicy.buffered.rawValue
+                statsLock.unlock()
+                return
+            }
+            throw ModelError.posixFailed(call: "fcntl(F_NOCACHE)", errno: failure)
         }
-        let failure = errno
-        if ioCachePolicy == .automatic {
-            uncachedIOEnabled = false
-            statsLock.lock()
-            statsStorage.ioCacheMode = K3ExpertIOCachePolicy.buffered.rawValue
-            statsLock.unlock()
-            return
-        }
-        throw ModelError.posixFailed(call: "fcntl(F_NOCACHE)", errno: failure)
     }
 
     /// Next MoE layer in visit order. Wraps around to the first MoE layer at
@@ -667,6 +888,20 @@ public final class K3ExpertStreaming: @unchecked Sendable {
     private func nextMoELayer(after layer0: Int) -> Int? {
         for layer in moeLayers where layer > layer0 { return layer }
         return moeLayers.first
+    }
+
+    private func predictionCandidates(layer: Int) -> [Int]? {
+        guard let latest = predictions[layer] else { return nil }
+        switch policy {
+        case .off:
+            return nil
+        case .predict:
+            return latest
+        case .selective:
+            guard let previous = previousPredictions[layer] else { return nil }
+            let stable = Set(previous)
+            return Array(latest.lazy.filter { stable.contains($0) }.prefix(4))
+        }
     }
 
     /// Prefetch task body: read all jobs, then publish slot keys. Runs inside
@@ -679,10 +914,20 @@ public final class K3ExpertStreaming: @unchecked Sendable {
     ) throws {
         try readJobs(jobs)
         let strideBytes = Int(expertStride)
+        var newResidentEntries = 0
         for job in jobs {
             let slotIndex = (job.destination - bank.pointer) / strideBytes
+            if bank.isDirectResident && bank.slotExpert[slotIndex] < 0 {
+                newResidentEntries += 1
+            }
             bank.slotLayer[slotIndex] = Int32(job.file.layer)
             bank.slotExpert[slotIndex] = Int32(job.expert)
+        }
+        if newResidentEntries > 0 {
+            statsLock.lock()
+            residentEntryCountStorage += newResidentEntries
+            statsStorage.residentCacheEntries = residentEntryCountStorage
+            statsLock.unlock()
         }
     }
 
@@ -715,13 +960,14 @@ public final class K3ExpertStreaming: @unchecked Sendable {
             guard job.expert >= 0 && job.expert < job.file.expertOffsets.count else {
                 throw StreamerError.offsetOutOfRange(UInt64(job.expert))
             }
-            let expertOffset = job.file.expertOffsets[job.expert]
+            let location = job.file.expertLocations[job.expert]
+            let expertOffset = location.offset
             var pageCursor = 0
             for split in 0..<splits {
                 let pages = basePages + (split < extraPages ? 1 : 0)
                 if pages > 0 {
                     chunkList.append(Chunk(
-                        fd: job.file.fileDescriptor,
+                        fd: location.fileDescriptor,
                         fileOffset: expertOffset + UInt64(pageCursor * pageBytes),
                         destination: job.destination.advanced(by: pageCursor * pageBytes),
                         byteCount: pages * pageBytes))

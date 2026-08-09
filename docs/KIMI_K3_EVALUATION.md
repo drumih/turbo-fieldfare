@@ -145,12 +145,14 @@ M5-Max fork ([gorroai](https://github.com/gorroai/flash-moe),
 [Anemll](https://github.com/Anemll/flash-moe) — "Beyond the DRAM Wall:
 20.34 tok/s on M5 Max, 4.67× over baseline"), ordered by their measured wins:
 
-1. **Temporal expert prediction / prefetch** (+31–55 %, their biggest single
-   win): store this token's per-layer routing, prefetch next token's experts
-   into a second buffer set while attention runs. Adopted as
-   `K3ExpertStreaming`'s default policy, behind a runtime toggle — K3's
-   Quantile Balancing flattens expert usage, so the hit rate must be measured
-   on real weights before the default is final.
+1. **Temporal expert prediction / prefetch** is retained only as an explicit
+   experiment (`--expert-predict on`), not as the production default. The
+   former next-token top-16 replay policy produced 32.9 % real-weight hits on
+   a 256-token greedy K3 run, but increased requested expert I/O from 6.88 TB
+   to 11.10 TB and reduced decode from 0.418 to 0.316 tok/s. The production
+   policy is therefore on-demand reads (`.off`); any future predictor must
+   demonstrate a net win on real-weight, long-decode A/B runs before becoming
+   eligible for the default.
 2. **Bounded pread fanout**: decode and chunked prefill share one scheduler;
    the M5 K3 profile issues one contiguous 17.5 MB read per expert and tunes
    its worker limit online among 1/2/4. Page-aligned split reads remain an
@@ -170,10 +172,18 @@ From [FareedKhan-dev/kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-
 1. **Multiply MXFP4 directly from packed nibbles** — never materialize a
    dequantized expert (194 GB/token of format conversion avoided there).
    Adopted in the decode GEMV kernels.
-2. **LRU is structurally useless for K3 experts** (Quantile Balancing flattens
-   usage; measured 0.0 % hit rate below a ~36 GB arena). Adopted: no large
-   cross-layer expert LRU/LFU; keep-last + prediction-driven prefetch + OS
-   page cache instead. This replaces the Gemma path's 16-slot LFU.
+2. **A small Gemma-style LFU is structurally useless for K3 experts**
+   (Quantile Balancing flattens global usage; measured 0.0 % hit rate below a
+   ~36 GB arena). The first K3-wide LRU experiment reduced SSD bytes but lost
+   throughput because every miss populated a second allocation and every hit
+   copied back into the compute bank. The replacement `--expert-cache-gib`
+   path slices one page-aligned RAM arena into complete 16-slot banks assigned
+   directly to layers: misses land in
+   the compute slot and hits stay there. Only the current layer gets a Metal
+   bytesNoCopy view, preventing the resident arena from exhausting the GPU
+   working set. A 24 GiB budget fixes 91 of 92 layers resident without
+   speculative reads or cache copies. It remains off by default until the
+   real-weight A/B includes memory pressure and tok/s.
 3. **Config reader that refuses defaults** — a missing `full_attn_layers`
    silently turns 24 MLA layers into KDA. Adopted: the v2 manifest validator
    rejects absent arch fields rather than defaulting them.
@@ -228,3 +238,15 @@ A `.gturbo` v2 bundle of ~1.5 TB on disk (1.447 TB MXFP4 experts verbatim +
 0.3–1 tok/s cold / better warm, NAX-accelerated prefill, validated end-to-end
 on synthetic weights with byte-exact format fixtures and CPU-reference kernel
 tests — ready for the real checkpoint with a single repack command.
+
+**Measured against the real checkpoint**: a chunked-prefill CLI run on the
+validated 128 GB M5 Max (32-token chunks, `--expert-predict off`,
+`--expert-cache-gib 16`, `--expert-io-cache uncached`, 262144-token context,
+`trusted-install` verification) recorded 0.512 tok/s decode and a 51.9 s TTFT
+across a 3-chunk, 68-token prefill — inside the §3 estimate, not just the
+synthetic-fixture band. See [K3 disk runtime](K3_DISK_RUNTIME.md#measured-example-real-checkpoint)
+for the full command and verbose footer. The 16 GiB expert-cache figure is
+itself the result of a real-checkpoint 8/16/24 GiB A/B at this context, not
+a guess: 24 GiB reuses more experts but runs ~51% slower once its memory
+pressure outweighs the SSD reads it avoids — see
+[K3 disk runtime](K3_DISK_RUNTIME.md#cache-size-sweep-8--16--24-gib-real-checkpoint-262144-context).

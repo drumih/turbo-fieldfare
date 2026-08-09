@@ -4,6 +4,7 @@ import Darwin
 import Metal
 @testable import TurboFieldfare
 @testable import TurboFieldfareFormat
+@testable import TurboFieldfareCLICore
 import TurboFieldfareValidationSupport
 
 /// Synthetic end-to-end for the Stage-C2 stack: a TINY K3 v2 bundle
@@ -25,6 +26,200 @@ import TurboFieldfareValidationSupport
 /// intermediate 64 (not 48 — the shared down-projection's columns must be a
 /// multiple of 64).
 @Suite struct K3ForwardRunnerTests {
+
+    @Test func externalExpertStripesMatchCanonicalBundle() throws {
+        let fixture = try Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.url) }
+        let context = try MetalContext()
+        let model = try K3Model.load(
+            bundleURL: fixture.url,
+            device: context.device,
+            expecting: fixture.config)
+        var roots: [URL] = []
+        for shard in 0..<2 {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("k3-expert-shard-\(shard)-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(
+                at: root, withIntermediateDirectories: true)
+            roots.append(root)
+            var layers: [K3ExpertShardDescriptor.Layer] = []
+            for layer in fixture.config.moeLayers0.sorted() {
+                let experts = stride(
+                    from: shard,
+                    to: fixture.config.expertsPerLayer,
+                    by: 2).map { $0 }
+                let file = String(format: "layer_%02d.bin", layer)
+                let url = root.appendingPathComponent(file)
+                var bytes: [UInt8] = []
+                for expert in experts {
+                    let blob = fixture.expertBlobs[layer]![expert]
+                    bytes += blob
+                    bytes += [UInt8](
+                        repeating: 0,
+                        count: Int(fixture.config.expertStride) - blob.count)
+                }
+                try Data(bytes).write(to: url)
+                layers.append(.init(
+                    layer: layer,
+                    file: file,
+                    experts: experts,
+                    size: UInt64(bytes.count),
+                    sha256: try Sha256Verifier.hashFile(at: url)))
+            }
+            let descriptor = K3ExpertShardDescriptor(
+                modelID: model.modelID,
+                sourceSnapshotHash: model.sourceSnapshotHash,
+                expertStride: fixture.config.expertStride,
+                expertsPerLayer: fixture.config.expertsPerLayer,
+                shardIndex: shard,
+                shardCount: 2,
+                layers: layers)
+            try JSONEncoder().encode(descriptor).write(
+                to: root.appendingPathComponent("expert-shard.json"))
+        }
+        defer { for root in roots { try? FileManager.default.removeItem(at: root) } }
+
+        let prompt: [Int32] = [7, 11, 19]
+        let canonical = try K3Engine.load(
+            bundleURL: fixture.url,
+            maxContext: 64,
+            expecting: fixture.config,
+            prefetchPolicy: .off)
+        _ = try canonical.generate(
+            promptTokens: prompt,
+            config: GenerationConfig(temperature: 0),
+            maxNew: 1,
+            prefillMode: .chunked(chunkTokens: 32))
+
+        let striped = try K3Engine.load(
+            bundleURL: fixture.url,
+            maxContext: 64,
+            expecting: fixture.config,
+            prefetchPolicy: .off,
+            expertShardRoots: roots)
+        _ = try striped.generate(
+            promptTokens: prompt,
+            config: GenerationConfig(temperature: 0),
+            maxNew: 1,
+            prefillMode: .chunked(chunkTokens: 32))
+
+        #expect(RelError.maxAbsDiff(
+            canonical.lastLogits(), striped.lastLogits()) == 0)
+    }
+
+    @Test func directResidentBanksMatchCanonicalDecodeExactly() throws {
+        let fixture = try Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.url) }
+        let prompt: [Int32] = [7, 11, 19]
+        let generation = GenerationConfig(temperature: 0)
+
+        let canonical = try K3Engine.load(
+            bundleURL: fixture.url,
+            maxContext: 64,
+            expecting: fixture.config,
+            prefetchPolicy: .off)
+        var canonicalTokens: [Int32] = []
+        _ = try canonical.generate(
+            promptTokens: prompt,
+            config: generation,
+            maxNew: 3,
+            prefillMode: .chunked(chunkTokens: 32),
+            onToken: { canonicalTokens.append($0) })
+
+        let residentBytes = UInt64(
+            fixture.config.moeLayers0.count * fixture.config.moeTopKExperts)
+            * fixture.config.expertStride
+        let resident = try K3Engine.load(
+            bundleURL: fixture.url,
+            maxContext: 64,
+            expecting: fixture.config,
+            prefetchPolicy: .off,
+            residentExpertCacheBytes: residentBytes)
+        var residentTokens: [Int32] = []
+        let stats = try resident.generate(
+            promptTokens: prompt,
+            config: generation,
+            maxNew: 3,
+            prefillMode: .chunked(chunkTokens: 32),
+            onToken: { residentTokens.append($0) })
+
+        #expect(residentTokens == canonicalTokens)
+        #expect(RelError.maxAbsDiff(
+            canonical.lastLogits(), resident.lastLogits()) == 0)
+        #expect(stats.expertStreaming.residentCacheCapacity
+            == fixture.config.moeLayers0.count * fixture.config.moeTopKExperts)
+        #expect(stats.expertStreaming.residentCacheCopyBytes == 0)
+        #expect(stats.expertStreaming.residentCachePopulateBytes == 0)
+    }
+
+    @Test func cliJSONLBatchLoadsOnceAndEmitsOneResultPerJob() async throws {
+        let fixture = try Self.makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.url) }
+        let tokenizerSource = try #require(Bundle.module.url(
+            forResource: "tiktoken.model",
+            withExtension: nil,
+            subdirectory: "Fixtures/k3"))
+        let tokenizerDirectory = fixture.url.appendingPathComponent("tokenizer")
+        try FileManager.default.createDirectory(
+            at: tokenizerDirectory, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: tokenizerSource,
+            to: tokenizerDirectory.appendingPathComponent("tiktoken.model"))
+
+        let temporary = FileManager.default.temporaryDirectory
+        let batchURL = temporary.appendingPathComponent(
+            "k3-batch-\(UUID().uuidString).jsonl")
+        let outputURL = temporary.appendingPathComponent(
+            "k3-batch-out-\(UUID().uuidString).jsonl")
+        let errorURL = temporary.appendingPathComponent(
+            "k3-batch-err-\(UUID().uuidString).txt")
+        defer {
+            try? FileManager.default.removeItem(at: batchURL)
+            try? FileManager.default.removeItem(at: outputURL)
+            try? FileManager.default.removeItem(at: errorURL)
+        }
+        try Data(("{\"id\":\"a\",\"prompt\":\"!\",\"max_new\":1}\n"
+            + "{\"id\":\"b\",\"prompt\":\"!\",\"max_new\":1}\n").utf8)
+            .write(to: batchURL)
+        FileManager.default.createFile(atPath: outputURL.path, contents: Data())
+        FileManager.default.createFile(atPath: errorURL.path, contents: Data())
+        let output = try FileHandle(forWritingTo: outputURL)
+        let errors = try FileHandle(forWritingTo: errorURL)
+        defer {
+            try? output.close()
+            try? errors.close()
+        }
+
+        let args = Args(
+            model: fixture.url.path,
+            batchFile: batchURL.path,
+            maxNew: 1,
+            maxNewExplicit: true,
+            maxContext: 64,
+            temperature: 0,
+            temperatureExplicit: true,
+            expertIOWorkers: "1")
+        let result = await runK3(
+            args: args,
+            stdout: output,
+            stderr: errors,
+            expecting: fixture.config)
+        try errors.synchronize()
+        let errorText = try String(contentsOf: errorURL, encoding: .utf8)
+        #expect(result.exitCode == 0, "\(errorText)")
+        try output.synchronize()
+        let lines = try String(contentsOf: outputURL, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+        #expect(lines.count == 2)
+        for (index, line) in lines.enumerated() {
+            let object = try #require(try JSONSerialization.jsonObject(
+                with: Data(line.utf8)) as? [String: Any])
+            #expect(object["index"] as? Int == index)
+            #expect(object["error"] == nil)
+            #expect(object["text"] is String)
+            #expect(object["new_tokens"] as? Int == 1)
+        }
+    }
 
     @Test func realWeightActivationProbeMatchesIndependentReference() throws {
         let fixture = try Self.makeFixture()

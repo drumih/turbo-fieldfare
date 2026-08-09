@@ -219,10 +219,6 @@ final class K3ChunkedPrefiller {
         self.pool = poolBuf
     }
 
-    deinit {
-        for file in layerFiles.values { close(file.fileDescriptor) }
-    }
-
     func enableActivationTrace() {
         captureActivationTrace = true
         lastRouterDiagnostics = nil
@@ -371,7 +367,11 @@ final class K3ChunkedPrefiller {
             cb.commit()
             committed = true
             cb.waitUntilCompleted()
-            if let error = cb.error { throw MetalError.libraryCompileFailed("\(error)") }
+            if let error = cb.error {
+                throw MetalError.libraryCompileFailed(
+                    "K3 chunked prefill final command failed "
+                        + "(chunkStart=\(chunkStart) tokens=\(T)): \(error)")
+            }
             if captureActivationTrace, emitHead {
                 let ptr = headNormed.contents().bindMemory(
                     to: Float16.self, capacity: config.hiddenSize)
@@ -621,7 +621,11 @@ final class K3ChunkedPrefiller {
         cb.commit()
         committed = true
         cb.waitUntilCompleted()
-        if let error = cb.error { throw MetalError.libraryCompileFailed("\(error)") }
+        if let error = cb.error {
+            throw MetalError.libraryCompileFailed(
+                "K3 chunked prefill pre-MoE command failed "
+                    + "(layer=\(layer) tokens=\(T)): \(error)")
+        }
 
         if captureActivationTrace, layer == c.moeLayers0.min() {
             let row = T - 1
@@ -656,7 +660,15 @@ final class K3ChunkedPrefiller {
         var halfCB: [MTLCommandBuffer?] = [nil, nil]
         for (tileIndex, tile) in plan.tiles.enumerated() {
             let half = tileIndex & 1
-            if let prior = halfCB[half] { prior.waitUntilCompleted() }
+            if let prior = halfCB[half] {
+                prior.waitUntilCompleted()
+                if let error = prior.error {
+                    throw MetalError.libraryCompileFailed(
+                        "K3 chunked prefill expert tile failed "
+                            + "(layer=\(layer) tile=\(max(tileIndex - 2, 0)) "
+                            + "tokens=\(T)): \(error)")
+                }
+            }
             try readExpertTile(layer: layer, experts: tile.experts, half: half)
             writeTilePairs(plan: plan, tile: tile, half: half, into: pairsBuf[half])
             guard let tileCB = context.queue.makeCommandBuffer() else {
@@ -676,10 +688,18 @@ final class K3ChunkedPrefiller {
                                     dLatent: dLatent,
                                     intermediate: c.moeExpertIntermediateSize,
                                     tilePairCount: tile.pairIndices.count)
+            tileCB.label = "k3.prefill.layer\(layer).expertTile\(tileIndex)"
             tileCB.commit()
             halfCB[half] = tileCB
         }
-        for tileCB in halfCB { tileCB?.waitUntilCompleted() }
+        for (half, tileCB) in halfCB.enumerated() {
+            tileCB?.waitUntilCompleted()
+            if let error = tileCB?.error {
+                throw MetalError.libraryCompileFailed(
+                    "K3 chunked prefill final expert tile failed "
+                        + "(layer=\(layer) half=\(half) tokens=\(T)): \(error)")
+            }
+        }
 
         // Reduce + norm + up-proj + shared add, into the continuing buffer.
         guard let nextCB = context.queue.makeCommandBuffer() else {
@@ -789,7 +809,7 @@ final class K3ChunkedPrefiller {
 
     private func layerFile(for layer0: Int) throws -> K3ExpertLayerFile {
         if let file = layerFiles[layer0] { return file }
-        let file = try model.expertLayerFile(layer0)
+        let file = try streaming.expertLayerFileForPrefill(layer0)
         layerFiles[layer0] = file
         return file
     }
