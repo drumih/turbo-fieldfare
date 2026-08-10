@@ -17,7 +17,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
-        .package(url: "https://github.com/apple/swift-nio.git", exact: "2.99.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", exact: "2.101.3"),
     ],
     targets: [
         .target(
