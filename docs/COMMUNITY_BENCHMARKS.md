@@ -138,6 +138,9 @@ all affect decode speed.
 | [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 61 / 516 | 4.134 tok/s | One submitted run |
 | [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 430 / 780 | 3.672 tok/s | One submitted run |
 | [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | 3,015 / 617 | 3.012 tok/s | One submitted run |
+| [Maxim Voronin](https://github.com/maxslamdunk) · [issue #116](https://github.com/drumih/turbo-fieldfare/issues/116) | M1 MacBook Air | 8 GB | Internal 256 GB SSD | 61 / 511 | 3.340 tok/s | One submitted run |
+| [Maxim Voronin](https://github.com/maxslamdunk) · [issue #116](https://github.com/drumih/turbo-fieldfare/issues/116) | M1 MacBook Air | 8 GB | Internal 256 GB SSD | 430 / 669 | 3.053 tok/s | One submitted run |
+| [Maxim Voronin](https://github.com/maxslamdunk) · [issue #116](https://github.com/drumih/turbo-fieldfare/issues/116) | M1 MacBook Air | 8 GB | Internal 256 GB SSD | 3,015 / 604 | 2.642 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 61 / 511 | 7.802 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 430 / 669 | 7.173 tok/s | One submitted run |
 | [German](https://github.com/iGerman00) · [issue #76](https://github.com/drumih/turbo-fieldfare/issues/76) | M1 MacBook Air | 16 GB | Internal SSD | 3,015 / 604 | 6.093 tok/s | One submitted run |
@@ -168,12 +171,18 @@ all affect decode speed.
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 61 / 516 | 11.53 tok/s | Median of five runs |
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 430 / 780 | 10.79 tok/s | Median of five runs |
 | [22f](https://github.com/22f) · [issue #23](https://github.com/drumih/turbo-fieldfare/issues/23) | M4 Mac mini | 16 GB | External Samsung 990 Pro | 3,015 / 617 | 11.21 tok/s | Median of five runs |
+| [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 61 / 516 | 22.256 tok/s | One submitted run |
+| [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 430 / 780 | 28.964 tok/s | One submitted run |
+| [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 3,015 / 617 | 24.209 tok/s | One submitted run |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 61 / 516 | 34.060 tok/s | Automatic mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 430 / 780 | 30.954 tok/s | Automatic mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 3,015 / 617 | 25.292 tok/s | Automatic mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 61 / 516 | 33.379 tok/s | High Power mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 430 / 780 | 30.614 tok/s | High Power mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 3,015 / 617 | 25.230 tok/s | High Power mode |
+| [nxexcelsior](https://github.com/nxexcelsior) · [issue #111](https://github.com/drumih/turbo-fieldfare/issues/111) | M5 MacBook Air | 24 GB | Internal SSD | 61 / 497 | 11.982 tok/s | One submitted run |
+| [nxexcelsior](https://github.com/nxexcelsior) · [issue #111](https://github.com/drumih/turbo-fieldfare/issues/111) | M5 MacBook Air | 24 GB | Internal SSD | 430 / 721 | 12.429 tok/s | One submitted run |
+| [nxexcelsior](https://github.com/nxexcelsior) · [issue #111](https://github.com/drumih/turbo-fieldfare/issues/111) | M5 MacBook Air | 24 GB | Internal SSD | 3,015 / 610 | 9.783 tok/s | One submitted run |
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 61 / 497 | 37.426 tok/s | One submitted run |
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 430 / 721 | 34.194 tok/s | One submitted run |
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 3,015 / 610 | 31.485 tok/s | One submitted run |
