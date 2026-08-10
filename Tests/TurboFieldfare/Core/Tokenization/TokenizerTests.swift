@@ -45,6 +45,21 @@ struct TokenizerTests {
         #expect(tok.decode(ids) == text)
     }
 
+    @Test("Decode keeps spaces before punctuation", arguments: [
+        "step 1 . done",
+        "x , y",
+        "he said ' ok ' now",
+        "a    . b",
+        "wait ! really ?",
+    ])
+    func decodePreservesSpacingBeforePunctuation(_ text: String) {
+        // HF's clean_up_tokenization_spaces collapsed these ("he said ' ok ' now"
+        // became "he said'ok'now"), which broke decode(encode(x)) == x for a
+        // tokenizer that is lossless by construction.
+        let ids = tok.encode(text, addBOS: false)
+        #expect(tok.decode(ids) == text)
+    }
+
     @Test("Round-trip multi-byte UTF-8", arguments: [
         "你好，世界。",
         "漢字",
@@ -122,34 +137,69 @@ struct TokenizerTests {
         #expect(!tail.unicodeScalars.contains("\u{FFFD}"))
     }
 
-    @Test("Streaming delta preserves graphemes extended by later scalars")
-    func streamingExtendedGraphemes() {
-        let cases = [
-            ("ห", "ห้าม", "้าม"),
-            ("e", "e\u{301}", "\u{301}"),
-            ("ا", "ا\u{64E}", "\u{64E}"),
-            ("ש", "ש\u{5B8}", "\u{5B8}"),
-            ("क", "क्ष", "्ष"),
-            ("\u{1100}", "\u{1100}\u{1161}", "\u{1161}"),
-            ("\u{263A}", "\u{263A}\u{FE0F}", "\u{FE0F}"),
-            ("\u{1F44D}", "\u{1F44D}\u{1F3FD}", "\u{1F3FD}"),
-            ("1", "1\u{FE0F}\u{20E3}", "\u{FE0F}\u{20E3}"),
-            ("\u{1F1EC}", "\u{1F1EC}\u{1F1E7}", "\u{1F1E7}"),
-            ("\u{1F469}", "\u{1F469}\u{200D}\u{1F4BB}", "\u{200D}\u{1F4BB}"),
-        ]
-        for (prefix, current, expectedDelta) in cases {
+    @Test("Streaming reassembles graphemes extended by later scalars", arguments: [
+        "ห้าม",
+        "e\u{301}",
+        "ا\u{64E}",
+        "ש\u{5B8}",
+        "क्ष",
+        "\u{1100}\u{1161}",
+        "\u{263A}\u{FE0F}",
+        "\u{1F44D}\u{1F3FD}",
+        "1\u{FE0F}\u{20E3}",
+        "\u{1F1EC}\u{1F1E7}",
+        "\u{1F469}\u{200D}\u{1F4BB}",
+    ])
+    func streamingExtendedGraphemes(_ text: String) {
+        assertStreams(text)
+    }
+
+    @Test("Whitespace run before punctuation survives streaming")
+    func streamingWhitespaceThenPunctuation() {
+        // Encoder-unreachable but generator-reachable: the normalizer maps " " to
+        // "▁", so no encode() call produces a bare whitespace run followed by
+        // punctuation. A generating model emits it freely — in indented markdown
+        // and in code. HF's clean_up_tokenization_spaces rewrote " ." to "."
+        // across that boundary, which made the streaming delta drop the
+        // punctuation token entirely and silently.
+        for (run, mark) in [("▁▁▁▁", "."), ("▁▁", ","), ("▁▁▁▁", "?"), ("▁▁", "!")] {
+            guard let runID = tok.tokenizer.convertTokenToId(run),
+                  let markID = tok.tokenizer.convertTokenToId(mark) else {
+                Issue.record("vocabulary is missing \(run) or \(mark)")
+                continue
+            }
+            let ids = [Int32(runID), Int32(markID)]
             var detok = GFDetokenizer(tokenizer: tok)
-            #expect(detok.commitDelta(prefix) == prefix)
-            #expect(detok.commitDelta(current) == expectedDelta)
+            var assembled = ""
+            for id in ids { assembled += detok.push(id) }
+            assembled += detok.flush()
+
+            #expect(assembled == tok.decode(ids))
+            #expect(assembled == String(repeating: " ", count: run.count) + mark,
+                    "expected the whitespace run and '\(mark)' intact, got '\(assembled)'")
         }
     }
 
-    @Test("Streaming delta resynchronizes after a rewritten prefix")
-    func streamingPrefixResync() {
-        var detok = GFDetokenizer(tokenizer: tok)
-        #expect(detok.commitDelta("abc") == "abc")
-        #expect(detok.commitDelta("ax") == "")
-        #expect(detok.commitDelta("axy") == "y")
+    @Test("Streaming matches batch decode for arbitrary token streams")
+    func streamingMatchesBatchForArbitraryIDs() {
+        // Every other streaming test round-trips encode() output, which can only
+        // produce token sequences the encoder itself emits. A generating model is
+        // under no such constraint, so drive the detokenizer with raw IDs.
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func nextID() -> Int32 {
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return Int32(state % UInt64(tok.vocabSize))
+        }
+        for round in 0..<16 {
+            let ids = (0..<256).map { _ in nextID() }
+            var detok = GFDetokenizer(tokenizer: tok)
+            var assembled = ""
+            for id in ids { assembled += detok.push(id) }
+            assembled += detok.flush()
+            #expect(assembled == tok.decode(ids), "round \(round) diverged from batch decode")
+        }
     }
 
     @Test("Streaming detokenizer matches full decode for complex Unicode", arguments: [

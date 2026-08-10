@@ -3,101 +3,73 @@ import Tokenizers
 
 /// Streaming detokenizer for generation loops.
 ///
-/// Two challenges drive the design:
+/// Emits each token's own contribution to the output as it arrives. Two
+/// properties make that safe:
 ///
-/// 1. BPE byte-fallback splits multi-byte codepoints (e.g. emoji) across several
-///    tokens. Naively decoding each token in isolation yields broken UTF-8.
-/// 2. swift-transformers' decoder silently drops byte-fallback tokens that sit
-///    at the **end** of the decoded sequence (the bytes are committed only once
-///    a non-byte-fallback token follows). For us this matters at `flush()`.
+/// 1. The Gemma decoder sequence (`Replace`, `ByteFallback`, `Fuse`) is
+///    position-independent, so the decode of a token stream is the
+///    concatenation of its per-token fragments. `GemmaDecoding` reproduces that
+///    sequence without HF's `clean_up_tokenization_spaces` pass, which is the
+///    one stage that rewrites already-decoded text and is wrong for this
+///    tokenizer anyway (see `GemmaDecoding`).
+/// 2. BPE byte fallback splits a multi-byte codepoint across several tokens, so
+///    a run of `<0xXX>` tokens is held until its bytes form valid UTF-8. That
+///    keeps a split codepoint whole instead of streaming replacement characters
+///    (issue #58).
 ///
-/// Strategy:
-///   - During `push(_:)` we decode the longest prefix of accumulated IDs that
-///     does NOT end with byte-fallback tokens, then emit the delta vs. previously
-///     emitted text. Any trailing byte-fallback IDs are held back.
-///   - During `flush()` we decode the stable prefix as above AND manually
-///     assemble the trailing byte-fallback bytes into a UTF-8 string. This
-///     recovers text the library would otherwise drop on a sequence-ending
-///     codepoint.
+/// Cost is O(1) per token and independent of how much has already been
+/// generated. The previous implementation re-decoded the entire accumulated
+/// token list on every push, which made a generation O(n²) — roughly 3.6·10⁹
+/// dictionary lookups over the app's 64K-token budget — and compared the result
+/// against the full emitted prefix to recover a delta.
 struct GFDetokenizer {
     @usableFromInline let tokenizer: any Tokenizer
-    @usableFromInline var stableIDs: [Int] = []
-    @usableFromInline var trailingByteIDs: [Int] = []
-    @usableFromInline var emitted: String = ""
+    /// Bytes of an in-flight byte-fallback run that is not yet valid UTF-8.
+    @usableFromInline var pendingBytes: [UInt8] = []
+    @usableFromInline var specials: GemmaSpecialTokenFilter
 
     init(tokenizer: GFTokenizer) {
         self.tokenizer = tokenizer.tokenizer
+        self.specials = GemmaSpecialTokenFilter(tokenizer: tokenizer.tokenizer)
     }
 
+    /// Text contributed by `id`, ready to append to the stream.
+    ///
+    /// Returns `""` while a byte-fallback run is still incomplete; those bytes
+    /// come out with the token that completes them, or at `flush()`.
     mutating func push(_ id: Int32) -> String {
-        let tokenID = Int(id)
-        let token = tokenizer.convertIdToToken(tokenID) ?? ""
-        if Self.isByteFallback(token) {
-            trailingByteIDs.append(tokenID)
-            return ""
-        }
+        guard let token = tokenizer.convertIdToToken(Int(id)) else { return "" }
 
-        if !trailingByteIDs.isEmpty {
-            stableIDs.append(contentsOf: trailingByteIDs)
-            trailingByteIDs.removeAll(keepingCapacity: true)
-        }
-        stableIDs.append(tokenID)
-
-        let current = tokenizer.decode(tokens: stableIDs, skipSpecialTokens: true)
-        return commitDelta(current)
-    }
-
-    mutating func flush() -> String {
-        let stableText = stableIDs.isEmpty
-            ? ""
-            : tokenizer.decode(tokens: stableIDs, skipSpecialTokens: true)
-
-        let trailingText = assembleByteFallback(trailingByteIDs)
-        let fullText = stableText + trailingText
-        return commitDelta(fullText)
-    }
-
-    @usableFromInline
-    mutating func commitDelta(_ current: String) -> String {
-        // A combining mark can extend the last emitted grapheme, so compare the
-        // append-only prefix without using Character boundaries.
-        let currentUTF8 = current.utf8
-        var boundary = currentUTF8.startIndex
-        for byte in emitted.utf8 {
-            guard boundary != currentUTF8.endIndex,
-                  currentUTF8[boundary] == byte else {
-                // Decoder altered the prefix — extremely rare in append-only streams.
-                // Resync rather than emit garbage; the user-visible loss is bounded
-                // to whatever was retokenized.
-                emitted = current
+        if let byte = GemmaDecoding.byteValue(token) {
+            pendingBytes.append(byte)
+            guard let assembled = GemmaDecoding.assembleBytes(pendingBytes) else {
                 return ""
             }
-            currentUTF8.formIndex(after: &boundary)
+            pendingBytes.removeAll(keepingCapacity: true)
+            return assembled
         }
-        let delta = String(current[boundary...])
-        emitted = current
-        return delta
+
+        var text = drainPendingBytes()
+        if !specials.isSpecial(Int(id)) {
+            text += GemmaDecoding.fragment(token)
+        }
+        return text
     }
 
-    @usableFromInline
-    func assembleByteFallback(_ ids: [Int]) -> String {
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(ids.count)
-        for id in ids {
-            guard let tok = tokenizer.convertIdToToken(id) else { continue }
-            guard Self.isByteFallback(tok),
-                  let byte = UInt8(tok.dropFirst(3).dropLast(), radix: 16)
-            else { continue }
-            bytes.append(byte)
-        }
-        return String(bytes: bytes, encoding: .utf8) ?? ""
+    /// Remainder held back at a stop boundary.
+    mutating func flush() -> String {
+        drainPendingBytes()
     }
 
+    /// Close an in-flight byte-fallback run.
+    ///
+    /// A run that never became valid UTF-8 is decoded leniently, matching what a
+    /// batch `decode` of the same IDs produces, rather than being dropped.
     @usableFromInline
-    static func isByteFallback(_ token: String) -> Bool {
-        token.count == 6
-            && token.hasPrefix("<0x")
-            && token.hasSuffix(">")
-            && token.dropFirst(3).dropLast().allSatisfy { $0.isHexDigit }
+    mutating func drainPendingBytes() -> String {
+        guard !pendingBytes.isEmpty else { return "" }
+        let text = String(decoding: pendingBytes, as: UTF8.self)
+        pendingBytes.removeAll(keepingCapacity: true)
+        return text
     }
 }

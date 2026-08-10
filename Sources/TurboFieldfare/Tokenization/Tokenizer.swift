@@ -147,8 +147,36 @@ public struct GFTokenizer: @unchecked Sendable {
     }
 
     /// Decode token IDs to text. `skipSpecialTokens` strips BOS/EOS/turn markers from the output.
+    ///
+    /// Runs the pinned Gemma decoder sequence directly (see `GemmaDecoding`)
+    /// rather than `Tokenizers.decode`, whose trailing
+    /// `clean_up_tokenization_spaces` pass defaults to on for this tokenizer and
+    /// rewrites model output (`"he said ' ok ' now"` -> `"he said'ok'now"`),
+    /// breaking `decode(encode(x)) == x`. This path and `GFDetokenizer` share the
+    /// same pipeline, so batch and streaming decode agree.
     public func decode(_ ids: [Int32], skipSpecialTokens: Bool = true) -> String {
-        tokenizer.decode(tokens: ids.map(Int.init), skipSpecialTokens: skipSpecialTokens)
+        var filter = GemmaSpecialTokenFilter(tokenizer: tokenizer)
+        var text = ""
+        var bytes: [UInt8] = []
+
+        func drainBytes() {
+            guard !bytes.isEmpty else { return }
+            text += String(decoding: bytes, as: UTF8.self)
+            bytes.removeAll(keepingCapacity: true)
+        }
+
+        for id in ids {
+            guard let token = tokenizer.convertIdToToken(Int(id)) else { continue }
+            if let byte = GemmaDecoding.byteValue(token) {
+                bytes.append(byte)
+                continue
+            }
+            drainBytes()
+            if skipSpecialTokens, filter.isSpecial(Int(id)) { continue }
+            text += GemmaDecoding.fragment(token)
+        }
+        drainBytes()
+        return text
     }
 
     // MARK: - Chat template
