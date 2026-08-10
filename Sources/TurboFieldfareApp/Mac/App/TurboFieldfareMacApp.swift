@@ -1,5 +1,6 @@
 import AppKit
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 // Run as a regular foreground app even when launched as a bare SwiftPM
@@ -43,6 +44,14 @@ struct TurboFieldfareMacApp: App {
         .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About TurboFieldfare") {
+                    NSApp.orderFrontStandardAboutPanel(options: [
+                        .version: TurboFieldfareAppVersion.resolve(),
+                        .applicationName: "TurboFieldfare",
+                    ])
+                }
+            }
             CommandMenu("Generation") {
                 Button("Cancel Generation") { model.cancel() }
                     .keyboardShortcut(".", modifiers: .command)
