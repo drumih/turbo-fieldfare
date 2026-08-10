@@ -5,6 +5,7 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
     case missingSpecialToken(String)
     case invalidChatTemplate(String)
     case missingToolTemplate
+    case unsupportedDecoder(probe: String, expected: String, actual: String)
 
     public var description: String {
         switch self {
@@ -12,6 +13,9 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
         case .invalidChatTemplate(let detail): return "invalid chat messages: \(detail)"
         case .missingToolTemplate:
             return "installed tokenizer is missing chat_template.jinja; reinstall the model"
+        case .unsupportedDecoder(let probe, let expected, let actual):
+            return "tokenizer decoder is not the pinned Gemma 4 sequence: "
+                + "\(probe) decoded to '\(actual)', expected '\(expected)'"
         }
     }
 }
@@ -95,8 +99,48 @@ public struct GFTokenizer: @unchecked Sendable {
         fileManager.fileExists(atPath: folder.appendingPathComponent("tokenizer.json").path)
     }
 
+    /// Reject a tokenizer whose decoder is not the pinned Gemma 4 sequence.
+    ///
+    /// `GemmaDecoding` reproduces `Sequence[Replace("▁" -> " "), ByteFallback,
+    /// Fuse]` rather than calling `Tokenizers.decode`, so that decode stays
+    /// lossless and per-token (see `GemmaDecoding`). The installed tokenizer is
+    /// pinned and hash-validated, but `TURBO_FIELDFARE_TOKENIZER_DIR` can point
+    /// at any directory. Without this check a tokenizer declaring a different
+    /// decoder would decode subtly wrong text instead of failing.
+    ///
+    /// The probes avoid strings the library's cleanup pass would rewrite, so
+    /// they compare the decoder sequence alone.
+    private static func verifyDecoderPipeline(_ tokenizer: any Tokenizer) throws {
+        for probe in ["▁the", "the", "."] {
+            guard let id = tokenizer.convertTokenToId(probe) else { continue }
+            let actual = tokenizer.decode(tokens: [id], skipSpecialTokens: false)
+            let expected = GemmaDecoding.fragment(probe)
+            guard actual == expected else {
+                throw GFTokenizerError.unsupportedDecoder(
+                    probe: probe, expected: expected, actual: actual)
+            }
+        }
+
+        // A codepoint split across byte-fallback tokens must fuse into one
+        // character rather than decode per token. The run needs a trailing
+        // non-byte token: the library commits byte-fallback bytes only once a
+        // regular token follows, and drops them outright at the end of a
+        // sequence (issue #58) — which is why `GFDetokenizer` assembles the tail
+        // itself instead of asking the library.
+        let byteProbe = ["<0xC3>", "<0xA9>", "the"]
+        let byteIDs = byteProbe.compactMap { tokenizer.convertTokenToId($0) }
+        if byteIDs.count == byteProbe.count {
+            let actual = tokenizer.decode(tokens: byteIDs, skipSpecialTokens: false)
+            guard actual == "éthe" else {
+                throw GFTokenizerError.unsupportedDecoder(
+                    probe: byteProbe.joined(), expected: "éthe", actual: actual)
+            }
+        }
+    }
+
     public init(tokenizer: any Tokenizer) throws {
         self.tokenizer = tokenizer
+        try Self.verifyDecoderPipeline(tokenizer)
 
         guard let bos = tokenizer.bosTokenId else {
             throw GFTokenizerError.missingSpecialToken("<bos>")

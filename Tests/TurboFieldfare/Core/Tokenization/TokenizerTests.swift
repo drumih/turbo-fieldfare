@@ -190,6 +190,13 @@ struct TokenizerTests {
         // special-token filtering, byte-fallback grouping, and the "▁" mapping.
         var ids = randomIDs(count: 256, seed: 0x2545_F491_4F6C_DD1D)
         ids += [tok.bosID, tok.eosID, tok.endOfTurnID, tok.channelStartID, tok.padID]
+        // The library drops byte-fallback tokens that end a sequence (issue #58)
+        // while we assemble them, so the two only agree when a regular token
+        // closes the stream. End on one rather than depend on where the random
+        // IDs happen to land.
+        if let trailing = tok.tokenizer.convertTokenToId("the") {
+            ids.append(Int32(trailing))
+        }
         for skipSpecialTokens in [true, false] {
             let mine = tok.decode(ids, skipSpecialTokens: skipSpecialTokens)
             let library = tok.tokenizer.decode(tokens: ids.map(Int.init),
