@@ -180,20 +180,32 @@ struct TokenizerTests {
         }
     }
 
+    @Test("Decode differs from the library only by its cleanup pass")
+    func decodeDiffersFromLibraryOnlyByCleanup() {
+        // The streaming test below compares against our own batch decode, so it
+        // cannot catch a fault shared by both. This one keeps swift-transformers
+        // as an independent oracle: our decode, run through the cleanup pass we
+        // deliberately dropped, must reproduce the library byte for byte. That
+        // pins the intended difference to exactly that pass and covers
+        // special-token filtering, byte-fallback grouping, and the "▁" mapping.
+        var ids = randomIDs(count: 256, seed: 0x2545_F491_4F6C_DD1D)
+        ids += [tok.bosID, tok.eosID, tok.endOfTurnID, tok.channelStartID, tok.padID]
+        for skipSpecialTokens in [true, false] {
+            let mine = tok.decode(ids, skipSpecialTokens: skipSpecialTokens)
+            let library = tok.tokenizer.decode(tokens: ids.map(Int.init),
+                                               skipSpecialTokens: skipSpecialTokens)
+            #expect(Self.huggingFaceCleanUp(mine) == library,
+                    "decode diverged from the library beyond the cleanup pass (skipSpecialTokens: \(skipSpecialTokens))")
+        }
+    }
+
     @Test("Streaming matches batch decode for arbitrary token streams")
     func streamingMatchesBatchForArbitraryIDs() {
         // Every other streaming test round-trips encode() output, which can only
         // produce token sequences the encoder itself emits. A generating model is
         // under no such constraint, so drive the detokenizer with raw IDs.
-        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
-        func nextID() -> Int32 {
-            state ^= state << 13
-            state ^= state >> 7
-            state ^= state << 17
-            return Int32(state % UInt64(tok.vocabSize))
-        }
         for round in 0..<16 {
-            let ids = (0..<256).map { _ in nextID() }
+            let ids = randomIDs(count: 256, seed: 0x9E37_79B9_7F4A_7C15 &+ UInt64(round))
             var detok = GFDetokenizer(tokenizer: tok)
             var assembled = ""
             for id in ids { assembled += detok.push(id) }
@@ -275,6 +287,31 @@ struct TokenizerTests {
     }
 
     // MARK: - Helpers
+
+    /// Deterministic xorshift64 IDs — token streams the encoder cannot produce
+    /// but a generating model can.
+    private func randomIDs(count: Int, seed: UInt64) -> [Int32] {
+        var state = seed == 0 ? 0x9E37_79B9_7F4A_7C15 : seed
+        return (0..<count).map { _ in
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return Int32(state % UInt64(tok.vocabSize))
+        }
+    }
+
+    /// swift-transformers' `clean_up_tokenization_spaces` pass, reproduced here
+    /// so the differential test can pin our only intended difference from the
+    /// library to exactly this pass. Not used in production — see `GemmaDecoding`.
+    private static func huggingFaceCleanUp(_ text: String) -> String {
+        let replacements = [
+            (" .", "."), (" ?", "?"), (" !", "!"), (" ,", ","), (" ' ", "'"),
+            (" n't", "n't"), (" 'm", "'m"), (" 's", "'s"), (" 've", "'ve"), (" 're", "'re"),
+        ]
+        return replacements.reduce(text) { partial, rule in
+            partial.replacingOccurrences(of: rule.0, with: rule.1)
+        }
+    }
 
     private func assertStreams(_ target: String) {
         let ids = tok.encode(target, addBOS: false)
