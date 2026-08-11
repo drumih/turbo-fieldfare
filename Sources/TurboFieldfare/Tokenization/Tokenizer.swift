@@ -215,30 +215,15 @@ public struct GFTokenizer: @unchecked Sendable {
     /// rather than `Tokenizers.decode`, whose trailing
     /// `clean_up_tokenization_spaces` pass defaults to on for this tokenizer and
     /// rewrites model output (`"he said ' ok ' now"` -> `"he said'ok'now"`),
-    /// breaking `decode(encode(x)) == x`. This path and `GFDetokenizer` share the
-    /// same pipeline, so batch and streaming decode agree.
+    /// breaking `decode(encode(x)) == x`. Batch decode is a push-loop over
+    /// `GFDetokenizer`, so batch and streaming decode agree by construction.
     public func decode(_ ids: [Int32], skipSpecialTokens: Bool = true) -> String {
+        var detok = GFDetokenizer(tokenizer: self, skipSpecialTokens: skipSpecialTokens)
         var text = ""
-        var bytes: [UInt8] = []
-
-        func drainBytes() {
-            guard !bytes.isEmpty else { return }
-            text += String(decoding: bytes, as: UTF8.self)
-            bytes.removeAll(keepingCapacity: true)
-        }
-
         for id in ids {
-            guard let token = tokenizer.convertIdToToken(Int(id)) else { continue }
-            if let byte = GemmaDecoding.byteValue(token) {
-                bytes.append(byte)
-                continue
-            }
-            drainBytes()
-            if skipSpecialTokens, specialTokenIDs.contains(id) { continue }
-            text += GemmaDecoding.fragment(token)
+            text += detok.push(id)
         }
-        drainBytes()
-        return text
+        return text + detok.flush()
     }
 
     // MARK: - Chat template

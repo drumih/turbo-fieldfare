@@ -41,20 +41,86 @@ enum GemmaDecoding {
 
     /// One token's contribution to the output: the `Replace` decoder's
     /// `"▁" -> " "` substitution. Byte-fallback tokens are handled by
-    /// `assembleBytes` instead — they only decode as a complete run.
+    /// `ByteFallbackRun` instead — they only decode as a complete run.
     static func fragment(_ token: String) -> String {
-        token.replacingOccurrences(of: sentencePieceUnderline, with: " ")
+        // Runs once per generated token; most tokens contain no "▁", and the
+        // guard returns them without Foundation bridging or an allocation.
+        guard token.unicodeScalars.contains(sentencePieceUnderline) else { return token }
+        var scalars = String.UnicodeScalarView()
+        for scalar in token.unicodeScalars {
+            scalars.append(scalar == sentencePieceUnderline ? " " : scalar)
+        }
+        return String(scalars)
     }
 
-    /// Assemble a run of byte-fallback tokens into text.
-    ///
-    /// Returns `nil` while the run is not yet valid UTF-8, which is how a
-    /// codepoint split across several tokens stays whole instead of streaming
-    /// out as replacement characters (issue #58).
-    static func assembleBytes(_ bytes: [UInt8]) -> String? {
-        guard !bytes.isEmpty else { return "" }
+    private static let sentencePieceUnderline: Unicode.Scalar = "\u{2581}"
+}
+
+/// A run of `<0xXX>` byte-fallback tokens, decoded with the reference HF
+/// `tokenizers` ByteFallback semantics: the run commits as a whole — valid
+/// UTF-8 becomes its text, anything else (including an incomplete trailing
+/// sequence) becomes one U+FFFD per byte of the run. The swift-transformers
+/// port differs here (it decodes invalid runs leniently and drops a trailing
+/// run outright — issue #58); we follow the Rust reference.
+///
+/// Streaming: while the run is valid so far, nothing can be emitted, because
+/// one more byte can invalidate the whole run retroactively. The moment the
+/// run becomes invalid its fate is sealed — every byte, past and future,
+/// decodes to exactly one U+FFFD — so an invalid run streams replacement
+/// characters live rather than freezing the stream, and buffers nothing.
+struct ByteFallbackRun {
+    private var bytes: [UInt8] = []
+    private var poisoned = false
+    /// Continuation bytes still owed by the current lead, and the allowed
+    /// range for the next one (RFC 3629 constrains the first continuation
+    /// after E0/ED/F0/F4 leads).
+    private var pendingContinuations = 0
+    private var nextContinuation: ClosedRange<UInt8> = 0x80...0xBF
+
+    /// Text this byte contributes to the stream: `""` while the run is valid
+    /// so far, replacement characters once it can no longer become valid.
+    mutating func push(_ byte: UInt8) -> String {
+        if poisoned { return "\u{FFFD}" }
+        bytes.append(byte)
+        if accept(byte) { return "" }
+        poisoned = true
+        defer { bytes.removeAll(keepingCapacity: true) }
+        return String(repeating: "\u{FFFD}", count: bytes.count)
+    }
+
+    /// Close the run: a non-byte token follows, or the stream ends.
+    mutating func commit() -> String {
+        defer {
+            bytes.removeAll(keepingCapacity: true)
+            poisoned = false
+            pendingContinuations = 0
+            nextContinuation = 0x80...0xBF
+        }
+        guard !poisoned, !bytes.isEmpty else { return "" }
         return String(bytes: bytes, encoding: .utf8)
+            ?? String(repeating: "\u{FFFD}", count: bytes.count)
     }
 
-    private static let sentencePieceUnderline = "▁"
+    /// Advance the incremental UTF-8 validator. `false` means no suffix can
+    /// ever make the run valid again.
+    private mutating func accept(_ byte: UInt8) -> Bool {
+        if pendingContinuations > 0 {
+            guard nextContinuation.contains(byte) else { return false }
+            pendingContinuations -= 1
+            nextContinuation = 0x80...0xBF
+            return true
+        }
+        switch byte {
+        case 0x00...0x7F: break
+        case 0xC2...0xDF: pendingContinuations = 1
+        case 0xE0: pendingContinuations = 2; nextContinuation = 0xA0...0xBF
+        case 0xE1...0xEC, 0xEE, 0xEF: pendingContinuations = 2
+        case 0xED: pendingContinuations = 2; nextContinuation = 0x80...0x9F
+        case 0xF0: pendingContinuations = 3; nextContinuation = 0x90...0xBF
+        case 0xF1...0xF3: pendingContinuations = 3
+        case 0xF4: pendingContinuations = 3; nextContinuation = 0x80...0x8F
+        default: return false // stray continuation, overlong lead, or > U+10FFFF
+        }
+        return true
+    }
 }

@@ -235,8 +235,15 @@ struct TokenizerTests {
         // cannot catch a fault shared by both. This one keeps swift-transformers
         // as an independent oracle: our decode, run through the cleanup pass we
         // deliberately dropped, must reproduce the library byte for byte. That
-        // pins the intended difference to exactly that pass and covers
-        // special-token filtering, byte-fallback grouping, and the "▁" mapping.
+        // pins the intended differences and covers special-token filtering,
+        // byte-fallback grouping, and the "▁" mapping. Besides the cleanup
+        // pass, we intentionally diverge from the Swift port on byte-fallback
+        // runs — invalid runs decode to one U+FFFD per byte and trailing runs
+        // are flushed, both per the reference Rust decoder, where the port
+        // decodes leniently and drops trailing runs (issue #58). The fixed
+        // seeds produce no multi-byte-token runs, so those divergences do not
+        // reach this comparison; the byte-soup test covers them against a
+        // reference-semantics oracle.
         var ids = randomIDs(count: 256, seed: 0x2545_F491_4F6C_DD1D)
         ids += [tok.bosID, tok.eosID, tok.endOfTurnID, tok.channelStartID, tok.padID]
         // The library drops byte-fallback tokens that end a sequence (issue #58)
@@ -252,6 +259,124 @@ struct TokenizerTests {
                                                skipSpecialTokens: skipSpecialTokens)
             #expect(Self.huggingFaceCleanUp(mine) == library,
                     "decode diverged from the library beyond the cleanup pass (skipSpecialTokens: \(skipSpecialTokens))")
+        }
+    }
+
+    // MARK: - Byte-fallback runs
+
+    @Test("Byte run fuses across a skipped special token")
+    func byteRunFusesAcrossSkippedSpecial() throws {
+        // The library filters skipped special IDs before its decoder chain, so
+        // a byte run must fuse ACROSS a skipped special. In keep mode the
+        // special is an ordinary token and closes the run instead, leaving two
+        // single-byte runs that are invalid on their own - one U+FFFD each.
+        let ids: [Int32] = try [
+            byteTokenID("<0xC3>"), tok.eosID, byteTokenID("<0xA9>"), regularTokenID("the"),
+        ]
+        #expect(tok.decode(ids, skipSpecialTokens: true) == "éthe")
+        var detok = GFDetokenizer(tokenizer: tok)
+        var assembled = ""
+        for id in ids { assembled += detok.push(id) }
+        assembled += detok.flush()
+        #expect(assembled == "éthe")
+        #expect(tok.decode(ids, skipSpecialTokens: false) == "\u{FFFD}<eos>\u{FFFD}the")
+    }
+
+    @Test("Invalid byte runs stream replacement characters immediately")
+    func invalidByteRunsStreamImmediately() throws {
+        // Once a run can no longer become valid UTF-8, every byte - past and
+        // future - decodes to exactly one U+FFFD, so the stream emits them
+        // live instead of freezing and buffering until the next regular token.
+        var detok = GFDetokenizer(tokenizer: tok)
+        let stray = try byteTokenID("<0x80>")
+        for _ in 0..<64 {
+            #expect(detok.push(stray) == "\u{FFFD}")
+        }
+        #expect(detok.flush() == "")
+
+        detok = GFDetokenizer(tokenizer: tok)
+        #expect(try detok.push(byteTokenID("<0xC3>")) == "")
+        #expect(try detok.push(byteTokenID("<0xFF>")) == "\u{FFFD}\u{FFFD}")
+
+        // E0's first continuation is constrained to A0-BF, so 0x80 poisons the
+        // run even though it is a continuation byte.
+        detok = GFDetokenizer(tokenizer: tok)
+        #expect(try detok.push(byteTokenID("<0xE0>")) == "")
+        #expect(try detok.push(byteTokenID("<0x80>")) == "\u{FFFD}\u{FFFD}")
+    }
+
+    @Test("An incomplete trailing sequence invalidates the whole run")
+    func incompleteTailInvalidatesWholeRun() throws {
+        // The reference decoder validates the run as a whole, so an incomplete
+        // tail turns even a valid prefix into per-byte replacement characters.
+        var detok = GFDetokenizer(tokenizer: tok)
+        #expect(try detok.push(byteTokenID("<0xE2>")) == "")
+        #expect(try detok.push(byteTokenID("<0x82>")) == "")
+        #expect(detok.flush() == "\u{FFFD}\u{FFFD}")
+
+        detok = GFDetokenizer(tokenizer: tok)
+        for token in ["<0xC3>", "<0xA9>", "<0xE2>", "<0x82>"] {
+            #expect(try detok.push(byteTokenID(token)) == "")
+        }
+        #expect(detok.flush() == String(repeating: "\u{FFFD}", count: 4))
+    }
+
+    @Test("A valid byte run commits with the token that closes it")
+    func validByteRunCommitsAtBoundary() throws {
+        var detok = GFDetokenizer(tokenizer: tok)
+        for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
+            #expect(try detok.push(byteTokenID(token)) == "")
+        }
+        #expect(try detok.push(regularTokenID("the")) == "😀the")
+    }
+
+    @Test("Byte-token soup matches batch decode and reference run semantics")
+    func byteSoupMatchesReference() throws {
+        // Adversarial byte-run coverage the encoder can never produce: mostly
+        // byte tokens with occasional regular tokens, checked against a direct
+        // reimplementation of the reference decoder's run semantics
+        // (from_utf8, else one U+FFFD per byte) and against our own streaming.
+        let byteIDs: [Int32] = try (0...255).map {
+            try byteTokenID(String(format: "<0x%02X>", $0))
+        }
+        let theID = try regularTokenID("the")
+        var state: UInt64 = 0xA076_1D64_78BD_642F
+        func next() -> UInt64 {
+            state ^= state << 13
+            state ^= state >> 7
+            state ^= state << 17
+            return state
+        }
+        for round in 0..<16 {
+            var ids: [Int32] = []
+            var expected = ""
+            var run: [UInt8] = []
+            func closeRun() {
+                guard !run.isEmpty else { return }
+                expected += String(bytes: run, encoding: .utf8)
+                    ?? String(repeating: "\u{FFFD}", count: run.count)
+                run.removeAll()
+            }
+            for _ in 0..<256 {
+                let r = next()
+                if r % 8 == 0 {
+                    closeRun()
+                    ids.append(theID)
+                    expected += "the"
+                } else {
+                    let byte = UInt8(truncatingIfNeeded: r >> 8)
+                    ids.append(byteIDs[Int(byte)])
+                    run.append(byte)
+                }
+            }
+            closeRun()
+
+            #expect(tok.decode(ids) == expected, "round \(round) batch diverged")
+            var detok = GFDetokenizer(tokenizer: tok)
+            var assembled = ""
+            for id in ids { assembled += detok.push(id) }
+            assembled += detok.flush()
+            #expect(assembled == expected, "round \(round) streaming diverged")
         }
     }
 
@@ -343,6 +468,14 @@ struct TokenizerTests {
     }
 
     // MARK: - Helpers
+
+    private func byteTokenID(_ token: String) throws -> Int32 {
+        Int32(try GFTokenizer.requireTokenID(tok.tokenizer, token))
+    }
+
+    private func regularTokenID(_ token: String) throws -> Int32 {
+        Int32(try GFTokenizer.requireTokenID(tok.tokenizer, token))
+    }
 
     /// Deterministic xorshift64 IDs — token streams the encoder cannot produce
     /// but a generating model can.
