@@ -56,6 +56,15 @@ import TurboFieldfare
         }
     }
 
+    @Test func forceJSONRejectsStopStrings() {
+        #expect(throws: ArgsError.mutuallyExclusive("--force-json", "--stop")) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--force-json", "--stop", "}",
+            ])
+        }
+    }
+
     @Test func topKAboveKernelLimitRejected() {
         #expect(throws: ArgsError.invalidValue(flag: "--top-k", value: "257")) {
             _ = try Args.parse([
@@ -68,7 +77,7 @@ import TurboFieldfare
         let expected: Set<String> = [
             "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
-            "--seed", "--stop", "--quiet", "--expert-cache-slots",
+            "--seed", "--stop", "--force-json", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
             "--rdadvise", "--help",
         ]

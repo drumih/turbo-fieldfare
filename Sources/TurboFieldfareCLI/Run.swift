@@ -52,7 +52,8 @@ public func run(args: Args,
             repetitionPenalty: args.repetitionPenalty,
             seed: args.seed,
             stopStrings: args.stops,
-            extraStopTokens: [])
+            extraStopTokens: [],
+            forceJSON: args.forceJSON)
         let runtime = try args.resolvedRuntimeConfiguration(
             forceLogitsHead: !config.isPureGreedy)
 
@@ -95,7 +96,8 @@ public func run(args: Args,
             let tokensPerSecond = stats.decodeSeconds > 0
                 ? Double(stats.newTokens) / stats.decodeSeconds
                 : 0
-            let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))]\n"
+            let vetoes = args.forceJSON ? " vetoes=\(stats.grammarVetoes)" : ""
+            let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))\(vetoes)]\n"
             stderr.write(Data(footer.utf8))
         }
         return RunResult(exitCode: 0)

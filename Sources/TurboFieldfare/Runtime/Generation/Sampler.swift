@@ -15,6 +15,10 @@ public struct GenerationConfig: Sendable {
     public var seed: UInt64? = nil         // nil = nondeterministic
     public var stopStrings: [String] = []
     public var extraStopTokens: Set<Int32> = []
+    /// Constrain decoding to grammar-valid JSON (byte-level automaton over
+    /// sampled candidates; EOS forced once the root value closes). Requires a
+    /// logits head — incompatible with the fused greedy path.
+    public var forceJSON: Bool = false
 
     public init(maxNewTokens: Int = 256,
                 temperature: Float = 1.0,
@@ -23,7 +27,8 @@ public struct GenerationConfig: Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 stopStrings: [String] = [],
-                extraStopTokens: Set<Int32> = []) {
+                extraStopTokens: Set<Int32> = [],
+                forceJSON: Bool = false) {
         self.maxNewTokens = maxNewTokens
         self.temperature = temperature
         self.topK = topK
@@ -32,6 +37,7 @@ public struct GenerationConfig: Sendable {
         self.seed = seed
         self.stopStrings = stopStrings
         self.extraStopTokens = extraStopTokens
+        self.forceJSON = forceJSON
     }
 
     public func validate() throws {
@@ -54,6 +60,10 @@ public struct GenerationConfig: Sendable {
         if temperature > 0, topK == nil, let topP, topP < 1 {
             throw GeneratorError.invalidGenerationConfig(
                 "topP below one requires topK; full-vocabulary nucleus sampling is not implemented")
+        }
+        if forceJSON, !stopStrings.isEmpty {
+            throw GeneratorError.invalidGenerationConfig(
+                "stopStrings are incompatible with forceJSON; the grammar owns termination")
         }
     }
 

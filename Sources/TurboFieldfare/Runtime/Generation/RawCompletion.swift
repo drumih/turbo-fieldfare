@@ -28,6 +28,15 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    /// Times the JSON grammar vetoed the GPU-sampled token and the
+    /// probability-ordered fallback chose instead. 0 unless `forceJSON`.
+    public var grammarVetoes: Int = 0
+    /// Times the tool-call grammar vetoed the GPU-sampled token. 0 unless the
+    /// tool-call constraint ran.
+    public var toolGrammarVetoes: Int = 0
+    /// Of those, the ones where the rejected token died while the function name
+    /// was still being spelled — the model wanted a tool that was not declared.
+    public var toolNameVetoes: Int = 0
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -62,9 +71,10 @@ public struct RawCompletionScratch: @unchecked Sendable {
 extension GenerationConfig {
     /// A pure-greedy config can use the fused head's GPU argmax
     /// (`RealForwardRunner.lastGreedyToken`) instead of sampling from the
-    /// logits buffer. Anything else needs real logits.
+    /// logits buffer. Anything else — including JSON-constrained decoding,
+    /// which must inspect and veto candidates — needs real logits.
     public var isPureGreedy: Bool {
-        temperature == 0 && repetitionPenalty == 1
+        temperature == 0 && repetitionPenalty == 1 && !forceJSON
     }
 
 }
@@ -86,15 +96,24 @@ public func runRawCompletion(producer: any LogitProducer,
                              scratch: RawCompletionScratch,
                              prefillConfig: PrefillRuntimeConfig = .defaultChunked,
                              start: RawCompletionStart = .reset,
+                             toolFilter: ToolCallTokenFilter? = nil,
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
+    // The two grammars speak different languages about the same token stream;
+    // there is no meaningful intersection to enforce.
+    guard !(config.forceJSON && toolFilter != nil) else {
+        throw GeneratorError.invalidGenerationConfig(
+            "forceJSON and the tool-call grammar cannot constrain the same generation")
+    }
     guard !promptIds.isEmpty else {
         throw GeneratorError.emptyPrompt
     }
     let fusedRunner = producer as? RealForwardRunner
     let fusedGreedy = fusedRunner?.usesFusedGreedyHead == true
-    guard !fusedGreedy || config.isPureGreedy else {
+    // A constrained decode has to see and veto candidates, which the fused
+    // head's GPU argmax never surfaces.
+    guard !fusedGreedy || (config.isPureGreedy && toolFilter == nil) else {
         throw PrefillError.unsupportedPrefillSeed(
             "the fused-head producer cannot serve this sampling configuration; use a logits head")
     }
@@ -174,53 +193,109 @@ public func runRawCompletion(producer: any LogitProducer,
 
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
+    let jsonFilter = config.forceJSON
+        ? JSONTokenFilter(tokenizer: tokenizer, extraStopIDs: config.extraStopTokens)
+        : nil
+    let grammar: (any TokenGrammarFilter)? = jsonFilter ?? toolFilter
+    var jsonAssembler = UTF8StreamAssembler()
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
     var reason: StopReason = .maxTokens
     var uncommittedBoundaryTokenIDs: [Int32] = []
 
+    // Under forceJSON the emitted text is the automaton-validated byte stream,
+    // NOT detokenizer output: the library decode applies `cleanUp` (` ,`→`,`)
+    // and drops undecodable byte-fallback tails, either of which would desync
+    // what the grammar guaranteed from what the caller receives.
+    func flushTail() -> String {
+        if jsonFilter != nil { return jsonAssembler.flush() }
+        // Inside an open `<|tool_call>` region the byte-fallback pieces the
+        // detokenizer is holding back are raw bytes of an argument — the `é`
+        // tail of a path — not assistant prose. The region dies with the
+        // generation and is never decoded, so those bytes are not text anyone
+        // may show: dropping them is the whole point of holding them back.
+        if toolFilter?.isInsideCall == true { return "" }
+        return detok.flush()
+    }
+
     while true {
         try Task.checkCancellation()
 
-        let tokenID: Int32
+        let sampled: Int32?
         if generated == 0, let seed = prefillSeed {
             switch seed {
             case .greedyToken(let token):
-                tokenID = Int32(bitPattern: token)
+                sampled = Int32(bitPattern: token)
             case .logitsWritten:
-                tokenID = try sampleOnce(scratch: scratch, context: context,
-                                         history: history, config: config, position: generated)
+                sampled = try sampleOnce(scratch: scratch, context: context,
+                                         history: history, config: config, position: generated,
+                                         grammar: grammar)
             }
         } else if fusedGreedy {
-            tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
+            sampled = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
-            tokenID = try sampleOnce(scratch: scratch, context: context,
-                                     history: history, config: config, position: generated)
+            sampled = try sampleOnce(scratch: scratch, context: context,
+                                     history: history, config: config, position: generated,
+                                     grammar: grammar)
+        }
+        // The grammar admits no token at all. Under the tool-call grammar that
+        // is the region byte cap: at `GemmaToolCallParser.maximumBytes` every
+        // token overflows it and `<tool_call|>` cannot close an argument object
+        // that is still open, so the region can only be abandoned. That is the
+        // budget running out inside a call, which the caller already handles —
+        // report it as such instead of failing the whole request. Force-json
+        // has no bounded region to abandon: there, an empty vocabulary is a
+        // real configuration failure.
+        guard let tokenID = sampled else {
+            guard toolFilter != nil else {
+                throw GeneratorError.invalidGenerationConfig(
+                    "force-json: no token in the vocabulary can extend the JSON document")
+            }
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
+            if !tail.isEmpty { onProgress(.tail(tail)) }
+            reason = .maxTokens
+            break
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
 
         if tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID) {
-            if tokenID == tokenizer.endOfTurnID {
+            if jsonFilter != nil {
+                // Grammar-gated stops always mean "the JSON may end here";
+                // .toolCalls/.endOfTurn semantics don't apply to forced JSON.
+                reason = .eos
+            } else if tokenID == tokenizer.endOfTurnID {
                 reason = .endOfTurn
             } else if tokenID == tokenizer.toolResponseID {
                 reason = .toolCalls
             } else {
                 reason = .eos
             }
-            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             break
         }
 
-        let delta = detok.push(tokenID)
+        let delta: String
+        if let jsonFilter {
+            delta = jsonAssembler.push(jsonFilter.lastAcceptedBytes)
+        } else {
+            delta = detok.push(tokenID)
+        }
         let visible = stopMatcher.push(delta)
         onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
+
+        if let jsonFilter, jsonFilter.isComplete {
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
+            if !tail.isEmpty { onProgress(.tail(tail)) }
+            reason = .eos
+            break
+        }
 
         let hitStopString = stopMatcher.isStopped || shouldStop()
         let hitMax = generated >= config.maxNewTokens
         if hitStopString || hitMax {
-            let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
+            let tail = stopMatcher.push(flushTail()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             reason = hitStopString ? .stopString : .maxTokens
             break
@@ -241,16 +316,63 @@ public func runRawCompletion(producer: any LogitProducer,
                            reason: reason,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
-                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
+                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+                           grammarVetoes: jsonFilter?.vetoCount ?? 0,
+                           toolGrammarVetoes: toolFilter?.vetoCount ?? 0,
+                           toolNameVetoes: toolFilter?.nameVetoCount ?? 0)
 }
 
+/// nil when the active grammar accepts nothing: the caller decides whether that
+/// ends the generation or fails it.
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
-                        history: [Int32], config: GenerationConfig, position: Int) throws -> Int32 {
+                        history: [Int32], config: GenerationConfig, position: Int,
+                        grammar: (any TokenGrammarFilter)?) throws -> Int32? {
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
                            outToken: scratch.outToken)
     cb.commit(); cb.waitUntilCompleted()
     try checkCommandBufferError(cb.error)
-    return Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
+    let sampled = Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
+    guard let grammar, !grammar.tryAccept(sampled) else { return sampled }
+    grammar.noteVeto()
+    return grammarFallbackToken(scratch: scratch, filter: grammar)
+}
+
+/// The GPU-sampled token broke the active grammar. `scratch.probs` (shared
+/// storage, written by the completed softcap+softmax pass) is walked in
+/// probability order — first grammar-accepted token wins. A capped candidate
+/// set covers the common case; the full vocabulary is scanned only if every
+/// high-probability candidate is grammar-invalid. nil when the sweep comes back
+/// empty: the grammar has painted itself into a corner.
+private func grammarFallbackToken(scratch: RawCompletionScratch,
+                                  filter: any TokenGrammarFilter) -> Int32? {
+    let vocab = scratch.sampler.vocab
+    let probs = scratch.probs.contents().bindMemory(to: Float16.self, capacity: vocab)
+
+    var top: [(id: Int32, p: Float16)] = []
+    top.reserveCapacity(257)
+    var floor: Float16 = 0
+    for id in 0..<vocab {
+        let p = probs[id]
+        guard p > floor else { continue }
+        top.append((Int32(id), p))
+        if top.count > 256 {
+            let minIndex = top.indices.min { top[$0].p < top[$1].p }!
+            top.remove(at: minIndex)
+            floor = top.min { $0.p < $1.p }!.p
+        }
+    }
+    top.sort { $0.p > $1.p }
+    for candidate in top where filter.tryAccept(candidate.id) {
+        return candidate.id
+    }
+
+    let remaining = (0..<vocab)
+        .map { (id: Int32($0), p: probs[$0]) }
+        .sorted { $0.p > $1.p }
+    for candidate in remaining where filter.tryAccept(candidate.id) {
+        return candidate.id
+    }
+    return nil
 }

@@ -77,6 +77,8 @@ struct StructuredOutputFailureDiagnostics: Equatable, Sendable {
     let kvPositionMatchesHistory: Bool
     let completionCountMatchesHistory: Bool
     let prefillAccountingMatches: Bool
+    let toolGrammarVetoes: Int
+    let toolNameVetoes: Int
     let renderedPromptHash: String
     let effectivePromptHash: String
     let generatedHash: String
@@ -165,6 +167,8 @@ struct StructuredOutputFailureDiagnostics: Equatable, Sendable {
         self.completionCountMatchesHistory = offset == result.newTokens
         self.prefillAccountingMatches = !prefillOverflow
             && prefillAccounted == result.prefillTokens
+        self.toolGrammarVetoes = result.toolGrammarVetoes
+        self.toolNameVetoes = result.toolNameVetoes
         self.renderedPromptHash = Self.i32leSHA256([renderedPromptIDs[...]])
         self.effectivePromptHash = Self.i32leSHA256([effectivePromptIDs[...]])
         self.generatedHash = Self.i32leSHA256(generatedSegments)
@@ -219,6 +223,8 @@ struct StructuredOutputFailureDiagnostics: Equatable, Sendable {
             "kv_position_matches_history=\(kvPositionMatchesHistory)",
             "completion_count_matches_history=\(completionCountMatchesHistory)",
             "prefill_accounting_matches=\(prefillAccountingMatches)",
+            "tool_grammar_vetoes=\(toolGrammarVetoes)",
+            "tool_name_vetoes=\(toolNameVetoes)",
             "rendered_prompt_i32le_sha256=\(renderedPromptHash)",
             "effective_prompt_i32le_sha256=\(effectivePromptHash)",
             "generated_i32le_sha256=\(generatedHash)",
@@ -374,6 +380,14 @@ public actor ServerCoordinator {
     public var isActive: Bool { active }
 }
 
+/// Whether `<|tool_call>` blocks are constrained to the Gemma tool-call
+/// grammar. `off` restores the pre-constraint token stream exactly, which is
+/// what makes the flag a usable escape hatch and a regression control.
+public enum ServerToolCallGrammarMode: String, Sendable, Equatable {
+    case on
+    case off
+}
+
 public actor ServerModelSession: ServerInferenceBackend {
     private let context: MetalContext
     private let model: Model
@@ -384,11 +398,13 @@ public actor ServerModelSession: ServerInferenceBackend {
     private let maxContext: Int
     private let promptCacheMode: ServerPromptCacheMode
     private let promptCacheDomain: ServerPromptCacheDomain
+    private let toolCallGrammar: ServerToolCallGrammarMode
     private var promptCache = ServerPromptCache()
 
     public static func load(modelDirectory: URL,
                             maxContext: Int,
-                            promptCacheMode: ServerPromptCacheMode = .singlePrefix) async throws -> ServerModelSession {
+                            promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+                            toolCallGrammar: ServerToolCallGrammarMode = .on) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
             throw GFTokenizerError.missingToolTemplate
@@ -441,7 +457,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                                   prefillConfig: runtime.prefillConfig,
                                   maxContext: maxContext,
                                   promptCacheMode: promptCacheMode,
-                                  promptCacheDomain: promptCacheDomain)
+                                  promptCacheDomain: promptCacheDomain,
+                                  toolCallGrammar: toolCallGrammar)
     }
 
     private init(context: MetalContext,
@@ -452,7 +469,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                  prefillConfig: PrefillRuntimeConfig,
                  maxContext: Int,
                  promptCacheMode: ServerPromptCacheMode,
-                 promptCacheDomain: ServerPromptCacheDomain) {
+                 promptCacheDomain: ServerPromptCacheDomain,
+                 toolCallGrammar: ServerToolCallGrammarMode) {
         self.context = context
         self.model = model
         self.tokenizer = tokenizer
@@ -462,6 +480,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.maxContext = maxContext
         self.promptCacheMode = promptCacheMode
         self.promptCacheDomain = promptCacheDomain
+        self.toolCallGrammar = toolCallGrammar
     }
 
     public func generate(
@@ -530,6 +549,14 @@ public actor ServerModelSession: ServerInferenceBackend {
                 tokenizer: tokenizer,
                 allowedTools: Set(request.tools.map(\.name)))
             : nil
+        // Same predicate and same name set as the decoder. With no tools
+        // declared the trie is empty and `<|tool_call>` is blocked outright:
+        // that shape decodes as `unknownTool` today, which the server turns
+        // into a 500; now it comes back as text.
+        let toolFilter = toolCallGrammar == .on && needsToolTemplate
+            ? ToolCallTokenFilter(tokenizer: tokenizer,
+                                  allowedNames: Set(request.tools.map(\.name)))
+            : nil
         var stopMatcher = StreamingStopMatcher(stops: request.generationConfig.stopStrings)
         var content = ""
         var calls: [ParsedToolCall] = []
@@ -545,6 +572,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: completionStart,
+            toolFilter: toolFilter,
             shouldStop: { shouldStop }) { progress in
                 guard decodingError == nil else { return }
                 do {
@@ -553,7 +581,9 @@ public actor ServerModelSession: ServerInferenceBackend {
                         break
                     case .token(_, let tokenID, let delta):
                         let events = if let decoder {
-                            try decoder.consume(tokenID: tokenID, delta: delta)
+                            try decoder.consume(tokenID: tokenID,
+                                                delta: delta,
+                                                validatedBody: toolFilter?.closedCallBody)
                         } else {
                             delta.isEmpty ? [] : [StructuredAssistantEvent.content(delta)]
                         }
@@ -608,12 +638,22 @@ public actor ServerModelSession: ServerInferenceBackend {
                 kind: .decoderConsume,
                 cause: .classify(decodingError))
         }
-        do {
-            try decoder?.finish()
-        } catch {
-            throw structuredFailure(
-                kind: .decoderFinish,
-                cause: .classify(error))
+        // A tool call cut off by the completion budget is a length stop, not a
+        // server error: report what was decoded instead of turning the whole
+        // request into a 500. Only reachable with the grammar on — without it an
+        // open region can also mean the model derailed, which the diagnostics
+        // must keep surfacing.
+        let truncatedByBudget = toolFilter != nil
+            && decoder?.hasOpenToolRegion == true
+            && result.reason == .maxTokens
+        if !truncatedByBudget {
+            do {
+                try decoder?.finish()
+            } catch {
+                throw structuredFailure(
+                    kind: .decoderFinish,
+                    cause: .classify(error))
+            }
         }
         if needsToolTemplate, result.reason == .toolCalls, calls.isEmpty {
             throw structuredFailure(kind: .orphanToolResponse, cause: .none)
@@ -624,7 +664,9 @@ public actor ServerModelSession: ServerInferenceBackend {
             onEvent(.content(tail))
         }
         let reason: String
-        if !calls.isEmpty {
+        if truncatedByBudget {
+            reason = "length"
+        } else if !calls.isEmpty {
             reason = "tool_calls"
         } else if result.reason == .maxTokens {
             reason = "length"
@@ -638,7 +680,15 @@ public actor ServerModelSession: ServerInferenceBackend {
                 content: content,
                 calls: calls,
                 result: result,
-                stopStringFiltered: stopMatcher.isStopped)
+                stopStringFiltered: stopMatcher.isStopped,
+                toolRegionOpen: truncatedByBudget)
+        }
+        if truncatedByBudget {
+            // The cache refused the entry above; the KV it would have described
+            // must go too. It ends inside a call this response did not reveal,
+            // so nothing may resume from it — same disposal the pre-constraint
+            // 500 got from the `completed` guard, without the 500.
+            runner.reset()
         }
         completed = true
         return ServerCompletion(

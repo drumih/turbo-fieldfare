@@ -47,6 +47,10 @@ requests for preparation or queueing. The limit is enforced before prompt
 rendering and tokenization. Use `--queue-limit` to change it. Press Control-C
 to stop the server.
 
+Tool calls are decoded under a grammar constraint by default; see
+[Constrained tool-call decoding](#constrained-tool-call-decoding) for what that
+changes and how to turn it off with `--tool-call-grammar off`.
+
 ## Connect a client
 
 The base URL is `http://127.0.0.1:8080/v1`. Some client libraries require an
@@ -160,6 +164,36 @@ forms. Unions of string constants are also supported. Overlapping `oneOf`,
 mixed-type unions such as `string | object`, and `allOf` return HTTP 400 with
 `invalid_tool_schema`; the server does not guess which branch the model should
 use.
+
+### Constrained tool-call decoding
+
+Tool calls are generated under a byte-level grammar. Once the model emits
+`<|tool_call>`, every candidate token is checked before it is accepted: if it
+would break the call, the highest-probability token that does not is used
+instead. The grammar accepts exactly the argument dialect the chat template
+renders and the decoder reads back — bare object keys at every depth, strings
+delimited by the `<|"|>` escape token, and plain numbers without exponents —
+which is what removes the failure mode where a long generation ends in
+`finish_reason: "tool_calls"` with no decodable call.
+
+Consequences worth knowing:
+
+- The function name is forced to one of the names declared in `tools`. If the
+  request declares no tools, `<|tool_call>` cannot open at all and the model
+  answers with text.
+- Backslashes in string arguments are emitted escaped (`C:\\Users`), which is
+  what the decoder needs to return `C:\Users`.
+- Numbers are written out (`100000`, not `1e5`).
+- A call cut off by `max_completion_tokens` returns `finish_reason: "length"`
+  with whatever was decoded before it, instead of failing the request. The
+  unfinished call is dropped whole: no fragment of its arguments appears in
+  `content`, and the turn is never cached, so the next request re-prefills
+  instead of resuming inside a call the response never showed. A string
+  argument that reaches the 256 KiB limit ends the same way.
+
+Use `--tool-call-grammar off` to restore the unconstrained token stream. The
+flag is a rollback control: with it off the server generates exactly the tokens
+it generated before the constraint existed.
 
 ## Supported API
 
