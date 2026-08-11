@@ -32,6 +32,55 @@ struct TokenizerTests {
         #expect(tok.stopTokenIDs.count == 3)
     }
 
+    @Test("convertTokenToId substitutes unk for absent tokens")
+    func convertTokenToIdSubstitutesUnk() {
+        // Pins the library behavior `requireTokenID` exists for: BPE resolves an
+        // absent token to the unknown-token ID, never nil, so a plain `guard
+        // let` cannot detect a missing special marker.
+        let id = tok.tokenizer.convertTokenToId("<no-such-token-xyzzy>")
+        #expect(id != nil)
+        #expect(id == tok.tokenizer.unknownTokenId)
+    }
+
+    @Test("Marker resolution rejects unk substitution")
+    func markerResolutionRejectsUnk() throws {
+        #expect(throws: GFTokenizerError.self) {
+            _ = try GFTokenizer.requireTokenID(tok.tokenizer, "<no-such-token-xyzzy>")
+        }
+        let pad = try GFTokenizer.requireTokenID(tok.tokenizer, "<pad>")
+        #expect(Int32(pad) == tok.padID)
+    }
+
+    @Test("Special-token ID set matches the library's skip filter")
+    func specialTokenSetMatchesLibrary() {
+        // The config-derived set must reproduce the semantics the old runtime
+        // probe encoded: a special token decodes to nothing when skipped and to
+        // its literal text when kept.
+        var probes = randomIDs(count: 64, seed: 0xDEAD_BEEF_CAFE_F00D)
+        probes += [tok.bosID, tok.eosID, tok.padID, tok.endOfTurnID,
+                   tok.toolCallStartID, tok.toolCallEndID, tok.toolResponseID,
+                   tok.toolResponseEndID, tok.channelStartID, tok.channelEndID]
+        for id in probes {
+            let skipped = tok.tokenizer.decode(tokens: [Int(id)], skipSpecialTokens: true)
+            let kept = tok.tokenizer.decode(tokens: [Int(id)], skipSpecialTokens: false)
+            let librarySpecial = skipped.isEmpty && !kept.isEmpty
+            #expect(tok.specialTokenIDs.contains(id) == librarySpecial,
+                    "id \(id) special-set membership diverged from library semantics")
+        }
+    }
+
+    @Test("Library fuses a split codepoint across byte-fallback tokens")
+    func libraryFusesSplitCodepoint() throws {
+        // The behavioral half of the old init-time decoder probe, kept as a
+        // test: the library remains the oracle for the pinned chain's
+        // ByteFallback/Fuse behavior. The run needs a trailing non-byte token
+        // because the library drops trailing byte runs (issue #58).
+        let ids = try ["<0xC3>", "<0xA9>", "the"].map {
+            try GFTokenizer.requireTokenID(tok.tokenizer, $0)
+        }
+        #expect(tok.tokenizer.decode(tokens: ids, skipSpecialTokens: false) == "éthe")
+    }
+
     // MARK: - Encode / decode
 
     @Test("Round-trip ASCII", arguments: [

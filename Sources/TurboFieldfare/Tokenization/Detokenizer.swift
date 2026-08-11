@@ -26,11 +26,11 @@ struct GFDetokenizer {
     @usableFromInline let tokenizer: any Tokenizer
     /// Bytes of an in-flight byte-fallback run that is not yet valid UTF-8.
     @usableFromInline var pendingBytes: [UInt8] = []
-    @usableFromInline var specials: GemmaSpecialTokenFilter
+    @usableFromInline let specialTokenIDs: Set<Int32>
 
     init(tokenizer: GFTokenizer) {
         self.tokenizer = tokenizer.tokenizer
-        self.specials = GemmaSpecialTokenFilter(tokenizer: tokenizer.tokenizer)
+        self.specialTokenIDs = tokenizer.specialTokenIDs
     }
 
     /// Text contributed by `id`, ready to append to the stream.
@@ -50,7 +50,7 @@ struct GFDetokenizer {
         }
 
         var text = drainPendingBytes()
-        if !specials.isSpecial(Int(id)) {
+        if !specialTokenIDs.contains(id) {
             text += GemmaDecoding.fragment(token)
         }
         return text

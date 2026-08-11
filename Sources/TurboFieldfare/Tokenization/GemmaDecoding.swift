@@ -58,27 +58,3 @@ enum GemmaDecoding {
 
     private static let sentencePieceUnderline = "▁"
 }
-
-/// Caches which token IDs `skipSpecialTokens` drops.
-///
-/// The library owns the added/special token set and does not expose it, so the
-/// answer is probed once per distinct ID and memoized: a special token decodes
-/// to nothing when skipped, and to its literal text when not. A generation
-/// touches a few thousand distinct IDs, so the probe cost is bounded.
-struct GemmaSpecialTokenFilter {
-    private let tokenizer: any Tokenizer
-    private var cache: [Int: Bool] = [:]
-
-    init(tokenizer: any Tokenizer) {
-        self.tokenizer = tokenizer
-    }
-
-    mutating func isSpecial(_ id: Int) -> Bool {
-        if let cached = cache[id] { return cached }
-        let skipped = tokenizer.decode(tokens: [id], skipSpecialTokens: true)
-        let kept = tokenizer.decode(tokens: [id], skipSpecialTokens: false)
-        let value = skipped.isEmpty && !kept.isEmpty
-        cache[id] = value
-        return value
-    }
-}
