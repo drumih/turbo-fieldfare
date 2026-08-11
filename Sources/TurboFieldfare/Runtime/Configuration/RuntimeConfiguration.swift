@@ -31,6 +31,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let prefillChunkTokens: Int
     public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
+    public let profilingEnabled: Bool
+    public let profilingJson: Bool
+    public let telemetry: RuntimeTelemetry?
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: RuntimeExpertCachePolicy = .lfu,
@@ -38,7 +41,10 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
-                forceLogitsHead: Bool = false) {
+                forceLogitsHead: Bool = false,
+                profilingEnabled: Bool = false,
+                profilingJson: Bool = false,
+                telemetry: RuntimeTelemetry? = nil) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
         precondition(Self.allowedPrefillChunkTokens.contains(prefillChunkTokens),
@@ -50,6 +56,15 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         self.prefillChunkTokens = prefillChunkTokens
         self.prefillAttentionPath = prefillAttentionPath
         self.headPath = forceLogitsHead ? .logits : .fusedRows
+        self.profilingEnabled = profilingEnabled || profilingJson
+        self.profilingJson = profilingJson
+        if let telemetry {
+            self.telemetry = telemetry
+        } else if profilingEnabled || profilingJson {
+            self.telemetry = RuntimeTelemetry(isEnabled: true, cacheSlotsPerLayer: expertCacheSlots)
+        } else {
+            self.telemetry = nil
+        }
     }
 
     public static var production: RuntimeConfiguration {
@@ -68,5 +83,18 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     }
     public var modelExpertCachePolicy: ExpertCachePolicy {
         expertCachePolicy == .lru ? .lru : .lfu
+    }
+
+    public static func == (lhs: RuntimeConfiguration, rhs: RuntimeConfiguration) -> Bool {
+        lhs.expertCacheSlots == rhs.expertCacheSlots &&
+        lhs.expertCachePolicy == rhs.expertCachePolicy &&
+        lhs.rdadvisePolicy == rhs.rdadvisePolicy &&
+        lhs.prefillPolicy == rhs.prefillPolicy &&
+        lhs.prefillChunkTokens == rhs.prefillChunkTokens &&
+        lhs.prefillAttentionPath == rhs.prefillAttentionPath &&
+        lhs.headPath == rhs.headPath &&
+        lhs.profilingEnabled == rhs.profilingEnabled &&
+        lhs.profilingJson == rhs.profilingJson &&
+        lhs.telemetry === rhs.telemetry
     }
 }

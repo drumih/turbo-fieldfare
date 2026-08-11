@@ -65,7 +65,8 @@ public func run(args: Args,
             device: context.device,
             streamingMode: .pread(slotCount: runtime.expertCacheSlots),
             expertCachePolicy: runtime.modelExpertCachePolicy,
-            integrityPolicy: .fullSha256)
+            integrityPolicy: .fullSha256,
+            telemetry: runtime.telemetry)
         let runner = try RealForwardRunner(
             model: model,
             context: context,
@@ -97,6 +98,13 @@ public func run(args: Args,
                 : 0
             let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))]\n"
             stderr.write(Data(footer.utf8))
+        }
+        if let report = stats.telemetryReport {
+            if args.profileJson {
+                stdout.write(Data(((try report.toJSONString()) + "\n").utf8))
+            } else if args.profile {
+                stdout.write(Data((report.toFormattedText() + "\n").utf8))
+            }
         }
         return RunResult(exitCode: 0)
     } catch is CancellationError {

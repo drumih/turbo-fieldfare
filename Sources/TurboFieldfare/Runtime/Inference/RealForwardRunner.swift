@@ -242,12 +242,25 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                 byteCap: Self.rdadviseAdaptiveByteCap,
                 slowCallNanos: Self.rdadviseAdaptiveSlowCallNanos))
         self.rdadviseEnabled = runtimeConfiguration.rdadviseEnabled
-        self.kv = try KVCacheManager(device: context.device,
-                                     config: cfg,
-                                     maxContext: maxContext,
-                                     fp16RingEnabled: useFP16Ring,
-                                     slidingWindow: cfg.slidingWindow,
-                                     maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
+        if let telemetry = runtimeConfiguration.telemetry {
+            self.model.telemetry = telemetry
+        }
+        let kvManager = try KVCacheManager(device: context.device,
+                                           config: cfg,
+                                           maxContext: maxContext,
+                                           fp16RingEnabled: useFP16Ring,
+                                           slidingWindow: cfg.slidingWindow,
+                                           maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
+        self.kv = kvManager
+
+        let commonWeightsBytes = UInt64(model.residentBuffer.buffer.length)
+        let expertCacheCap = UInt64(cfg.numLayers * runtimeConfiguration.expertCacheSlots * 3_358_720)
+        let kvCap = kvManager.totalByteSize
+        let prefillScratchCap: UInt64 = 16_384_000
+        self.model.telemetry?.setMemoryAllocations(commonWeights: commonWeightsBytes,
+                                                   expertCacheCapacity: expertCacheCap,
+                                                   kvCache: kvCap,
+                                                   prefillScratch: prefillScratchCap)
 
         self.embedInt4 = try EmbedLookupInt4(context: context)
         self.rms       = try RMSNorm(context: context)
@@ -374,6 +387,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             perLayer.append(buf)
         }
         self.effectiveScaleBuffers = perLayer
+    }
+
+    public var telemetry: RuntimeTelemetry? {
+        model.telemetry
     }
 
     public func reset() {
@@ -1276,11 +1293,19 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             }
             if let sharedCB = pending.sharedCB {
                 try checkCommandBufferError(sharedCB.error)
+                if sharedCB.gpuEndTime > sharedCB.gpuStartTime {
+                    let nanos = UInt64((sharedCB.gpuEndTime - sharedCB.gpuStartTime) * 1_000_000_000.0)
+                    model.telemetry?.addGPUTime(sharedExpert: nanos)
+                }
             }
             if let phase1HitCB = pending.phase1HitCB {
                 try checkCommandBufferError(phase1HitCB.error)
             }
             try checkCommandBufferError(pending.cb.error)
+            if pending.cb.gpuEndTime > pending.cb.gpuStartTime {
+                let nanos = UInt64((pending.cb.gpuEndTime - pending.cb.gpuStartTime) * 1_000_000_000.0)
+                model.telemetry?.addGPUTime(cb2: nanos)
+            }
             totalCb2Nanos &+= pending.encodeAndCommitNanos
         }
 
@@ -1471,6 +1496,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             let tWait = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             waitUntilCompleted(cb)
             let waitNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tWait
+            if cb.gpuEndTime > cb.gpuStartTime {
+                let cb1GpuNanos = UInt64((cb.gpuEndTime - cb.gpuStartTime) * 1_000_000_000.0)
+                model.telemetry?.addGPUTime(cb1: cb1GpuNanos)
+            }
+            model.telemetry?.addCPUTime(routerHandoff: waitNanos, gpuSyncWait: waitNanos)
             if let pending = pendingRoutedCommand {
                 try finishPendingRoutedCommand(pending, waitIfNeeded: false)
                 pendingRoutedCommand = nil
@@ -1730,14 +1760,18 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             let tHead = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             if useFusedHeadForThisToken {
                 try runSync(gFusionHead)
-                totalHeadFusedNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tHead
+                let elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tHead
+                totalHeadFusedNanos &+= elapsed
+                model.telemetry?.addGPUTime(lmHead: elapsed)
                 lastGreedyToken = greedyTokenBuf.contents().load(as: UInt32.self)
             } else {
                 try runSync { cb in
                     gFinalNorm(cb)
                     gLmHead(cb)
                 }
-                totalHeadNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tHead
+                let elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tHead
+                totalHeadNanos &+= elapsed
+                model.telemetry?.addGPUTime(lmHead: elapsed)
             }
         }
 

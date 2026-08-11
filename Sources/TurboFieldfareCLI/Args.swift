@@ -18,6 +18,8 @@ public struct Args: Equatable, Sendable {
     public var prefillPolicy: RuntimePrefillPolicy
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: RDAdvicePolicyMode
+    public var profile: Bool
+    public var profileJson: Bool
 
     public init(model: String,
                 prompt: String? = nil,
@@ -35,7 +37,9 @@ public struct Args: Equatable, Sendable {
                 expertCachePolicy: RuntimeExpertCachePolicy = RuntimeConfiguration.production.expertCachePolicy,
                 prefillPolicy: RuntimePrefillPolicy = RuntimeConfiguration.production.prefillPolicy,
                 prefillChunkTokens: Int = RuntimeConfiguration.production.prefillChunkTokens,
-                rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy) {
+                rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy,
+                profile: Bool = false,
+                profileJson: Bool = false) {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -53,6 +57,8 @@ public struct Args: Equatable, Sendable {
         self.prefillPolicy = prefillPolicy
         self.prefillChunkTokens = prefillChunkTokens
         self.rdadvisePolicy = rdadvisePolicy
+        self.profile = profile
+        self.profileJson = profileJson
     }
 }
 
@@ -131,7 +137,9 @@ extension Args {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            forceLogitsHead: forceLogitsHead)
+            forceLogitsHead: forceLogitsHead,
+            profilingEnabled: profile || profileJson,
+            profilingJson: profileJson)
     }
 
     public static func parse(_ argv: [String]) throws -> Args {
@@ -147,6 +155,8 @@ extension Args {
         var seed: UInt64?
         var stops: [String] = []
         var quiet = false
+        var profile = false
+        var profileJson = false
         let runtimeDefaults = RuntimeConfiguration.production
         var expertCacheSlots = runtimeDefaults.expertCacheSlots
         var expertCachePolicy = runtimeDefaults.expertCachePolicy
@@ -162,6 +172,12 @@ extension Args {
                 throw ArgsError.helpRequested
             case "--quiet":
                 quiet = true
+                index += 1
+            case "--profile":
+                profile = true
+                index += 1
+            case "--profile-json":
+                profileJson = true
                 index += 1
             case "--model":
                 model = try takeValue(argv, &index, flag: flag)
@@ -277,7 +293,9 @@ extension Args {
                              expertCachePolicy: expertCachePolicy,
                              prefillPolicy: prefillPolicy,
                              prefillChunkTokens: prefillChunkTokens,
-                             rdadvisePolicy: rdadvisePolicy)
+                             rdadvisePolicy: rdadvisePolicy,
+                             profile: profile,
+                             profileJson: profileJson)
         _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         return arguments
     }

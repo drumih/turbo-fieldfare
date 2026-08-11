@@ -61,6 +61,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     public let layout: StreamLayout
     public let slotCount: Int
     public let cachePolicy: ExpertCachePolicy
+    public var telemetry: RuntimeTelemetry?
 
     private let fd: Int32
     private let slotPointers: [UnsafeMutableRawPointer]
@@ -83,18 +84,34 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                       device: device,
                       slotCount: slotCount,
                       cachePolicy: cachePolicy,
-                      fileDescriptor: nil)
+                      fileDescriptor: nil,
+                      telemetry: nil)
+    }
+
+    public convenience init(layout: StreamLayout,
+                            device: MTLDevice,
+                            slotCount: Int,
+                            cachePolicy: ExpertCachePolicy = .lfu,
+                            telemetry: RuntimeTelemetry?) throws {
+        try self.init(layout: layout,
+                      device: device,
+                      slotCount: slotCount,
+                      cachePolicy: cachePolicy,
+                      fileDescriptor: nil,
+                      telemetry: telemetry)
     }
 
     package init(layout: StreamLayout,
                  device: MTLDevice,
                  slotCount: Int,
                  cachePolicy: ExpertCachePolicy = .lfu,
-                 fileDescriptor: Int32?) throws {
+                 fileDescriptor: Int32?,
+                 telemetry: RuntimeTelemetry? = nil) throws {
         precondition(slotCount > 0, "slotCount must be positive")
         self.layout = layout
         self.slotCount = slotCount
         self.cachePolicy = cachePolicy
+        self.telemetry = telemetry
         let pageSize = Int(getpagesize())
 
         let openedFD = fileDescriptor.map { fcntl($0, F_DUPFD_CLOEXEC, 0) }
@@ -189,10 +206,17 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         guard regionOffset + layout.expertStride <= layout.streamSize else {
             throw StreamerError.offsetOutOfRange(regionOffset)
         }
+        let startNanos = telemetry != nil ? RuntimeTelemetry.currentNanos() : 0
+        telemetry?.recordSSDReadStart()
         try readFull(
             into: slotPointers[slot],
             fileOffset: layout.streamOffset + regionOffset,
             count: Int(layout.expertStride))
+        if let telemetry {
+            let latency = RuntimeTelemetry.currentNanos() - startNanos
+            telemetry.recordSSDReadEnd(bytes: layout.expertStride, latencyNanos: latency)
+            telemetry.recordExpertLoad(layer: layer, expert: expert)
+        }
         return (slotBuffers[slot], 0, layout.expertStride)
     }
 
@@ -267,12 +291,14 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             hits: experts.count - misses.count)
     }
 
-    public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
+    public func executeExpertCachePlan(_ plan: ExpertCachePlan, layer: Int = 0) throws
         -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
         precondition(plan.experts.count <= slotCount,
                      "expert cache plan exceeds slot count")
         precondition(plan.assignedSlots.count == plan.experts.count,
                      "expert cache plan slot count mismatch")
+
+        telemetry?.recordCacheEvent(hits: plan.hits, misses: plan.misses.count, evictions: plan.misses.count)
 
         let errorLock = NSLock()
         nonisolated(unsafe) var firstError: Error?
@@ -280,7 +306,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             let index = plan.misses[missOffset]
             do {
                 _ = try self.loadExpert(
-                    layer: 0,
+                    layer: layer,
                     expert: plan.experts[index],
                     slot: plan.assignedSlots[index])
             } catch {
