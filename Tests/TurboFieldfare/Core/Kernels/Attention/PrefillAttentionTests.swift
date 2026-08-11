@@ -141,7 +141,7 @@ import TurboFieldfareValidationSupport
         let context = try MetalContext()
         // Hosted CI has no Apple10 GPU, so it returns without dispatching this
         // kernel. Run this suite on Apple10 before changing the TensorOps path.
-        guard context.device.supportsFamily(.apple10) else { return }
+        guard context.device.supportsApple10TensorOps else { return }
         let fixture = Self.makeFixture(start: visibleKeys - 1,
                                        chunk: 1,
                                        window: 0,
@@ -185,10 +185,30 @@ import TurboFieldfareValidationSupport
                 "preferred TensorOps maxAbs=\(maxAbs) rel=\(rel)")
         #expect(rel <= 2e-2,
                 "preferred TensorOps rel=\(rel) maxAbs=\(maxAbs)")
-        if !context.device.supportsFamily(.apple10) {
+        if !context.device.supportsApple10TensorOps {
             let baseline = try Self.runKernel(fixture, path: .causalTiled)
             #expect(preferred == baseline)
         }
+    }
+
+    /// The other TensorOps tests return early when the path is unavailable, so
+    /// on their own they would stay green if the kernel silently disappeared
+    /// from the shader library. This one fails loudly instead: once a device
+    /// reports Apple10 MPP tensor support, the pipeline must exist.
+    @Test func apple10DevicesMustProvideTheTensorOpsPipeline() throws {
+        let context = try MetalContext()
+        // A false reading means either a non-Apple10 GPU or a build against an
+        // SDK with no Apple10 family to ask about. Neither is a regression, and
+        // the second case cannot be distinguished from the first, so skip.
+        guard context.device.supportsApple10TensorOps else { return }
+        let prefill = try PrefillAttention(context: context)
+        #expect(prefill.tensorOpsPipelineAvailable, """
+            This device reports Apple10 MPP tensor support, but the TensorOps \
+            prefill pipeline is missing, so prefill silently fell back to the \
+            causal-tiled kernel. The usual cause is MetalContext's \
+            shaderLanguageVersion resolving below MSL 4.0, which drops every \
+            kernel guarded by __HAVE_TENSOR__ from the shader library.
+            """)
     }
 
     private static func makeFixture(start: Int,

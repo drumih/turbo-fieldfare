@@ -45,10 +45,15 @@ final class PrefillAttention {
     private let psoCausalTiled: MTLComputePipelineState
     private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
 
+    /// Whether the Apple10 MPP tensor-ops prefill kernel is usable here. False
+    /// on hosts without Apple10 support and on shader libraries compiled below
+    /// MSL 4.0, in which case `encodeCausal` uses the causal-tiled kernel.
+    var tensorOpsPipelineAvailable: Bool { psoFullTensorOps2DValidityV2 != nil }
+
     init(context: MetalContext) throws {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")
-        self.psoFullTensorOps2DValidityV2 = context.device.supportsFamily(.apple10)
+        self.psoFullTensorOps2DValidityV2 = context.device.supportsApple10TensorOps
             ? try? context.pipeline("attention_prefill_full_tensorops_2d_validity_v2")
             : nil
     }
@@ -79,12 +84,17 @@ final class PrefillAttention {
         let pipeline: MTLComputePipelineState
         if let tensorOpsPipeline {
             pipeline = tensorOpsPipeline
-        } else if tensorOpsShape && path == .fullTensorOps2DValidityV2 {
+        } else if tensorOpsShape
+                    && path == .fullTensorOps2DValidityV2
+                    && context.device.supportsApple10TensorOps {
+            // The device advertises MPP tensor support, so a missing pipeline
+            // means the kernel failed to build — a bug, not a platform limit.
             preconditionFailure(
-                "TensorOps 2D prefill attention requires Apple10 MPP tensor support")
+                "TensorOps 2D prefill attention pipeline is missing on an Apple10 device")
         } else {
-            // Explicit mode also falls back for incompatible shapes. Benchmark
-            // fixtures must use 512/16/2 to prove that TensorOps ran.
+            // Explicit mode also falls back for incompatible shapes, and on
+            // hosts without Apple10 MPP tensor support or without MSL 4.0.
+            // Benchmark fixtures must use 512/16/2 to prove that TensorOps ran.
             pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
         }
         let headDim = Int(params.headDim)
