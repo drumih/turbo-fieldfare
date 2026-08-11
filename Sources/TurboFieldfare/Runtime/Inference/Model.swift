@@ -52,10 +52,12 @@ public struct Model {
         var streamers: [PreadExpertStreamer?]
         var layerVerified: [Bool]
         var telemetry: RuntimeTelemetry?
-        init(numLayers: Int, telemetry: RuntimeTelemetry? = nil) {
+        var expertTracer: ExpertTracer?
+        init(numLayers: Int, telemetry: RuntimeTelemetry? = nil, expertTracer: ExpertTracer? = nil) {
             self.streamers = Array(repeating: nil, count: numLayers)
             self.layerVerified = Array(repeating: false, count: numLayers)
             self.telemetry = telemetry
+            self.expertTracer = expertTracer
         }
     }
 
@@ -70,7 +72,8 @@ public struct Model {
          manifest: Manifest,
          directoryURL: URL,
          modelDirectory: GTurboModelDirectory,
-         telemetry: RuntimeTelemetry? = nil) {
+         telemetry: RuntimeTelemetry? = nil,
+         expertTracer: ExpertTracer? = nil) {
         self.device = device
         self.config = config
         self.streamingMode = streamingMode
@@ -82,7 +85,7 @@ public struct Model {
         self.manifest = manifest
         self.directoryURL = directoryURL
         self.modelDirectory = modelDirectory
-        self.streamersBox = StreamersBox(numLayers: packedExpertsLayout.numLayers, telemetry: telemetry)
+        self.streamersBox = StreamersBox(numLayers: packedExpertsLayout.numLayers, telemetry: telemetry, expertTracer: expertTracer)
         self.streamersQueue = DispatchQueue(label: "turbo-fieldfare.expert-streamers")
     }
 
@@ -93,6 +96,18 @@ public struct Model {
                 streamersBox.telemetry = newValue
                 for streamer in streamersBox.streamers.compactMap({ $0 }) {
                     streamer.telemetry = newValue
+                }
+            }
+        }
+    }
+
+    public var expertTracer: ExpertTracer? {
+        get { streamersQueue.sync { streamersBox.expertTracer } }
+        nonmutating set {
+            streamersQueue.sync {
+                streamersBox.expertTracer = newValue
+                for streamer in streamersBox.streamers.compactMap({ $0 }) {
+                    streamer.expertTracer = newValue
                 }
             }
         }
@@ -332,7 +347,8 @@ public struct Model {
             slotCount: slotCount,
             cachePolicy: expertCachePolicy,
             fileDescriptor: layerFD,
-            telemetry: streamersBox.telemetry)
+            telemetry: streamersBox.telemetry,
+            expertTracer: streamersBox.expertTracer)
         streamersBox.layerVerified[L] = true
     }
 
@@ -355,7 +371,8 @@ extension Model {
                             expertCachePolicy: ExpertCachePolicy = PreadExpertStreamer.cachePolicyDefault,
                             integrityPolicy: ModelIntegrityPolicy? = nil,
                             loadStats: UnsafeMutablePointer<ModelLoadStats>? = nil,
-                            telemetry: RuntimeTelemetry? = nil) throws -> Model {
+                            telemetry: RuntimeTelemetry? = nil,
+                            expertTracer: ExpertTracer? = nil) throws -> Model {
         var stats = ModelLoadStats()
         defer {
             loadStats?.pointee = stats
@@ -498,7 +515,8 @@ extension Model {
             manifest: manifest,
             directoryURL: directoryURL,
             modelDirectory: modelDirectory,
-            telemetry: telemetry)
+            telemetry: telemetry,
+            expertTracer: expertTracer)
     }
 
     private static func validateTrustedReceiptLayerLayout(modelDirectory: GTurboModelDirectory,

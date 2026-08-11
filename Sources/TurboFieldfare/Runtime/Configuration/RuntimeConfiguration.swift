@@ -34,6 +34,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let profilingEnabled: Bool
     public let profilingJson: Bool
     public let telemetry: RuntimeTelemetry?
+    public let expertTracingEnabled: Bool
+    public let expertTraceOutputPath: String?
+    public let expertTracer: ExpertTracer?
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: RuntimeExpertCachePolicy = .lfu,
@@ -44,7 +47,10 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 forceLogitsHead: Bool = false,
                 profilingEnabled: Bool = false,
                 profilingJson: Bool = false,
-                telemetry: RuntimeTelemetry? = nil) {
+                telemetry: RuntimeTelemetry? = nil,
+                expertTracingEnabled: Bool = false,
+                expertTraceOutputPath: String? = nil,
+                expertTracer: ExpertTracer? = nil) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
         precondition(Self.allowedPrefillChunkTokens.contains(prefillChunkTokens),
@@ -64,6 +70,15 @@ public struct RuntimeConfiguration: Sendable, Equatable {
             self.telemetry = RuntimeTelemetry(isEnabled: true, cacheSlotsPerLayer: expertCacheSlots)
         } else {
             self.telemetry = nil
+        }
+        self.expertTracingEnabled = expertTracingEnabled || expertTraceOutputPath != nil || expertTracer != nil
+        self.expertTraceOutputPath = expertTraceOutputPath
+        if let expertTracer {
+            self.expertTracer = expertTracer
+        } else if expertTracingEnabled || expertTraceOutputPath != nil {
+            self.expertTracer = ExpertTracer(isEnabled: true)
+        } else {
+            self.expertTracer = nil
         }
     }
 
@@ -95,6 +110,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         lhs.headPath == rhs.headPath &&
         lhs.profilingEnabled == rhs.profilingEnabled &&
         lhs.profilingJson == rhs.profilingJson &&
-        lhs.telemetry === rhs.telemetry
+        lhs.telemetry === rhs.telemetry &&
+        lhs.expertTracingEnabled == rhs.expertTracingEnabled &&
+        lhs.expertTraceOutputPath == rhs.expertTraceOutputPath &&
+        lhs.expertTracer === rhs.expertTracer
     }
 }

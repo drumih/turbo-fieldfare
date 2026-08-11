@@ -20,8 +20,11 @@ public struct Args: Equatable, Sendable {
     public var rdadvisePolicy: RDAdvicePolicyMode
     public var profile: Bool
     public var profileJson: Bool
+    public var expertTrace: Bool
+    public var expertTraceJson: String?
+    public var analyzeExpertTrace: String?
 
-    public init(model: String,
+    public init(model: String = "",
                 prompt: String? = nil,
                 messagesFile: String? = nil,
                 maxNew: Int = 1_024,
@@ -39,7 +42,10 @@ public struct Args: Equatable, Sendable {
                 prefillChunkTokens: Int = RuntimeConfiguration.production.prefillChunkTokens,
                 rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy,
                 profile: Bool = false,
-                profileJson: Bool = false) {
+                profileJson: Bool = false,
+                expertTrace: Bool = false,
+                expertTraceJson: String? = nil,
+                analyzeExpertTrace: String? = nil) {
         self.model = model
         self.prompt = prompt
         self.messagesFile = messagesFile
@@ -59,6 +65,9 @@ public struct Args: Equatable, Sendable {
         self.rdadvisePolicy = rdadvisePolicy
         self.profile = profile
         self.profileJson = profileJson
+        self.expertTrace = expertTrace
+        self.expertTraceJson = expertTraceJson
+        self.analyzeExpertTrace = analyzeExpertTrace
     }
 }
 
@@ -139,7 +148,9 @@ extension Args {
             prefillChunkTokens: prefillChunkTokens,
             forceLogitsHead: forceLogitsHead,
             profilingEnabled: profile || profileJson,
-            profilingJson: profileJson)
+            profilingJson: profileJson,
+            expertTracingEnabled: expertTrace || expertTraceJson != nil,
+            expertTraceOutputPath: expertTraceJson)
     }
 
     public static func parse(_ argv: [String]) throws -> Args {
@@ -157,6 +168,9 @@ extension Args {
         var quiet = false
         var profile = false
         var profileJson = false
+        var expertTrace = false
+        var expertTraceJson: String?
+        var analyzeExpertTrace: String?
         let runtimeDefaults = RuntimeConfiguration.production
         var expertCacheSlots = runtimeDefaults.expertCacheSlots
         var expertCachePolicy = runtimeDefaults.expertCachePolicy
@@ -179,6 +193,13 @@ extension Args {
             case "--profile-json":
                 profileJson = true
                 index += 1
+            case "--expert-trace":
+                expertTrace = true
+                index += 1
+            case "--expert-trace-json":
+                expertTraceJson = try takeValue(argv, &index, flag: flag)
+            case "--analyze-expert-trace":
+                analyzeExpertTrace = try takeValue(argv, &index, flag: flag)
             case "--model":
                 model = try takeValue(argv, &index, flag: flag)
             case "--prompt":
@@ -267,6 +288,11 @@ extension Args {
             }
         }
 
+        if let analyzePath = analyzeExpertTrace {
+            return Args(model: model ?? "",
+                        analyzeExpertTrace: analyzePath)
+        }
+
         guard let model else { throw ArgsError.requiredMissing("--model") }
         if prompt != nil && messagesFile != nil {
             throw ArgsError.mutuallyExclusive("--prompt", "--messages-file")
@@ -295,7 +321,10 @@ extension Args {
                              prefillChunkTokens: prefillChunkTokens,
                              rdadvisePolicy: rdadvisePolicy,
                              profile: profile,
-                             profileJson: profileJson)
+                             profileJson: profileJson,
+                             expertTrace: expertTrace,
+                             expertTraceJson: expertTraceJson,
+                             analyzeExpertTrace: analyzeExpertTrace)
         _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         return arguments
     }
