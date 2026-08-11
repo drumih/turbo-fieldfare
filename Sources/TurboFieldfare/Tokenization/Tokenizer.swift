@@ -8,6 +8,7 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
     case missingToolTemplate
     case missingTokenizerConfig
     case unsupportedDecoder(actual: String)
+    case invalidTokenID(token: String, id: Int)
 
     public var description: String {
         switch self {
@@ -20,6 +21,8 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
         case .unsupportedDecoder(let actual):
             return "tokenizer decoder is not the pinned Gemma 4 sequence "
                 + "Sequence[Replace(▁→␣), ByteFallback, Fuse]; found: \(actual)"
+        case .invalidTokenID(let token, let id):
+            return "tokenizer declares out-of-range ID \(id) for token \(token)"
         }
     }
 }
@@ -164,12 +167,22 @@ public struct GFTokenizer: @unchecked Sendable {
     /// missing marker would silently bind to `<unk>`, colliding with every
     /// other missing marker. The round-trip through `convertIdToToken` detects
     /// any substitution.
-    static func requireTokenID(_ tokenizer: any Tokenizer, _ token: String) throws -> Int {
+    static func requireTokenID(_ tokenizer: any Tokenizer, _ token: String) throws -> Int32 {
         guard let id = tokenizer.convertTokenToId(token),
               tokenizer.convertIdToToken(id) == token else {
             throw GFTokenizerError.missingSpecialToken(token)
         }
-        return id
+        return try int32ID(token, id)
+    }
+
+    /// Config-supplied IDs are full-range `Int`; a trapping `Int32(_:)` would
+    /// crash on a corrupt tokenizer instead of taking the typed error path
+    /// every other malformed-config case uses.
+    private static func int32ID(_ token: String, _ id: Int) throws -> Int32 {
+        guard let value = Int32(exactly: id) else {
+            throw GFTokenizerError.invalidTokenID(token: token, id: id)
+        }
+        return value
     }
 
     public init(tokenizer: any Tokenizer, tokenizerData: Config) throws {
@@ -182,7 +195,7 @@ public struct GFTokenizer: @unchecked Sendable {
         for added in tokenizerData["addedTokens"].array(or: []) {
             guard added["special"].boolean(or: false),
                   let id = added["id"].integer() else { continue }
-            specials.insert(Int32(id))
+            try specials.insert(Self.int32ID(added.content.string() ?? "added token", id))
         }
         self.specialTokenIDs = specials
 
@@ -192,16 +205,16 @@ public struct GFTokenizer: @unchecked Sendable {
         guard let eos = tokenizer.eosTokenId else {
             throw GFTokenizerError.missingSpecialToken("<eos>")
         }
-        self.bosID = Int32(bos)
-        self.eosID = Int32(eos)
-        self.padID = try Int32(Self.requireTokenID(tokenizer, "<pad>"))
-        self.endOfTurnID = try Int32(Self.requireTokenID(tokenizer, "<turn|>"))
-        self.toolCallStartID = try Int32(Self.requireTokenID(tokenizer, "<|tool_call>"))
-        self.toolCallEndID = try Int32(Self.requireTokenID(tokenizer, "<tool_call|>"))
-        self.toolResponseID = try Int32(Self.requireTokenID(tokenizer, "<|tool_response>"))
-        self.toolResponseEndID = try Int32(Self.requireTokenID(tokenizer, "<tool_response|>"))
-        self.channelStartID = try Int32(Self.requireTokenID(tokenizer, "<|channel>"))
-        self.channelEndID = try Int32(Self.requireTokenID(tokenizer, "<channel|>"))
+        self.bosID = try Self.int32ID("<bos>", bos)
+        self.eosID = try Self.int32ID("<eos>", eos)
+        self.padID = try Self.requireTokenID(tokenizer, "<pad>")
+        self.endOfTurnID = try Self.requireTokenID(tokenizer, "<turn|>")
+        self.toolCallStartID = try Self.requireTokenID(tokenizer, "<|tool_call>")
+        self.toolCallEndID = try Self.requireTokenID(tokenizer, "<tool_call|>")
+        self.toolResponseID = try Self.requireTokenID(tokenizer, "<|tool_response>")
+        self.toolResponseEndID = try Self.requireTokenID(tokenizer, "<tool_response|>")
+        self.channelStartID = try Self.requireTokenID(tokenizer, "<|channel>")
+        self.channelEndID = try Self.requireTokenID(tokenizer, "<channel|>")
         self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
         self.vocabSize = 262_144
     }

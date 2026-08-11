@@ -1,4 +1,5 @@
 import Foundation
+import Hub
 import Testing
 @testable import TurboFieldfare
 
@@ -48,7 +49,7 @@ struct TokenizerTests {
             _ = try GFTokenizer.requireTokenID(tok.tokenizer, "<no-such-token-xyzzy>")
         }
         let pad = try GFTokenizer.requireTokenID(tok.tokenizer, "<pad>")
-        #expect(Int32(pad) == tok.padID)
+        #expect(pad == tok.padID)
     }
 
     @Test("Special-token ID set matches the library's skip filter")
@@ -69,6 +70,28 @@ struct TokenizerTests {
         }
     }
 
+    @Test("Out-of-range added-token IDs are rejected, not trapped")
+    func outOfRangeAddedTokenIDRejected() {
+        // Config.integer() returns full-range Int; a trapping Int32(_:) on a
+        // corrupt tokenizer.json would crash at load instead of throwing.
+        let data: Config = [
+            "decoder": [
+                "type": "Sequence",
+                "decoders": [
+                    ["type": "Replace", "pattern": ["String": "▁"], "content": " "],
+                    ["type": "ByteFallback"],
+                    ["type": "Fuse"],
+                ],
+            ],
+            "added_tokens": [
+                ["id": 3_000_000_000, "content": "<huge>", "special": true],
+            ],
+        ]
+        #expect(throws: GFTokenizerError.self) {
+            _ = try GFTokenizer(tokenizer: tok.tokenizer, tokenizerData: data)
+        }
+    }
+
     @Test("Library fuses a split codepoint across byte-fallback tokens")
     func libraryFusesSplitCodepoint() throws {
         // The behavioral half of the old init-time decoder probe, kept as a
@@ -76,7 +99,7 @@ struct TokenizerTests {
         // ByteFallback/Fuse behavior. The run needs a trailing non-byte token
         // because the library drops trailing byte runs (issue #58).
         let ids = try ["<0xC3>", "<0xA9>", "the"].map {
-            try GFTokenizer.requireTokenID(tok.tokenizer, $0)
+            Int(try GFTokenizer.requireTokenID(tok.tokenizer, $0))
         }
         #expect(tok.tokenizer.decode(tokens: ids, skipSpecialTokens: false) == "éthe")
     }
@@ -271,7 +294,7 @@ struct TokenizerTests {
         // special is an ordinary token and closes the run instead, leaving two
         // single-byte runs that are invalid on their own - one U+FFFD each.
         let ids: [Int32] = try [
-            byteTokenID("<0xC3>"), tok.eosID, byteTokenID("<0xA9>"), regularTokenID("the"),
+            tokenID("<0xC3>"), tok.eosID, tokenID("<0xA9>"), tokenID("the"),
         ]
         #expect(tok.decode(ids, skipSpecialTokens: true) == "éthe")
         var detok = GFDetokenizer(tokenizer: tok)
@@ -288,21 +311,21 @@ struct TokenizerTests {
         // future - decodes to exactly one U+FFFD, so the stream emits them
         // live instead of freezing and buffering until the next regular token.
         var detok = GFDetokenizer(tokenizer: tok)
-        let stray = try byteTokenID("<0x80>")
+        let stray = try tokenID("<0x80>")
         for _ in 0..<64 {
             #expect(detok.push(stray) == "\u{FFFD}")
         }
         #expect(detok.flush() == "")
 
         detok = GFDetokenizer(tokenizer: tok)
-        #expect(try detok.push(byteTokenID("<0xC3>")) == "")
-        #expect(try detok.push(byteTokenID("<0xFF>")) == "\u{FFFD}\u{FFFD}")
+        #expect(try detok.push(tokenID("<0xC3>")) == "")
+        #expect(try detok.push(tokenID("<0xFF>")) == "\u{FFFD}\u{FFFD}")
 
         // E0's first continuation is constrained to A0-BF, so 0x80 poisons the
         // run even though it is a continuation byte.
         detok = GFDetokenizer(tokenizer: tok)
-        #expect(try detok.push(byteTokenID("<0xE0>")) == "")
-        #expect(try detok.push(byteTokenID("<0x80>")) == "\u{FFFD}\u{FFFD}")
+        #expect(try detok.push(tokenID("<0xE0>")) == "")
+        #expect(try detok.push(tokenID("<0x80>")) == "\u{FFFD}\u{FFFD}")
     }
 
     @Test("An incomplete trailing sequence invalidates the whole run")
@@ -310,13 +333,13 @@ struct TokenizerTests {
         // The reference decoder validates the run as a whole, so an incomplete
         // tail turns even a valid prefix into per-byte replacement characters.
         var detok = GFDetokenizer(tokenizer: tok)
-        #expect(try detok.push(byteTokenID("<0xE2>")) == "")
-        #expect(try detok.push(byteTokenID("<0x82>")) == "")
+        #expect(try detok.push(tokenID("<0xE2>")) == "")
+        #expect(try detok.push(tokenID("<0x82>")) == "")
         #expect(detok.flush() == "\u{FFFD}\u{FFFD}")
 
         detok = GFDetokenizer(tokenizer: tok)
         for token in ["<0xC3>", "<0xA9>", "<0xE2>", "<0x82>"] {
-            #expect(try detok.push(byteTokenID(token)) == "")
+            #expect(try detok.push(tokenID(token)) == "")
         }
         #expect(detok.flush() == String(repeating: "\u{FFFD}", count: 4))
     }
@@ -325,9 +348,9 @@ struct TokenizerTests {
     func validByteRunCommitsAtBoundary() throws {
         var detok = GFDetokenizer(tokenizer: tok)
         for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
-            #expect(try detok.push(byteTokenID(token)) == "")
+            #expect(try detok.push(tokenID(token)) == "")
         }
-        #expect(try detok.push(regularTokenID("the")) == "😀the")
+        #expect(try detok.push(tokenID("the")) == "😀the")
     }
 
     @Test("A barrier marker commits the run as its own delta")
@@ -338,15 +361,15 @@ struct TokenizerTests {
         var detok = GFDetokenizer(tokenizer: tok,
                                   barrierTokenIDs: tok.structuralMarkerIDs)
         for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
-            #expect(try detok.push(byteTokenID(token)) == "")
+            #expect(try detok.push(tokenID(token)) == "")
         }
         #expect(detok.push(tok.channelEndID) == "😀")
         // Non-barrier specials still fuse: a codepoint split around eos stays
         // whole, preserving decode parity for everything but the markers.
-        #expect(try detok.push(byteTokenID("<0xC3>")) == "")
+        #expect(try detok.push(tokenID("<0xC3>")) == "")
         #expect(detok.push(tok.eosID) == "")
-        #expect(try detok.push(byteTokenID("<0xA9>")) == "")
-        #expect(try detok.push(regularTokenID("the")) == "éthe")
+        #expect(try detok.push(tokenID("<0xA9>")) == "")
+        #expect(try detok.push(tokenID("the")) == "éthe")
     }
 
     @Test("Byte-token soup matches batch decode and reference run semantics")
@@ -356,9 +379,9 @@ struct TokenizerTests {
         // reimplementation of the reference decoder's run semantics
         // (from_utf8, else one U+FFFD per byte) and against our own streaming.
         let byteIDs: [Int32] = try (0...255).map {
-            try byteTokenID(String(format: "<0x%02X>", $0))
+            try tokenID(String(format: "<0x%02X>", $0))
         }
-        let theID = try regularTokenID("the")
+        let theID = try tokenID("the")
         var state: UInt64 = 0xA076_1D64_78BD_642F
         func next() -> UInt64 {
             state ^= state << 13
@@ -488,12 +511,8 @@ struct TokenizerTests {
 
     // MARK: - Helpers
 
-    private func byteTokenID(_ token: String) throws -> Int32 {
-        Int32(try GFTokenizer.requireTokenID(tok.tokenizer, token))
-    }
-
-    private func regularTokenID(_ token: String) throws -> Int32 {
-        Int32(try GFTokenizer.requireTokenID(tok.tokenizer, token))
+    private func tokenID(_ token: String) throws -> Int32 {
+        try GFTokenizer.requireTokenID(tok.tokenizer, token)
     }
 
     /// Deterministic xorshift64 IDs — token streams the encoder cannot produce

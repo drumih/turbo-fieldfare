@@ -514,7 +514,7 @@ struct GemmaToolCallTests {
         try feed(tokenizer.channelStartID)
         for id in tokenizer.encode("thought\n", addBOS: false) { try feed(id) }
         for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
-            try feed(Int32(GFTokenizer.requireTokenID(tokenizer.tokenizer, token)))
+            try feed(GFTokenizer.requireTokenID(tokenizer.tokenizer, token))
         }
         try feed(tokenizer.channelEndID)
         for id in tokenizer.encode("ok", addBOS: false) { try feed(id) }
