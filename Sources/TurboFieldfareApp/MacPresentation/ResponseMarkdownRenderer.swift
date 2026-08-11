@@ -77,12 +77,16 @@ public struct ResponseMarkdownRenderer {
                 guard block.kind != .thematicBreak else { continue }
                 let text = String(parsed[run.range].characters)
                 guard !text.isEmpty else { continue }
-                output.append(NSAttributedString(
-                    string: text,
-                    attributes: attributes(
-                        inlineIntent: run.inlinePresentationIntent,
-                        link: run.link,
-                        block: block.kind)))
+                let attrs = attributes(
+                    inlineIntent: run.inlinePresentationIntent,
+                    link: run.link,
+                    block: block.kind)
+                if block.kind == .code
+                    || run.inlinePresentationIntent?.contains(.code) == true {
+                    output.append(NSAttributedString(string: text, attributes: attrs))
+                } else {
+                    appendRenderedText(text, attributes: attrs, to: output)
+                }
             }
 
             guard output.length > 0 else { return fallback(source) }
@@ -93,7 +97,18 @@ public struct ResponseMarkdownRenderer {
     }
 
     public func plainText(_ source: String) -> String {
-        render(source).attributedString.string
+        let rendered = render(source).attributedString
+        let plain = NSMutableString()
+        rendered.enumerateAttributes(
+            in: NSRange(location: 0, length: rendered.length),
+            options: []) { attributes, range, _ in
+            if let attachment = attributes[.attachment] as? MathTextAttachment {
+                plain.append(attachment.latexSource)
+            } else {
+                plain.append((rendered.string as NSString).substring(with: range))
+            }
+        }
+        return plain as String
     }
 
     private func requiresRawFallback(_ source: String) -> Bool {
@@ -305,6 +320,99 @@ public struct ResponseMarkdownRenderer {
             break
         }
         return style
+    }
+
+    private func appendRenderedText(
+        _ text: String,
+        attributes attrs: [NSAttributedString.Key: Any],
+        to output: NSMutableAttributedString
+    ) {
+        let expressions = MathExpressionScanner.scan(text)
+        guard !expressions.isEmpty else {
+            output.append(NSAttributedString(string: text, attributes: attrs))
+            return
+        }
+        let inlineFontSize = (attrs[.font] as? NSFont)?.pointSize
+            ?? NSFont.systemFontSize
+        var cursor = text.startIndex
+        var trailingWasDisplay = false
+        for expression in expressions {
+            if cursor < expression.range.lowerBound {
+                appendSegment(
+                    text[cursor..<expression.range.lowerBound],
+                    attributes: attrs,
+                    collapseLeadingNewline: trailingWasDisplay,
+                    to: output)
+            }
+            let rawSource = String(text[expression.range])
+            if let attachment = MathImageRenderer.attachment(
+                latex: expression.latex,
+                isDisplay: expression.isDisplay,
+                fontSize: expression.isDisplay
+                    ? NSFont.systemFontSize + 2
+                    : inlineFontSize,
+                rawSource: rawSource) {
+                appendAttachment(
+                    attachment,
+                    isDisplay: expression.isDisplay,
+                    attributes: attrs,
+                    to: output)
+            } else {
+                output.append(NSAttributedString(string: rawSource, attributes: attrs))
+            }
+            trailingWasDisplay = expression.isDisplay
+            cursor = expression.range.upperBound
+        }
+        if cursor < text.endIndex {
+            appendSegment(
+                text[cursor...],
+                attributes: attrs,
+                collapseLeadingNewline: trailingWasDisplay,
+                to: output)
+        }
+    }
+
+    private func appendSegment(
+        _ substring: Substring,
+        attributes attrs: [NSAttributedString.Key: Any],
+        collapseLeadingNewline: Bool,
+        to output: NSMutableAttributedString
+    ) {
+        var string = String(substring)
+        if collapseLeadingNewline, output.string.last == "\n", string.first == "\n" {
+            string.removeFirst()
+        }
+        guard !string.isEmpty else { return }
+        output.append(NSAttributedString(string: string, attributes: attrs))
+    }
+
+    private func appendAttachment(
+        _ attachment: MathTextAttachment,
+        isDisplay: Bool,
+        attributes attrs: [NSAttributedString.Key: Any],
+        to output: NSMutableAttributedString
+    ) {
+        var attachmentAttributes = attrs
+        if isDisplay {
+            if !output.string.isEmpty, output.string.last != "\n" {
+                output.append(NSAttributedString(string: "\n", attributes: baseAttributes()))
+            }
+            let style = ((attrs[.paragraphStyle] as? NSParagraphStyle)
+                ?? NSParagraphStyle.default).mutableCopy() as! NSMutableParagraphStyle
+            style.alignment = .center
+            attachmentAttributes[.paragraphStyle] = style
+        }
+        let attributedAttachment = NSMutableAttributedString(
+            string: "\u{FFFC}",
+            attributes: attachmentAttributes)
+        attributedAttachment.addAttribute(
+            .attachment,
+            value: attachment,
+            range: NSRange(location: 0, length: attributedAttachment.length))
+        output.append(attributedAttachment)
+        if isDisplay {
+            output.append(NSAttributedString(string: "\n", attributes: baseAttributes()))
+        }
     }
 
     private func fallback(_ source: String) -> Result {

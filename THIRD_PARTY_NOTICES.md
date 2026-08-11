@@ -43,6 +43,11 @@ The following table covers the complete graph reported by
 | [swift-crypto](https://github.com/apple/swift-crypto) | 4.5.0 | Apache-2.0; upstream NOTICE applies |
 | [swift-asn1](https://github.com/apple/swift-asn1) | 1.7.0 | Apache-2.0; upstream NOTICE applies |
 | [yyjson](https://github.com/ibireme/yyjson) | 0.12.0 | MIT |
+| [SwiftMath](https://github.com/mgriebling/SwiftMath) | 1.7.3 (pending) | MIT |
+
+`Package.resolved` in this checkout predates the SwiftMath addition (macOS math
+rendering); regenerate it with `swift package resolve` on macOS and re-run the
+review before release.
 
 No copyleft or custom non-commercial license was found in this resolved graph.
 The dependency license files remain authoritative. For binary distribution,
