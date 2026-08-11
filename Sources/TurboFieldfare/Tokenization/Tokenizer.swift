@@ -52,6 +52,14 @@ public struct GFTokenizer: @unchecked Sendable {
     public let channelEndID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
+    /// The channel/tool markers that structure assistant output. Streaming
+    /// treats them as detokenizer barriers: a byte-fallback run must not span
+    /// one, or its text would surface after the marker and be routed under the
+    /// wrong channel state.
+    public var structuralMarkerIDs: Set<Int32> {
+        [toolCallStartID, toolCallEndID, toolResponseID, toolResponseEndID,
+         channelStartID, channelEndID]
+    }
     /// IDs that `decode(skipSpecialTokens: true)` strips — the
     /// `added_tokens[special == true]` set from `tokenizer.json`, identical to
     /// the filter the library's own decode applies before its decoder chain.

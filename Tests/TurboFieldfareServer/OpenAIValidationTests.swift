@@ -497,6 +497,36 @@ struct GemmaToolCallTests {
         #expect(try decoder.consumeTail("final-but-no-newline").isEmpty)
     }
 
+    @Test func heldBytesBeforeChannelMarkerStayInTheirChannel() async throws {
+        // Thought text ending in a byte-fallback character right before
+        // <channel|> must not leak into the visible answer. The barrier
+        // detokenizer commits the held character as the marker's delta, and
+        // consume routes it under the still-thought channel.
+        let tokenizer = try await GFTokenizer.load()
+        var detok = GFDetokenizer(tokenizer: tokenizer,
+                                  barrierTokenIDs: tokenizer.structuralMarkerIDs)
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        var events: [StructuredAssistantEvent] = []
+        func feed(_ id: Int32) throws {
+            events += try decoder.consume(tokenID: id, delta: detok.push(id))
+        }
+
+        try feed(tokenizer.channelStartID)
+        for id in tokenizer.encode("thought\n", addBOS: false) { try feed(id) }
+        for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
+            try feed(Int32(GFTokenizer.requireTokenID(tokenizer.tokenizer, token)))
+        }
+        try feed(tokenizer.channelEndID)
+        for id in tokenizer.encode("ok", addBOS: false) { try feed(id) }
+        events += try decoder.consumeTail(detok.flush())
+
+        let visible = events.compactMap { event -> String? in
+            if case .content(let text) = event { return text }
+            return nil
+        }.joined()
+        #expect(visible == "ok", "thought-channel bytes leaked: '\(visible)'")
+    }
+
     @Test func tailAfterFailureThrows() async throws {
         let tokenizer = try await GFTokenizer.load()
         let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])

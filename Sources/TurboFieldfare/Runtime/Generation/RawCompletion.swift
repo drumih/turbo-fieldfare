@@ -116,7 +116,8 @@ public func runRawCompletion(producer: any LogitProducer,
     }
     let computedPrefillTokens = promptIds.count - cachedPromptTokens
 
-    var detok = GFDetokenizer(tokenizer: tokenizer)
+    var detok = GFDetokenizer(tokenizer: tokenizer,
+                              barrierTokenIDs: tokenizer.structuralMarkerIDs)
     var history = Array(promptIds.prefix(cachedPromptTokens))
     history.reserveCapacity(promptIds.count + config.maxNewTokens)
 

@@ -330,6 +330,25 @@ struct TokenizerTests {
         #expect(try detok.push(regularTokenID("the")) == "😀the")
     }
 
+    @Test("A barrier marker commits the run as its own delta")
+    func barrierMarkerCommitsHeldRun() throws {
+        // The generation pipeline must not let a byte run span a channel/tool
+        // marker: the held text surfaces as the marker's own delta, so the
+        // structured decoder can route it under the pre-switch channel state.
+        var detok = GFDetokenizer(tokenizer: tok,
+                                  barrierTokenIDs: tok.structuralMarkerIDs)
+        for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
+            #expect(try detok.push(byteTokenID(token)) == "")
+        }
+        #expect(detok.push(tok.channelEndID) == "😀")
+        // Non-barrier specials still fuse: a codepoint split around eos stays
+        // whole, preserving decode parity for everything but the markers.
+        #expect(try detok.push(byteTokenID("<0xC3>")) == "")
+        #expect(detok.push(tok.eosID) == "")
+        #expect(try detok.push(byteTokenID("<0xA9>")) == "")
+        #expect(try detok.push(regularTokenID("the")) == "éthe")
+    }
+
     @Test("Byte-token soup matches batch decode and reference run semantics")
     func byteSoupMatchesReference() throws {
         // Adversarial byte-run coverage the encoder can never produce: mostly
