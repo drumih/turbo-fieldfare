@@ -461,6 +461,82 @@ struct GemmaToolCallTests {
             .content("visible"),
         ])
     }
+
+    @Test func routesControlTokenDeltaThroughCurrentChannel() async throws {
+        // A non-empty delta on a control token is text the detokenizer held
+        // back from before that token; it belongs to the channel in effect
+        // now and must not vanish with the control token's early return.
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "leftover") == [
+            .content("leftover"),
+        ])
+        // The channel switch still happened: this resolves the label.
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        // In the thought channel the routed delta is correctly dropped.
+        #expect(try decoder.consume(tokenID: tokenizer.channelEndID, delta: "hidden").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "ok") == [.content("ok")])
+    }
+
+    @Test func tailDuringThoughtChannelIsSuppressed() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        #expect(try decoder.consumeTail("secret").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.channelEndID, delta: "").isEmpty)
+        #expect(try decoder.consumeTail("ok") == [.content("ok")])
+    }
+
+    @Test func tailDuringUnresolvedLabelEmitsNothing() async throws {
+        // Generation ended before the channel label line completed; the text
+        // cannot be attributed, so nothing may surface.
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consumeTail("final-but-no-newline").isEmpty)
+    }
+
+    @Test func heldBytesBeforeChannelMarkerStayInTheirChannel() async throws {
+        // Thought text ending in a byte-fallback character right before
+        // <channel|> must not leak into the visible answer. The barrier
+        // detokenizer commits the held character as the marker's delta, and
+        // consume routes it under the still-thought channel.
+        let tokenizer = try await GFTokenizer.load()
+        var detok = GFDetokenizer(tokenizer: tokenizer,
+                                  barrierTokenIDs: tokenizer.structuralMarkerIDs)
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        var events: [StructuredAssistantEvent] = []
+        func feed(_ id: Int32) throws {
+            events += try decoder.consume(tokenID: id, delta: detok.push(id))
+        }
+
+        try feed(tokenizer.channelStartID)
+        for id in tokenizer.encode("thought\n", addBOS: false) { try feed(id) }
+        for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
+            try feed(GFTokenizer.requireTokenID(tokenizer.tokenizer, token))
+        }
+        try feed(tokenizer.channelEndID)
+        for id in tokenizer.encode("ok", addBOS: false) { try feed(id) }
+        events += try decoder.consumeTail(detok.flush())
+
+        let visible = events.compactMap { event -> String? in
+            if case .content(let text) = event { return text }
+            return nil
+        }.joined()
+        #expect(visible == "ok", "thought-channel bytes leaked: '\(visible)'")
+    }
+
+    @Test func tailAfterFailureThrows() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(throws: GemmaToolCallParserError.self) {
+            try decoder.consume(tokenID: tokenizer.toolCallEndID, delta: "")
+        }
+        #expect(throws: GemmaToolCallParserError.self) {
+            try decoder.consumeTail("x")
+        }
+    }
 }
 
 @Suite("Streaming stop matcher")

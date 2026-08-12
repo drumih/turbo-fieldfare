@@ -1,10 +1,14 @@
 import Foundation
+import Hub
 import Tokenizers
 
 public enum GFTokenizerError: Error, CustomStringConvertible {
     case missingSpecialToken(String)
     case invalidChatTemplate(String)
     case missingToolTemplate
+    case missingTokenizerConfig
+    case unsupportedDecoder(actual: String)
+    case invalidTokenID(token: String, id: Int)
 
     public var description: String {
         switch self {
@@ -12,6 +16,13 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
         case .invalidChatTemplate(let detail): return "invalid chat messages: \(detail)"
         case .missingToolTemplate:
             return "installed tokenizer is missing chat_template.jinja; reinstall the model"
+        case .missingTokenizerConfig:
+            return "tokenizer_config.json is missing or unreadable"
+        case .unsupportedDecoder(let actual):
+            return "tokenizer decoder is not the pinned Gemma 4 sequence "
+                + "Sequence[Replace(▁→␣), ByteFallback, Fuse]; found: \(actual)"
+        case .invalidTokenID(let token, let id):
+            return "tokenizer declares out-of-range ID \(id) for token \(token)"
         }
     }
 }
@@ -44,6 +55,18 @@ public struct GFTokenizer: @unchecked Sendable {
     public let channelEndID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
+    /// The channel/tool markers that structure assistant output. Streaming
+    /// treats them as detokenizer barriers: a byte-fallback run must not span
+    /// one, or its text would surface after the marker and be routed under the
+    /// wrong channel state.
+    public var structuralMarkerIDs: Set<Int32> {
+        [toolCallStartID, toolCallEndID, toolResponseID, toolResponseEndID,
+         channelStartID, channelEndID]
+    }
+    /// IDs that `decode(skipSpecialTokens: true)` strips — the
+    /// `added_tokens[special == true]` set from `tokenizer.json`, identical to
+    /// the filter the library's own decode applies before its decoder chain.
+    let specialTokenIDs: Set<Int32>
 
     @usableFromInline
     let tokenizer: any Tokenizer
@@ -82,21 +105,99 @@ public struct GFTokenizer: @unchecked Sendable {
     }
 
     static func loadUncached(pretrained modelID: String = Self.modelID) async throws -> GFTokenizer {
-        let underlying = try await AutoTokenizer.from(pretrained: modelID)
-        return try GFTokenizer(tokenizer: underlying)
+        try await make(from: LanguageModelConfigurationFromHub(modelName: modelID))
     }
 
     static func loadUncached(from folder: URL) async throws -> GFTokenizer {
-        let underlying = try await AutoTokenizer.from(modelFolder: folder)
-        return try GFTokenizer(tokenizer: underlying)
+        try await make(from: LanguageModelConfigurationFromHub(modelFolder: folder))
+    }
+
+    /// Build from the raw tokenizer configs so the decoder pipeline and the
+    /// special-token set can be validated against `tokenizer.json` itself.
+    /// Same fetch/caching path `AutoTokenizer.from(pretrained:)` uses internally.
+    private static func make(from hub: LanguageModelConfigurationFromHub) async throws -> GFTokenizer {
+        guard let tokenizerConfig = try await hub.tokenizerConfig else {
+            throw GFTokenizerError.missingTokenizerConfig
+        }
+        let tokenizerData = try await hub.tokenizerData
+        let underlying = try AutoTokenizer.from(
+            tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData)
+        return try GFTokenizer(tokenizer: underlying, tokenizerData: tokenizerData)
     }
 
     private static func hasTokenizerJSON(in folder: URL, fileManager: FileManager) -> Bool {
         fileManager.fileExists(atPath: folder.appendingPathComponent("tokenizer.json").path)
     }
 
-    public init(tokenizer: any Tokenizer) throws {
+    /// Reject a tokenizer whose declared decoder is not the pinned Gemma 4
+    /// sequence.
+    ///
+    /// `GemmaDecoding` reproduces `Sequence[Replace("▁" -> " "), ByteFallback,
+    /// Fuse]` rather than calling `Tokenizers.decode`, so that decode stays
+    /// lossless and per-token (see `GemmaDecoding`). The installed tokenizer is
+    /// pinned and hash-validated, but `TURBO_FIELDFARE_TOKENIZER_DIR` can point
+    /// at any directory. Without this check a tokenizer declaring a different
+    /// decoder would decode subtly wrong text instead of failing.
+    ///
+    /// The check reads `tokenizer.json`'s decoder declaration structurally, so
+    /// it rejects any foreign decoder — including one whose behavior happens to
+    /// coincide on a handful of probe strings — without asserting the library's
+    /// exact runtime output, which a benign dependency bump may change.
+    /// Behavioral agreement with the library is pinned by the differential
+    /// tests instead.
+    static func verifyDecoderConfiguration(_ tokenizerData: Config) throws {
+        let decoder = tokenizerData["decoder"]
+        let steps = decoder.decoders.array(or: [])
+        guard decoder.type.string() == "Sequence",
+              steps.count == 3,
+              steps[0].type.string() == "Replace",
+              steps[0].pattern.String.string() == "▁",
+              steps[0].content.string() == " ",
+              steps[1].type.string() == "ByteFallback",
+              steps[2].type.string() == "Fuse"
+        else {
+            throw GFTokenizerError.unsupportedDecoder(actual: decoder.description)
+        }
+    }
+
+    /// Resolve a special token to its ID, rejecting `<unk>` substitution.
+    ///
+    /// BPE's `convertTokenToId` returns the unknown-token ID — not `nil` — for
+    /// a token absent from the vocab, so a plain `guard let` never fires and a
+    /// missing marker would silently bind to `<unk>`, colliding with every
+    /// other missing marker. The round-trip through `convertIdToToken` detects
+    /// any substitution.
+    static func requireTokenID(_ tokenizer: any Tokenizer, _ token: String) throws -> Int32 {
+        guard let id = tokenizer.convertTokenToId(token),
+              tokenizer.convertIdToToken(id) == token else {
+            throw GFTokenizerError.missingSpecialToken(token)
+        }
+        return try int32ID(token, id)
+    }
+
+    /// Config-supplied IDs are full-range `Int`; a trapping `Int32(_:)` would
+    /// crash on a corrupt tokenizer instead of taking the typed error path
+    /// every other malformed-config case uses.
+    private static func int32ID(_ token: String, _ id: Int) throws -> Int32 {
+        guard let value = Int32(exactly: id) else {
+            throw GFTokenizerError.invalidTokenID(token: token, id: id)
+        }
+        return value
+    }
+
+    public init(tokenizer: any Tokenizer, tokenizerData: Config) throws {
         self.tokenizer = tokenizer
+        try Self.verifyDecoderConfiguration(tokenizerData)
+
+        // The same `added_tokens[special == true]` ID set the library's
+        // `decode(skipSpecialTokens: true)` filters before running its decoder.
+        var specials: Set<Int32> = []
+        for added in tokenizerData["addedTokens"].array(or: []) {
+            guard added["special"].boolean(or: false),
+                  let id = added["id"].integer() else { continue }
+            try specials.insert(Self.int32ID(added.content.string() ?? "added token", id))
+        }
+        self.specialTokenIDs = specials
 
         guard let bos = tokenizer.bosTokenId else {
             throw GFTokenizerError.missingSpecialToken("<bos>")
@@ -104,33 +205,16 @@ public struct GFTokenizer: @unchecked Sendable {
         guard let eos = tokenizer.eosTokenId else {
             throw GFTokenizerError.missingSpecialToken("<eos>")
         }
-        guard let pad = tokenizer.convertTokenToId("<pad>") else {
-            throw GFTokenizerError.missingSpecialToken("<pad>")
-        }
-        guard let eot = tokenizer.convertTokenToId("<turn|>") else {
-            throw GFTokenizerError.missingSpecialToken("<turn|>")
-        }
-        guard let toolResponse = tokenizer.convertTokenToId("<|tool_response>") else {
-            throw GFTokenizerError.missingSpecialToken("<|tool_response>")
-        }
-        guard let toolCallStart = tokenizer.convertTokenToId("<|tool_call>"),
-              let toolCallEnd = tokenizer.convertTokenToId("<tool_call|>"),
-              let toolResponseEnd = tokenizer.convertTokenToId("<tool_response|>"),
-              let channelStart = tokenizer.convertTokenToId("<|channel>"),
-              let channelEnd = tokenizer.convertTokenToId("<channel|>") else {
-            throw GFTokenizerError.missingSpecialToken("Gemma tool/channel markers")
-        }
-
-        self.bosID = Int32(bos)
-        self.eosID = Int32(eos)
-        self.padID = Int32(pad)
-        self.endOfTurnID = Int32(eot)
-        self.toolCallStartID = Int32(toolCallStart)
-        self.toolCallEndID = Int32(toolCallEnd)
-        self.toolResponseID = Int32(toolResponse)
-        self.toolResponseEndID = Int32(toolResponseEnd)
-        self.channelStartID = Int32(channelStart)
-        self.channelEndID = Int32(channelEnd)
+        self.bosID = try Self.int32ID("<bos>", bos)
+        self.eosID = try Self.int32ID("<eos>", eos)
+        self.padID = try Self.requireTokenID(tokenizer, "<pad>")
+        self.endOfTurnID = try Self.requireTokenID(tokenizer, "<turn|>")
+        self.toolCallStartID = try Self.requireTokenID(tokenizer, "<|tool_call>")
+        self.toolCallEndID = try Self.requireTokenID(tokenizer, "<tool_call|>")
+        self.toolResponseID = try Self.requireTokenID(tokenizer, "<|tool_response>")
+        self.toolResponseEndID = try Self.requireTokenID(tokenizer, "<tool_response|>")
+        self.channelStartID = try Self.requireTokenID(tokenizer, "<|channel>")
+        self.channelEndID = try Self.requireTokenID(tokenizer, "<channel|>")
         self.stopTokenIDs = [self.eosID, self.endOfTurnID, self.toolResponseID]
         self.vocabSize = 262_144
     }
@@ -147,8 +231,20 @@ public struct GFTokenizer: @unchecked Sendable {
     }
 
     /// Decode token IDs to text. `skipSpecialTokens` strips BOS/EOS/turn markers from the output.
+    ///
+    /// Runs the pinned Gemma decoder sequence directly (see `GemmaDecoding`)
+    /// rather than `Tokenizers.decode`, whose trailing
+    /// `clean_up_tokenization_spaces` pass defaults to on for this tokenizer and
+    /// rewrites model output (`"he said ' ok ' now"` -> `"he said'ok'now"`),
+    /// breaking `decode(encode(x)) == x`. Batch decode is a push-loop over
+    /// `GFDetokenizer`, so batch and streaming decode agree by construction.
     public func decode(_ ids: [Int32], skipSpecialTokens: Bool = true) -> String {
-        tokenizer.decode(tokens: ids.map(Int.init), skipSpecialTokens: skipSpecialTokens)
+        var detok = GFDetokenizer(tokenizer: self, skipSpecialTokens: skipSpecialTokens)
+        var text = ""
+        for id in ids {
+            text += detok.push(id)
+        }
+        return text + detok.flush()
     }
 
     // MARK: - Chat template

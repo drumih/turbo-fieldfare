@@ -548,15 +548,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             shouldStop: { shouldStop }) { progress in
                 guard decodingError == nil else { return }
                 do {
-                    switch progress {
-                    case .prefill:
-                        break
-                    case .token(_, let tokenID, let delta):
-                        let events = if let decoder {
-                            try decoder.consume(tokenID: tokenID, delta: delta)
-                        } else {
-                            delta.isEmpty ? [] : [StructuredAssistantEvent.content(delta)]
-                        }
+                    func handle(_ events: [StructuredAssistantEvent]) {
                         for event in events {
                             switch event {
                             case .content(let text):
@@ -571,12 +563,28 @@ public actor ServerModelSession: ServerInferenceBackend {
                                 onEvent(.toolCall(call))
                             }
                         }
-                    case .tail(let text):
-                        let visible = stopMatcher.push(text)
-                        if !visible.isEmpty {
-                            content += visible
-                            onEvent(.content(visible))
+                    }
+                    switch progress {
+                    case .prefill:
+                        break
+                    case .token(_, let tokenID, let delta):
+                        let events = if let decoder {
+                            try decoder.consume(tokenID: tokenID, delta: delta)
+                        } else {
+                            delta.isEmpty ? [] : [StructuredAssistantEvent.content(delta)]
                         }
+                        handle(events)
+                    case .tail(let text):
+                        // The flush tail is not tied to a token ID, so it must
+                        // go through the decoder's channel state explicitly;
+                        // appending it directly would leak text held back
+                        // inside the thought channel or a tool call.
+                        let events = if let decoder {
+                            try decoder.consumeTail(text)
+                        } else {
+                            text.isEmpty ? [] : [StructuredAssistantEvent.content(text)]
+                        }
+                        handle(events)
                     }
                 } catch {
                     decodingError = error
