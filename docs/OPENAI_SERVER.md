@@ -189,3 +189,18 @@ watch memory pressure.
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not
 prompt text, tool arguments, headers, or request bodies.
+
+## Bind to a network address
+
+`--host` sets the network address to bind (default `127.0.0.1` for localhost
+only). Use `0.0.0.0` to listen on all IPv4 interfaces.
+
+Any host other than `127.0.0.1` exposes the server beyond localhost. The server
+has no authentication or TLS. Only do this if you know what you are doing.
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --host 0.0.0.0 \
+  --port 8080
+```
