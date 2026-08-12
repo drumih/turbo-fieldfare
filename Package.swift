@@ -29,6 +29,7 @@ let package = Package(
             dependencies: [
                 "TurboFieldfareFormat",
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "Hub", package: "swift-transformers"),
             ],
             path: "Sources/TurboFieldfare",
             resources: [
@@ -119,7 +120,13 @@ let package = Package(
         ),
         .testTarget(
             name: "TurboFieldfareTestsCore",
-            dependencies: ["TurboFieldfare", "TurboFieldfareValidationSupport", "TurboFieldfareRepackCore", "TurboFieldfareCLICore"],
+            dependencies: [
+                "TurboFieldfare",
+                "TurboFieldfareValidationSupport",
+                "TurboFieldfareRepackCore",
+                "TurboFieldfareCLICore",
+                .product(name: "Hub", package: "swift-transformers"),
+            ],
             path: "Tests/TurboFieldfare/Core"
         ),
         .testTarget(
