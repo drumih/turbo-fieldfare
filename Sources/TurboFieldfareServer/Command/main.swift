@@ -16,10 +16,12 @@ do {
 do {
     let signals = ServerTerminationSignals()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
+    let runtimeConfiguration = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: true)
     let backend = try await ServerModelSession.load(
         modelDirectory: modelURL,
         maxContext: arguments.maxContext,
-        promptCacheMode: arguments.promptCacheMode)
+        promptCacheMode: arguments.promptCacheMode,
+        runtimeConfiguration: runtimeConfiguration)
     let server = TurboFieldfareHTTPServer(
         modelID: arguments.modelID,
         queueLimit: arguments.queueLimit,

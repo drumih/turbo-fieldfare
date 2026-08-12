@@ -564,6 +564,11 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.expertCacheSlots == 16)
+        #expect(arguments.expertCachePolicy == .lfu)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 128)
+        #expect(arguments.rdadvisePolicy == .off)
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {
@@ -583,5 +588,46 @@ struct ServerArgumentTests {
                 "--prompt-cache-mode", "many",
             ])
         }
+    }
+
+    @Test func parsesRuntimeOptionsAndValidates() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "32",
+            "--expert-cache-policy", "lru",
+            "--prefill", "on",
+            "--prefill-chunk-tokens", "64",
+            "--rdadvise", "adaptive",
+        ])
+        #expect(arguments.expertCacheSlots == 32)
+        #expect(arguments.expertCachePolicy == .lru)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 64)
+        #expect(arguments.rdadvisePolicy == .adaptive)
+
+        let config = try arguments.resolvedRuntimeConfiguration()
+        #expect(config.expertCacheSlots == 32)
+        #expect(config.expertCachePolicy == .lru)
+        #expect(config.prefillPolicy == .chunked)
+        #expect(config.prefillChunkTokens == 64)
+        #expect(config.rdadvisePolicy == .adaptive)
+    }
+
+    @Test func rejectsIncompatibleChunkedPrefillWith8Slots() throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--expert-cache-slots", "8",
+                "--prefill", "on",
+            ])
+        }
+
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "8",
+            "--prefill", "off",
+        ])
+        #expect(arguments.expertCacheSlots == 8)
+        #expect(arguments.prefillPolicy == .off)
     }
 }
