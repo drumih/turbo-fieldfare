@@ -47,6 +47,31 @@ requests for preparation or queueing. The limit is enforced before prompt
 rendering and tokenization. Use `--queue-limit` to change it. Press Control-C
 to stop the server.
 
+## Runtime settings
+
+The server accepts the same runtime flags as the CLI, with the same values and
+defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --expert-cache-slots 32 \
+  --expert-cache-policy lru \
+  --prefill on \
+  --prefill-chunk-tokens 64 \
+  --rdadvise bounded
+```
+
+Without these flags the server runs the production defaults: 16 expert-cache
+slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
+off. Values are validated before the model loads, so an unsupported one exits
+with the usage text rather than failing partway through startup. Chunked
+prefill needs at least 16 expert-cache slots, so `--expert-cache-slots 8`
+requires `--prefill off`.
+
+The settings are fixed for the life of the process. Restart the server to
+change them.
+
 ## Connect a client
 
 The base URL is `http://127.0.0.1:8080/v1`. Some client libraries require an

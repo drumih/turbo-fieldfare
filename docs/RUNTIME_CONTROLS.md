@@ -1,8 +1,9 @@
 # Runtime controls
 
-The Mac app and CLI expose generation and runtime controls. The app keeps them
-in its fixed right settings pane. FP16 is the fixed KV format. Generation
-settings apply to the next request; app load-time settings require a reload.
+The Mac app, CLI, and local server expose generation and runtime controls. The
+app keeps them in its fixed right settings pane. FP16 is the fixed KV format.
+Generation settings apply to the next request; app load-time settings require a
+reload.
 
 ## Generation controls
 
@@ -24,7 +25,11 @@ benchmark protocol.
 
 ## Runtime settings
 
-| Control | Mac values | CLI flag | Production default | Effect |
+The CLI and the [local server](OPENAI_SERVER.md) accept these flags with the
+same names, values, and defaults. The server resolves them before it loads the
+model, so an unsupported combination fails immediately with the usage text.
+
+| Control | Mac values | CLI and server flag | Production default | Effect |
 | --- | --- | --- | --- | --- |
 | Expert-cache slots | 8, 16, 24, 32 | `--expert-cache-slots` | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. Chunked prefill requires at least 16 slots. |
 | Expert-cache policy | LFU | `--expert-cache-policy lfu\|lru` | LFU | Chooses which expert is evicted when the cache is full. |
@@ -36,7 +41,8 @@ In the app, changing context length, expert-cache slots, or RDADVISE requires a
 reload. Some sampling changes also require a reload because greedy and sampled
 generation use different output-head paths. Prompt-prefill settings apply to
 each request and do not require a reload. Each CLI invocation loads a new model
-process, so its selected runtime settings apply immediately.
+process, so its selected runtime settings apply immediately. The server fixes
+its runtime settings at startup, so changing one means restarting the process.
 
 ## Run an experiment
 

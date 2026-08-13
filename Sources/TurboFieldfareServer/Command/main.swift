@@ -1,10 +1,15 @@
 import Darwin
 import Foundation
+import TurboFieldfare
 import TurboFieldfareServerCore
 
 let arguments: ServerArguments
+let runtimeConfiguration: RuntimeConfiguration
 do {
     arguments = try ServerArguments.parse(Array(CommandLine.arguments.dropFirst()))
+    // Resolved here so an unusable flag combination exits with usage instead of
+    // failing after the model has started loading.
+    runtimeConfiguration = try arguments.resolvedRuntimeConfiguration()
 } catch ServerArgumentError.help {
     print(ServerArguments.usage)
     exit(0)
@@ -19,7 +24,8 @@ do {
     let backend = try await ServerModelSession.load(
         modelDirectory: modelURL,
         maxContext: arguments.maxContext,
-        promptCacheMode: arguments.promptCacheMode)
+        promptCacheMode: arguments.promptCacheMode,
+        runtimeConfiguration: runtimeConfiguration)
     let server = TurboFieldfareHTTPServer(
         modelID: arguments.modelID,
         queueLimit: arguments.queueLimit,
