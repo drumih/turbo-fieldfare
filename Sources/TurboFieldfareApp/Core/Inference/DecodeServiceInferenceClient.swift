@@ -235,7 +235,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             let starter = Process()
             let starterErrors = Pipe()
             starter.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-            starter.arguments = ["kickstart", "gui/\(getuid())/\(label)"]
+            starter.arguments = Self.kickstartArguments(uid: getuid(), label: label)
             starter.standardOutput = FileHandle.nullDevice
             starter.standardError = starterErrors
             try starter.run()
@@ -269,11 +269,22 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             }
         }
         Self.removeLaunchJob(label: label)
+        throw AppInferenceError.modelLoadFailed(
+            Self.socketFailureMessage(
+                socketError: lastError.map(String.init(describing:)),
+                kickstartError: kickstartError))
+    }
+
+    static func kickstartArguments(uid: uid_t, label: String) -> [String] {
+        ["kickstart", "gui/\(uid)/\(label)"]
+    }
+
+    static func socketFailureMessage(socketError: String?, kickstartError: String?)
+        -> String {
         let kickstartDetail = kickstartError.map {
             "; launchctl kickstart failed: \($0)"
         } ?? ""
-        throw AppInferenceError.modelLoadFailed(
-            "decode service socket did not become ready: \(lastError.map(String.init(describing:)) ?? "unknown error")\(kickstartDetail)")
+        return "decode service socket did not become ready: \(socketError ?? "unknown error")\(kickstartDetail)"
     }
 
     private func currentHandles()
