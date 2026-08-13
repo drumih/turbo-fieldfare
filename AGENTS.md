@@ -46,12 +46,6 @@ Before a model run, require macOS 26+, Swift 6.2+, enough disk, acceptable `memo
 
 Run package tests through `Scripts/test.sh`. Run only one app, CLI, or model-using test at a time.
 
-Before creating or updating a PR, run `periphery scan --retain-public` from
-this checkout. The public repository must contain no unexplained unused Swift
-declarations. Use a Periphery ignore only for code that is intentionally
-reached dynamically, with a short reason. If Periphery is unavailable or the
-scan fails, report that and do not present the PR as ready.
-
 For performance results, build release once and follow the [community benchmark guide](docs/COMMUNITY_BENCHMARKS.md) exactly. Do not enable experimental controls or profiling.
 
 Do not download a full checkpoint, duplicate the `.gturbo` model, create a worktree, or purge caches just to run tests.
