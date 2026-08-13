@@ -29,7 +29,7 @@ import Testing
         try Data("sentinel".utf8).write(to: oldTemporary)
 
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for _ in 0..<2 {
+            for _ in 0..<8 {
                 group.addTask {
                     _ = try VerifiedInstallTool.run(
                         options: VerifyInstallOptions(inputGTurbo: root.path))

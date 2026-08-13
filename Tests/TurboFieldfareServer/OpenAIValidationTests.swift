@@ -564,6 +564,11 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.expertCacheSlots == 16)
+        #expect(arguments.expertCachePolicy == .lfu)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 128)
+        #expect(arguments.rdadvisePolicy == .off)
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {
@@ -582,6 +587,64 @@ struct ServerArgumentTests {
                 "--model", "model.gturbo",
                 "--prompt-cache-mode", "many",
             ])
+        }
+    }
+
+    @Test func runtimeFlagsReachTheResolvedConfiguration() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "32",
+            "--expert-cache-policy", "lru",
+            "--prefill", "on",
+            "--prefill-chunk-tokens", "64",
+            "--rdadvise", "adaptive",
+        ])
+        #expect(arguments.expertCacheSlots == 32)
+        #expect(arguments.expertCachePolicy == .lru)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 64)
+        #expect(arguments.rdadvisePolicy == .adaptive)
+
+        let configuration = try arguments.resolvedRuntimeConfiguration()
+        #expect(configuration.expertCacheSlots == 32)
+        #expect(configuration.expertCachePolicy == .lru)
+        #expect(configuration.prefillPolicy == .chunked)
+        #expect(configuration.prefillChunkTokens == 64)
+        #expect(configuration.rdadvisePolicy == .adaptive)
+    }
+
+    @Test func prefillOffIsResolvableBelowTheChunkedPrefillSlotFloor() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "8",
+            "--prefill", "off",
+        ])
+        let configuration = try arguments.resolvedRuntimeConfiguration()
+        #expect(configuration.expertCacheSlots == 8)
+        #expect(configuration.prefillPolicy == .off)
+    }
+
+    @Test func chunkedPrefillBelowTheSlotFloorIsRejected() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "8",
+            "--prefill", "on",
+        ])
+        #expect(throws: ServerArgumentError.self) {
+            try arguments.resolvedRuntimeConfiguration()
+        }
+    }
+
+    @Test(arguments: [
+        ["--expert-cache-slots", "12"],
+        ["--expert-cache-policy", "mru"],
+        ["--prefill", "maybe"],
+        ["--prefill-chunk-tokens", "256"],
+        ["--rdadvise", "eager"],
+    ])
+    func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse(["--model", "model.gturbo"] + flag)
         }
     }
 }
