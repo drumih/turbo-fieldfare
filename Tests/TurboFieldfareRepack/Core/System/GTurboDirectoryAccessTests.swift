@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 
@@ -43,7 +44,8 @@ import Testing
 
     // A subdirectory the scan cannot read fails the whole scan. Permission
     // problems are real damage, unlike an entry that merely disappeared.
-    @Test func enumerationFailsWhenASubdirectoryCannotBeRead() throws {
+    @Test(.enabled(if: getuid() != 0))
+    func enumerationFailsWhenASubdirectoryCannotBeRead() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("gturbo-\(UUID().uuidString)-scan-denied")
         let nested = root.appendingPathComponent("nested")
