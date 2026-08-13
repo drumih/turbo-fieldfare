@@ -195,6 +195,55 @@ struct ServerPromptCacheTests {
         #expect(cache.entry == nil)
     }
 
+    /// A model that repeats a tool call verbatim must keep its cache.
+    ///
+    /// Agentic clients do this constantly — `ls` of the same directory, a
+    /// re-read of the same file — and a model looping on one call does nothing
+    /// else. The repeat renders to an identical token sequence, so the boundary
+    /// search finds it more than once; resolving that by position keeps the
+    /// bridge encodable, where demanding a unique match threw and left the
+    /// conversation uncached from that turn on.
+    @Test func repeatedIdenticalToolCallKeepsTheBoundaryResolvable() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let tools = [GFTokenizer.FunctionDefinition(
+            name: "ls",
+            description: "list a directory",
+            parameters: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object(["type": .string("string")]),
+                ]),
+            ]))]
+        let call = { (id: String) in
+            GFTokenizer.HistoricalToolCall(
+                id: id,
+                name: "ls",
+                arguments: .object(["path": .string(".")]))
+        }
+        let first = GFTokenizer.Message(
+            role: .assistant, content: nil, toolCalls: [call("call_1")])
+        let firstResult = GFTokenizer.Message(
+            role: .tool, content: "pkg/", toolCallID: "call_1", name: "ls")
+        // Byte-identical to the first call; only the call id differs.
+        let repeated = GFTokenizer.Message(
+            role: .assistant, content: nil, toolCalls: [call("call_2")])
+        let repeatedResult = GFTokenizer.Message(
+            role: .tool, content: "pkg/", toolCallID: "call_2", name: "ls")
+        let cachedMessages = [
+            GFTokenizer.Message(role: .user, content: "list the tree"),
+            first,
+            firstResult,
+        ]
+
+        let bridge = try tokenizer.encodeToolResultContinuation(
+            cachedMessages: cachedMessages,
+            assistant: repeated,
+            incomingMessages: cachedMessages + [repeated, repeatedResult],
+            tools: tools)
+
+        #expect(bridge.first == tokenizer.toolResponseID)
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = []

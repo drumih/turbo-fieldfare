@@ -401,11 +401,26 @@ public struct GFTokenizer: @unchecked Sendable {
         let callStart = starts[starts.count - callCount]
         let callSequence = Array(prefix[callStart...callEnd])
         let matches = full.subsequenceStartIndices(matching: callSequence)
-        guard matches.count == 1 else {
+        // The boundary is unambiguous by POSITION even when the sequence repeats.
+        // `prefix` and `full` render the same leading history, and the generation
+        // prompt is appended past the boundary, so the occurrence at `callStart`
+        // is the cached call itself rather than an identical earlier twin.
+        //
+        // Requiring a unique match cost agentic loops their cache: as soon as a
+        // model repeated a call verbatim — `ls` of the same path, a re-read of
+        // the same file — the sequence occurred twice, the bridge refused to
+        // encode, and the cache stayed dead for the rest of the conversation,
+        // because every later request carried both twins too.
+        let boundary: Int
+        if matches.contains(callStart) {
+            boundary = callStart
+        } else if matches.count == 1 {
+            boundary = matches[0]
+        } else {
             throw GFTokenizerError.invalidChatTemplate(
                 "cached assistant tool-call boundary is ambiguous")
         }
-        let suffixStart = matches[0] + callSequence.count
+        let suffixStart = boundary + callSequence.count
         let suffix = Array(full[suffixStart...])
         guard suffix.first == toolResponseID else {
             throw GFTokenizerError.invalidChatTemplate(
