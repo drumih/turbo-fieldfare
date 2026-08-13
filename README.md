@@ -250,10 +250,13 @@ swift build -c release --product TurboFieldfareServer
   --model scratch/gemma4.gturbo
 ```
 
-It listens on `http://127.0.0.1:8080/v1` and supports Chat Completions,
-streaming, function tools, and single-prefix prompt reuse. The client must
-authorize and run every tool call. Keep the server on loopback; it has no
-remote authentication or TLS.
+By default it listens on `http://127.0.0.1:8080/v1` and supports Chat
+Completions, streaming, function tools, and single-prefix prompt reuse. For
+access from trusted devices in the same Tailnet, pass `--bind tailnet`; the
+server binds only to the detected Tailscale IPv4 address, not a wildcard
+interface. The client must authorize and run every tool call. Tailnet access
+relies on its ACL because the server has no application-level authentication
+or TLS.
 
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.

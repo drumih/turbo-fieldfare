@@ -3,6 +3,7 @@ import Foundation
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
     public let port: Int
+    public let bindMode: ServerBindMode
     public let modelID: String
     public let maxContext: Int
     public let queueLimit: Int
@@ -12,7 +13,8 @@ public struct ServerArguments: Equatable, Sendable {
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
       --model <dir>          Required model directory.
-      --port <1...65535>     Loopback port (default 8080).
+      --port <1...65535>     Listening port (default 8080).
+      --bind <mode>          loopback or tailnet (default loopback).
       --model-id <id>        API model identifier (default gemma-4-26b-a4b-it).
       --max-context <tokens> 4096, 8192, 16384, 32768, or 65536 (default 16384).
       --queue-limit <count>  Maximum queued requests (default 4).
@@ -24,6 +26,7 @@ public struct ServerArguments: Equatable, Sendable {
     public static func parse(_ input: [String]) throws -> ServerArguments {
         var model: String?
         var port = 8080
+        var bindMode = ServerBindMode.loopback
         var modelID = "gemma-4-26b-a4b-it"
         var maxContext = 16_384
         var queueLimit = 4
@@ -45,6 +48,11 @@ public struct ServerArguments: Equatable, Sendable {
                     throw ServerArgumentError.invalid("--port must be between 1 and 65535")
                 }
                 port = parsed
+            case "--bind":
+                guard let parsed = ServerBindMode(rawValue: value) else {
+                    throw ServerArgumentError.invalid("--bind must be loopback or tailnet")
+                }
+                bindMode = parsed
             case "--model-id":
                 guard !value.isEmpty else {
                     throw ServerArgumentError.invalid("--model-id must not be empty")
@@ -74,10 +82,43 @@ public struct ServerArguments: Equatable, Sendable {
         guard let model else { throw ServerArgumentError.invalid("--model is required") }
         return ServerArguments(model: model,
                                port: port,
+                               bindMode: bindMode,
                                modelID: modelID,
                                maxContext: maxContext,
                                queueLimit: queueLimit,
                                promptCacheMode: promptCacheMode)
+    }
+}
+
+public enum ServerBindMode: String, Equatable, Sendable {
+    case loopback
+    case tailnet
+
+    public func host() throws -> String {
+        if self == .loopback { return "127.0.0.1" }
+
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["tailscale", "ip", "-4"]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            throw ServerArgumentError.invalid(
+                "could not run tailscale; ensure its CLI is installed")
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let address = String(
+                data: output.fileHandleForReading.readDataToEndOfFile(),
+                encoding: .utf8
+              )?.split(whereSeparator: \.isWhitespace).first else {
+            throw ServerArgumentError.invalid(
+                "could not detect a Tailnet IPv4 address; ensure Tailscale is running")
+        }
+        return String(address)
     }
 }
 

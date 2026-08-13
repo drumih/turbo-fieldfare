@@ -561,6 +561,7 @@ struct ServerArgumentTests {
     @Test func defaults() throws {
         let arguments = try ServerArguments.parse(["--model", "model.gturbo"])
         #expect(arguments.port == 8080)
+        #expect(arguments.bindMode == .loopback)
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
@@ -581,6 +582,20 @@ struct ServerArgumentTests {
             try ServerArguments.parse([
                 "--model", "model.gturbo",
                 "--prompt-cache-mode", "many",
+            ])
+        }
+    }
+
+    @Test func parsesTailnetBindMode() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--bind", "tailnet",
+        ])
+        #expect(arguments.bindMode == .tailnet)
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--bind", "public",
             ])
         }
     }

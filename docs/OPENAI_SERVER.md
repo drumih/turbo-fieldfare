@@ -1,8 +1,9 @@
 # Local OpenAI-compatible server
 
 `TurboFieldfareServer` exposes a local Chat Completions API for one Gemma
-model. It binds to `127.0.0.1` without authentication or TLS. Do not expose it
-through a proxy or tunnel.
+model. It binds to `127.0.0.1` by default, or to the machine's exact Tailscale
+IPv4 address with `--bind tailnet`. It has no application-level authentication
+or TLS; do not expose it through a wildcard interface, proxy, or tunnel.
 
 ## Start the server
 
@@ -26,6 +27,22 @@ swift build -c release --product TurboFieldfareServer
 The server loads the model before opening the port. Wait for
 `TurboFieldfareServer ready`, then keep the process running while clients use
 it.
+
+To make the server available only inside the current Tailnet, let it detect and
+bind the machine's Tailscale IPv4 address:
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --bind tailnet \
+  --port 8080 \
+  --max-context 32768 \
+  --queue-limit 32
+```
+
+The command fails instead of falling back to a broader interface when
+Tailscale is unavailable. Access remains governed by the Tailnet ACL. The
+server still has no application-level authentication or TLS.
 
 Check the server from another terminal:
 
