@@ -171,6 +171,14 @@ package final class GTurboDirectoryAccess {
                 let childFD = openat(directoryFD, name,
                                      O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                 guard childFD >= 0 else {
+                    // Same snapshot race as the stat above, one level up: the
+                    // directory can be removed between fstatat and openat. Drop
+                    // the entry recorded for it rather than reporting a name
+                    // that no longer exists.
+                    if errno == ENOENT {
+                        result.removeLast()
+                        continue
+                    }
                     throw RepackError.fileOpenFailed(
                         path: "\(rootPath)/\(relativePath)", errno: errno)
                 }

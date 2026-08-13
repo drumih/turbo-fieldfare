@@ -40,4 +40,24 @@ import Testing
         let access = try GTurboDirectoryAccess(rootPath: root.path)
         #expect(try access.relativeEntries(maxDepth: 4) == ["kept.bin"])
     }
+
+    // A subdirectory the scan cannot read fails the whole scan. Permission
+    // problems are real damage, unlike an entry that merely disappeared.
+    @Test func enumerationFailsWhenASubdirectoryCannotBeRead() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gturbo-\(UUID().uuidString)-scan-denied")
+        let nested = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: nested.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try Data("x".utf8).write(to: nested.appendingPathComponent("child.bin"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: nested.path)
+
+        let access = try GTurboDirectoryAccess(rootPath: root.path)
+        #expect(throws: RepackError.self) {
+            _ = try access.relativeEntries(maxDepth: 4)
+        }
+    }
 }
