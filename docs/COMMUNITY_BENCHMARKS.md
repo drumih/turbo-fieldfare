@@ -153,6 +153,9 @@ all affect decode speed.
 | [Vaibhav Malik](https://github.com/VaibhavMalik4187) · [issue #64](https://github.com/drumih/turbo-fieldfare/issues/64) | M1 Max MacBook Pro | 64 GB | Internal SSD | 61 / 511 | 22.888 tok/s | One submitted run |
 | [Vaibhav Malik](https://github.com/VaibhavMalik4187) · [issue #64](https://github.com/drumih/turbo-fieldfare/issues/64) | M1 Max MacBook Pro | 64 GB | Internal SSD | 430 / 669 | 22.043 tok/s | One submitted run |
 | [Vaibhav Malik](https://github.com/VaibhavMalik4187) · [issue #64](https://github.com/drumih/turbo-fieldfare/issues/64) | M1 Max MacBook Pro | 64 GB | Internal SSD | 3,015 / 604 | 20.493 tok/s | One submitted run |
+| [stefinuxha](https://github.com/stefinuxha) · [issue #131](https://github.com/drumih/turbo-fieldfare/issues/131) | M2 Mac mini | 16 GB | Not reported | 61 / 511 | 9.674 tok/s | One submitted run |
+| [stefinuxha](https://github.com/stefinuxha) · [issue #131](https://github.com/drumih/turbo-fieldfare/issues/131) | M2 Mac mini | 16 GB | Not reported | 430 / 669 | 8.889 tok/s | One submitted run |
+| [stefinuxha](https://github.com/stefinuxha) · [issue #131](https://github.com/drumih/turbo-fieldfare/issues/131) | M2 Mac mini | 16 GB | Not reported | 3,015 / 604 | 6.578 tok/s | One submitted run |
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 61 / 511 | 15.713 tok/s | One submitted run |
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 430 / 669 | 17.826 tok/s | One submitted run |
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 3,015 / 604 | 15.755 tok/s | One submitted run |
