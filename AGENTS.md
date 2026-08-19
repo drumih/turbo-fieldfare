@@ -8,7 +8,8 @@ This checkout is for running and reporting existing behavior. Do not edit source
 
 ## Layout and commands
 
-`Sources/TurboFieldfare/` is the runtime; `Sources/TurboFieldfareRepack/`,
+`Sources/TurboFieldfareFormat/` owns the Foundation-only `.gturbo` v1 wire
+contract. `Sources/TurboFieldfare/` is the runtime; `Sources/TurboFieldfareRepack/`,
 `Sources/TurboFieldfareCLI/`, `Sources/TurboFieldfareServer/`, and
 `Sources/TurboFieldfareApp/` contain the installer, CLI, loopback server, and
 Mac app.

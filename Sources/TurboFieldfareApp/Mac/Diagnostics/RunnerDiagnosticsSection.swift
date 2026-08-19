@@ -15,6 +15,12 @@ struct RunnerDiagnosticsSection: View {
 
                 groupLabel("Performance")
                 DiagnosticRow("Prompt prefill", MetricFormat.seconds(diagnostics.prefillSeconds))
+                if let prefillRate = diagnostics.prefillTokensPerSecond {
+                    DiagnosticRow(
+                        "Prefill rate",
+                        "\(MetricFormat.rate(prefillRate)) tok/s",
+                        help: "Prompt tokens divided by prefill time. Compare runs with similar prompt lengths and settings; short prompts include proportionally more fixed overhead.")
+                }
                 DiagnosticRow("First token wait", MetricFormat.seconds(diagnostics.timeToFirstTokenSeconds))
                 DiagnosticRow("Request TTFT", MetricFormat.seconds(diagnostics.requestStartTimeToFirstTokenSeconds))
                 DiagnosticRow("Decode duration", MetricFormat.seconds(diagnostics.decodeSeconds))
@@ -123,15 +129,21 @@ private struct DiagnosticRow: View {
     let label: String
     let value: String
     let multiline: Bool
+    let help: String?
+    @State private var isShowingHelp = false
 
-    init(_ label: String, _ value: String, multiline: Bool = false) {
+    init(_ label: String,
+         _ value: String,
+         multiline: Bool = false,
+         help: String? = nil) {
         self.label = label
         self.value = value
         self.multiline = multiline
+        self.help = help
     }
 
     var body: some View {
-        LabeledContent(label) {
+        LabeledContent {
             Text(value)
                 .font(.caption)
                 .monospacedDigit()
@@ -140,6 +152,31 @@ private struct DiagnosticRow: View {
                 .multilineTextAlignment(.trailing)
                 .lineLimit(multiline ? nil : 2)
                 .fixedSize(horizontal: false, vertical: true)
+        } label: {
+            HStack(spacing: 4) {
+                Text(label)
+                if let help {
+                    Button {
+                        isShowingHelp.toggle()
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 16, height: 16)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(help)
+                    .popover(isPresented: $isShowingHelp, arrowEdge: .trailing) {
+                        Text(help)
+                            .font(.callout)
+                            .frame(width: 280, alignment: .leading)
+                            .padding()
+                    }
+                    .accessibilityLabel("\(label) information")
+                    .accessibilityHint(help)
+                }
+            }
         }
     }
 }

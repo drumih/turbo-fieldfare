@@ -50,31 +50,23 @@ public enum VerifiedInstallReceiptReader {
 
     public static func load(directoryURL: URL,
                             maxBytes: UInt64 = defaultMaxBytes) throws -> VerifiedInstallReceipt {
-        let url = directoryURL.appendingPathComponent(fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw ModelError.trustedReceiptInvalid(detail: "\(fileName) is missing")
-        }
         do {
-            let size = try fileSize(url)
-            guard size <= maxBytes else {
-                throw ModelError.trustedReceiptInvalid(
-                    detail: "\(fileName) size \(size) exceeds metadata cap \(maxBytes)")
-            }
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(VerifiedInstallReceipt.self, from: data)
+            let directory = try GTurboModelDirectory(rootURL: directoryURL)
+            let data = try directory.readMetadata(fileName, maxBytes: maxBytes)
+            return try decode(data: data)
+        } catch ModelError.missingFile {
+            throw ModelError.trustedReceiptInvalid(detail: "\(fileName) is missing")
         } catch let error as ModelError {
-            throw error
+            if case .trustedReceiptInvalid = error { throw error }
+            throw ModelError.trustedReceiptInvalid(detail: "\(fileName): \(error)")
         } catch {
             throw ModelError.trustedReceiptInvalid(detail: "\(fileName): \(error)")
         }
     }
 
-    private static func fileSize(_ url: URL) throws -> UInt64 {
-        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        guard let number = attrs[.size] as? NSNumber else {
-            throw ModelError.trustedReceiptInvalid(detail: "\(fileName) size unavailable")
-        }
-        return number.uint64Value
+    package static func decode(data: Data) throws -> VerifiedInstallReceipt {
+        do { return try JSONDecoder().decode(VerifiedInstallReceipt.self, from: data) }
+        catch { throw ModelError.trustedReceiptInvalid(detail: "\(fileName): \(error)") }
     }
 
     public static func validate(_ receipt: VerifiedInstallReceipt,

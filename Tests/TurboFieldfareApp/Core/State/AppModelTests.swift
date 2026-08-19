@@ -121,6 +121,32 @@ import Testing
     }
 
     @MainActor
+    @Test func newlineShortcutDoesNotMarkReadySessionStale() {
+        let model = AppModel(client: MockLifecycleInferenceClient())
+        let directory = FileManager.default.temporaryDirectory
+        model.modelPathText = directory.path
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+
+        model.setNewlineShortcut(.shiftReturn)
+
+        #expect(model.newlineShortcut == .shiftReturn)
+        #expect(!model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
+    @Test func promptExamplesPreferenceDoesNotMarkReadySessionStale() {
+        let model = AppModel(client: MockLifecycleInferenceClient())
+        let directory = FileManager.default.temporaryDirectory
+        model.modelPathText = directory.path
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+
+        model.setShowPromptExamples(false)
+
+        #expect(!model.showPromptExamples)
+        #expect(!model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
     @Test func mockRunUpdatesOutputAndDiagnostics() async throws {
         let client = MockInferenceClient(response: "alpha beta", tokenDelayNanos: 1)
         let model = AppModel(client: client)
@@ -149,6 +175,7 @@ import Testing
         model.run()
 
         #expect(model.outputPromptText == "original prompt")
+        #expect(model.promptText == "original prompt")
         #expect(model.hasOutputTranscript)
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText == "You:\noriginal prompt")
@@ -161,6 +188,45 @@ import Testing
         #expect(model.outputConversationPlainText
             == "You:\noriginal prompt\n\nAnswer:\nanswer")
         #expect(!model.outputConversationPlainText.contains("edited prompt"))
+    }
+
+    @MainActor
+    @Test func clearAfterSendingPreservesTranscriptAndNextDraft() async throws {
+        let client = MockInferenceClient(
+            response: "answer",
+            tokenDelayNanos: 20_000_000)
+        let model = readyModel(client: client)
+        model.setSentPromptBehavior(.clear)
+        model.promptText = "original prompt"
+        model.maxNewTokensOverride = 1
+
+        model.run()
+
+        #expect(model.isRunning)
+        #expect(model.outputPromptText == "original prompt")
+        #expect(model.promptText.isEmpty)
+
+        model.promptText = "next draft"
+        await waitForIdle(model)
+
+        #expect(model.promptText == "next draft")
+        #expect(model.outputConversationPlainText.hasPrefix(
+            "You:\noriginal prompt\n\nAnswer:\n"))
+    }
+
+    @MainActor
+    @Test func failedValidationDoesNotClearPrompt() {
+        let model = readyModel(client: MockInferenceClient(response: "answer"))
+        model.setSentPromptBehavior(.clear)
+        model.promptText = "keep invalid prompt"
+        model.maxNewTokensOverride = 0
+
+        model.run()
+
+        #expect(!model.isRunning)
+        #expect(model.promptText == "keep invalid prompt")
+        #expect(model.outputPromptText.isEmpty)
+        #expect(model.error != nil)
     }
 
     @MainActor
@@ -257,9 +323,12 @@ import Testing
 
     @MainActor
     @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() {
-        let model = AppModel(client: MockInferenceClient())
-        let oldURL = FileManager.default.temporaryDirectory.appendingPathComponent("old.gturbo")
-        let newURL = FileManager.default.temporaryDirectory.appendingPathComponent("new.gturbo")
+        let model = AppModel(client: MockInferenceClient(),
+                             installer: MockModelInstallerClient())
+        let testDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("app-model-path-\(UUID().uuidString)", isDirectory: true)
+        let oldURL = testDirectory.appendingPathComponent("old.gturbo")
+        let newURL = testDirectory.appendingPathComponent("new.gturbo")
         model.modelPathText = oldURL.path
         model.loadState = .ready(modelDirectory: oldURL, loadSeconds: 1)
         model.diagnostics = AppDiagnostics(

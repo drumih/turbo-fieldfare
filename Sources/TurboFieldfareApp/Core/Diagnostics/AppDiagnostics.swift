@@ -61,6 +61,18 @@ public struct AppDiagnostics: Equatable, Sendable {
         return prefillSeconds + timeToFirstTokenSeconds
     }
 
+    public var prefillTokensPerSecond: Double? {
+        guard let promptTokenCount,
+              promptTokenCount > 0,
+              let prefillSeconds,
+              prefillSeconds.isFinite,
+              prefillSeconds > 0 else {
+            return nil
+        }
+        let rate = Double(promptTokenCount) / prefillSeconds
+        return rate.isFinite ? rate : nil
+    }
+
     public init(generatedTokens: Int,
                 stopReason: AppStopReason,
                 promptTokenCount: Int? = nil,

@@ -1,4 +1,5 @@
 import Testing
+import TurboFieldfare
 @testable import TurboFieldfareCLICore
 
 @Suite struct CLIArgumentsTests {
@@ -16,6 +17,9 @@ import Testing
         #expect(arguments.seed == nil)
         #expect(arguments.stops.isEmpty)
         #expect(!arguments.quiet)
+
+        let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        #expect(runtime == RuntimeConfiguration.production)
     }
 
     @Test func generationOptionsParseAndStopsRepeat() throws {
@@ -64,11 +68,125 @@ import Testing
         let expected: Set<String> = [
             "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
-            "--seed", "--stop", "--quiet", "--help",
+            "--seed", "--stop", "--quiet", "--expert-cache-slots",
+            "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
+            "--rdadvise", "--help",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
         #expect(options == expected)
+    }
+
+    @Test func runtimeOptionsReachTypedConfiguration() throws {
+        let arguments = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi",
+            "--expert-cache-slots", "24",
+            "--expert-cache-policy", "lru",
+            "--prefill", "off",
+            "--prefill-chunk-tokens", "64",
+            "--rdadvise", "adaptive",
+        ])
+
+        #expect(arguments.expertCacheSlots == 24)
+        #expect(arguments.expertCachePolicy == .lru)
+        #expect(arguments.prefillPolicy == .off)
+        #expect(arguments.prefillChunkTokens == 64)
+        #expect(arguments.rdadvisePolicy == .adaptive)
+
+        let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: true)
+        #expect(runtime.expertCacheSlots == 24)
+        #expect(runtime.modelExpertCachePolicy == .lru)
+        #expect(runtime.prefillPolicy == .off)
+        #expect(runtime.prefillChunkTokens == 64)
+        #expect(runtime.rdadvisePolicy == .adaptive)
+        #expect(runtime.headPath == .logits)
+    }
+
+    @Test func everySupportedRuntimeOptionParses() throws {
+        for value in RuntimeConfiguration.allowedExpertCacheSlots {
+            let prefill = value < RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+                ? "off" : "on"
+            let arguments = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--expert-cache-slots", "\(value)",
+                "--prefill", prefill,
+            ])
+            #expect(arguments.expertCacheSlots == value)
+        }
+        for value in RuntimeConfiguration.allowedPrefillChunkTokens {
+            let arguments = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--prefill-chunk-tokens", "\(value)",
+            ])
+            #expect(arguments.prefillChunkTokens == value)
+        }
+        for value in ["lfu", "lru"] {
+            let arguments = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--expert-cache-policy", value,
+            ])
+            #expect(arguments.expertCachePolicy.rawValue == value)
+        }
+        for value in ["off", "default", "bounded", "adaptive"] {
+            let arguments = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi", "--rdadvise", value,
+            ])
+            #expect(arguments.rdadvisePolicy.rawValue == value)
+        }
+        #expect(try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--prefill", "on",
+        ]).prefillPolicy == .chunked)
+        #expect(try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--prefill", "off",
+        ]).prefillPolicy == .off)
+    }
+
+    @Test func unsupportedRuntimeOptionValuesAreRejected() {
+        let invalidValues = [
+            ("--expert-cache-slots", "7"),
+            ("--expert-cache-policy", "fifo"),
+            ("--prefill", "yes"),
+            ("--prefill-chunk-tokens", "256"),
+            ("--rdadvise", "automatic"),
+        ]
+        for (flag, value) in invalidValues {
+            #expect(throws: ArgsError.invalidValue(flag: flag, value: value)) {
+                _ = try Args.parse([
+                    "--model", "m.gturbo", "--prompt", "hi", flag, value,
+                ])
+            }
+        }
+
+        #expect(throws: ArgsError.invalidValue(
+            flag: "--expert-cache-slots", value: "8 requires --prefill off")) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--expert-cache-slots", "8", "--prefill", "on",
+            ])
+        }
+    }
+
+    @Test func programmaticArgumentsCannotReachRuntimePreconditions() {
+        var arguments = Args(model: "m.gturbo", prompt: "hi")
+        arguments.expertCacheSlots = 7
+        #expect(throws: ArgsError.invalidValue(
+            flag: "--expert-cache-slots", value: "7")) {
+            _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        }
+
+        arguments.expertCacheSlots = RuntimeConfiguration.production.expertCacheSlots
+        arguments.prefillChunkTokens = 256
+        #expect(throws: ArgsError.invalidValue(
+            flag: "--prefill-chunk-tokens", value: "256")) {
+            _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        }
+
+        arguments.prefillChunkTokens = RuntimeConfiguration.production.prefillChunkTokens
+        arguments.expertCacheSlots = 8
+        #expect(throws: ArgsError.invalidValue(
+            flag: "--expert-cache-slots", value: "8 requires --prefill off")) {
+            _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        }
     }
 
     @Test func unsupportedSelectorsAreRejected() {

@@ -116,7 +116,8 @@ public func runRawCompletion(producer: any LogitProducer,
     }
     let computedPrefillTokens = promptIds.count - cachedPromptTokens
 
-    var detok = GFDetokenizer(tokenizer: tokenizer)
+    var detok = GFDetokenizer(tokenizer: tokenizer,
+                              barrierTokenIDs: tokenizer.structuralMarkerIDs)
     var history = Array(promptIds.prefix(cachedPromptTokens))
     history.reserveCapacity(promptIds.count + config.maxNewTokens)
 
@@ -188,14 +189,14 @@ public func runRawCompletion(producer: any LogitProducer,
             case .greedyToken(let token):
                 tokenID = Int32(bitPattern: token)
             case .logitsWritten:
-                tokenID = sampleOnce(scratch: scratch, context: context,
-                                     history: history, config: config, position: generated)
+                tokenID = try sampleOnce(scratch: scratch, context: context,
+                                         history: history, config: config, position: generated)
             }
         } else if fusedGreedy {
             tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
-            tokenID = sampleOnce(scratch: scratch, context: context,
-                                 history: history, config: config, position: generated)
+            tokenID = try sampleOnce(scratch: scratch, context: context,
+                                     history: history, config: config, position: generated)
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
@@ -245,11 +246,12 @@ public func runRawCompletion(producer: any LogitProducer,
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
-                        history: [Int32], config: GenerationConfig, position: Int) -> Int32 {
+                        history: [Int32], config: GenerationConfig, position: Int) throws -> Int32 {
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
                            outToken: scratch.outToken)
     cb.commit(); cb.waitUntilCompleted()
+    try checkCommandBufferError(cb.error)
     return Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
 }

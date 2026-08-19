@@ -44,6 +44,57 @@ struct OpenAIValidationTests {
         }
     }
 
+    @Test func hyphenatedToolNamesValidateInDefinitionsAndHistory() throws {
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[
+            {"role":"user","content":"resolve it"},
+            {"role":"assistant","tool_calls":[{
+              "id":"call_0123456789abcdef01234567",
+              "type":"function",
+              "function":{"name":"resolve-library-id","arguments":"{\"name\":\"swift\"}"}
+            }]},
+            {"role":"tool","tool_call_id":"call_0123456789abcdef01234567","content":"42"}
+          ],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"resolve-library-id",
+              "parameters":{"type":"object","properties":{"name":{"type":"string"}}}
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.tools.first?.name == "resolve-library-id")
+        #expect(validated.messages[1].toolCalls.first?.name == "resolve-library-id")
+    }
+
+    @Test func invalidToolNameErrorIdentifiesTheName() throws {
+        for invalid in ["bad name", "bad.name", "bad@name"] {
+            let data = Data(#"""
+            {
+              "model":"m",
+              "messages":[{"role":"user","content":"x"}],
+              "tools":[{
+                "type":"function",
+                "function":{"name":"\#(invalid)","parameters":{"type":"object"}}
+              }]
+            }
+            """#.utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            do {
+                _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+                Issue.record("invalid tool name was accepted: \(invalid)")
+            } catch let error as ServerRequestError {
+                #expect(error.envelope.error.code == "invalid_tool_name")
+                #expect(error.envelope.error.message.contains(String(reflecting: invalid)))
+            }
+        }
+    }
+
     @Test func acceptsLeadingSystemAndDeveloperGuidance() throws {
         let data = Data(#"""
         {"model":"m","messages":[
@@ -198,6 +249,143 @@ struct OpenAIValidationTests {
         #expect(parsed.arguments.objectValue?["file-path"] == .string("/tmp/x"))
     }
 
+    @Test func stringConstantUnionAdaptsToEnumAndRenders() async throws {
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[{"role":"user","content":"search"}],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"vcc_recall",
+              "description":"",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "scope":{
+                    "anyOf":[
+                      {"type":"string","const":"lineage"},
+                      {"type":"string","const":"all"}
+                    ],
+                    "description":""
+                  }
+                }
+              }
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tool = try #require(validated.tools.first)
+        let properties = try #require(tool.parameters.objectValue?["properties"]?.objectValue)
+        let scope = try #require(properties["scope"]?.objectValue)
+        #expect(scope["type"] == .string("string"))
+        #expect(scope["enum"] == .array([.string("lineage"), .string("all")]))
+        #expect(scope["anyOf"] == nil)
+
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = tokenizer.decode(
+            try tokenizer.encodeToolChat(
+                messages: validated.messages,
+                tools: validated.tools),
+            skipSpecialTokens: false)
+        #expect(rendered.contains("lineage"))
+        #expect(rendered.contains("all"))
+    }
+
+    @Test func nullableToolSchemasAdaptWithoutChangingConstraints() throws {
+        let typeArray = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "name":{"type":["null","string"],"minLength":2}
+          }
+        }
+        """#.utf8))
+        let adapted = try GemmaToolSchema.adapted(typeArray, toolName: "lookup")
+        let name = adapted.objectValue?["properties"]?.objectValue?["name"]?.objectValue
+        #expect(name?["type"] == .string("string"))
+        #expect(name?["nullable"] == .bool(true))
+        #expect(name?["minLength"] == .integer(2))
+        #expect(try GemmaToolSchema.adapted(adapted, toolName: "lookup") == adapted)
+
+        let anyOf = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "limit":{"description":"limit","anyOf":[
+              {"type":"integer","minimum":1},
+              {"type":"null"}
+            ]}
+          }
+        }
+        """#.utf8))
+        let anyOfAdapted = try GemmaToolSchema.adapted(anyOf, toolName: "lookup")
+        let limit = anyOfAdapted.objectValue?["properties"]?.objectValue?["limit"]?.objectValue
+        #expect(limit?["type"] == .string("integer"))
+        #expect(limit?["nullable"] == .bool(true))
+        #expect(limit?["minimum"] == .integer(1))
+        #expect(limit?["description"] == .string("limit"))
+        #expect(limit?["anyOf"] == nil)
+
+        let nestedOneOf = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {
+          "type":"object",
+          "properties":{
+            "names":{"type":"array","items":{"oneOf":[
+              {"type":"null"},
+              {"type":"string","minLength":1}
+            ]}}
+          }
+        }
+        """#.utf8))
+        let nestedAdapted = try GemmaToolSchema.adapted(nestedOneOf, toolName: "lookup")
+        let item = nestedAdapted.objectValue?["properties"]?.objectValue?["names"]?
+            .objectValue?["items"]?.objectValue
+        #expect(item?["type"] == .string("string"))
+        #expect(item?["nullable"] == .bool(true))
+        #expect(item?["minLength"] == .integer(1))
+        #expect(item?["oneOf"] == nil)
+    }
+
+    @Test func unsupportedToolSchemaUnionsFailClosed() throws {
+        let schemas = [
+            #"{"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"object"}]}}}"#,
+            #"{"type":"object","properties":{"args":{"anyOf":[{"type":"string"},{"type":"object","properties":{},"additionalProperties":true}]}}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"allOf":[{"type":"string"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"description":"missing"}}}"#,
+            #"{"type":"object","properties":{"v":{"type":["string","number"]}}}"#,
+            #"{"type":"object","properties":{"v":{"type":["string","null"],"nullable":false}}}"#,
+            #"{"type":"object","properties":{"v":true}}"#,
+        ]
+        for encoded in schemas {
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
+            do {
+                _ = try GemmaToolSchema.adapted(schema, toolName: "unsafe")
+                Issue.record("unsupported schema was accepted: \(encoded)")
+            } catch let error as ServerRequestError {
+                #expect(error.envelope.error.code == "invalid_tool_schema")
+                #expect(error.envelope.error.param == "tools")
+            }
+        }
+    }
+
+    @Test func semanticsChangingNullableSchemasFailClosed() throws {
+        let schemas = [
+            #"{"type":["object","null"],"properties":{}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":["string","null"]},{"type":"null"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"oneOf":[{"type":"string","const":"same"},{"type":"string","const":"same"}]}}}"#,
+        ]
+        for encoded in schemas {
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
+            #expect(throws: ServerRequestError.self) {
+                try GemmaToolSchema.adapted(schema, toolName: "unsafe")
+            }
+        }
+    }
+
     @Test func ambiguousParameterKeysFailValidation() throws {
         let data = Data(#"""
         {
@@ -273,6 +461,82 @@ struct GemmaToolCallTests {
             .content("visible"),
         ])
     }
+
+    @Test func routesControlTokenDeltaThroughCurrentChannel() async throws {
+        // A non-empty delta on a control token is text the detokenizer held
+        // back from before that token; it belongs to the channel in effect
+        // now and must not vanish with the control token's early return.
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "leftover") == [
+            .content("leftover"),
+        ])
+        // The channel switch still happened: this resolves the label.
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        // In the thought channel the routed delta is correctly dropped.
+        #expect(try decoder.consume(tokenID: tokenizer.channelEndID, delta: "hidden").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "ok") == [.content("ok")])
+    }
+
+    @Test func tailDuringThoughtChannelIsSuppressed() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        #expect(try decoder.consumeTail("secret").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.channelEndID, delta: "").isEmpty)
+        #expect(try decoder.consumeTail("ok") == [.content("ok")])
+    }
+
+    @Test func tailDuringUnresolvedLabelEmitsNothing() async throws {
+        // Generation ended before the channel label line completed; the text
+        // cannot be attributed, so nothing may surface.
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consumeTail("final-but-no-newline").isEmpty)
+    }
+
+    @Test func heldBytesBeforeChannelMarkerStayInTheirChannel() async throws {
+        // Thought text ending in a byte-fallback character right before
+        // <channel|> must not leak into the visible answer. The barrier
+        // detokenizer commits the held character as the marker's delta, and
+        // consume routes it under the still-thought channel.
+        let tokenizer = try await GFTokenizer.load()
+        var detok = GFDetokenizer(tokenizer: tokenizer,
+                                  barrierTokenIDs: tokenizer.structuralMarkerIDs)
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        var events: [StructuredAssistantEvent] = []
+        func feed(_ id: Int32) throws {
+            events += try decoder.consume(tokenID: id, delta: detok.push(id))
+        }
+
+        try feed(tokenizer.channelStartID)
+        for id in tokenizer.encode("thought\n", addBOS: false) { try feed(id) }
+        for token in ["<0xF0>", "<0x9F>", "<0x98>", "<0x80>"] {
+            try feed(GFTokenizer.requireTokenID(tokenizer.tokenizer, token))
+        }
+        try feed(tokenizer.channelEndID)
+        for id in tokenizer.encode("ok", addBOS: false) { try feed(id) }
+        events += try decoder.consumeTail(detok.flush())
+
+        let visible = events.compactMap { event -> String? in
+            if case .content(let text) = event { return text }
+            return nil
+        }.joined()
+        #expect(visible == "ok", "thought-channel bytes leaked: '\(visible)'")
+    }
+
+    @Test func tailAfterFailureThrows() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])
+        #expect(throws: GemmaToolCallParserError.self) {
+            try decoder.consume(tokenID: tokenizer.toolCallEndID, delta: "")
+        }
+        #expect(throws: GemmaToolCallParserError.self) {
+            try decoder.consumeTail("x")
+        }
+    }
 }
 
 @Suite("Streaming stop matcher")
@@ -300,6 +564,11 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
+        #expect(arguments.expertCacheSlots == 16)
+        #expect(arguments.expertCachePolicy == .lfu)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 128)
+        #expect(arguments.rdadvisePolicy == .off)
     }
 
     @Test func parsesSinglePrefixModeAndRejectsUnknownMode() throws {
@@ -318,6 +587,64 @@ struct ServerArgumentTests {
                 "--model", "model.gturbo",
                 "--prompt-cache-mode", "many",
             ])
+        }
+    }
+
+    @Test func runtimeFlagsReachTheResolvedConfiguration() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "32",
+            "--expert-cache-policy", "lru",
+            "--prefill", "on",
+            "--prefill-chunk-tokens", "64",
+            "--rdadvise", "adaptive",
+        ])
+        #expect(arguments.expertCacheSlots == 32)
+        #expect(arguments.expertCachePolicy == .lru)
+        #expect(arguments.prefillPolicy == .chunked)
+        #expect(arguments.prefillChunkTokens == 64)
+        #expect(arguments.rdadvisePolicy == .adaptive)
+
+        let configuration = try arguments.resolvedRuntimeConfiguration()
+        #expect(configuration.expertCacheSlots == 32)
+        #expect(configuration.expertCachePolicy == .lru)
+        #expect(configuration.prefillPolicy == .chunked)
+        #expect(configuration.prefillChunkTokens == 64)
+        #expect(configuration.rdadvisePolicy == .adaptive)
+    }
+
+    @Test func prefillOffIsResolvableBelowTheChunkedPrefillSlotFloor() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "8",
+            "--prefill", "off",
+        ])
+        let configuration = try arguments.resolvedRuntimeConfiguration()
+        #expect(configuration.expertCacheSlots == 8)
+        #expect(configuration.prefillPolicy == .off)
+    }
+
+    @Test func chunkedPrefillBelowTheSlotFloorIsRejected() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--expert-cache-slots", "8",
+            "--prefill", "on",
+        ])
+        #expect(throws: ServerArgumentError.self) {
+            try arguments.resolvedRuntimeConfiguration()
+        }
+    }
+
+    @Test(arguments: [
+        ["--expert-cache-slots", "12"],
+        ["--expert-cache-policy", "mru"],
+        ["--prefill", "maybe"],
+        ["--prefill-chunk-tokens", "256"],
+        ["--rdadvise", "eager"],
+    ])
+    func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse(["--model", "model.gturbo"] + flag)
         }
     }
 }

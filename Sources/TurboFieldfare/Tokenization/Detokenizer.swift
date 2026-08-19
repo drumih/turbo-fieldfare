@@ -1,95 +1,76 @@
 import Foundation
 import Tokenizers
 
-/// Streaming detokenizer for generation loops.
+/// Streaming detokenizer for generation loops. `GFTokenizer.decode` is a
+/// push-loop over this type, so batch and streaming decode agree by
+/// construction.
 ///
-/// Two challenges drive the design:
+/// Emits each token's own contribution to the output as it arrives. Two
+/// properties make that safe:
 ///
-/// 1. BPE byte-fallback splits multi-byte codepoints (e.g. emoji) across several
-///    tokens. Naively decoding each token in isolation yields broken UTF-8.
-/// 2. swift-transformers' decoder silently drops byte-fallback tokens that sit
-///    at the **end** of the decoded sequence (the bytes are committed only once
-///    a non-byte-fallback token follows). For us this matters at `flush()`.
+/// 1. The Gemma decoder sequence (`Replace`, `ByteFallback`, `Fuse`) is
+///    position-independent, so the decode of a token stream is the
+///    concatenation of its per-token fragments. `GemmaDecoding` reproduces that
+///    sequence without HF's `clean_up_tokenization_spaces` pass, which is the
+///    one stage that rewrites already-decoded text and is wrong for this
+///    tokenizer anyway (see `GemmaDecoding`).
+/// 2. BPE byte fallback splits a multi-byte codepoint across several tokens, so
+///    a run of `<0xXX>` tokens is held until the token that closes it and
+///    commits as a whole, with the reference decoder's semantics (see
+///    `ByteFallbackRun`). Skipped special tokens are filtered before the run
+///    logic — matching the library, which drops special IDs before its decoder
+///    chain — so a run fuses across them; in keep mode a special is an ordinary
+///    token and closes the run.
 ///
-/// Strategy:
-///   - During `push(_:)` we decode the longest prefix of accumulated IDs that
-///     does NOT end with byte-fallback tokens, then emit the delta vs. previously
-///     emitted text. Any trailing byte-fallback IDs are held back.
-///   - During `flush()` we decode the stable prefix as above AND manually
-///     assemble the trailing byte-fallback bytes into a UTF-8 string. This
-///     recovers text the library would otherwise drop on a sequence-ending
-///     codepoint.
+/// `barrierTokenIDs` carves out an exception to the fuse rule for the
+/// generation pipeline: the channel/tool markers structure assistant output,
+/// and text held back across one would surface after the marker and be routed
+/// under the wrong channel state (thought text leaking into the visible
+/// answer). A barrier commits the run and returns its text as the marker's own
+/// delta, which `StructuredAssistantDecoder.consume` routes under the channel
+/// in effect before the marker switches it. Plain `decode` passes no barriers,
+/// keeping full library parity.
+///
+/// Cost is O(1) per token and independent of how much has already been
+/// generated. The previous implementation re-decoded the entire accumulated
+/// token list on every push, which made a generation O(n²) — roughly 3.6·10⁹
+/// dictionary lookups over the app's 64K-token budget — and compared the result
+/// against the full emitted prefix to recover a delta.
 struct GFDetokenizer {
-    @usableFromInline let tokenizer: any Tokenizer
-    @usableFromInline var stableIDs: [Int] = []
-    @usableFromInline var trailingByteIDs: [Int] = []
-    @usableFromInline var emitted: String = ""
+    let tokenizer: any Tokenizer
+    let skipSpecialTokens: Bool
+    private let specialTokenIDs: Set<Int32>
+    private let barrierTokenIDs: Set<Int32>
+    /// In-flight byte-fallback run.
+    private var run = ByteFallbackRun()
 
-    init(tokenizer: GFTokenizer) {
+    init(tokenizer: GFTokenizer,
+         skipSpecialTokens: Bool = true,
+         barrierTokenIDs: Set<Int32> = []) {
         self.tokenizer = tokenizer.tokenizer
+        self.skipSpecialTokens = skipSpecialTokens
+        self.specialTokenIDs = tokenizer.specialTokenIDs
+        self.barrierTokenIDs = barrierTokenIDs
     }
 
+    /// Text contributed by `id`, ready to append to the stream.
+    ///
+    /// Returns `""` while a byte-fallback run is still open and valid; those
+    /// bytes come out with the token that closes the run, at a barrier marker,
+    /// or at `flush()`.
     mutating func push(_ id: Int32) -> String {
-        let tokenID = Int(id)
-        let token = tokenizer.convertIdToToken(tokenID) ?? ""
-        if Self.isByteFallback(token) {
-            trailingByteIDs.append(tokenID)
-            return ""
+        // An unknown ID contributes nothing and leaves the run open, matching
+        // the library, whose decode compactMap-drops unresolvable IDs.
+        guard let token = tokenizer.convertIdToToken(Int(id)) else { return "" }
+        if skipSpecialTokens, specialTokenIDs.contains(id) {
+            return barrierTokenIDs.contains(id) ? run.commit() : ""
         }
-
-        if !trailingByteIDs.isEmpty {
-            stableIDs.append(contentsOf: trailingByteIDs)
-            trailingByteIDs.removeAll(keepingCapacity: true)
-        }
-        stableIDs.append(tokenID)
-
-        let current = tokenizer.decode(tokens: stableIDs, skipSpecialTokens: true)
-        return commitDelta(current)
+        if let byte = GemmaDecoding.byteValue(token) { return run.push(byte) }
+        return run.commit() + GemmaDecoding.fragment(token)
     }
 
+    /// Remainder held back at a stop boundary.
     mutating func flush() -> String {
-        let stableText = stableIDs.isEmpty
-            ? ""
-            : tokenizer.decode(tokens: stableIDs, skipSpecialTokens: true)
-
-        let trailingText = assembleByteFallback(trailingByteIDs)
-        let fullText = stableText + trailingText
-        return commitDelta(fullText)
-    }
-
-    @usableFromInline
-    mutating func commitDelta(_ current: String) -> String {
-        guard current.hasPrefix(emitted) else {
-            // Decoder altered the prefix — extremely rare in append-only streams.
-            // Resync rather than emit garbage; the user-visible loss is bounded
-            // to whatever was retokenized.
-            emitted = current
-            return ""
-        }
-        let delta = String(current.dropFirst(emitted.count))
-        emitted = current
-        return delta
-    }
-
-    @usableFromInline
-    func assembleByteFallback(_ ids: [Int]) -> String {
-        var bytes: [UInt8] = []
-        bytes.reserveCapacity(ids.count)
-        for id in ids {
-            guard let tok = tokenizer.convertIdToToken(id) else { continue }
-            guard Self.isByteFallback(tok),
-                  let byte = UInt8(tok.dropFirst(3).dropLast(), radix: 16)
-            else { continue }
-            bytes.append(byte)
-        }
-        return String(bytes: bytes, encoding: .utf8) ?? ""
-    }
-
-    @usableFromInline
-    static func isByteFallback(_ token: String) -> Bool {
-        token.count == 6
-            && token.hasPrefix("<0x")
-            && token.hasSuffix(">")
-            && token.dropFirst(3).dropLast().allSatisfy { $0.isHexDigit }
+        run.commit()
     }
 }

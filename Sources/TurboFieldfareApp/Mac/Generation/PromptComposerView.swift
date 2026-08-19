@@ -1,3 +1,4 @@
+import AppKit
 import TurboFieldfareAppCore
 import TurboFieldfareMacPresentation
 import SwiftUI
@@ -46,6 +47,22 @@ struct PromptComposerView: View {
             .font(.body)
             .scrollContentBackground(.hidden)
             .focused($promptFocused)
+            .onKeyPress(.return, phases: [.down, .repeat]) { keyPress in
+                switch PromptSubmissionPolicy.decision(
+                    newlineShortcut: model.newlineShortcut,
+                    modifiers: keyPress.modifiers,
+                    canRun: model.canRun,
+                    hasMarkedText: promptHasMarkedText,
+                    isRepeat: keyPress.phase.contains(.repeat)) {
+                case .submit:
+                    model.run()
+                    return .handled
+                case .consume:
+                    return .handled
+                case .deferToEditor:
+                    return .ignored
+                }
+            }
             .frame(height: editorHeight)
             .overlay(alignment: .topLeading) {
                 if model.promptText.isEmpty {
@@ -58,6 +75,10 @@ struct PromptComposerView: View {
                         .allowsHitTesting(false)
                 }
             }
+    }
+
+    private var promptHasMarkedText: Bool {
+        (NSApp.keyWindow?.firstResponder as? NSTextView)?.hasMarkedText() == true
     }
 
     private var editorHeight: CGFloat {

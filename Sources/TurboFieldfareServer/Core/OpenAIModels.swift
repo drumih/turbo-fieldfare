@@ -11,9 +11,10 @@ public struct OpenAIErrorEnvelope: Codable, Equatable, Sendable {
 
     public let error: Detail
 
-    public init(message: String, param: String? = nil, code: String) {
+    public init(message: String, param: String? = nil, code: String,
+                type: String = "invalid_request_error") {
         error = Detail(message: message,
-                       type: "invalid_request_error",
+                       type: type,
                        param: param,
                        code: code)
     }
@@ -251,6 +252,30 @@ public struct ValidatedChatRequest: Sendable {
     public let maximumCompletionTokens: Int
 }
 
+private enum OpenAIToolName {
+    static let maximumLength = 64
+
+    static func isValid(_ name: String) -> Bool {
+        let bytes = name.utf8
+        guard !bytes.isEmpty, bytes.count <= maximumLength else { return false }
+        return bytes.allSatisfy { byte in
+            switch byte {
+            case 45, 48...57, 65...90, 95, 97...122:
+                true
+            default:
+                false
+            }
+        }
+    }
+
+    static func validationMessage(for name: String) -> String {
+        let prefix = name.prefix(maximumLength + 1)
+        let displayed = String(prefix.prefix(maximumLength))
+            + (prefix.count > maximumLength ? "..." : "")
+        return "tool name \(String(reflecting: displayed)) must contain 1 to 64 ASCII letters, numbers, underscores, or hyphens"
+    }
+}
+
 public enum OpenAIRequestValidator {
     public static func validate(_ request: OpenAIChatRequest,
                                 modelID: String) throws -> ValidatedChatRequest {
@@ -334,8 +359,8 @@ public enum OpenAIRequestValidator {
             throw invalid("only function tools are supported", "tools", "unsupported_tool")
         }
         let name = tool.function.name
-        guard name.range(of: #"^[A-Za-z0-9_]{1,64}$"#, options: .regularExpression) != nil else {
-            throw invalid("tool name must match [A-Za-z0-9_]{1,64}",
+        guard OpenAIToolName.isValid(name) else {
+            throw invalid(OpenAIToolName.validationMessage(for: name),
                           "tools", "invalid_tool_name")
         }
         guard tool.function.parameters.objectValue != nil else {
@@ -343,13 +368,15 @@ public enum OpenAIRequestValidator {
                           "tools", "invalid_tool_schema")
         }
         try validateSchemaKeys(tool.function.parameters)
-        guard (try? tool.function.parameters.jinjaSendableValue()) != nil else {
+        let parameters = try GemmaToolSchema.adapted(
+            tool.function.parameters, toolName: name)
+        guard (try? parameters.jinjaSendableValue()) != nil else {
             throw invalid("tool schema contains a number that cannot be represented exactly",
                           "tools", "invalid_tool_schema")
         }
         return GFTokenizer.FunctionDefinition(name: name,
                                               description: tool.function.description ?? "",
-                                              parameters: tool.function.parameters)
+                                              parameters: parameters)
     }
 
     private static func validateSchemaKeys(_ schema: JSONValue) throws {
@@ -406,11 +433,12 @@ public enum OpenAIRequestValidator {
             let content = try message.content?.textValue()
             let calls: [GFTokenizer.HistoricalToolCall] = try (message.toolCalls ?? []).map { call in
                 guard role == .assistant, call.type == "function",
-                      !call.id.isEmpty, knownCalls[call.id] == nil,
-                      call.function.name.range(
-                        of: #"^[A-Za-z0-9_]{1,64}$"#,
-                        options: .regularExpression) != nil else {
+                      !call.id.isEmpty, knownCalls[call.id] == nil else {
                     throw invalid("invalid or duplicate historical tool call",
+                                  "messages", "invalid_tool_call")
+                }
+                guard OpenAIToolName.isValid(call.function.name) else {
+                    throw invalid(OpenAIToolName.validationMessage(for: call.function.name),
                                   "messages", "invalid_tool_call")
                 }
                 let data = Data(call.function.arguments.utf8)

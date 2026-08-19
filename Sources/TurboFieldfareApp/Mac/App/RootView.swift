@@ -60,6 +60,7 @@ struct RootView: View {
         .animation(.smooth(duration: 0.25), value: model.error)
         .animation(.smooth(duration: 0.22), value: isChatSidebarVisible)
         .animation(.smooth(duration: 0.22), value: isInspectorVisible)
+        .animation(.smooth(duration: 0.2), value: model.presentation.conversationAction)
         .transaction { transaction in
             if model.isRunning {
                 transaction.animation = nil
@@ -134,12 +135,14 @@ struct RootView: View {
                     model.promptText = preset.prompt
                 }
             }
+            ModelActionBanner(model: model)
             PromptComposerView(model: model)
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
         .animation(.smooth(duration: 0.2), value: model.showsPromptExamples)
     }
+
 }
 
 private struct ConversationChromeHeightKey: PreferenceKey {

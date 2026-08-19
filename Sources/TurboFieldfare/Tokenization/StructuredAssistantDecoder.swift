@@ -33,14 +33,32 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
 
     public func consume(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw GemmaToolCallParserError.malformed }
+
+        // A non-empty delta on a control token is text the detokenizer held
+        // back from BEFORE the token (a skipped special contributes nothing of
+        // its own), so it belongs to the channel state in effect now — route
+        // it before the token changes that state. Inside a tool call the held
+        // bytes are part of the payload, which is re-decoded from its IDs at
+        // toolCallEnd, so nothing is lost by not routing there.
+        let isControl = tokenID == tokenizer.channelStartID
+            || tokenID == tokenizer.channelEndID
+            || tokenID == tokenizer.toolCallStartID
+            || tokenID == tokenizer.toolCallEndID
+            || tokenID == tokenizer.toolResponseID
+            || tokenID == tokenizer.toolResponseEndID
+        var events: [StructuredAssistantEvent] = []
+        if isControl, !delta.isEmpty, toolTokens == nil {
+            events = routeText(delta)
+        }
+
         if tokenID == tokenizer.channelStartID {
             label = ""
             channel = .label
-            return []
+            return events
         }
         if tokenID == tokenizer.channelEndID {
             channel = .visible
-            return []
+            return events
         }
         if tokenID == tokenizer.toolCallStartID {
             guard toolTokens == nil else {
@@ -48,7 +66,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                 throw GemmaToolCallParserError.malformed
             }
             toolTokens = []
-            return []
+            return events
         }
         if tokenID == tokenizer.toolCallEndID {
             guard let tokens = toolTokens else {
@@ -61,7 +79,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                 let call = try GemmaToolCallParser().parse(
                     text, allowedTools: allowedTools, id: idGenerator())
                 emittedCalls += 1
-                return [.toolCall(call)]
+                return events + [.toolCall(call)]
             } catch {
                 failed = true
                 throw error
@@ -72,7 +90,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                 failed = true
                 throw GemmaToolCallParserError.malformed
             }
-            return []
+            return events
         }
         if var tokens = toolTokens {
             tokens.append(tokenID)
@@ -83,6 +101,20 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             toolTokens = tokens
             return []
         }
+        return routeText(delta)
+    }
+
+    /// Route text flushed at a stop boundary through the current channel
+    /// state. The flush tail is not tied to a token ID, so it cannot go
+    /// through `consume`; without this a generation cut off inside the
+    /// thought channel would leak its held-back bytes into visible content.
+    public func consumeTail(_ text: String) throws -> [StructuredAssistantEvent] {
+        guard !failed else { throw GemmaToolCallParserError.malformed }
+        guard toolTokens == nil, !text.isEmpty else { return [] }
+        return routeText(text)
+    }
+
+    private func routeText(_ delta: String) -> [StructuredAssistantEvent] {
         switch channel {
         case .thought:
             return []

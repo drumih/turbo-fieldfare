@@ -78,6 +78,15 @@ public struct AppPresentationState: Equatable, Sendable {
         self.secondaryAction = secondaryAction
     }
 
+    public var conversationAction: AppModelAction? {
+        switch primaryAction {
+        case .load, .retryLoad, .reload:
+            return primaryAction
+        case .install, .cancelInstall, .cancelLoad, .unload, nil:
+            return nil
+        }
+    }
+
     public static func resolve(_ snapshot: AppPresentationSnapshot) -> Self {
         if snapshot.installState.isInstalling {
             if case .cancelling = snapshot.installState {

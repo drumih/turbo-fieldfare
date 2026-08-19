@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfare
 
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
@@ -7,19 +8,59 @@ public struct ServerArguments: Equatable, Sendable {
     public let maxContext: Int
     public let queueLimit: Int
     public let promptCacheMode: ServerPromptCacheMode
+    public let expertCacheSlots: Int
+    public let expertCachePolicy: RuntimeExpertCachePolicy
+    public let prefillPolicy: RuntimePrefillPolicy
+    public let prefillChunkTokens: Int
+    public let rdadvisePolicy: RDAdvicePolicyMode
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
-      --model <dir>          Required model directory.
-      --port <1...65535>     Loopback port (default 8080).
-      --model-id <id>        API model identifier (default gemma-4-26b-a4b-it).
-      --max-context <tokens> 4096, 8192, 16384, 32768, or 65536 (default 16384).
-      --queue-limit <count>  Maximum queued requests (default 4).
+      --model <dir>              Required model directory.
+      --port <1...65535>         Loopback port (default 8080).
+      --model-id <id>            API model identifier (default gemma-4-26b-a4b-it).
+      --max-context <tokens>     4096, 8192, 16384, 32768, or 65536 (default 16384).
+      --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
-                             Prompt KV reuse mode (default single-prefix).
-      --help                 Show this help.
+                                 Prompt KV reuse mode (default single-prefix).
+      --expert-cache-slots <n>   Expert-cache slots: 8, 16, 24, or 32 (default 16).
+      --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
+      --prefill on|off           Enable or disable chunked prompt prefill (default on).
+                                 Chunked prefill requires 16 or more cache slots.
+      --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, or 128 (default 128).
+      --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
+                                 (default off).
+      --help                     Show this help.
     """
+
+    // Mirrors the CLI's runtime flags so both binaries accept the same options
+    // with the same validation, instead of the server pinning production
+    // defaults. RuntimeConfiguration traps on unsupported values, so every
+    // bound is checked here before the initializer runs.
+    public func resolvedRuntimeConfiguration(
+        forceLogitsHead: Bool = true
+    ) throws -> RuntimeConfiguration {
+        guard RuntimeConfiguration.allowedExpertCacheSlots.contains(expertCacheSlots) else {
+            throw ServerArgumentError.invalid("--expert-cache-slots must be 8, 16, 24, or 32")
+        }
+        guard RuntimeConfiguration.allowedPrefillChunkTokens.contains(prefillChunkTokens) else {
+            throw ServerArgumentError.invalid("--prefill-chunk-tokens must be 32, 64, or 128")
+        }
+        guard prefillPolicy == .off
+                || expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        else {
+            throw ServerArgumentError.invalid(
+                "--expert-cache-slots \(expertCacheSlots) requires --prefill off")
+        }
+        return RuntimeConfiguration(
+            expertCacheSlots: expertCacheSlots,
+            expertCachePolicy: expertCachePolicy,
+            rdadvisePolicy: rdadvisePolicy,
+            prefillEnabled: prefillPolicy == .chunked,
+            prefillChunkTokens: prefillChunkTokens,
+            forceLogitsHead: forceLogitsHead)
+    }
 
     public static func parse(_ input: [String]) throws -> ServerArguments {
         var model: String?
@@ -28,6 +69,11 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var expertCacheSlots = 16
+        var expertCachePolicy = RuntimeExpertCachePolicy.lfu
+        var prefillPolicy = RuntimePrefillPolicy.chunked
+        var prefillChunkTokens = 128
+        var rdadvisePolicy = RDAdvicePolicyMode.off
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -67,6 +113,35 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--expert-cache-slots":
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedExpertCacheSlots.contains(parsed) else {
+                    throw ServerArgumentError.invalid("--expert-cache-slots must be 8, 16, 24, or 32")
+                }
+                expertCacheSlots = parsed
+            case "--expert-cache-policy":
+                guard let parsed = RuntimeExpertCachePolicy(rawValue: value) else {
+                    throw ServerArgumentError.invalid("--expert-cache-policy must be lfu or lru")
+                }
+                expertCachePolicy = parsed
+            case "--prefill":
+                switch value {
+                case "on": prefillPolicy = .chunked
+                case "off": prefillPolicy = .off
+                default: throw ServerArgumentError.invalid("--prefill must be on or off")
+                }
+            case "--prefill-chunk-tokens":
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed) else {
+                    throw ServerArgumentError.invalid("--prefill-chunk-tokens must be 32, 64, or 128")
+                }
+                prefillChunkTokens = parsed
+            case "--rdadvise":
+                guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--rdadvise must be off, default, bounded, or adaptive")
+                }
+                rdadvisePolicy = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -77,7 +152,12 @@ public struct ServerArguments: Equatable, Sendable {
                                modelID: modelID,
                                maxContext: maxContext,
                                queueLimit: queueLimit,
-                               promptCacheMode: promptCacheMode)
+                               promptCacheMode: promptCacheMode,
+                               expertCacheSlots: expertCacheSlots,
+                               expertCachePolicy: expertCachePolicy,
+                               prefillPolicy: prefillPolicy,
+                               prefillChunkTokens: prefillChunkTokens,
+                               rdadvisePolicy: rdadvisePolicy)
     }
 }
 

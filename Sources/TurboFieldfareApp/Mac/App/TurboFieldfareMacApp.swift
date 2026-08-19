@@ -9,10 +9,7 @@ import SwiftUI
 private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        if let iconURL = Bundle.module.url(
-            forResource: "turbofieldfare-app-icon",
-            withExtension: "png"
-        ), let icon = NSImage(contentsOf: iconURL) {
+        if let icon = MacAppIcon.load() {
             NSApp.applicationIconImage = icon
             NSApp.dockTile.display()
         }
@@ -48,6 +45,14 @@ struct TurboFieldfareMacApp: App {
         .defaultSize(width: 1280, height: 760)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About TurboFieldfare") {
+                    NSApp.orderFrontStandardAboutPanel(
+                        options: AboutPanelPresentation.options(
+                            infoDictionary: Bundle.main.infoDictionary,
+                            icon: MacAppIcon.load()))
+                }
+            }
             CommandMenu("Chat") {
                 Button("New Chat") { model.createChat() }
                     .keyboardShortcut("n", modifiers: .command)
@@ -71,6 +76,25 @@ struct TurboFieldfareMacApp: App {
                     .disabled(!model.canReloadModel)
                 Button("Unload Model", action: model.unloadModel)
                     .disabled(!model.canUnloadModel)
+                Divider()
+                Button("Reveal Model in Finder", action: revealModel)
+                    .disabled(modelRevealTarget == .unavailable)
+            }
+            CommandMenu("Settings") {
+                Picker("Send Message With", selection: newlineShortcutBinding) {
+                    ForEach(AppNewlineShortcut.sendMessageOptions) { shortcut in
+                        Text(shortcut.sendMessageLabel).tag(shortcut)
+                    }
+                }
+                Picker("Prompt Examples", selection: showPromptExamplesBinding) {
+                    Text("Show").tag(true)
+                    Text("Hide").tag(false)
+                }
+                Picker("After Sending", selection: sentPromptBehaviorBinding) {
+                    ForEach(AppSentPromptBehavior.allCases) { behavior in
+                        Text(behavior.settingsLabel).tag(behavior)
+                    }
+                }
             }
             CommandMenu("Appearance") {
                 Picker("Appearance", selection: $appearanceRawValue) {
@@ -80,6 +104,47 @@ struct TurboFieldfareMacApp: App {
                     }
                 }
             }
+        }
+    }
+
+    private var modelRevealTarget: ModelRevealTarget {
+        ModelRevealPolicy.target(
+            forModelPath: model.modelPathText,
+            fileExists: FileManager.default.fileExists(atPath:))
+    }
+
+    private func revealModel() {
+        switch modelRevealTarget {
+        case .selectItem(let url):
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        case .openContainer(let url):
+            NSWorkspace.shared.open(url)
+        case .unavailable:
+            break
+        }
+    }
+
+    private var newlineShortcutBinding: Binding<AppNewlineShortcut> {
+        Binding {
+            model.newlineShortcut
+        } set: { shortcut in
+            model.setNewlineShortcut(shortcut)
+        }
+    }
+
+    private var showPromptExamplesBinding: Binding<Bool> {
+        Binding {
+            model.showPromptExamples
+        } set: { show in
+            model.setShowPromptExamples(show)
+        }
+    }
+
+    private var sentPromptBehaviorBinding: Binding<AppSentPromptBehavior> {
+        Binding {
+            model.sentPromptBehavior
+        } set: { behavior in
+            model.setSentPromptBehavior(behavior)
         }
     }
 }

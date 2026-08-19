@@ -1,8 +1,21 @@
 import Testing
 import Foundation
+import Darwin
 @testable import TurboFieldfare
 
 @Suite struct PackedExpertsLayoutTests {
+
+    @Test func rejectsLayoutFIFOWithoutBlocking() throws {
+        let dir = try Self.writeToyLayout()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let layout = dir.appendingPathComponent("packed_experts/layout.json")
+        try FileManager.default.removeItem(at: layout)
+        #expect(mkfifo(layout.path, 0o600) == 0)
+
+        #expect(throws: ModelError.self) {
+            try PackedExpertsLayoutReader.load(directoryURL: dir)
+        }
+    }
 
     /// Hand-write a tiny layout.json with one layer, two experts, two
     /// sub-tensors each. Returns the directory URL.

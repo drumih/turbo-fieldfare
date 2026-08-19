@@ -14,6 +14,7 @@ final class DecodeServiceOutbox: @unchecked Sendable {
         var latestPrefill: PrefillProgress?
         var latestToken: AppTokenEvent?
         var terminal: DecodeServiceEvent?
+        var terminalCommitted = false
         var finished = false
         var sequence: UInt64 = 0
     }
@@ -38,12 +39,21 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             state.pendingText += token.textDelta
             state.latestToken = token
         case .finished(let diagnostics):
-            state.terminal = terminal(.finished, diagnostics: diagnostics)
+            if !state.terminalCommitted {
+                state.terminal = terminal(.finished, diagnostics: diagnostics)
+                state.terminalCommitted = true
+            }
         case .cancelled(let diagnostics):
-            state.terminal = terminal(.cancelled, diagnostics: diagnostics)
+            if !state.terminalCommitted {
+                state.terminal = terminal(.cancelled, diagnostics: diagnostics)
+                state.terminalCommitted = true
+            }
         case .failed(let error, let diagnostics):
-            state.terminal = terminal(
-                .failed, diagnostics: diagnostics, error: error.userMessage)
+            if !state.terminalCommitted {
+                state.terminal = terminal(
+                    .failed, diagnostics: diagnostics, error: error.userMessage)
+                state.terminalCommitted = true
+            }
         }
         if state.terminal != nil { condition.signal() }
         condition.unlock()
@@ -51,9 +61,10 @@ final class DecodeServiceOutbox: @unchecked Sendable {
 
     func finish(error: Error? = nil) {
         condition.lock()
-        if state.terminal == nil, let error {
+        if !state.terminalCommitted, let error {
             state.terminal = DecodeServiceEvent(
                 kind: .failed, generationID: generationID, error: "\(error)")
+            state.terminalCommitted = true
         }
         state.finished = true
         condition.broadcast()

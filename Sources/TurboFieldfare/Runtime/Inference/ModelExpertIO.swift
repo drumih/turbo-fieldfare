@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TurboFieldfareFormat
 
 public struct RoutedExpertFetchPlan: Sendable {
     public let layer: Int
@@ -20,7 +21,11 @@ extension Model {
     public func routedExpertOffsets(layer: Int) -> MoEExpertOffsets {
         let expert = packedExpertsLayout.expert(layer: layer, expert: 0)
         func offset(_ role: String) -> UInt32 {
-            UInt32(expert.subTensors[role]?.offset ?? 0)
+            guard let tensor = expert.subTensors[role],
+                  let offset = UInt32(exactly: tensor.offset) else {
+                preconditionFailure("invalid routed expert metadata for role \(role)")
+            }
+            return offset
         }
         return MoEExpertOffsets(
             gateWOff: offset("gate"),
@@ -151,7 +156,7 @@ extension Model {
                 biasOffset: 0,
                 biasLength: 0,
                 shape: (UInt32(layer), UInt32(experts[index]), 0, 0),
-                dtype: 0)
+                dtype: GTurboFormatV1.DType.u32.rawValue)
         }
     }
 }

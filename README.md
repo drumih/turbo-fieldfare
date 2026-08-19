@@ -72,11 +72,13 @@ header from any chat, type your prompt, and press **Generate**.
 | Platform        | macOS 26, Metal 4, Swift 6.2                                                                                             |
 | M2 measured decode | [5.1-6.3 tok/s](docs/BENCHMARKS.md#m2-measured-decode) on an 8 GB M2 MacBook Air |
 | M5 measured decode | [31-35 tok/s](docs/BENCHMARKS.md#m5-measured-decode) on a 24 GB M5 Pro |
+| Community Reports | [Here](docs/COMMUNITY_BENCHMARKS.md#community-results) |
 
 The measured result is a reference point, not a performance ceiling. Prompt
 length, generated length, page-cache state, and hardware all affect throughput.
-To help measure another Apple Silicon Mac, follow the
-[community benchmark guide](docs/COMMUNITY_BENCHMARKS.md).
+See [community benchmark results](docs/COMMUNITY_BENCHMARKS.md#community-results)
+from other Macs, or follow the
+[community benchmark guide](docs/COMMUNITY_BENCHMARKS.md) to add your own.
 
 ## Using TurboFieldfare
 
@@ -182,7 +184,8 @@ After installation:
 1. Choose **Load Model**.
 2. Enter a prompt in the composer.
 3. Optionally use the paperclip to attach PDF, DOCX, PPTX, or XLSX files.
-4. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>.
+4. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use
+   **Settings > Send Message With** to choose Return or Command-Return.
 5. Use the stop button or <kbd>Escape</kbd> to end generation early.
 
 The status bar shows generation progress, decode speed, and memory use. Use the
@@ -251,26 +254,12 @@ This formats messages in the same way as the Mac app. The CLI response limit
 is set with `--max-new`, which defaults to 1,024 tokens. The Mac app can
 generate until the selected context window is full.
 
-#### Raw completion
-
-`--prompt` is available for raw completion and reproducible comparisons. It
-passes the text directly to the model without chat formatting. Use
-`--messages-file` for instruction-response conversations.
-
-```bash
-swift run -c release TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
-  --prompt "The capital of France is" \
-  --max-new 64 \
-  --temperature 0
-```
-
-This example deliberately requests a short greedy completion.
-
 Common generation options include `--max-context`, `--temperature`, `--top-k`,
 `--top-p`, `--repetition-penalty`, `--seed`, and repeatable `--stop` strings.
-The public CLI uses production runtime defaults. Run the following command for
-the complete option list:
+Runtime options include `--expert-cache-slots`, `--expert-cache-policy`,
+`--prefill`, `--prefill-chunk-tokens`, and `--rdadvise`; omitted options use
+the [production defaults](docs/RUNTIME_CONTROLS.md). Run the following command
+for the complete option list:
 
 ```bash
 swift run -c release TurboFieldfareCLI --help
@@ -325,6 +314,9 @@ Prompt prefill uses chunks of up to 128 tokens so one fetched expert can serve
 multiple rows. Generation repeats the routed layer loop one token at a time.
 The installer applies the same bounded-memory rule: it repacks remote ranges
 directly into `.gturbo` without staging a full shard or tensor.
+
+For a video overview of TurboFieldfare, see Better Stack's
+[Local AI On Apple Silicon uses 7X Less RAM](https://youtu.be/vHhephsP6vU).
 
 For a visual introduction to the model architecture, see Maarten Grootendorst's
 [A Visual Guide to Gemma 4](https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-gemma-4).
