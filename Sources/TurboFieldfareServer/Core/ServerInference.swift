@@ -384,6 +384,7 @@ public actor ServerModelSession: ServerInferenceBackend {
     private let maxContext: Int
     private let promptCacheMode: ServerPromptCacheMode
     private let promptCacheDomain: ServerPromptCacheDomain
+    private let patchedTemplate: String?
     private var promptCache = ServerPromptCache()
 
     public static func load(modelDirectory: URL,
@@ -412,9 +413,11 @@ public actor ServerModelSession: ServerInferenceBackend {
                                            maxContext: maxContext,
                                            runtimeConfiguration: runtime)
         let scratch = try RawCompletionScratch(context: context, vocab: model.config.vocabSize)
-        let templateDigest = SHA256.hash(data: try Data(contentsOf: templateURL))
+        let templateData = try Data(contentsOf: templateURL)
+        let templateDigest = SHA256.hash(data: templateData)
             .map { String(format: "%02x", $0) }
             .joined()
+        let patchedTemplate = ChatTemplatePatcher.patch(String(decoding: templateData, as: UTF8.self))
         let runtimeIdentity = [
             String(runtime.expertCacheSlots),
             runtime.expertCachePolicy.rawValue,
@@ -442,7 +445,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                                   prefillConfig: runtime.prefillConfig,
                                   maxContext: maxContext,
                                   promptCacheMode: promptCacheMode,
-                                  promptCacheDomain: promptCacheDomain)
+                                  promptCacheDomain: promptCacheDomain,
+                                  patchedTemplate: patchedTemplate)
     }
 
     private init(context: MetalContext,
@@ -453,7 +457,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                  prefillConfig: PrefillRuntimeConfig,
                  maxContext: Int,
                  promptCacheMode: ServerPromptCacheMode,
-                 promptCacheDomain: ServerPromptCacheDomain) {
+                 promptCacheDomain: ServerPromptCacheDomain,
+                 patchedTemplate: String?) {
         self.context = context
         self.model = model
         self.tokenizer = tokenizer
@@ -463,6 +468,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.maxContext = maxContext
         self.promptCacheMode = promptCacheMode
         self.promptCacheDomain = promptCacheDomain
+        self.patchedTemplate = patchedTemplate
     }
 
     public func generate(
@@ -665,7 +671,8 @@ public actor ServerModelSession: ServerInferenceBackend {
         if usesToolTemplate(request) {
             promptIDs = try tokenizer.encodeToolChat(
                 messages: request.messages,
-                tools: request.tools)
+                tools: request.tools,
+                patchedTemplate: patchedTemplate)
         } else {
             let rendered = try tokenizer.applyChatTemplate(request.messages)
             promptIDs = tokenizer.encode(rendered, addBOS: false)

@@ -327,7 +327,8 @@ public struct GFTokenizer: @unchecked Sendable {
     }
 
     public func encodeToolChat(messages: [Message],
-                               tools: [FunctionDefinition]) throws -> [Int32] {
+                                tools: [FunctionDefinition],
+                                patchedTemplate: String? = nil) throws -> [Int32] {
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
         }
@@ -364,7 +365,7 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         return try tokenizer.applyChatTemplate(
             messages: upstreamMessages,
-            chatTemplate: nil,
+            chatTemplate: patchedTemplate.map(ChatTemplateArgument.literal),
             addGenerationPrompt: true,
             truncation: false,
             maxLength: nil,
