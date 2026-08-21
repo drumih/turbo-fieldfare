@@ -193,6 +193,32 @@ import Testing
             response: "", isTerminal: false, requested: false))
     }
 
+    @Test func completedChatPrefersPersistedOutputOverAnEmptyOrStaleMailbox() {
+        #expect(InstructionTranscriptDocumentController.resolvedResponse(
+            output: "Saved answer",
+            streamedResponse: "",
+            isTerminal: true) == "Saved answer")
+        #expect(InstructionTranscriptDocumentController.resolvedResponse(
+            output: "Saved answer",
+            streamedResponse: "Previous chat",
+            isTerminal: true) == "Saved answer")
+    }
+
+    @Test func activeGenerationUsesNonEmptyMailboxAndFallsBackToOutput() {
+        #expect(InstructionTranscriptDocumentController.resolvedResponse(
+            output: "UI partial",
+            streamedResponse: "Lossless streamed partial",
+            isTerminal: false) == "Lossless streamed partial")
+        #expect(InstructionTranscriptDocumentController.resolvedResponse(
+            output: "UI partial",
+            streamedResponse: "",
+            isTerminal: false) == "UI partial")
+        #expect(InstructionTranscriptDocumentController.resolvedResponse(
+            output: "UI partial",
+            streamedResponse: nil,
+            isTerminal: false) == "UI partial")
+    }
+
     @Test func promptChangeOrResponseResetRebuildsWithoutStaleBytes() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()
@@ -206,6 +232,73 @@ import Testing
         #expect(storage.string == "You\nNew\n\nAnswer\nShort")
         #expect(!storage.string.contains("Old"))
         #expect(!storage.string.contains("Long response"))
+    }
+
+    @Test func rendersPreviousTurnsBeforeStreamingCurrentAnswer() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+        let history = [
+            InstructionTranscriptMessage(role: .user, content: "First question"),
+            InstructionTranscriptMessage(role: .assistant, content: "**First answer**"),
+            InstructionTranscriptMessage(role: .user, content: "Follow-up"),
+        ]
+
+        let result = controller.synchronize(
+            storage: storage,
+            history: history,
+            response: "Second answer",
+            isTerminal: false)
+
+        #expect(result.mutation == .rebuilt)
+        #expect(storage.string
+            == "You\nFirst question\n\nAnswer\nFirst answer\n\nYou\nFollow-up\n\nAnswer\nSecond answer")
+        #expect(controller.history == history)
+        #expect(controller.prompt == "Follow-up")
+        #expect((storage.string as NSString).substring(
+            with: result.assistantRange) == "Second answer")
+    }
+
+    @Test func switchingChatHistoryRebuildsWithoutLeakingPriorTurns() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+        _ = controller.synchronize(
+            storage: storage,
+            history: [
+                InstructionTranscriptMessage(role: .user, content: "Chat A"),
+                InstructionTranscriptMessage(role: .assistant, content: "Answer A"),
+            ],
+            response: "",
+            isTerminal: true)
+
+        let result = controller.synchronize(
+            storage: storage,
+            history: [
+                InstructionTranscriptMessage(role: .user, content: "Chat B"),
+            ],
+            response: "Answer B",
+            isTerminal: false)
+
+        #expect(result.mutation == .rebuilt)
+        #expect(storage.string == "You\nChat B\n\nAnswer\nAnswer B")
+        #expect(!storage.string.contains("Chat A"))
+        #expect(!storage.string.contains("Answer A"))
+    }
+
+    @Test func responseWithoutHistoryStillHasAStableAssistantRange() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        let result = controller.synchronize(
+            storage: storage,
+            history: [],
+            response: "Service response",
+            isTerminal: false)
+
+        #expect(result.mutation == .rebuilt)
+        #expect(storage.string == "Answer\nService response")
+        #expect((storage.string as NSString).substring(
+            with: result.assistantRange) == "Service response")
+        #expect(controller.prompt.isEmpty)
     }
 
     @Test func terminalUpdateFormatsOnlyAssistantRangeAndKeepsRawResponse() {

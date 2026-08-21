@@ -91,6 +91,74 @@ import TurboFieldfareDecodeProtocol
         #expect(decoded.prefillTotal == 514)
     }
 
+    @Test func generationRequestRoundTripPreservesChatRoles() throws {
+        let generationID = UUID()
+        let runtimeOptions = DecodeRuntimeOptions(
+            expertCacheSlots: 32,
+            expertCachePolicy: "lru",
+            prefillEnabled: false,
+            prefillChunkTokens: 64,
+            rdadvisePolicy: "adaptive",
+            modelVerification: "trusted-install")
+        let request = DecodeGenerationRequest(
+            messages: [
+                DecodeGenerationMessage(role: .system, content: "Memory"),
+                DecodeGenerationMessage(role: .user, content: "Question"),
+                DecodeGenerationMessage(role: .assistant, content: "Answer"),
+                DecodeGenerationMessage(role: .user, content: "Follow-up"),
+            ],
+            maxNewTokens: 128,
+            maxContextTokens: 8_192,
+            temperature: 0.2,
+            repetitionPenalty: 1.1,
+            runtimeOptions: runtimeOptions,
+            generationID: generationID)
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(
+            contentsOf: DecodeFrameCodec.encode(request))
+        try pipe.fileHandleForWriting.close()
+
+        let decoded = try DecodeFrameCodec.read(
+            DecodeGenerationRequest.self,
+            from: pipe.fileHandleForReading)
+
+        #expect(decoded.messages == request.messages)
+        #expect(decoded.prompt == "Follow-up")
+        #expect(decoded.maxNewTokens == 128)
+        #expect(decoded.maxContextTokens == 8_192)
+        #expect(decoded.temperature == 0.2)
+        #expect(decoded.repetitionPenalty == 1.1)
+        #expect(decoded.runtimeOptions == runtimeOptions)
+        #expect(decoded.generationID == generationID)
+    }
+
+    @Test func legacyPromptInitializerProducesASingleUserMessage() {
+        let request = DecodeGenerationRequest(
+            prompt: "Question",
+            maxNewTokens: 16,
+            maxContextTokens: 4_096,
+            temperature: 0)
+
+        #expect(request.messages == [
+            DecodeGenerationMessage(role: .user, content: "Question"),
+        ])
+        #expect(request.prompt == "Question")
+    }
+
+    @Test func promptCompatibilityAccessorUsesTheLastUserTurn() {
+        let request = DecodeGenerationRequest(
+            messages: [
+                DecodeGenerationMessage(role: .system, content: "Memory"),
+                DecodeGenerationMessage(role: .user, content: "First"),
+                DecodeGenerationMessage(role: .assistant, content: "Answer"),
+            ],
+            maxNewTokens: 16,
+            maxContextTokens: 4_096,
+            temperature: 0)
+
+        #expect(request.prompt == "First")
+    }
+
     @Test func decoderAcceptsAFrameSplitAcrossSingleByteWrites() throws {
         let event = DecodeServiceEvent(
             kind: .snapshot,

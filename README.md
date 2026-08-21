@@ -57,8 +57,8 @@ required by the tokenizer. The complete release build includes the foreground
 Mac app and its sibling decode-service executable.
 
 When the app opens, choose **Download** and let TurboFieldfare fetch and repack
-the pinned model (about 15 GB). Once it is ready, choose **Load Model**, type
-your prompt, and press **Generate**.
+the pinned model (about 15 GB). Once it is ready, choose **Load Model** in the
+header from any chat, type your prompt, and press **Generate**.
 
 ## At a glance
 
@@ -110,8 +110,27 @@ The package is arm64-only. Older macOS and Metal versions are not supported.
 ### Prompting the model
 
 The Mac app treats what you type as an instruction and handles Gemma's chat
-formatting automatically. Just describe the task and include any context the
-model needs.
+formatting automatically. Each chat keeps its own multi-turn history and draft
+attachments. Chats live in a collapsible left sidebar with a dedicated
+**New chat** button; press <kbd>Command</kbd>+<kbd>N</kbd> to start another
+context or <kbd>Control</kbd>+<kbd>Command</kbd>+<kbd>S</kbd> to toggle the
+sidebar. Its visibility is independent from the collapsible right settings
+pane. Chat history is written locally on a serialized background queue and
+flushed when the app terminates. If the archive cannot be decoded, the
+unreadable file is preserved as `mac-app-chats.recovery-*.json` instead of
+being deleted.
+
+The composer can extract text locally from PDF, DOCX, PPTX, and XLSX files and
+include it with the next message. Files are not uploaded to a remote service.
+Scanned PDFs need a selectable text layer; images, slide graphics, and legacy
+binary Office files such as XLS are not model inputs. Long extracted text is
+trimmed to the configured context window and marked as truncated. Before a turn
+is committed to history, the app uses the model tokenizer to measure the
+rendered conversation. When older turns no longer fit, Gemma compresses them
+into a rolling memory that is saved only in that chat, while the full transcript
+remains visible. The status bar reports **Compressing history** during this
+extra local generation. If the current request alone is too large, it stays in
+the composer so it can be shortened.
 
 Generation defaults to temperature `0.2`, Top-K `64`, and Top-P `0.95`. Set
 temperature to `0` for deterministic greedy output. The model can still repeat
@@ -136,10 +155,16 @@ Build the complete package so the app and its sibling decode service are both
 available. When launched from this checkout, the app stores the model in
 `scratch/gemma4.gturbo`.
 
+To reuse a model from another checkout or disk, choose **Model → Choose Model
+Folder…** and select the `.gturbo` directory that contains `manifest.json`.
+The Mac app remembers that location across launches, so parallel builds can
+share one installation without copying it.
+
 #### Install the model
 
 On first launch, the app checks the available storage and shows the download
-and installed sizes. Choose **Download** to begin.
+and installed sizes. Choose **Choose Existing Model…** to use an installation
+already on disk, or choose **Download** to begin a new one.
 
 The installer never materializes the full source checkpoint. It streams the
 required byte ranges from the pinned Hugging Face revision and repacks them
@@ -158,13 +183,16 @@ After installation:
 
 1. Choose **Load Model**.
 2. Enter a prompt in the composer.
-3. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use **Settings > Send Message With** to choose Return or Command-Return.
-4. Use the stop button or <kbd>Escape</kbd> to end generation early.
+3. Optionally use the paperclip to attach PDF, DOCX, PPTX, or XLSX files.
+4. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use
+   **Settings > Send Message With** to choose Return or Command-Return.
+5. Use the stop button or <kbd>Escape</kbd> to end generation early.
 
 The status bar shows generation progress, decode speed, and memory use. Use the
 right pane to configure sampling, context length, expert-cache slots, and
-runtime options. See [Runtime controls](docs/RUNTIME_CONTROLS.md) for details
-and defaults.
+runtime options. Hide or restore it with its status-bar button or
+<kbd>Shift</kbd>+<kbd>Command</kbd>+<kbd>I</kbd>. See
+[Runtime controls](docs/RUNTIME_CONTROLS.md) for details and defaults.
 
 ### Command-line interface
 

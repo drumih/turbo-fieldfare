@@ -51,11 +51,12 @@ final class GenerationTaskRegistry: Sendable {
 
 }
 
-/// Real-model inference client for the Mac app. Wraps the same raw-completion
-/// loop the CLI uses (`runRawCompletion`, BOS + verbatim encode, no chat
-/// template) behind the `AppInferenceClient` event stream, with an explicit
-/// load lifecycle so the resident weights stay warm across generations.
-public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Sendable {
+/// Real-model inference client for the Mac app. Renders the pinned chat
+/// template, then wraps the same raw-completion loop the CLI uses behind the
+/// `AppInferenceClient` event stream. Its explicit load lifecycle keeps the
+/// resident weights warm across generations.
+public final class RealInferenceClient: AppModelLifecycleClient,
+    AppGenerationContextReporting, @unchecked Sendable {
     private let session: RealInferenceSession
     private let memorySampler: AppMemorySampler
     private let generationTasks = GenerationTaskRegistry()
@@ -102,6 +103,17 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
                 generationTasks.take(generationID)?.cancel()
             }
         }
+    }
+
+    public func prepare(_ request: AppGenerationRequest) async throws
+        -> AppGenerationRequest {
+        try await AppGenerationContextWindow.prepareUsingModelTokenizer(request)
+    }
+
+    public func prepareWithContextReport(_ request: AppGenerationRequest) async throws
+        -> AppPreparedGenerationRequest {
+        try await AppGenerationContextWindow
+            .prepareUsingModelTokenizerWithReport(request)
     }
 
     public func cancel() {
@@ -283,9 +295,11 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let renderedPrompt = try tokenizer.applyChatTemplate([
-                GFTokenizer.Message(role: .user, content: request.prompt)
-            ])
+            let request = try AppGenerationContextWindow.prepare(
+                request,
+                tokenizer: tokenizer)
+            let renderedPrompt = try tokenizer.applyChatTemplate(
+                request.messages.map(Self.tokenizerMessage))
             let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
             progress.promptTokenCount = promptIds.count
             guard promptIds.count < runner.maxContext else {
@@ -454,6 +468,17 @@ actor RealInferenceSession {
         case .stopString: return .stopString
         case .toolCalls: return .toolCalls
         }
+    }
+
+    private static func tokenizerMessage(
+        _ message: AppGenerationMessage
+    ) -> GFTokenizer.Message {
+        let role: GFTokenizer.Role = switch message.role {
+        case .system: .system
+        case .user: .user
+        case .assistant: .assistant
+        }
+        return GFTokenizer.Message(role: role, content: message.content)
     }
 
     internal static func prefillFailureDiagnostics(config: PrefillRuntimeConfig,

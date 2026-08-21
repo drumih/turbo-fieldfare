@@ -1,3 +1,4 @@
+import AppKit
 import TurboFieldfareAppCore
 import TurboFieldfareMacPresentation
 import SwiftUI
@@ -5,19 +6,44 @@ import SwiftUI
 struct RootView: View {
     let model: AppModel
     @State private var conversationChromeHeight: CGFloat = 0
+    @AppStorage("TurboFieldfare.chatSidebarVisible")
+    private var isChatSidebarVisible = true
+    @AppStorage("TurboFieldfare.inspectorVisible")
+    private var isInspectorVisible = true
 
     var body: some View {
         HStack(spacing: 0) {
+            if isChatSidebarVisible {
+                ChatSidebarView(model: model)
+                    .frame(width: CGFloat(AppChromeLayout.chatSidebarWidth))
+                    .frame(maxHeight: .infinity)
+                    .background(TurboFieldfareMacTheme.sidebarBackgroundColor)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+
+                Divider()
+            }
+
             primaryContent
-                .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: CGFloat(AppChromeLayout.primaryMinimumWidth),
+                    maxWidth: .infinity,
+                    maxHeight: .infinity)
 
-            Divider()
+            if isInspectorVisible {
+                Divider()
 
-            InspectorView(model: model)
-                .frame(width: 320)
-                .frame(maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                InspectorView(model: model)
+                    .frame(width: CGFloat(AppChromeLayout.inspectorWidth))
+                    .frame(maxHeight: .infinity)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
+        .frame(
+            minWidth: CGFloat(AppChromeLayout.minimumWindowWidth(
+                isChatSidebarVisible: isChatSidebarVisible,
+                isInspectorVisible: isInspectorVisible)),
+            minHeight: CGFloat(AppChromeLayout.minimumHeight))
         .containerBackground(for: .window) {
             LinearGradient(
                 colors: [
@@ -32,11 +58,19 @@ struct RootView: View {
         .tint(TurboFieldfareMacTheme.accentColor)
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
         .animation(.smooth(duration: 0.25), value: model.error)
+        .animation(.smooth(duration: 0.22), value: isChatSidebarVisible)
+        .animation(.smooth(duration: 0.22), value: isInspectorVisible)
         .animation(.smooth(duration: 0.2), value: model.presentation.conversationAction)
         .transaction { transaction in
             if model.isRunning {
                 transaction.animation = nil
             }
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.willTerminateNotification)
+        ) { _ in
+            model.flushChatPersistence()
         }
     }
 
@@ -49,7 +83,12 @@ struct RootView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            StatusHUDView(model: model)
+            StatusHUDView(
+                model: model,
+                isChatSidebarVisible: isChatSidebarVisible,
+                isInspectorVisible: isInspectorVisible,
+                toggleChatSidebar: { isChatSidebarVisible.toggle() },
+                toggleInspector: { isInspectorVisible.toggle() })
         }
     }
 
@@ -91,7 +130,7 @@ struct RootView: View {
     private var conversationChrome: some View {
         VStack(spacing: 10) {
             ErrorBanner(model: model)
-            if model.promptText.isEmpty && model.showPromptExamples && !model.isRunning {
+            if model.showsPromptExamples {
                 PromptExamplesView { preset in
                     model.promptText = preset.prompt
                 }
@@ -101,8 +140,7 @@ struct RootView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 16)
-        .animation(.smooth(duration: 0.2), value: model.promptText.isEmpty)
-        .animation(.smooth(duration: 0.2), value: model.showPromptExamples)
+        .animation(.smooth(duration: 0.2), value: model.showsPromptExamples)
     }
 
 }
