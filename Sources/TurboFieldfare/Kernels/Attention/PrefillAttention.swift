@@ -41,6 +41,15 @@ struct PrefillAttentionParams: Sendable, Equatable {
 
 
 final class PrefillAttention {
+    // The causal tiled fallback runs one threadgroup per query/head pair. On
+    // pre-Apple10 GPUs, a full-attention dispatch beyond 4K can exceed macOS's
+    // interactive GPU-work limit even though the allocation is small. Since
+    // work grows with both query rows and visible KV length, shrink row batches
+    // as the context grows while preserving the optimized Apple10 path.
+    static let longContextThreshold = 4_096
+    static let longContextQueryKVPairBudget = 24_576
+    static let longContextMaximumQueryRowsPerEncoder = 8
+
     private let context: MetalContext
     private let psoCausalTiled: MTLComputePipelineState
     private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
@@ -95,25 +104,73 @@ final class PrefillAttention {
         precondition(threadCount <= pipeline.maxTotalThreadsPerThreadgroup,
                      "tiled prefill attention requires headDim <= maxTotalThreadsPerThreadgroup")
 
-        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
-        enc.setComputePipelineState(pipeline)
-        enc.setBuffer(q, offset: qOffset, index: 0)
-        enc.setBuffer(k, offset: kOffset, index: 1)
-        enc.setBuffer(v, offset: vOffset, index: 2)
-        enc.setBuffer(out, offset: outOffset, index: 3)
-        var p = params
-        enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
-        let groups = useTensorOps
-            ? MTLSize(width: Int(params.queryCount),
-                      height: Int(params.numQHeads) / 8,
-                      depth: 1)
-            : MTLSize(width: Int(params.queryCount),
-                      height: Int(params.numQHeads),
-                      depth: 1)
-        enc.dispatchThreadgroups(
-            groups,
-            threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1))
-        enc.endEncoding()
+        let fullAttentionShape = kvRingCapacity == 0
+            && params.headDim == 512
+            && params.numQHeads == 16
+            && params.numKVHeads == 2
+        let spans = Self.querySpans(queryCount: Int(params.queryCount),
+                                    kvValidCount: Int(params.kvValidCount),
+                                    fullAttentionShape: fullAttentionShape,
+                                    useTensorOps: useTensorOps)
+        for span in spans {
+            guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+            enc.label = "prefill.attention queries=\(span.lowerBound)..<\(span.upperBound) kv=\(params.kvValidCount)"
+            enc.setComputePipelineState(pipeline)
+            enc.setBuffer(
+                q,
+                offset: qOffset
+                    + span.lowerBound * Int(params.qTokenStrideElements)
+                    * MemoryLayout<Float16>.stride,
+                index: 0)
+            enc.setBuffer(k, offset: kOffset, index: 1)
+            enc.setBuffer(v, offset: vOffset, index: 2)
+            enc.setBuffer(
+                out,
+                offset: outOffset
+                    + span.lowerBound * Int(params.oTokenStrideElements)
+                    * MemoryLayout<Float16>.stride,
+                index: 3)
+            var batchParams = params
+            batchParams.startPosition += UInt32(span.lowerBound)
+            batchParams.queryCount = UInt32(span.count)
+            enc.setBytes(
+                &batchParams,
+                length: MemoryLayout<PrefillAttentionParams>.stride,
+                index: 4)
+            let groups = useTensorOps
+                ? MTLSize(width: span.count,
+                          height: Int(params.numQHeads) / 8,
+                          depth: 1)
+                : MTLSize(width: span.count,
+                          height: Int(params.numQHeads),
+                          depth: 1)
+            enc.dispatchThreadgroups(
+                groups,
+                threadsPerThreadgroup: MTLSize(width: threadCount, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+    }
+
+    static func querySpans(queryCount: Int,
+                           kvValidCount: Int,
+                           fullAttentionShape: Bool,
+                           useTensorOps: Bool) -> [Range<Int>] {
+        precondition(queryCount > 0, "queryCount must be positive")
+        let rows: Int
+        if !useTensorOps
+            && fullAttentionShape
+            && kvValidCount > longContextThreshold {
+            rows = max(
+                1,
+                min(
+                    longContextMaximumQueryRowsPerEncoder,
+                    longContextQueryKVPairBudget / kvValidCount))
+        } else {
+            rows = queryCount
+        }
+        return stride(from: 0, to: queryCount, by: rows).map {
+            $0..<min($0 + rows, queryCount)
+        }
     }
 
 

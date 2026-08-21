@@ -7,6 +7,7 @@ enum MetalError: Error, CustomStringConvertible {
     case missingShaderResource(String)
     case missingFunction(String)
     case libraryCompileFailed(String)
+    case commandBufferFailed(String)
 
     public var description: String {
         switch self {
@@ -15,14 +16,19 @@ enum MetalError: Error, CustomStringConvertible {
         case .missingShaderResource(let n): return "Shader resource missing: \(n)"
         case .missingFunction(let n):     return "Metal function missing in library: \(n)"
         case .libraryCompileFailed(let s):return "Metal library compile failed: \(s)"
+        case .commandBufferFailed(let detail): return "Metal command buffer failed: \(detail)"
         }
     }
 }
 
-func checkCommandBufferError(_ error: (any Error)?) throws {
-    if let error {
-        throw error
-    }
+func checkCommandBufferError(_ error: (any Error)?, label: String? = nil) throws {
+    guard let error else { return }
+    guard let label else { throw error }
+
+    let nsError = error as NSError
+    throw MetalError.commandBufferFailed(
+        "label=\(label) domain=\(nsError.domain) code=\(nsError.code) "
+            + "description=\(nsError.localizedDescription) userInfo=\(nsError.userInfo)")
 }
 
 public struct MetalFunctionConstant: Hashable, Sendable {

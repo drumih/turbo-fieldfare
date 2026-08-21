@@ -761,9 +761,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
 
         prefillChunkState.markDirty(startPosition: startPosition, tokenCount: tokens.count)
 
-        guard var cb = ctx.queue.makeCommandBuffer() else {
-            throw ModelError.residentBufferWrapFailed
-        }
+        var cb = try makeDiagnosticPrefillCommandBuffer()
         prefillEmbed.encode(commandBuffer: cb,
                             table: emb.buffer,
                             tableOffset: Int(emb.offset),
@@ -870,13 +868,50 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     qTokenStrideElements: UInt32(qDim),
                     oTokenStrideElements: UInt32(qDim),
                     scale: 1.0)
+            var usedSeparateAttentionBuffers = false
             if let kv {
-                    let keyBuffer = kv.keyBuffer(layer: L, validTokenCount: startPosition + t)
-                    let valueBuffer = kv.valueBuffer(layer: L, validTokenCount: startPosition + t)
-                    let ringCapacity = kv.ringCapacity(layer: L)
-                    let activeRingCapacity = ringCapacity > 0 && startPosition + t > ringCapacity
-                        ? UInt32(ringCapacity)
-                        : 0
+                let keyBuffer = kv.keyBuffer(layer: L, validTokenCount: startPosition + t)
+                let valueBuffer = kv.valueBuffer(layer: L, validTokenCount: startPosition + t)
+                let ringCapacity = kv.ringCapacity(layer: L)
+                let activeRingCapacity = ringCapacity > 0 && startPosition + t > ringCapacity
+                    ? UInt32(ringCapacity)
+                    : 0
+                let needsBoundedTiledAttention = isFull
+                    && !ctx.device.supportsFamily(.apple10)
+                    && startPosition + t > PrefillAttention.longContextThreshold
+                if needsBoundedTiledAttention {
+                    usedSeparateAttentionBuffers = true
+                    cb.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=qkv"
+                    cb.commit()
+                    try waitForCompletion(cb)
+
+                    let spans = PrefillAttention.querySpans(
+                        queryCount: t,
+                        kvValidCount: startPosition + t,
+                        fullAttentionShape: true,
+                        useTensorOps: false)
+                    for span in spans {
+                        let attentionCB = try makeDiagnosticPrefillCommandBuffer()
+                        var batchParams = params
+                        batchParams.startPosition += UInt32(span.lowerBound)
+                        batchParams.queryCount = UInt32(span.count)
+                        prefillAttention.encodeCausal(
+                            commandBuffer: attentionCB,
+                            q: scratch.q,
+                            qOffset: span.lowerBound * qDim * MemoryLayout<Float16>.stride,
+                            k: keyBuffer,
+                            v: valueBuffer,
+                            out: scratch.attentionOutput,
+                            outOffset: span.lowerBound * qDim * MemoryLayout<Float16>.stride,
+                            params: batchParams,
+                            kvRingCapacity: activeRingCapacity,
+                            path: prefillAttentionPath)
+                        attentionCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=attention queries=\(span.lowerBound)..<\(span.upperBound)"
+                        attentionCB.commit()
+                        try waitForCompletion(attentionCB)
+                    }
+                    cb = try makeDiagnosticPrefillCommandBuffer()
+                } else {
                     prefillAttention.encodeCausal(commandBuffer: cb,
                                                   q: scratch.q,
                                                   k: keyBuffer,
@@ -885,6 +920,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   params: params,
                                                   kvRingCapacity: activeRingCapacity,
                                                   path: prefillAttentionPath)
+                }
             } else {
                 throw PrefillError.chunkedUnsupported(
                     "chunked prefill attention requires FP16 KV")
@@ -939,6 +975,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                         topK: UInt32(cfg.topKExperts),
                         hiddenStrideElements: UInt32(D))
 
+                    let phase = usedSeparateAttentionBuffers
+                        ? "post_attention_router"
+                        : "qkv_attention_router"
+                    cb.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=\(phase)"
                     cb.commit()
                     try waitForCompletion(cb)
 
@@ -978,9 +1018,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                         tileExpertCount: routeTileExpertCount,
                         expertSortKeys: model.routedExpertPhysicalOffsets(layer: L))
 
-                    guard let sharedCB = ctx.queue.makeCommandBuffer() else {
-                        throw ModelError.residentBufferWrapFailed
-                    }
+                    let sharedCB = try makeDiagnosticPrefillCommandBuffer()
+                    sharedCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=shared_expert"
                     let sharedProj = sharedExpertProjections[L]
                     try prefillSharedExpert.encodeBlock(commandBuffer: sharedCB,
                                                         x: scratch.denseX,
@@ -1118,9 +1157,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                             hiddenStrideElements: UInt32(D),
                             binding: fetch.binding,
                             offsets: routedOffsets)
-                        guard let tileCB = ctx.queue.makeCommandBuffer() else {
-                            throw ModelError.residentBufferWrapFailed
-                        }
+                        let tileCB = try makeDiagnosticPrefillCommandBuffer()
+                        tileCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=routed_tile tile=\(tileIndex)"
                         _ = prefillGroupedMoE.encodeStreamedBatched(
                             commandBuffer: tileCB,
                             hidden: scratch.routedX,
@@ -1144,9 +1182,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     while !pendingTiles.isEmpty {
                         try drainOldestPendingTile()
                     }
-                    guard let tailCB = ctx.queue.makeCommandBuffer() else {
-                        throw ModelError.residentBufferWrapFailed
-                    }
+                    let tailCB = try makeDiagnosticPrefillCommandBuffer()
+                    tailCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=layer_tail"
                     prefillMoE.encodeReduceTokenMajor(commandBuffer: tailCB,
                                                       routePartials: scratch.routePartials,
                                                       routeWeights: scratch.routeWeights,
@@ -1177,10 +1214,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                         try waitForCompletion(tailCB)
                     }
                     if L + 1 < cfg.numLayers {
-                        guard let nextCB = ctx.queue.makeCommandBuffer() else {
-                            throw ModelError.residentBufferWrapFailed
-                        }
-                        cb = nextCB
+                        cb = try makeDiagnosticPrefillCommandBuffer()
                     }
                     continue
         }
@@ -1188,9 +1222,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         if writeFinalHead {
             let finalNorm = model.finalNorm
             let lm = model.lmHead
-            guard let finalCB = ctx.queue.makeCommandBuffer() else {
-                throw ModelError.residentBufferWrapFailed
-            }
+            let finalCB = try makeDiagnosticPrefillCommandBuffer()
+            finalCB.label = "prefill start=\(startPosition) count=\(t) phase=final_head"
             if outputMode == .greedyIfAvailable, useFusedGreedyHead {
                 fusionHead.encodeGreedyDecode(
                     commandBuffer: finalCB,
@@ -1751,9 +1784,18 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         try waitForCompletion(cb)
     }
 
+    private func makeDiagnosticPrefillCommandBuffer() throws -> MTLCommandBuffer {
+        let descriptor = MTLCommandBufferDescriptor()
+        descriptor.errorOptions = .encoderExecutionStatus
+        guard let commandBuffer = ctx.queue.makeCommandBuffer(descriptor: descriptor) else {
+            throw ModelError.residentBufferWrapFailed
+        }
+        return commandBuffer
+    }
+
     private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
         waitUntilCompleted(cb)
-        try checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb.error, label: cb.label)
     }
 
     private nonisolated func waitUntilCompleted(_ cb: MTLCommandBuffer) {

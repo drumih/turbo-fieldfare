@@ -191,6 +191,50 @@ import TurboFieldfareValidationSupport
         }
     }
 
+    @Test func tiledLongContextSplitsQueryRowsWithoutChangingOtherPaths() {
+        #expect(PrefillAttention.querySpans(
+            queryCount: 128,
+            kvValidCount: 4_096,
+            fullAttentionShape: true,
+            useTensorOps: false) == [0..<128])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 128,
+            kvValidCount: 4_097,
+            fullAttentionShape: true,
+            useTensorOps: false) == [
+                0..<5, 5..<10, 10..<15, 15..<20, 20..<25, 25..<30,
+                30..<35, 35..<40, 40..<45, 45..<50, 50..<55, 55..<60,
+                60..<65, 65..<70, 70..<75, 75..<80, 80..<85, 85..<90,
+                90..<95, 95..<100, 100..<105, 105..<110, 110..<115,
+                115..<120, 120..<125, 125..<128,
+            ])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 9,
+            kvValidCount: 6_784,
+            fullAttentionShape: true,
+            useTensorOps: false) == [0..<3, 3..<6, 6..<9])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 7,
+            kvValidCount: 10_229,
+            fullAttentionShape: true,
+            useTensorOps: false) == [0..<2, 2..<4, 4..<6, 6..<7])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 3,
+            kvValidCount: 32_768,
+            fullAttentionShape: true,
+            useTensorOps: false) == [0..<1, 1..<2, 2..<3])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 128,
+            kvValidCount: 8_192,
+            fullAttentionShape: false,
+            useTensorOps: false) == [0..<128])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 128,
+            kvValidCount: 8_192,
+            fullAttentionShape: true,
+            useTensorOps: true) == [0..<128])
+    }
+
     private static func makeFixture(start: Int,
                                     chunk: Int,
                                     window: Int,
