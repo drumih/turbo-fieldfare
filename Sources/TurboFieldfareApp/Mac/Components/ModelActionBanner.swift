@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct ModelActionBanner: View {
@@ -12,7 +13,7 @@ struct ModelActionBanner: View {
                     .foregroundStyle(iconColor(for: action))
                     .accessibilityHidden(true)
                 Text(message(for: action))
-                    .font(.callout)
+                    .font(.callout.weight(.medium))
                     .lineLimit(2)
                 Spacer(minLength: 8)
                 Button(buttonTitle(for: action)) {
@@ -20,16 +21,18 @@ struct ModelActionBanner: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .accessibilityLabel(buttonTitle(for: action))
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.vertical, 10)
             .background {
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .fill(TurboFieldfareMacTheme.elevatedSurface)
                     .overlay {
                         RoundedRectangle(cornerRadius: 14)
-                            .stroke(iconColor(for: action).opacity(0.5), lineWidth: 1)
+                            .stroke(iconColor(for: action).opacity(0.75), lineWidth: 1.5)
                     }
+                    .shadow(color: iconColor(for: action).opacity(0.12), radius: 6, y: 1)
             }
             .accessibilityElement(children: .contain)
             .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -14,7 +14,7 @@ import Testing
 
         #expect(model.currentProcessMemoryBytes == 2_100_000_000)
         #expect(model.outputResponsePlainText == "lossless output")
-        #expect(model.outputConversationPlainText == "Answer:\nlossless output")
+        #expect(model.outputConversationPlainText == "Assistant:\nlossless output")
 
         model.clearOutput()
         #expect(client.generationTranscriptMailbox.completeText.isEmpty)

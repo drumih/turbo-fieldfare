@@ -67,40 +67,60 @@ struct OutputPaneView: View {
             showsPrefillPlaceholder: model.isRunning
                 && model.outputResponsePlainText.isEmpty)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(16)
+            .background {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(TurboFieldfareMacTheme.elevatedSurface.opacity(0.72))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(TurboFieldfareMacTheme.cardBorder, lineWidth: 1)
+                    }
+            }
             .overlay(alignment: .topTrailing) {
                 if !model.isRunning && !model.outputResponsePlainText.isEmpty {
                     copyResponseButton
-                        .padding(8)
+                        .padding(12)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
     }
 
     private var copyResponseButton: some View {
         Button {
             copyResponse()
         } label: {
-            Image(systemName: responseCopyFeedbackID == nil
-                  ? "doc.on.doc"
-                  : "checkmark.circle.fill")
-                .font(.callout.weight(.medium))
-                .contentTransition(.symbolEffect(.replace))
+            Label(
+                responseCopyFeedbackID == nil ? "Copy" : "Copied",
+                systemImage: responseCopyFeedbackID == nil
+                    ? "doc.on.doc"
+                    : "checkmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .contentShape(Capsule())
                 .foregroundStyle(responseCopyFeedbackID == nil
-                                 ? Color.secondary
+                                 ? Color.primary
                                  : TurboFieldfareMacTheme.accentColor)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-                .background(.regularMaterial, in: Circle())
-                .overlay {
-                    Circle().stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                .background {
+                    Capsule()
+                        .fill(TurboFieldfareMacTheme.elevatedSurface)
+                        .overlay {
+                            Capsule().stroke(
+                                responseCopyFeedbackID == nil
+                                    ? TurboFieldfareMacTheme.fieldBorder
+                                    : TurboFieldfareMacTheme.accentColor.opacity(0.7),
+                                lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
                 }
         }
         .buttonStyle(.plain)
         .accessibilityLabel(responseCopyFeedbackID == nil
                             ? "Copy response"
                             : "Response copied")
-        .accessibilityHint("Copies only the generated answer")
+        .accessibilityHint("Copies only the generated assistant reply")
         .help(responseCopyFeedbackID == nil
               ? "Copy response"
               : "Response copied")
@@ -109,9 +129,10 @@ struct OutputPaneView: View {
     private var emptyPlaceholderContent: some View {
         VStack(spacing: 8) {
             if !needsModelLoad {
-                Text("Choose a predefined example or write your own prompt.")
+                Text(emptyReadyHeadline)
                     .font(.headline)
-                Text("Describe the goal, relevant context, and any constraints.")
+                    .multilineTextAlignment(.center)
+                Text(emptyReadyDetail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -148,6 +169,32 @@ struct OutputPaneView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    /// Matches what the chrome actually offers: examples only appear when the
+    /// prompt is empty and the examples toggle is on.
+    private var showsPromptExamplesInChrome: Bool {
+        model.promptText.isEmpty && model.showPromptExamples && !model.isRunning
+    }
+
+    private var emptyReadyHeadline: String {
+        if showsPromptExamplesInChrome {
+            return "Choose an example below or write your own prompt."
+        }
+        if model.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Write a prompt below to get started."
+        }
+        return "Your prompt is ready."
+    }
+
+    private var emptyReadyDetail: String {
+        if showsPromptExamplesInChrome {
+            return "Describe the goal, relevant context, and any constraints. Then press Generate."
+        }
+        if model.promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Describe the goal, relevant context, and any constraints. Then press Generate."
+        }
+        return "Edit it if you like, then press Generate."
     }
 
     private var needsModelLoad: Bool {
@@ -188,7 +235,15 @@ private struct EmptyPlaceholderIcon: View {
     var body: some View {
         Image(systemName: systemName)
             .font(.title2)
-            .foregroundStyle(.quaternary)
+            .foregroundStyle(.secondary)
+            .frame(width: 48, height: 48)
+            .background {
+                Circle()
+                    .fill(TurboFieldfareMacTheme.fieldSurface)
+                    .overlay {
+                        Circle().stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                    }
+            }
             .accessibilityHidden(true)
     }
 }
@@ -483,9 +538,9 @@ private struct TranscriptPreview: View {
         Image(systemName: "cube.transparent")
             .font(.title2)
             .foregroundStyle(.quaternary)
-        Text("Choose a predefined example or write your own prompt.")
+        Text("Write a prompt below to get started.")
             .font(.headline)
-        Text("Describe the goal, relevant context, and any constraints.")
+        Text("Describe the goal, relevant context, and any constraints. Then press Generate.")
             .foregroundStyle(.secondary)
     }
     .frame(width: 720, height: 420)

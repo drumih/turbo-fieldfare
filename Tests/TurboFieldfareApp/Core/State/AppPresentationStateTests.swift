@@ -126,6 +126,40 @@ import Testing
         #expect(state.label == "Prefill (128/514)")
     }
 
+    @Test func lastStopReasonUsesHumanLabelNotRawWireValue() {
+        let ready = AppModelLoadState.ready(
+            modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
+            loadSeconds: 1)
+        var snapshot = Self.installedSnapshot(loadState: ready)
+        snapshot.lastStopReason = .endOfTurn
+        let state = AppPresentationState.resolve(snapshot)
+        // Normal end-of-turn is just "Done" — not "Done · finished".
+        #expect(state.label == "Done")
+        #expect(!state.label.contains("endOfTurn"))
+        #expect(!state.label.contains("finished"))
+
+        snapshot.lastStopReason = .maxTokens
+        let lengthLimited = AppPresentationState.resolve(snapshot)
+        #expect(lengthLimited.label == "Done · length limit")
+        #expect(!lengthLimited.label.contains("maxTokens"))
+    }
+
+    @Test func insufficientSpaceUsesFormattedShortfall() {
+        var snapshot = Self.installedSnapshot(loadState: .notLoaded)
+        snapshot.requiresInstallation = true
+        snapshot.installReadiness = .insufficientSpace(
+            AppModelInstallRequirement(
+                requiredBytes: 2_000_000_000,
+                availableBytes: 500_000_000))
+        let state = AppPresentationState.resolve(snapshot)
+        #expect(state.label == "Not enough storage")
+        let detail = state.detail ?? ""
+        #expect(detail.contains("more required"))
+        // Must not dump a raw integer byte count like "1500000000 bytes more required".
+        #expect(!detail.contains("1500000000"))
+        #expect(!detail.hasPrefix(String(1_500_000_000)))
+    }
+
     private static func installedSnapshot(loadState: AppModelLoadState) -> AppPresentationSnapshot {
         AppPresentationSnapshot(requiresInstallation: false,
                                 installState: .idle,

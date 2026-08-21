@@ -18,22 +18,24 @@ struct ErrorBanner: View {
                 Button {
                     model.error = nil
                 } label: {
-                    Label("Dismiss error", systemImage: "xmark")
-                        .labelStyle(.iconOnly)
+                    Image(systemName: "xmark")
                         .font(.caption.weight(.semibold))
                         .frame(width: 28, height: 28)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss error")
+                .help("Dismiss error")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background {
                 Capsule()
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .fill(TurboFieldfareMacTheme.elevatedSurface)
                     .overlay {
-                        Capsule().stroke(.red.opacity(0.55), lineWidth: 1)
+                        Capsule().stroke(.red.opacity(0.7), lineWidth: 1.5)
                     }
+                    .shadow(color: .red.opacity(0.08), radius: 4, y: 1)
             }
             .help(error.technicalDetail)
             .transition(.move(edge: .bottom).combined(with: .opacity))

@@ -74,20 +74,22 @@ struct ModelInstallView: View {
             }
             Text(model.modelPathText)
                 .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(18)
-        .background {
-            RoundedRectangle(cornerRadius: 20)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(.separator.opacity(0.5), lineWidth: 0.5)
+                .padding(8)
+                .background {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(TurboFieldfareMacTheme.fieldSurface)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(TurboFieldfareMacTheme.fieldBorder, lineWidth: 1)
+                        }
                 }
         }
+        .padding(18)
+        .turboElevatedCard(cornerRadius: 20)
     }
 
     @ViewBuilder

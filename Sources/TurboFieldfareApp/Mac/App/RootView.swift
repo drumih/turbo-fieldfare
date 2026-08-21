@@ -11,12 +11,15 @@ struct RootView: View {
             primaryContent
                 .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
+            Rectangle()
+                .fill(TurboFieldfareMacTheme.hairlineDivider)
+                .frame(width: 1)
+                .accessibilityHidden(true)
 
             InspectorView(model: model)
                 .frame(width: 320)
                 .frame(maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(TurboFieldfareMacTheme.elevatedSurface.opacity(0.55))
         }
         .containerBackground(for: .window) {
             LinearGradient(

@@ -130,9 +130,9 @@ import Testing
 
         #expect(first.mutation == .rebuilt)
         #expect(second.mutation == .appended)
-        #expect(storage.string == "You\nExplain this\n\nAnswer\nHello")
-        #expect(storage.string.components(separatedBy: "Answer").count == 2)
-        let answerRange = (storage.string as NSString).range(of: "Answer")
+        #expect(storage.string == "You\nExplain this\n\nAssistant\nHello")
+        #expect(storage.string.components(separatedBy: "Assistant").count == 2)
+        let answerRange = (storage.string as NSString).range(of: "Assistant")
         let answerColor = storage.attribute(
             .foregroundColor,
             at: answerRange.location,
@@ -154,7 +154,7 @@ import Testing
 
         #expect(prefilling.mutation == .rebuilt)
         #expect(controller.showsPrefillPlaceholder)
-        #expect(storage.string == "You\nExplain this\n\nAnswer\nProcessing your prompt")
+        #expect(storage.string == "You\nExplain this\n\nAssistant\nProcessing your prompt")
         #expect(controller.response.isEmpty)
         #expect(controller.assistantRange.length == 0)
 
@@ -176,7 +176,7 @@ import Testing
 
         #expect(responding.mutation == .rebuilt)
         #expect(!controller.showsPrefillPlaceholder)
-        #expect(storage.string == "You\nExplain this\n\nAnswer\nHello")
+        #expect(storage.string == "You\nExplain this\n\nAssistant\nHello")
         #expect(!storage.string.contains("Processing your prompt"))
         #expect((storage.string as NSString).substring(with: responding.assistantRange)
             == "Hello")
@@ -203,7 +203,7 @@ import Testing
             storage: storage, prompt: "New", response: "Short", isTerminal: false)
 
         #expect(result.mutation == .rebuilt)
-        #expect(storage.string == "You\nNew\n\nAnswer\nShort")
+        #expect(storage.string == "You\nNew\n\nAssistant\nShort")
         #expect(!storage.string.contains("Old"))
         #expect(!storage.string.contains("Long response"))
     }
@@ -226,7 +226,7 @@ import Testing
         #expect(result.mutation == .finalized)
         #expect(controller.isFinalized)
         #expect(controller.response == "**Bold answer**")
-        #expect(storage.string == "You\nQuestion\n\nAnswer\nBold answer")
+        #expect(storage.string == "You\nQuestion\n\nAssistant\nBold answer")
         #expect((storage.string as NSString).substring(with: result.assistantRange)
             == "Bold answer")
 

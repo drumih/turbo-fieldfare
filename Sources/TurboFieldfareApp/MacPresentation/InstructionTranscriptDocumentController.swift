@@ -150,7 +150,7 @@ public final class InstructionTranscriptDocumentController {
                 attributes: Self.promptAttributes()))
         }
         document.append(NSAttributedString(
-            string: "Answer\n",
+            string: "Assistant\n",
             attributes: Self.assistantLabelAttributes()))
         assistantRange = NSRange(location: document.length, length: 0)
         document.append(NSAttributedString(

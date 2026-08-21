@@ -186,7 +186,7 @@ import Testing
         #expect(model.outputPromptText == "original prompt")
         #expect(model.outputResponsePlainText == "answer")
         #expect(model.outputConversationPlainText
-            == "You:\noriginal prompt\n\nAnswer:\nanswer")
+            == "You:\noriginal prompt\n\nAssistant:\nanswer")
         #expect(!model.outputConversationPlainText.contains("edited prompt"))
     }
 
@@ -211,7 +211,7 @@ import Testing
 
         #expect(model.promptText == "next draft")
         #expect(model.outputConversationPlainText.hasPrefix(
-            "You:\noriginal prompt\n\nAnswer:\n"))
+            "You:\noriginal prompt\n\nAssistant:\n"))
     }
 
     @MainActor
@@ -270,7 +270,7 @@ import Testing
         #expect(model.hasOutputTranscript)
         #expect(!model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText.hasPrefix(
-            "You:\nstop after token\n\nAnswer:\n"))
+            "You:\nstop after token\n\nAssistant:\n"))
 
         model.clearOutput()
         #expect(!model.hasOutputTranscript)
