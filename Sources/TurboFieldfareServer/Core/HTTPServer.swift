@@ -214,6 +214,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             let contextBox = SendableContext(context)
             let streamState = StreamState()
             let phaseState = RequestPhaseState()
+            let progressLogLimiter = ServerProgressLogLimiter()
             let startStream: @Sendable () -> Void = {
                 guard request.stream,
                       streamState.start(eventLoop: contextBox.value.eventLoop,
@@ -255,15 +256,23 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             phaseState.set("generating")
                             ServerLog.generating(id: responseID)
                             return try await self.backend.generate(prepared) { event in
-                                guard request.stream else { return }
                                 switch event {
+                                case .progress(let progress):
+                                    if progressLogLimiter.shouldLog(progress) {
+                                        ServerLog.progress(
+                                            id: responseID,
+                                            progress: progress,
+                                            duration: started.duration(to: .now))
+                                    }
                                 case .content(let text):
+                                    guard request.stream else { return }
                                     self.writeStreamChunk(
                                         contextBox.value,
                                         self.chunk(id: responseID, created: created,
                                                    delta: ["content": text],
                                                    finishReason: nil))
                                 case .toolCall(let call):
+                                    guard request.stream else { return }
                                     self.writeToolCall(contextBox.value,
                                                        id: responseID,
                                                        created: created,

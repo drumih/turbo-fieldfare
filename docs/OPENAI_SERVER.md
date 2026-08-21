@@ -27,6 +27,16 @@ The server loads the model before opening the port. Wait for
 `TurboFieldfareServer ready`, then keep the process running while clients use
 it.
 
+During generation, stderr reports real model progress rather than a timer-only
+heartbeat. Long prefills log every 1,024 completed prompt tokens and at prefill
+completion; decode logs the first completion token and every 16 tokens after
+that. For example:
+
+```text
+request chatcmpl-... generating phase=prefill progress=4096/8118 elapsed=42.317s
+request chatcmpl-... generating phase=decode completion=1 elapsed=96.204s
+```
+
 Check the server from another terminal:
 
 ```bash

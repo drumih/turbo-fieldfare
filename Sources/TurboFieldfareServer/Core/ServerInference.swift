@@ -2,7 +2,13 @@ import CryptoKit
 import Foundation
 import TurboFieldfare
 
+public enum ServerGenerationProgress: Equatable, Sendable {
+    case prefill(done: Int, total: Int)
+    case decode(completionTokens: Int)
+}
+
 public enum ServerInferenceEvent: Equatable, Sendable {
+    case progress(ServerGenerationProgress)
     case content(String)
     case toolCall(ParsedToolCall)
 }
@@ -566,9 +572,10 @@ public actor ServerModelSession: ServerInferenceBackend {
                         }
                     }
                     switch progress {
-                    case .prefill:
-                        break
-                    case .token(_, let tokenID, let delta):
+                    case .prefill(let done, let total):
+                        onEvent(.progress(.prefill(done: done, total: total)))
+                    case .token(let index, let tokenID, let delta):
+                        onEvent(.progress(.decode(completionTokens: index + 1)))
                         let events = if let decoder {
                             try decoder.consume(tokenID: tokenID, delta: delta)
                         } else {
