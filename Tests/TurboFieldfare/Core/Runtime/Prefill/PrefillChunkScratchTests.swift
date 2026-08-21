@@ -32,7 +32,36 @@ import Metal
 
     @Test func layoutClampsChunkSizeToRuntimeBounds() {
         #expect(PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 0).chunkTokens == 1)
-        #expect(PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 512).chunkTokens == 128)
+        // The ceiling is 256: every size up to the 280-token pooled image span
+        // produces identical ring geometry, so 256 costs nothing the image path
+        // was not already paying. 512 is the first size that would.
+        #expect(PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 512).chunkTokens
+                == PrefillRuntimeConfig.maxChunkTokens)
+        #expect(PrefillRuntimeConfig.maxChunkTokens == 256)
+        #expect(PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 256).chunkTokens == 256)
+    }
+
+    /// `auto` asks for the smallest allowed chunk that covers the prompt,
+    /// because one chunk means each layer's experts are read once - the floor.
+    @Test func autoPicksTheSmallestChunkThatCoversThePrompt() {
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 20) == 32)
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 32) == 32)
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 33) == 64)
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 200) == 256)
+        // Beyond the ceiling it saturates rather than inventing a size.
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 7_019) == 256)
+        // A cap below the ceiling is honoured, so a caller can stay smaller.
+        #expect(PrefillRuntimeConfig.autoChunkTokens(promptTokens: 7_019, cap: 64) == 64)
+    }
+
+    /// The env door and the flag door have to agree on what is legal.
+    @Test func requestedChunkSizesSnapToTheAllowedList() {
+        #expect(PrefillRuntimeConfig.supportedChunkTokens(999) == 256)
+        #expect(PrefillRuntimeConfig.supportedChunkTokens(200) == 128)
+        #expect(PrefillRuntimeConfig.supportedChunkTokens(64) == 64)
+        // Below the smallest allowed size there is nothing to snap to, so it
+        // floors at one token rather than inventing 32.
+        #expect(PrefillRuntimeConfig.supportedChunkTokens(0) == 1)
     }
 
     @Test func allocationUsesPrivateScratchAndSharedRouteMetadata() throws {
@@ -81,4 +110,16 @@ import Metal
         #expect(scratch.routeIDs.storageMode == MTLStorageMode.shared)
         #expect(scratch.routeWeights.storageMode == MTLStorageMode.shared)
     }
+
+    @Test func multimodalBlockScratchStaysInsideBoundedBudget() {
+        let tokens = VisionConfig().maximumPooledTokens
+        let layout = PrefillChunkScratchLayout(
+            config: .gemma4_26B_A4B,
+            chunkTokens: tokens,
+            chunkTokenLimit: tokens)
+
+        #expect(layout.chunkTokens == 280)
+        #expect(layout.totalPersistentBytes < 100 * 1_048_576)
+    }
+
 }

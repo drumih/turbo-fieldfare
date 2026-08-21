@@ -785,13 +785,50 @@ struct PrefillAttentionParams {
     uint qTokenStrideElements;
     uint oTokenStrideElements;
     float scale;
+    uint bidirectionalBlockStart;
+    uint bidirectionalBlockEnd;
 };
+
+static inline uint prefill_attention_last_exclusive(
+    constant PrefillAttentionParams& p,
+    uint abs_q
+) {
+    const bool in_bidirectional_block =
+        abs_q >= p.bidirectionalBlockStart &&
+        abs_q < p.bidirectionalBlockEnd;
+    return min(
+        p.kvValidCount,
+        in_bidirectional_block ? p.bidirectionalBlockEnd : abs_q + 1u);
+}
 
 static inline uint prefill_kv_slot(uint logical) {
     return (is_function_constant_defined(FC_PREFILL_KV_RING_CAP) &&
             FC_PREFILL_KV_RING_CAP != 0u)
         ? (logical % FC_PREFILL_KV_RING_CAP)
         : logical;
+}
+
+kernel void prefill_attention_params_smoke(
+    constant PrefillAttentionParams& p [[buffer(0)]],
+    device uint* out [[buffer(1)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= 13u) return;
+    switch (id) {
+    case 0u: out[id] = p.startPosition; break;
+    case 1u: out[id] = p.queryCount; break;
+    case 2u: out[id] = p.headDim; break;
+    case 3u: out[id] = p.numQHeads; break;
+    case 4u: out[id] = p.numKVHeads; break;
+    case 5u: out[id] = p.kvValidCount; break;
+    case 6u: out[id] = p.slidingWindow; break;
+    case 7u: out[id] = p.kvTokenStrideElements; break;
+    case 8u: out[id] = p.qTokenStrideElements; break;
+    case 9u: out[id] = p.oTokenStrideElements; break;
+    case 10u: out[id] = as_type<uint>(p.scale); break;
+    case 11u: out[id] = p.bidirectionalBlockStart; break;
+    default: out[id] = p.bidirectionalBlockEnd; break;
+    }
 }
 
 static inline float prefill_attention_tg_sum(
@@ -860,7 +897,7 @@ kernel void attention_prefill_causal_tiled(
     if (p.slidingWindow != 0u && abs_q + 1u > p.slidingWindow) {
         first = abs_q + 1u - p.slidingWindow;
     }
-    const uint last_exclusive = min(p.kvValidCount, abs_q + 1u);
+    const uint last_exclusive = prefill_attention_last_exclusive(p, abs_q);
 
     device const half* q_row = Q + t * p.qTokenStrideElements + qh * p.headDim;
     float row_max = -INFINITY;

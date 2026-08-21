@@ -868,6 +868,35 @@ struct HTTPServerTests {
         #expect(await server.acceptedConnectionCount == 0)
         try await server.shutdown()
     }
+    @Test func imageRequestLargerThanLegacyOneMiBLimitStreamsToBackend() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend(),
+            visionCapability: "ready")
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        let encoded = Data(repeating: 0x5a, count: 900_000).base64EncodedString()
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("""
+        {"model":"test-model","messages":[{"role":"user","content":[
+          {"type":"image_url","image_url":{"url":"data:image/png;base64,\(encoded)"}},
+          {"type":"text","text":"describe"}
+        ]}]}
+        """.utf8)
+        #expect(try #require(request.httpBody?.count) > 1_048_576)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(decoding: data, as: UTF8.self).contains(#""content":"hello""#))
+
+        try await server.shutdown()
+    }
+
 }
 
 private enum RawSocketError: Error {
@@ -875,7 +904,7 @@ private enum RawSocketError: Error {
     case timeout
 }
 
-private func connectedSocket(port: Int) throws -> Int32 {
+func connectedSocket(port: Int) throws -> Int32 {
     let descriptor = Darwin.socket(AF_INET, SOCK_STREAM, 0)
     guard descriptor >= 0 else {
         throw RawSocketError.systemCall("socket", errno)
@@ -898,7 +927,7 @@ private func connectedSocket(port: Int) throws -> Int32 {
     return descriptor
 }
 
-private func writeAll(socket: Int32, text: String) throws {
+func writeAll(socket: Int32, text: String) throws {
     let bytes = Array(text.utf8)
     var written = 0
     while written < bytes.count {
@@ -913,7 +942,7 @@ private func writeAll(socket: Int32, text: String) throws {
     }
 }
 
-private func httpRequest(port: Int, body: String, connection: String) -> String {
+func httpRequest(port: Int, body: String, connection: String) -> String {
     "POST /v1/chat/completions HTTP/1.1\r\n"
         + "Host: 127.0.0.1:\(port)\r\n"
         + "Content-Type: application/json\r\n"
@@ -932,7 +961,7 @@ private func abortSocket(_ socket: Int32) {
     Darwin.close(socket)
 }
 
-private func readAvailable(socket: Int32, timeoutMilliseconds: Int32) throws -> String {
+func readAvailable(socket: Int32, timeoutMilliseconds: Int32) throws -> String {
     var result: [UInt8] = []
     var descriptor = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
     while Darwin.poll(&descriptor, 1, timeoutMilliseconds) > 0 {
@@ -948,7 +977,7 @@ private func readAvailable(socket: Int32, timeoutMilliseconds: Int32) throws -> 
     return String(decoding: result, as: UTF8.self)
 }
 
-private func readUntil(
+func readUntil(
     socket: Int32,
     timeoutMilliseconds: Int32,
     condition: (String) -> Bool

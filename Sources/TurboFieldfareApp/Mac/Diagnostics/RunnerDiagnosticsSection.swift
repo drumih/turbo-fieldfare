@@ -1,4 +1,5 @@
 import TurboFieldfareAppCore
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 struct RunnerDiagnosticsSection: View {
@@ -25,7 +26,14 @@ struct RunnerDiagnosticsSection: View {
                 DiagnosticRow("Request TTFT", MetricFormat.seconds(diagnostics.requestStartTimeToFirstTokenSeconds))
                 DiagnosticRow("Decode duration", MetricFormat.seconds(diagnostics.decodeSeconds))
                 DiagnosticRow("Decode rate", "\(MetricFormat.rate(diagnostics.tokensPerSecond)) tok/s")
-                DiagnosticRow("Peak memory", MetricFormat.memory(diagnostics.peakMemoryBytes))
+                DiagnosticRow("Peak charged",
+                              MetricFormat.memory(diagnostics.peakMemoryBytes),
+                              help: MemoryFootprintExplanation.exclusionNote)
+                if let mapped = diagnostics.visionTowerMappedBytes, mapped > 0 {
+                    // Page cache, not process memory: holding all of it moves
+                    // the figures above by about 5 MB.
+                    DiagnosticRow("Image tower mapped", MetricFormat.memory(mapped))
+                }
                 DiagnosticRow("I/O / token",
                               MetricFormat.milliseconds(diagnostics.runner?.ioMillisecondsPerToken))
 
@@ -130,7 +138,6 @@ private struct DiagnosticRow: View {
     let value: String
     let multiline: Bool
     let help: String?
-    @State private var isShowingHelp = false
 
     init(_ label: String,
          _ value: String,
@@ -156,25 +163,7 @@ private struct DiagnosticRow: View {
             HStack(spacing: 4) {
                 Text(label)
                 if let help {
-                    Button {
-                        isShowingHelp.toggle()
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 16, height: 16)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(help)
-                    .popover(isPresented: $isShowingHelp, arrowEdge: .trailing) {
-                        Text(help)
-                            .font(.callout)
-                            .frame(width: 280, alignment: .leading)
-                            .padding()
-                    }
-                    .accessibilityLabel("\(label) information")
-                    .accessibilityHint(help)
+                    InfoPopoverButton(subject: label, text: help)
                 }
             }
         }

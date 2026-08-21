@@ -159,6 +159,51 @@ import Testing
         return stream.finalizeHexString()
     }
 
+    @Test func visionCompanionCodecsMatchV1Fixtures() throws {
+        let zeroSHA = String(repeating: "0", count: 64)
+        let manifest = GTurboVisionManifestV1(
+            modelID: "fixture/model", sourceRevision: "fixture-revision",
+            sourceIndexSha256: zeroSHA, processorConfigSha256: zeroSHA,
+            compatibleTextSourceSnapshotHash: "fixture-text-snapshot",
+            compatibleTextManifestSha256: zeroSHA,
+            files: [
+                GTurboVisionFormatV1.weightsFile: .init(size: 32_768, sha256: zeroSHA),
+                GTurboVisionFormatV1.processorFile: .init(size: 2, sha256: zeroSHA),
+            ],
+            tensors: [
+                .init(
+                    name: "vision_tower.patch_embedder.input_proj.weight",
+                    executionPosition: 0, offset: 0, size: 512,
+                    shape: [16, 16], dtype: .bf16),
+                .init(
+                    name: "embed_vision.embedding_projection.weight",
+                    executionPosition: 1, offset: 16_384, size: 256,
+                    shape: [8, 8], dtype: .u32,
+                    quantization: .init(
+                        weightBits: 4, scheme: "affine", scaleType: "bf16",
+                        biasType: "bf16", groupSize: 64)),
+            ])
+        let receipt = GTurboVisionReceiptV1(
+            manifestSha256: zeroSHA,
+            companionDirectoryPath: "/fixture/model.vision.gturbo",
+            compatibleTextManifestSha256: zeroSHA,
+            sourceRepoID: "fixture/model", sourceRevision: "fixture-revision",
+            verificationTimestamp: "2026-08-05T00:00:00Z",
+            toolVersion: "fixture",
+            files: [
+                GTurboVisionFormatV1.manifestFile: .init(size: 1, sha256: zeroSHA),
+                GTurboVisionFormatV1.weightsFile: .init(size: 32_768, sha256: zeroSHA),
+                GTurboVisionFormatV1.processorFile: .init(size: 2, sha256: zeroSHA),
+            ])
+
+        let manifestFixture = try frozenFixture("vision-manifest.json")
+        let receiptFixture = try frozenFixture("vision-receipt.json")
+        #expect(try GTurboVisionManifestCodec.encode(manifest) == manifestFixture)
+        #expect(try GTurboVisionReceiptCodec.encode(receipt) == receiptFixture)
+        #expect(try GTurboVisionManifestCodec.decode(manifestFixture) == manifest)
+        #expect(try GTurboVisionReceiptCodec.decode(receiptFixture) == receipt)
+    }
+
     private func frozenFixture(_ name: String) throws -> Data {
         let url = try #require(Bundle.module.url(
             forResource: name, withExtension: "base64", subdirectory: "Fixtures/v1"))

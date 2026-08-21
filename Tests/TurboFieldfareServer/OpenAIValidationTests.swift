@@ -756,7 +756,7 @@ struct ServerArgumentTests {
         ["--expert-cache-slots", "12"],
         ["--expert-cache-policy", "mru"],
         ["--prefill", "maybe"],
-        ["--prefill-chunk-tokens", "256"],
+        ["--prefill-chunk-tokens", "512"],
         ["--rdadvise", "eager"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
@@ -764,4 +764,109 @@ struct ServerArgumentTests {
             try ServerArguments.parse(["--model", "model.gturbo"] + flag)
         }
     }
+    @Test func imageDataURLPreservesOrderedMultimodalParts() throws {
+        let dataURL = "data:image/png;base64,iVBORw0KGgo="
+        let data = Data(#"""
+        {"model":"m","messages":[{"role":"user","content":[
+          {"type":"text","text":"before"},
+          {"type":"image_url","image_url":{"url":"\#(dataURL)","detail":"auto"}},
+          {"type":"text","text":"after"}
+        ]}]}
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let message = try #require(validated.multimodalMessages?.first)
+        #expect(message.content.count == 3)
+        #expect(validated.imageFiles.count == 1)
+        guard case .text("before") = message.content[0],
+              case .image = message.content[1],
+              case .text("after") = message.content[2] else {
+            Issue.record("content part order changed")
+            return
+        }
+    }
+
+    @Test func imageIdentitiesAlignWithMessagesAndPreserveOrder() throws {
+        let a = "data:image/png;base64,iVBORw0KGgo="
+        let b = "data:image/png;base64,iVBORw0KGgoAAAA="
+        let json = #"""
+        {"model":"m","messages":[
+          {"role":"user","content":[
+            {"type":"image_url","image_url":{"url":"\#(a)"}},
+            {"type":"image_url","image_url":{"url":"\#(b)"}},
+            {"type":"text","text":"compare"}]},
+          {"role":"assistant","content":"ok"},
+          {"role":"user","content":"and now"}
+        ]}
+        """#
+        let request = try JSONDecoder().decode(
+            OpenAIChatRequest.self, from: Data(json.utf8))
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.imageIdentities.count == validated.messages.count)
+        #expect(validated.imageIdentities[0].count == 2)
+        #expect(validated.imageIdentities[1].isEmpty)
+        #expect(validated.imageIdentities[2].isEmpty)
+        #expect(validated.imageIdentities[0][0] != validated.imageIdentities[0][1])
+
+        // The same bytes must hash the same across separate requests, which is
+        // what lets a later turn recognise an earlier image.
+        let again = try OpenAIRequestValidator.validate(
+            try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(json.utf8)),
+            modelID: "m")
+        #expect(again.imageIdentities == validated.imageIdentities)
+        #expect(again.imageFiles.keys.sorted(by: { $0.uuidString < $1.uuidString })
+                != validated.imageFiles.keys.sorted(by: { $0.uuidString < $1.uuidString }))
+    }
+
+    @Test func imageValidationRejectsUnsupportedRoleDetailAndScheme() throws {
+        for content in [
+            #"{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}"#,
+            #"{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo=","detail":"high"}}]}"#,
+            #"{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]}"#,
+        ] {
+            let data = Data("{\"model\":\"m\",\"messages\":[\(content)]}".utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            #expect(throws: ServerRequestError.self) {
+                try OpenAIRequestValidator.validate(request, modelID: "m")
+            }
+        }
+    }
+
+    @Test func manyImagesValidateAndKeepPositionalIdentity() throws {
+        func conversation(imagesPerTurn: Int, turns: Int) throws -> OpenAIChatRequest {
+            var messages: [String] = []
+            var seed = 0
+            for turn in 0..<turns {
+                var parts: [String] = []
+                for _ in 0..<imagesPerTurn {
+                    seed += 1
+                    let payload = String(repeating: "A", count: 4 * seed)
+                    parts.append(
+                        #"{"type":"image_url","image_url":{"url":"data:image/png;base64,\#(payload)"}}"#)
+                }
+                parts.append(#"{"type":"text","text":"turn \#(turn)"}"#)
+                messages.append("{\"role\":\"user\",\"content\":[\(parts.joined(separator: ","))]}")
+                messages.append("{\"role\":\"assistant\",\"content\":\"ok \(turn)\"}")
+            }
+            messages.removeLast()
+            let json = "{\"model\":\"m\",\"messages\":[\(messages.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                OpenAIChatRequest.self, from: Data(json.utf8))
+        }
+
+        // Ten images across ten turns, each identified positionally.
+        let spread = try OpenAIRequestValidator.validate(
+            conversation(imagesPerTurn: 1, turns: 10), modelID: "m")
+        #expect(spread.imageFiles.count == 10)
+        #expect(spread.imageIdentities.count == spread.messages.count)
+        #expect(spread.imageIdentities.filter { !$0.isEmpty }.count == 10)
+
+        // And many in a single message.
+        let dense = try OpenAIRequestValidator.validate(
+            conversation(imagesPerTurn: 8, turns: 1), modelID: "m")
+        #expect(dense.imageFiles.count == 8)
+        #expect(dense.imageIdentities[0].count == 8)
+        #expect(Set(dense.imageIdentities[0]).count == 8)
+    }
+
 }

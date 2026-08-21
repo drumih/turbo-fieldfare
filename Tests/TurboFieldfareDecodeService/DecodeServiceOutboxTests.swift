@@ -32,6 +32,82 @@ import TurboFieldfareDecodeProtocol
         #expect(event.error == "first")
     }
 
+    /// Image encoding produces no progress or tokens, so the outbox must emit
+    /// memory-only events during that otherwise silent interval.
+    @Test func aSilentGenerationStillReportsMemory() throws {
+        let generationID = UUID()
+        let outbox = DecodeServiceOutbox(generationID: generationID)
+        let pipe = Pipe()
+        let writerFinished = DispatchSemaphore(value: 0)
+        let writer = Thread {
+            defer {
+                try? pipe.fileHandleForWriting.close()
+                writerFinished.signal()
+            }
+            try? outbox.runWriter(to: pipe.fileHandleForWriting)
+        }
+        writer.start()
+
+        let first = try DecodeFrameCodec.read(
+            DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        #expect(first.kind == .memory)
+        #expect(first.generationID == generationID)
+        #expect(try #require(first.currentMemoryBytes) > 0)
+
+        let second = try DecodeFrameCodec.read(
+            DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        #expect(second.kind == .memory)
+
+        outbox.publish(.prefillProgress(done: 4, total: 8))
+        var event = try DecodeFrameCodec.read(
+            DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        while event.kind == .memory {
+            event = try DecodeFrameCodec.read(
+                DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        }
+        #expect(event.kind == .prefill)
+        #expect(event.prefillDone == 4)
+        #expect(event.currentMemoryBytes != nil)
+
+        outbox.finish(error: AppInferenceError.cancelled)
+        #expect(writerFinished.wait(timeout: .now() + 5) == .success)
+    }
+
+    @Test func liveEventsCarryTheImageTowerFigure() throws {
+        let generationID = UUID()
+        let outbox = DecodeServiceOutbox(
+            generationID: generationID,
+            towerBytes: { 1_144_373_248 })
+        let pipe = Pipe()
+        let writerFinished = DispatchSemaphore(value: 0)
+        let writer = Thread {
+            defer {
+                try? pipe.fileHandleForWriting.close()
+                writerFinished.signal()
+            }
+            try? outbox.runWriter(to: pipe.fileHandleForWriting)
+        }
+        writer.start()
+
+        let idle = try DecodeFrameCodec.read(
+            DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        #expect(idle.kind == .memory)
+        #expect(idle.visionTowerMappedBytes == 1_144_373_248)
+
+        outbox.publish(.prefillProgress(done: 1, total: 2))
+        var event = try DecodeFrameCodec.read(
+            DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        while event.kind == .memory {
+            event = try DecodeFrameCodec.read(
+                DecodeServiceEvent.self, from: pipe.fileHandleForReading)
+        }
+        #expect(event.kind == .prefill)
+        #expect(event.visionTowerMappedBytes == 1_144_373_248)
+
+        outbox.finish(error: AppInferenceError.cancelled)
+        #expect(writerFinished.wait(timeout: .now() + 5) == .success)
+    }
+
     private func firstTerminal(
         from outbox: DecodeServiceOutbox,
         published event: AppInferenceEvent,

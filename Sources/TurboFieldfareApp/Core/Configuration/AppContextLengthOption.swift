@@ -22,9 +22,15 @@ public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
         let slidingLayers = architecture.numLayers - fullLayers
         let fp16Bytes = 2
         let keyAndValue = 2
+        // The ring the runtime actually allocates: the window plus the widest
+        // prefill chunk it may see, which is the pooled image-token count, not
+        // the default text chunk. Using the smaller number understates every
+        // estimate by about 29.69 MiB.
         let slidingRows = min(
             tokens,
-            architecture.slidingWindow + PrefillRuntimeConfig.defaultChunked.chunkTokens)
+            architecture.slidingWindow + max(
+                PrefillRuntimeConfig.defaultChunked.chunkTokens,
+                VisionConfig().maximumPooledTokens))
         let slidingBytesPerRow = architecture.numKVHeads
             * architecture.headDim * keyAndValue * fp16Bytes
         let fullBytesPerRow = architecture.numFullKVHeads
@@ -35,11 +41,14 @@ public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
 
     public var menuLabel: String {
         switch self {
-        case .fourK: "4K, Default"
-        case .eightK: "8K, +85 MB"
-        case .sixteenK: "16K, +250 MB"
-        case .thirtyTwoK: "32K, +590 MB"
-        case .sixtyFourK: "64K, +1.26 GB"
+        // Measured against the 8K default, not against 4K: moving the default
+        // without moving the baseline would have left every delta describing a
+        // size the user is no longer starting from.
+        case .fourK: "4K, -85 MB"
+        case .eightK: "8K, Default"
+        case .sixteenK: "16K, +170 MB"
+        case .thirtyTwoK: "32K, +500 MB"
+        case .sixtyFourK: "64K, +1.17 GB"
         }
     }
 }

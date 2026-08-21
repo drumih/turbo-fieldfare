@@ -137,4 +137,27 @@ import TurboFieldfareDecodeProtocol
                 from: pipe.fileHandleForReading)
         }
     }
+    @Test func generationRequestRoundTripPreservesImageDescriptors() throws {
+        let attachment = DecodeImageAttachment(
+            id: UUID(),
+            path: "/tmp/staged-image",
+            displayName: "image.png",
+            encodedBytes: 123,
+            sha256: String(repeating: "b", count: 64))
+        let request = DecodeGenerationRequest(
+            prompt: "describe",
+            imageAttachments: [attachment],
+            maxNewTokens: 16,
+            maxContextTokens: 4096,
+            temperature: 0)
+        let pipe = Pipe()
+        try pipe.fileHandleForWriting.write(contentsOf: DecodeFrameCodec.encode(request))
+        try pipe.fileHandleForWriting.close()
+
+        let decoded = try DecodeFrameCodec.read(
+            DecodeGenerationRequest.self,
+            from: pipe.fileHandleForReading)
+        #expect(decoded.imageAttachments == [attachment])
+    }
+
 }

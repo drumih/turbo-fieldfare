@@ -77,6 +77,12 @@ enum RemoteSnapshotLoader {
                 }
                 return value
             }
+            // The remote reports `info.size`; a value under 8 would underflow
+            // the bound below into ~2^64 and admit any header at all.
+            guard info.size >= 8 else {
+                throw RepackError.safetensorsHeaderInvalid(
+                    path: shard, detail: "remote reports \(info.size) bytes")
+            }
             if headerSize > Safetensors.maxHeaderBytes || headerSize > info.size - 8 {
                 throw RepackError.safetensorsHeaderTooLarge(path: shard, size: headerSize)
             }

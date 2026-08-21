@@ -13,7 +13,8 @@ import Testing
         #expect(request.temperature == 0.2)
         #expect(request.topK == 64)
         #expect(request.topP == 0.95)
-        #expect(request.maxNewTokens == 4_096)
+        #expect(request.maxNewTokens == 8_192,
+                "the reply limit follows the default context, 8K since 2026-08-17")
         #expect(request.repetitionPenalty == 1)
         #expect(!request.isPureGreedy)
         #expect(request.runtimeOptions.expertCacheSlots == 16)
@@ -94,7 +95,9 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(!model.hasStaleLoadedRuntime)
-        model.maxContextTokens = AppContextLengthOption.eightK.tokens
+        // Away from the default, which is 8K: setting the value it already has
+        // would prove nothing.
+        model.maxContextTokens = AppContextLengthOption.sixteenK.tokens
         #expect(model.hasStaleLoadedRuntime)
     }
 

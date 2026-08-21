@@ -17,6 +17,18 @@ public protocol AppModelLifecycleClient: AnyObject, AppInferenceClient {
 
 public protocol AppInferenceMemoryReporting: AnyObject {
     var currentInferenceMemoryBytes: UInt64? { get }
+    /// Resident bytes, which include the mapped weights the footprint omits.
+    /// Defaulted so a reporter that cannot answer simply does not.
+    var currentInferenceResidentBytes: UInt64? { get }
+    /// Bytes of image tower the inference process holds mapped, or nil when it
+    /// has no vision runtime. The only figure that separates the two image
+    /// residency policies: both charge the process the same few MB.
+    var currentInferenceTowerBytes: UInt64? { get }
+}
+
+extension AppInferenceMemoryReporting {
+    public var currentInferenceResidentBytes: UInt64? { nil }
+    public var currentInferenceTowerBytes: UInt64? { nil }
 }
 
 public protocol AppInferenceTranscriptReporting: AnyObject {

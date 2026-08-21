@@ -118,4 +118,52 @@ struct RangeCopyPlannerTests {
             fileSize: try Posix.fileSize(fd: fd, path: path),
             headerBytes: headerData)
     }
+    @Test func visionPlanIsBoundToTextManifestButNotAbsoluteOutputRoot() throws {
+        let firstRoot = temporaryRoot("vision-first")
+        let secondRoot = temporaryRoot("vision-second")
+        defer {
+            try? FileManager.default.removeItem(atPath: firstRoot)
+            try? FileManager.default.removeItem(atPath: secondRoot)
+        }
+        let source = SourceTensor(
+            name: "vision.weight",
+            shardPath: "model-00001.safetensors",
+            dtype: .bf16,
+            shape: [2],
+            absoluteOffset: 128,
+            sizeBytes: 4)
+        let plan = VisionPackPlan(
+            entries: [.init(
+                source: source,
+                executionPosition: 0,
+                fileOffset: 0,
+                quantSpec: nil,
+                groupSize: 64)],
+            weightsFileSize: 16_384,
+            sourcePayloadBytes: 4)
+        let binding = String(repeating: "a", count: 64)
+        let first = try RangeCopyPlanner.plan(
+            visionPackPlan: plan,
+            outputDirectory: firstRoot,
+            rangeChunkBytes: 4096,
+            textManifestSha256: binding)
+        let second = try RangeCopyPlanner.plan(
+            visionPackPlan: plan,
+            outputDirectory: secondRoot,
+            rangeChunkBytes: 4096,
+            textManifestSha256: binding)
+        let changedBinding = try RangeCopyPlanner.plan(
+            visionPackPlan: plan,
+            outputDirectory: secondRoot,
+            rangeChunkBytes: 4096,
+            textManifestSha256: String(repeating: "b", count: 64))
+
+        #expect(first.canonicalFingerprint == second.canonicalFingerprint)
+        #expect(first.canonicalFingerprint != changedBinding.canonicalFingerprint)
+        #expect(first.remoteBytesToDownload == 4)
+        #expect(first.expectedOutputs == [RemoteExpectedOutput(
+            relativePath: "vision_weights.bin",
+            size: 16_384)])
+    }
+
 }

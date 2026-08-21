@@ -9,7 +9,9 @@ import TurboFieldfare
         #expect(arguments.prompt == "hi")
         #expect(arguments.messagesFile == nil)
         #expect(arguments.maxNew == 1_024)
-        #expect(arguments.maxContext == 4096)
+        // 8K as of 2026-08-17, so an image and its prompt fit without anyone
+        // passing --max-context.
+        #expect(arguments.maxContext == 8192)
         #expect(arguments.temperature == 0.2)
         #expect(arguments.topK == 64)
         #expect(arguments.topP == 0.95)
@@ -71,6 +73,7 @@ import TurboFieldfare
             "--seed", "--stop", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
             "--rdadvise", "--help",
+            "--chat-prompt", "--image", "--vision-pack", "--vision-residency",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
@@ -146,7 +149,7 @@ import TurboFieldfare
             ("--expert-cache-slots", "7"),
             ("--expert-cache-policy", "fifo"),
             ("--prefill", "yes"),
-            ("--prefill-chunk-tokens", "256"),
+            ("--prefill-chunk-tokens", "512"),
             ("--rdadvise", "automatic"),
         ]
         for (flag, value) in invalidValues {
@@ -175,9 +178,9 @@ import TurboFieldfare
         }
 
         arguments.expertCacheSlots = RuntimeConfiguration.production.expertCacheSlots
-        arguments.prefillChunkTokens = 256
+        arguments.prefillChunkTokens = 512
         #expect(throws: ArgsError.invalidValue(
-            flag: "--prefill-chunk-tokens", value: "256")) {
+            flag: "--prefill-chunk-tokens", value: "512")) {
             _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         }
 
@@ -222,4 +225,72 @@ import TurboFieldfare
             ])
         }
     }
+    @Test func imageChatOptionsPreserveOrderAndResidency() throws {
+        let a = try Args.parse([
+            "--model", "m.gturbo",
+            "--image", "first.png",
+            "--chat-prompt", "compare",
+            "--image", "second.jpg",
+            "--vision-pack", "vision.gturbo",
+            "--vision-residency", "keep-ready",
+        ])
+        #expect(a.chatPrompt == "compare")
+        #expect(a.images == ["first.png", "second.jpg"])
+        #expect(a.visionPack == "vision.gturbo")
+        #expect(a.visionResidency == .keepReady)
+    }
+
+    @Test func imagesRejectRawAndMessagesModesButNotACount() {
+        #expect(throws: ArgsError.self) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "raw", "--image", "x.png",
+            ])
+        }
+        #expect(throws: ArgsError.self) {
+            _ = try Args.parse([
+                "--model", "m.gturbo", "--messages-file", "m.json",
+                "--image", "x.png",
+            ])
+        }
+        // No fixed image count: what bounds a request is the context, checked
+        // against the rendered prompt once token costs are known. The server
+        // moved to a context-derived budget and the CLI follows.
+        let many = try? Args.parse([
+            "--model", "m.gturbo", "--chat-prompt", "x",
+            "--image", "1", "--image", "2", "--image", "3",
+            "--image", "4", "--image", "5", "--image", "6",
+        ])
+        #expect(many?.images.count == 6)
+    }
+
+    @Test func mutual_exclusion_chatPromptVsMessagesFile() {
+        do {
+            _ = try Args.parse([
+                "--model", "m.gturbo",
+                "--chat-prompt", "X",
+                "--messages-file", "Y.json",
+            ])
+            Issue.record("expected ArgsError.mutuallyExclusive")
+        } catch let e as ArgsError {
+            #expect(e == .mutuallyExclusive("--chat-prompt", "--messages-file"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func mutual_exclusion_promptVsChatPrompt() {
+        do {
+            _ = try Args.parse([
+                "--model", "m.gturbo",
+                "--prompt", "X",
+                "--chat-prompt", "Y",
+            ])
+            Issue.record("expected ArgsError.mutuallyExclusive")
+        } catch let e as ArgsError {
+            #expect(e == .mutuallyExclusive("--prompt", "--chat-prompt"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
 }

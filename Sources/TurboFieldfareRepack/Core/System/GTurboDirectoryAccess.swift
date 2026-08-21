@@ -164,6 +164,12 @@ package final class GTurboDirectoryAccess {
             }
             if (info.st_mode & S_IFMT) == S_IFDIR {
                 if prefix.isEmpty, name == "tokenizer" { continue }
+                // Directory-shaped OS sidecars (.Spotlight-V100, .fseventsd,
+                // .TemporaryItems) land beside an artifact after any Finder or
+                // SMB round-trip. Descending into a Spotlight index is never
+                // right, and refusing the whole artifact over one is worse:
+                // list the entry so callers can filter it, and stop there.
+                if GTurboVisionFormatV1.isSidecarEntry(name) { continue }
                 guard depth < maxDepth else {
                     throw RepackError.configurationInvalid(
                         detail: "artifact directory nesting exceeds \(maxDepth)")

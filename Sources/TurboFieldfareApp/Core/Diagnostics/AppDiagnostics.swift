@@ -52,6 +52,7 @@ public struct AppDiagnostics: Equatable, Sendable {
     public var decodeSeconds: Double
     public var tokensPerSecond: Double
     public var peakMemoryBytes: UInt64?
+    public var visionTowerMappedBytes: UInt64?
     public var runtimeOptions: AppRuntimeOptions
     public var prefill: PrefillExecutionDiagnostics?
     public var runner: AppRunnerDiagnostics?
@@ -81,6 +82,7 @@ public struct AppDiagnostics: Equatable, Sendable {
                 decodeSeconds: Double,
                 tokensPerSecond: Double,
                 peakMemoryBytes: UInt64?,
+                visionTowerMappedBytes: UInt64? = nil,
                 runtimeOptions: AppRuntimeOptions,
                 prefill: PrefillExecutionDiagnostics? = nil,
                 runner: AppRunnerDiagnostics? = nil) {
@@ -92,6 +94,7 @@ public struct AppDiagnostics: Equatable, Sendable {
         self.decodeSeconds = decodeSeconds
         self.tokensPerSecond = tokensPerSecond
         self.peakMemoryBytes = peakMemoryBytes
+        self.visionTowerMappedBytes = visionTowerMappedBytes
         self.runtimeOptions = runtimeOptions
         self.prefill = prefill
         self.runner = runner
@@ -106,6 +109,7 @@ public struct AppTokenEvent: Equatable, Sendable {
 
 public enum AppInferenceEvent: Equatable, Sendable {
     case prefillProgress(done: Int, total: Int)
+    case memorySample
     case token(AppTokenEvent)
     case finished(AppDiagnostics)
     case cancelled(AppDiagnostics)
