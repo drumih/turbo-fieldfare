@@ -241,7 +241,27 @@ struct ServerPromptCacheTests {
             incomingMessages: cachedMessages + [repeated, repeatedResult],
             tools: tools)
 
+        // The bridge must continue from the cached second call, not its
+        // earlier identical twin. Both twins are followed by a tool response,
+        // so the first-token check alone cannot tell them apart; a
+        // twin-anchored bridge would replay the first response and the second
+        // call turn, carrying two response openers and a call opener.
         #expect(bridge.first == tokenizer.toolResponseID)
+        #expect(bridge.filter { $0 == tokenizer.toolResponseID }.count == 1)
+        #expect(!bridge.contains(tokenizer.toolCallStartID))
+
+        // A cached history that diverged from the incoming one cannot anchor
+        // the repeated sequence by position, and the ambiguous fallback still
+        // refuses rather than guessing a twin.
+        let diverged = [GFTokenizer.Message(role: .user, content: "list the other tree")]
+            + cachedMessages.dropFirst()
+        #expect(throws: (any Error).self) {
+            try tokenizer.encodeToolResultContinuation(
+                cachedMessages: diverged,
+                assistant: repeated,
+                incomingMessages: cachedMessages + [repeated, repeatedResult],
+                tools: tools)
+        }
     }
 
     private func request(

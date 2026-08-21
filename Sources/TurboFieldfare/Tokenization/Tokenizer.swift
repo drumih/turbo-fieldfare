@@ -400,25 +400,26 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         let callStart = starts[starts.count - callCount]
         let callSequence = Array(prefix[callStart...callEnd])
-        let matches = full.subsequenceStartIndices(matching: callSequence)
-        // The boundary is unambiguous by POSITION even when the sequence repeats.
-        // `prefix` and `full` render the same leading history, and the generation
-        // prompt is appended past the boundary, so the occurrence at `callStart`
-        // is the cached call itself rather than an identical earlier twin.
-        //
-        // Requiring a unique match cost agentic loops their cache: as soon as a
-        // model repeated a call verbatim — `ls` of the same path, a re-read of
-        // the same file — the sequence occurred twice, the bridge refused to
-        // encode, and the cache stayed dead for the rest of the conversation,
-        // because every later request carried both twins too.
+        // The cached call is located by position, not by unique occurrence: an
+        // agent that repeats a call verbatim renders an identical token
+        // sequence earlier in the history, so demanding a unique match refused
+        // the bridge and permanently dropped the cache from that turn on.
+        // Position is trustworthy exactly when both renders agree on
+        // everything up to and including the call block; a bare
+        // `matches.contains(callStart)` would also accept an identical twin
+        // that only coincidentally landed at `callStart` after a render
+        // divergence, and the tool-response guard below cannot tell twins
+        // apart because every twin is followed by its own tool response.
         let boundary: Int
-        if matches.contains(callStart) {
+        if full.count > callEnd, full[...callEnd] == prefix[...callEnd] {
             boundary = callStart
-        } else if matches.count == 1 {
-            boundary = matches[0]
         } else {
-            throw GFTokenizerError.invalidChatTemplate(
-                "cached assistant tool-call boundary is ambiguous")
+            let matches = full.subsequenceStartIndices(matching: callSequence)
+            guard matches.count == 1 else {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "cached assistant tool-call boundary is ambiguous")
+            }
+            boundary = matches[0]
         }
         let suffixStart = boundary + callSequence.count
         let suffix = Array(full[suffixStart...])
