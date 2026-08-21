@@ -45,13 +45,6 @@ public final class InstructionTranscriptDocumentController {
         }
     }
 
-    public static func shouldScrollToBottom(
-        wasAtBottom: Bool,
-        mutation: Mutation
-    ) -> Bool {
-        wasAtBottom || mutation == .finalized
-    }
-
     public static func shouldRunPrefillAnimation(
         response: String,
         isTerminal: Bool,
@@ -88,12 +81,12 @@ public final class InstructionTranscriptDocumentController {
                 response: response,
                 showsPrefillPlaceholder: displaysPrefillPlaceholder)
             mutation = .rebuilt
-        } else if response.count > self.response.count {
-            let delta = String(response.dropFirst(self.response.count))
-            storage.append(NSAttributedString(
-                string: delta,
-                attributes: Self.responseAttributes()))
-            assistantRange.length += (delta as NSString).length
+        } else if responseChanged && !isTerminal {
+            // Live-render the whole assistant block as it streams. Markdown block
+            // structure can change anywhere as tokens arrive (a newline turns a
+            // line into a list; a closing fence turns text into a code block), so
+            // re-render the response rather than append a plain-text delta.
+            renderAssistant(storage: storage, response: response, streaming: true)
             mutation = .appended
         }
 
@@ -102,9 +95,10 @@ public final class InstructionTranscriptDocumentController {
         self.showsPrefillPlaceholder = displaysPrefillPlaceholder
 
         if isTerminal && (!isFinalized || responseChanged) {
-            let rendered = renderer.render(response).attributedString
-            storage.replaceCharacters(in: assistantRange, with: rendered)
-            assistantRange.length = rendered.length
+            // Render tolerantly (not strict) so a response that ends inside a code
+            // fence stays a rendered code block instead of reverting to raw text
+            // at end of turn.
+            renderAssistant(storage: storage, response: response, streaming: true)
             isFinalized = true
             mutation = .finalized
         } else if !isTerminal {
@@ -131,6 +125,59 @@ public final class InstructionTranscriptDocumentController {
         return true
     }
 
+    private func renderAssistant(
+        storage: NSMutableAttributedString,
+        response: String,
+        streaming: Bool
+    ) {
+        let rendered = renderer.render(response, streaming: streaming).attributedString
+        let existing = storage.attributedSubstring(from: assistantRange)
+        // Streaming appends at the end, so the freshly rendered block usually
+        // shares a long prefix with what is already on screen. Replace only the
+        // differing suffix so already-laid-out content (everything the reader may
+        // have scrolled up to) is left untouched — a full replace each tick makes
+        // the transcript impossible to scroll while generating.
+        let shared = Self.commonPrefixLength(existing, rendered)
+        let staleRange = NSRange(
+            location: assistantRange.location + shared,
+            length: assistantRange.length - shared)
+        let freshTail = rendered.attributedSubstring(
+            from: NSRange(location: shared, length: rendered.length - shared))
+        storage.replaceCharacters(in: staleRange, with: freshTail)
+        assistantRange.length = rendered.length
+    }
+
+    /// Longest prefix over which `existing` and `replacement` agree on both
+    /// characters and attributes.
+    static func commonPrefixLength(
+        _ existing: NSAttributedString,
+        _ replacement: NSAttributedString
+    ) -> Int {
+        let a = existing.string as NSString
+        let b = replacement.string as NSString
+        let limit = min(a.length, b.length)
+        guard limit > 0 else { return 0 }
+
+        var charCommon = 0
+        while charCommon < limit, a.character(at: charCommon) == b.character(at: charCommon) {
+            charCommon += 1
+        }
+        guard charCommon > 0 else { return 0 }
+
+        var location = 0
+        var common = 0
+        while location < charCommon {
+            var aRange = NSRange(location: 0, length: 0)
+            var bRange = NSRange(location: 0, length: 0)
+            let aAttrs = existing.attributes(at: location, effectiveRange: &aRange)
+            let bAttrs = replacement.attributes(at: location, effectiveRange: &bRange)
+            guard NSDictionary(dictionary: aAttrs).isEqual(to: bAttrs) else { break }
+            location = min(min(NSMaxRange(aRange), NSMaxRange(bRange)), charCommon)
+            common = location
+        }
+        return common
+    }
+
     private func rebuild(
         storage: NSMutableAttributedString,
         prompt: String,
@@ -153,10 +200,9 @@ public final class InstructionTranscriptDocumentController {
             string: "Answer\n",
             attributes: Self.assistantLabelAttributes()))
         assistantRange = NSRange(location: document.length, length: 0)
-        document.append(NSAttributedString(
-            string: response,
-            attributes: Self.responseAttributes()))
-        assistantRange.length = (response as NSString).length
+        let renderedResponse = renderer.render(response, streaming: true).attributedString
+        document.append(renderedResponse)
+        assistantRange.length = renderedResponse.length
         prefillDotCount = 0
         prefillPlaceholderRange = nil
         if showsPrefillPlaceholder {

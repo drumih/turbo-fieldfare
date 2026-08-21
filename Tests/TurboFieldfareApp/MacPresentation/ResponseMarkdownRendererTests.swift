@@ -68,11 +68,10 @@ import Testing
         #expect(result.attributedString.string == source)
     }
 
-    @Test func unsupportedHTMLTableAndImageStayReadableAsRawText() {
+    @Test func unsupportedHTMLAndImagesStayReadableAsRawText() {
         let renderer = ResponseMarkdownRenderer()
         let samples = [
             "<div>Never execute this</div>",
-            "| A | B |\n|---|---|\n| 1 | 2 |",
             "![remote](https://example.com/image.png)",
         ]
 
@@ -81,6 +80,102 @@ import Testing
             #expect(result.usedFallback)
             #expect(result.attributedString.string == source)
         }
+    }
+
+    @Test func markdownTableRendersAsTableNotRawFallback() throws {
+        let source = """
+        | Action | Code |
+        | :--- | :--- |
+        | **Create** | `x = 1` |
+        | Remove | `del x` |
+        """
+        let result = ResponseMarkdownRenderer().render(source)
+        let attr = result.attributedString
+        let text = attr.string
+
+        #expect(!result.usedFallback)
+        #expect(text.contains("Action"))
+        #expect(text.contains("Create"))
+        #expect(text.contains("x = 1"))
+        #expect(!text.contains("|"))   // pipe delimiters consumed
+        #expect(!text.contains("**"))  // bold delimiters consumed
+
+        // Cells are laid out with NSTextTable blocks.
+        let cell = (text as NSString).range(of: "Create")
+        let paragraph = try #require(
+            attr.attribute(.paragraphStyle, at: cell.location, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(paragraph.textBlocks.first is NSTextTableBlock)
+    }
+
+    @Test func streamingClosesOpenCodeFenceSoTheBlockRendersWhileArriving() {
+        let renderer = ResponseMarkdownRenderer()
+        let partial = "Here is code:\n\n```swift\nlet answer = 42"
+
+        let strict = renderer.render(partial)
+        #expect(strict.usedFallback)
+        #expect(strict.attributedString.string == partial)
+
+        let streamed = renderer.render(partial, streaming: true)
+        #expect(!streamed.usedFallback)
+        #expect(streamed.attributedString.string.contains("let answer = 42"))
+        #expect(!streamed.attributedString.string.contains("```"))
+    }
+
+    @Test func streamingLeavesBalancedMarkdownIdenticalToStrictRender() {
+        let renderer = ResponseMarkdownRenderer()
+        let source = "A **bold** point with `code` and a closed block:\n\n```\ndone\n```"
+
+        let strict = renderer.render(source)
+        let streamed = renderer.render(source, streaming: true)
+
+        #expect(!streamed.usedFallback)
+        #expect(streamed.attributedString.string == strict.attributedString.string)
+    }
+
+    @Test func codeWithAngleBracketsRendersInsteadOfRawFallback() {
+        let renderer = ResponseMarkdownRenderer()
+        let samples = [
+            "Use `Array<Int>` and check x > 0.",
+            "```swift\nfor i in 2..<n {}\n```\n\n> note",
+            "```cpp\n#include <stdio.h>\nint main() { return 0; }\n```",
+            "```ts\nfunction id<T>(x: T): T { return x }\n```",
+        ]
+        for source in samples {
+            #expect(!renderer.render(source).usedFallback, "\(source)")
+        }
+    }
+
+    @Test func codeBlockCarriesContainerMarkerMonoFontAndKeywordColor() throws {
+        let result = ResponseMarkdownRenderer().render("```swift\nfunc f() {}\n```")
+        let attr = result.attributedString
+        let text = attr.string as NSString
+        #expect(!result.usedFallback)
+
+        let codeStart = text.range(of: "func f()").location
+        #expect(attr.attribute(
+            TranscriptCodeStyle.codeBlockAttribute,
+            at: codeStart, effectiveRange: nil) != nil)
+
+        let font = try #require(attr.attribute(.font, at: codeStart, effectiveRange: nil) as? NSFont)
+        #expect(font.fontDescriptor.symbolicTraits.contains(.monoSpace))
+
+        let keywordColor = attr.attribute(
+            .foregroundColor, at: text.range(of: "func").location, effectiveRange: nil) as? NSColor
+        #expect(keywordColor?.isEqual(TranscriptCodeStyle.keyword) == true)
+    }
+
+    @Test func codeBlockLinesAreSingleSpaced() {
+        let result = ResponseMarkdownRenderer().render("```swift\nlet a = 1\nlet b = 2\n```")
+        #expect(result.attributedString.string.contains("let a = 1\nlet b = 2"))
+        #expect(!result.attributedString.string.contains("let a = 1\n\nlet b = 2"))
+    }
+
+    @Test func pythonHashCommentsAreColoredAsComments() {
+        let result = ResponseMarkdownRenderer().render("```python\nx = 1  # note\n```")
+        let text = result.attributedString.string as NSString
+        let color = result.attributedString.attribute(
+            .foregroundColor, at: text.range(of: "# note").location, effectiveRange: nil) as? NSColor
+        #expect(color?.isEqual(TranscriptCodeStyle.comment) == true)
     }
 
     @Test func latexRemainsReadableText() {
@@ -139,6 +234,47 @@ import Testing
             effectiveRange: nil) as? NSColor
         #expect(answerColor?.isEqual(TurboFieldfareMacTheme.accentNSColor) == true)
         #expect(controller.response == "Hello")
+    }
+
+    @Test func streamingRendersMarkdownLiveInsteadOfRawText() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        let first = controller.synchronize(
+            storage: storage,
+            prompt: "Explain",
+            response: "# Title",
+            isTerminal: false)
+        #expect(first.mutation == .rebuilt)
+        #expect(!controller.isFinalized)
+        #expect(storage.string == "You\nExplain\n\nAnswer\nTitle")
+
+        let second = controller.synchronize(
+            storage: storage,
+            prompt: "Explain",
+            response: "# Title\n\nA **bold** line",
+            isTerminal: false)
+        #expect(second.mutation == .appended)
+        #expect(!controller.isFinalized)
+        #expect(storage.string.contains("bold"))
+        #expect(!storage.string.contains("**"))
+        #expect(!storage.string.contains("# Title"))
+    }
+
+    @Test func streamingCodeBlockRendersBeforeClosingFenceArrives() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+
+        let open = controller.synchronize(
+            storage: storage,
+            prompt: "Write code",
+            response: "```swift\nlet x = 1",
+            isTerminal: false)
+
+        #expect(open.mutation == .rebuilt)
+        #expect(!controller.isFinalized)
+        #expect(storage.string.contains("let x = 1"))
+        #expect(!storage.string.contains("```"))
     }
 
     @Test func animatedPrefillPlaceholderIsPresentationOnlyAndFirstResponseRemovesIt() {
@@ -240,7 +376,7 @@ import Testing
         #expect(storage.isEqual(to: unchanged))
     }
 
-    @Test func terminalPartialOutputIsReadableAndNextRunRestoresStreamingSource() {
+    @Test func returningToStreamingAfterFinalizeStillRendersMarkdown() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()
         _ = controller.synchronize(
@@ -257,13 +393,16 @@ import Testing
             isTerminal: false)
         #expect(result.mutation == .rebuilt)
         #expect(!controller.isFinalized)
-        #expect(storage.string.hasSuffix("Partial **answer**"))
+        // Streaming renders Markdown live, so a reopened stream shows the
+        // formatted text rather than the raw ** delimiters.
+        #expect(storage.string.hasSuffix("Partial answer"))
+        #expect(!storage.string.contains("**"))
     }
 
-    @Test func terminalResponseRendersAgainWhenClosingFenceArrivesLate() {
+    @Test func truncatedCodeBlockRendersAtTerminalInsteadOfRevertingToRaw() {
         let storage = NSMutableAttributedString()
         let controller = InstructionTranscriptDocumentController()
-        let partial = "```cpp\nkernel void matmul() {}"
+        let partial = "```cpp\nkernel void matmul() {}"  // ends inside an open fence
         let complete = partial + "\n```"
 
         let first = controller.synchronize(
@@ -272,7 +411,10 @@ import Testing
             response: partial,
             isTerminal: true)
         #expect(first.mutation == .finalized)
-        #expect(storage.string.hasSuffix(partial))
+        // A response that ends inside a fence stays a rendered code block at end of
+        // turn rather than reverting to raw ``` text.
+        #expect(!storage.string.contains("```"))
+        #expect(storage.string.contains("kernel void matmul() {}"))
 
         let updated = controller.synchronize(
             storage: storage,
@@ -287,6 +429,24 @@ import Testing
         #expect(!storage.string.contains("```"))
     }
 
+    @Test func streamingThenTerminalKeepsUnterminatedCodeBlockFormatted() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController()
+        let text = "See:\n\n```swift\nlet x = 1"  // no closing fence
+
+        _ = controller.synchronize(
+            storage: storage, prompt: "Q", response: text, isTerminal: false)
+        #expect(!storage.string.contains("```"))  // rendered while streaming
+
+        _ = controller.synchronize(
+            storage: storage, prompt: "Q", response: text, isTerminal: true)
+        #expect(!storage.string.contains("```"))  // still rendered at terminal — no revert
+        let ns = storage.string as NSString
+        #expect(storage.attribute(
+            TranscriptCodeStyle.codeBlockAttribute,
+            at: ns.range(of: "let x").location, effectiveRange: nil) != nil)
+    }
+
     @Test func selectionRangesClampToCurrentStorage() {
         let ranges = InstructionTranscriptDocumentController.clampedRanges([
             NSRange(location: 3, length: 20),
@@ -299,15 +459,21 @@ import Testing
         ])
     }
 
-    @Test func terminalFormattingAlwaysScrollsToBottom() {
-        #expect(InstructionTranscriptDocumentController.shouldScrollToBottom(
-            wasAtBottom: false,
-            mutation: .finalized))
-        #expect(InstructionTranscriptDocumentController.shouldScrollToBottom(
-            wasAtBottom: true,
-            mutation: .appended))
-        #expect(!InstructionTranscriptDocumentController.shouldScrollToBottom(
-            wasAtBottom: false,
-            mutation: .appended))
+    @Test func commonPrefixStopsAtFirstCharacterOrAttributeDifference() {
+        let mono = [NSAttributedString.Key.font: NSFont.monospacedSystemFont(
+            ofSize: NSFont.systemFontSize, weight: .regular)]
+        let plain = [NSAttributedString.Key.font: NSFont.systemFont(ofSize: NSFont.systemFontSize)]
+
+        // Same text, attributes diverge at index 5 → common prefix is 5.
+        let a = NSMutableAttributedString(string: "abcde", attributes: plain)
+        a.append(NSAttributedString(string: "fgh", attributes: plain))
+        let b = NSMutableAttributedString(string: "abcde", attributes: plain)
+        b.append(NSAttributedString(string: "fgh", attributes: mono))
+        #expect(InstructionTranscriptDocumentController.commonPrefixLength(a, b) == 5)
+
+        // Pure append shares the whole shorter string.
+        let short = NSAttributedString(string: "let x = 1", attributes: mono)
+        let long = NSAttributedString(string: "let x = 1\nlet y = 2", attributes: mono)
+        #expect(InstructionTranscriptDocumentController.commonPrefixLength(short, long) == 9)
     }
 }

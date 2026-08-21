@@ -273,6 +273,10 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         var timer: Timer?
         var prefillAnimationTimer: Timer?
         let documentController = InstructionTranscriptDocumentController()
+        /// Whether new output should keep the viewport pinned to the bottom.
+        /// Driven by the reader's own scrolling: true while they are at the
+        /// bottom, false the moment they scroll up to read earlier output.
+        private var autoFollow = true
 
         func attach(scrollView: NSScrollView, textView: NSTextView) {
             self.scrollView = scrollView
@@ -284,6 +288,17 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             timer.tolerance = 0.02
             RunLoop.main.add(timer, forMode: .common)
             self.timer = timer
+
+            let clipView = scrollView.contentView
+            clipView.postsBoundsChangedNotifications = true
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(clipViewDidScroll),
+                name: NSView.boundsDidChangeNotification, object: clipView)
+        }
+
+        @objc private func clipViewDidScroll() {
+            guard let scrollView else { return }
+            autoFollow = isAtBottom(scrollView)
         }
 
         func synchronize(
@@ -343,6 +358,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         func invalidate() {
+            NotificationCenter.default.removeObserver(self)
             timer?.invalidate()
             timer = nil
             stopPrefillAnimationTimer()
@@ -377,8 +393,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             isTerminal: Bool,
             showsPrefillPlaceholder: Bool
         ) {
-            guard let scrollView, let textView, let storage = textView.textStorage else { return }
-            let wasAtBottom = isAtBottom(scrollView)
+            guard let textView, let storage = textView.textStorage else { return }
             let selection = textView.selectedRanges.map(\.rangeValue)
 
             storage.beginEditing()
@@ -392,6 +407,9 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             updatePrefillAnimationTimer()
 
             guard update.mutation != .none else { return }
+            // A fresh prompt/response starts pinned to the bottom again.
+            if update.mutation == .rebuilt { autoFollow = true }
+
             let restored = InstructionTranscriptDocumentController.clampedRanges(
                 selection,
                 toLength: storage.length)
@@ -400,15 +418,15 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             } else {
                 textView.selectedRanges = restored.map(NSValue.init(range:))
             }
-            if InstructionTranscriptDocumentController.shouldScrollToBottom(
-                wasAtBottom: wasAtBottom,
-                mutation: update.mutation
-            ) {
-                if let textContainer = textView.textContainer {
-                    textView.layoutManager?.ensureLayout(for: textContainer)
-                }
-                textView.scrollToEndOfDocument(nil)
+
+            // Only the changed suffix was mutated, so content the reader scrolled
+            // up to is undisturbed. Follow the bottom solely when they are already
+            // there; never move their viewport otherwise.
+            guard autoFollow else { return }
+            if let textContainer = textView.textContainer {
+                textView.layoutManager?.ensureLayout(for: textContainer)
             }
+            textView.scrollToEndOfDocument(nil)
         }
 
         private func isAtBottom(_ scrollView: NSScrollView) -> Bool {
@@ -426,7 +444,18 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
 
-        let textView = NSTextView()
+        // Build an explicit TextKit 1 stack so the transcript can draw rounded
+        // containers behind fenced code blocks via TranscriptLayoutManager.
+        let textStorage = NSTextStorage()
+        let layoutManager = TranscriptLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(
+            size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = true
+        textContainer.lineFragmentPadding = 0
+        layoutManager.addTextContainer(textContainer)
+
+        let textView = NSTextView(frame: .zero, textContainer: textContainer)
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
@@ -435,8 +464,14 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
-        textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.lineFragmentPadding = 0
+        // A manually built text view (unlike `NSTextView()`) does not get a
+        // growable maxSize, so without this it stays capped at the viewport
+        // height and the transcript cannot scroll once content overflows.
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude)
+        textContainer.heightTracksTextView = false
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
         textView.setAccessibilityLabel("Conversation transcript")
