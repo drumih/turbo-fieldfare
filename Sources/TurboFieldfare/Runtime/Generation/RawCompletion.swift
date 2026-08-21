@@ -28,6 +28,31 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    public let telemetryReport: ProfilingReport?
+
+    public init(prefillTokens: Int,
+                cachedPromptTokens: Int,
+                computedPrefillTokens: Int,
+                prefillSeconds: Double,
+                newTokens: Int,
+                decodeSeconds: Double,
+                reason: StopReason,
+                kvPosition: Int,
+                kvBackedTokenIDs: [Int32],
+                uncommittedBoundaryTokenIDs: [Int32],
+                telemetryReport: ProfilingReport? = nil) {
+        self.prefillTokens = prefillTokens
+        self.cachedPromptTokens = cachedPromptTokens
+        self.computedPrefillTokens = computedPrefillTokens
+        self.prefillSeconds = prefillSeconds
+        self.newTokens = newTokens
+        self.decodeSeconds = decodeSeconds
+        self.reason = reason
+        self.kvPosition = kvPosition
+        self.kvBackedTokenIDs = kvBackedTokenIDs
+        self.uncommittedBoundaryTokenIDs = uncommittedBoundaryTokenIDs
+        self.telemetryReport = telemetryReport
+    }
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -134,6 +159,9 @@ public func runRawCompletion(producer: any LogitProducer,
         let continuable = producer as! any ContinuableLogitProducer
         try continuable.prepareForContinuation(expectedPosition: cachedPromptTokens)
     }
+    let telemetry = fusedRunner?.telemetry
+    telemetry?.reset()
+    telemetry?.recordPrefillStart(tokens: computedPrefillTokens)
     let prefillStart = Date()
     var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
@@ -172,8 +200,10 @@ public func runRawCompletion(producer: any LogitProducer,
             onProgress(.prefill(done: position, total: promptIds.count))
         }
     }
+    telemetry?.recordPrefillEnd()
 
     let decodeStart = Date()
+    telemetry?.recordDecodeStart()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
     var generated = 0
@@ -190,13 +220,18 @@ public func runRawCompletion(producer: any LogitProducer,
                 tokenID = Int32(bitPattern: token)
             case .logitsWritten:
                 tokenID = try sampleOnce(scratch: scratch, context: context,
-                                         history: history, config: config, position: generated)
+                                         history: history, config: config, position: generated,
+                                         telemetry: telemetry)
             }
         } else if fusedGreedy {
             tokenID = Int32(bitPattern: fusedRunner!.lastGreedyToken)
         } else {
             tokenID = try sampleOnce(scratch: scratch, context: context,
-                                     history: history, config: config, position: generated)
+                                     history: history, config: config, position: generated,
+                                     telemetry: telemetry)
+        }
+        if generated == 0 {
+            telemetry?.recordFirstTokenGenerated()
         }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
@@ -232,6 +267,9 @@ public func runRawCompletion(producer: any LogitProducer,
         position += 1
         uncommittedBoundaryTokenIDs.removeAll(keepingCapacity: true)
     }
+    telemetry?.recordDecodeEnd(tokens: generated)
+    let report = telemetry?.generateReport(modelName: "Gemma 4 26B-A4B",
+                                           contextLength: promptIds.count + config.maxNewTokens)
 
     return RawDecodeResult(prefillTokens: promptIds.count,
                            cachedPromptTokens: cachedPromptTokens,
@@ -242,16 +280,23 @@ public func runRawCompletion(producer: any LogitProducer,
                            reason: reason,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
-                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
+                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+                           telemetryReport: report)
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,
-                        history: [Int32], config: GenerationConfig, position: Int) throws -> Int32 {
+                        history: [Int32], config: GenerationConfig, position: Int,
+                        telemetry: RuntimeTelemetry? = nil) throws -> Int32 {
+    let tStart = telemetry != nil ? RuntimeTelemetry.currentNanos() : 0
     let cb = context.queue.makeCommandBuffer()!
     scratch.sampler.sample(commandBuffer: cb, logits: scratch.logits, probs: scratch.probs,
                            history: history, config: config, position: position,
                            outToken: scratch.outToken)
     cb.commit(); cb.waitUntilCompleted()
     try checkCommandBufferError(cb.error)
+    if let telemetry {
+        let elapsed = RuntimeTelemetry.currentNanos() - tStart
+        telemetry.addCPUTime(sampling: elapsed)
+    }
     return Int32(bitPattern: scratch.outToken.contents().load(as: UInt32.self))
 }

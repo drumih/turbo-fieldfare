@@ -105,13 +105,13 @@ extension Model {
         return streamer.adviseExpertCachePlanMisses(plan.cachePlan)
     }
 
-    public func fetchRoutedExperts(plan: RoutedExpertFetchPlan) async throws -> [TensorView] {
+    public func fetchRoutedExperts(plan: RoutedExpertFetchPlan, scores: [Float]? = nil) async throws -> [TensorView] {
         try ensureLayerOpened(plan.layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[plan.layer]! }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let buffers = try streamer.executeExpertCachePlan(plan.cachePlan)
+                    let buffers = try streamer.executeExpertCachePlan(plan.cachePlan, layer: plan.layer, scores: scores)
                     continuation.resume(returning: Self.makeExpertViews(
                         buffers,
                         layer: plan.layer,

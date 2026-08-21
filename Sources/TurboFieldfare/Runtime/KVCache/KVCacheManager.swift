@@ -125,6 +125,10 @@ public final class KVCacheManager {
 
     public func layerKind(_ layer: Int) -> LayerKind { kinds[layer] }
 
+    public var totalByteSize: UInt64 {
+        zip(kBuffers, vBuffers).reduce(0) { $0 + UInt64($1.0.length + $1.1.length) }
+    }
+
     /// Bytes per token for `layer` (K and V share the same stride).
     public func stride(layer: Int) -> Int { strides[layer] }
 

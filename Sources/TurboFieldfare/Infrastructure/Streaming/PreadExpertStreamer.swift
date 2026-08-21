@@ -39,12 +39,14 @@ public struct ExpertCachePlan: Sendable, Equatable {
     public let assignedSlots: [Int]
     public let misses: [Int]
     public let hits: Int
+    public let evictedExperts: [Int?]
 
-    public init(experts: [Int], assignedSlots: [Int], misses: [Int], hits: Int) {
+    public init(experts: [Int], assignedSlots: [Int], misses: [Int], hits: Int, evictedExperts: [Int?] = []) {
         self.experts = experts
         self.assignedSlots = assignedSlots
         self.misses = misses
         self.hits = hits
+        self.evictedExperts = evictedExperts.isEmpty ? [Int?](repeating: nil, count: experts.count) : evictedExperts
     }
 }
 
@@ -61,6 +63,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     public let layout: StreamLayout
     public let slotCount: Int
     public let cachePolicy: ExpertCachePolicy
+    public var telemetry: RuntimeTelemetry?
+    public var expertTracer: ExpertTracer?
 
     private let fd: Int32
     private let slotPointers: [UnsafeMutableRawPointer]
@@ -83,18 +87,39 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                       device: device,
                       slotCount: slotCount,
                       cachePolicy: cachePolicy,
-                      fileDescriptor: nil)
+                      fileDescriptor: nil,
+                      telemetry: nil,
+                      expertTracer: nil)
+    }
+
+    public convenience init(layout: StreamLayout,
+                            device: MTLDevice,
+                            slotCount: Int,
+                            cachePolicy: ExpertCachePolicy = .lfu,
+                            telemetry: RuntimeTelemetry?,
+                            expertTracer: ExpertTracer? = nil) throws {
+        try self.init(layout: layout,
+                      device: device,
+                      slotCount: slotCount,
+                      cachePolicy: cachePolicy,
+                      fileDescriptor: nil,
+                      telemetry: telemetry,
+                      expertTracer: expertTracer)
     }
 
     package init(layout: StreamLayout,
                  device: MTLDevice,
                  slotCount: Int,
                  cachePolicy: ExpertCachePolicy = .lfu,
-                 fileDescriptor: Int32?) throws {
+                 fileDescriptor: Int32?,
+                 telemetry: RuntimeTelemetry? = nil,
+                 expertTracer: ExpertTracer? = nil) throws {
         precondition(slotCount > 0, "slotCount must be positive")
         self.layout = layout
         self.slotCount = slotCount
         self.cachePolicy = cachePolicy
+        self.telemetry = telemetry
+        self.expertTracer = expertTracer
         let pageSize = Int(getpagesize())
 
         let openedFD = fileDescriptor.map { fcntl($0, F_DUPFD_CLOEXEC, 0) }
@@ -189,10 +214,17 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         guard regionOffset + layout.expertStride <= layout.streamSize else {
             throw StreamerError.offsetOutOfRange(regionOffset)
         }
+        let startNanos = telemetry != nil ? RuntimeTelemetry.currentNanos() : 0
+        telemetry?.recordSSDReadStart()
         try readFull(
             into: slotPointers[slot],
             fileOffset: layout.streamOffset + regionOffset,
             count: Int(layout.expertStride))
+        if let telemetry {
+            let latency = RuntimeTelemetry.currentNanos() - startNanos
+            telemetry.recordSSDReadEnd(bytes: layout.expertStride, latencyNanos: latency)
+            telemetry.recordExpertLoad(layer: layer, expert: expert)
+        }
         return (slotBuffers[slot], 0, layout.expertStride)
     }
 
@@ -252,10 +284,15 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         for slot in assignedSlots where slot >= 0 {
             slotLastUse[slot] = clock
         }
+        var evictedExperts = [Int?](repeating: nil, count: experts.count)
         for (offset, index) in misses.enumerated() {
             let slot = evictable[offset]
             assignedSlots[index] = slot
             reserved[slot] = true
+            let oldExp = slotExpert[slot]
+            if oldExp >= 0 {
+                evictedExperts[index] = oldExp
+            }
             slotExpert[slot] = -1
             slotLastUse[slot] = clock
         }
@@ -264,25 +301,36 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             experts: experts,
             assignedSlots: assignedSlots,
             misses: misses,
-            hits: experts.count - misses.count)
+            hits: experts.count - misses.count,
+            evictedExperts: evictedExperts)
     }
 
-    public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
+    public func executeExpertCachePlan(_ plan: ExpertCachePlan, layer: Int = 0, scores: [Float]? = nil) throws
         -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
         precondition(plan.experts.count <= slotCount,
                      "expert cache plan exceeds slot count")
         precondition(plan.assignedSlots.count == plan.experts.count,
                      "expert cache plan slot count mismatch")
 
+        telemetry?.recordCacheEvent(hits: plan.hits, misses: plan.misses.count, evictions: plan.misses.count)
+
         let errorLock = NSLock()
         nonisolated(unsafe) var firstError: Error?
+        nonisolated(unsafe) var missLatencies = [Int: UInt64]()
+        let missLatencyLock = NSLock()
+
         DispatchQueue.concurrentPerform(iterations: plan.misses.count) { missOffset in
             let index = plan.misses[missOffset]
+            let tStart = RuntimeTelemetry.currentNanos()
             do {
                 _ = try self.loadExpert(
-                    layer: 0,
+                    layer: layer,
                     expert: plan.experts[index],
                     slot: plan.assignedSlots[index])
+                let latency = RuntimeTelemetry.currentNanos() - tStart
+                missLatencyLock.lock()
+                missLatencies[index] = latency
+                missLatencyLock.unlock()
             } catch {
                 errorLock.lock()
                 if firstError == nil { firstError = error }
@@ -296,6 +344,28 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             slotExpert[plan.assignedSlots[index]] = plan.experts[index]
         }
         cacheLock.unlock()
+
+        if let tracer = expertTracer {
+            let missSet = Set(plan.misses)
+            for (rank, expert) in plan.experts.enumerated() {
+                let hit = !missSet.contains(rank)
+                let latency = missLatencies[rank] ?? 0
+                let eviction = plan.evictedExperts[rank]
+                let score = scores != nil && rank < scores!.count ? scores![rank] : nil
+                tracer.recordAccess(
+                    layer: layer,
+                    expert: expert,
+                    routingRank: rank,
+                    routingScore: score,
+                    hit: hit,
+                    ssdRead: !hit,
+                    readSize: hit ? 0 : layout.expertStride,
+                    readLatencyNanos: latency,
+                    cacheInsertion: !hit,
+                    evictedExpert: eviction
+                )
+            }
+        }
 
         return expertCachePlanBuffers(plan)
     }
