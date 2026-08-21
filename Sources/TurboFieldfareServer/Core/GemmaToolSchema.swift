@@ -58,6 +58,15 @@ enum GemmaToolSchema {
             }
             object["properties"] = .object(adapted)
         }
+        if type == "object", object["properties"] == nil {
+            // The chat template routes an object node without `properties`
+            // through a branch that iterates the node's own keys as if they
+            // were property schemas; preserved keywords such as
+            // `additionalProperties` or `default` then crash the `upper`
+            // filter. An explicit empty mapping selects the safe branch and
+            // renders identically (`properties:{}`).
+            object["properties"] = .object([:])
+        }
 
         if let items = object["items"] {
             guard type == "array" else {
