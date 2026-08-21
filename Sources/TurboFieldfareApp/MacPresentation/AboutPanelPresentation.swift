@@ -17,7 +17,7 @@ public enum AboutPanelPresentation {
     // Most users build from a clone, where there is no Info.plist to read a
     // version from, so this constant is what they see. Scripts/check_app_version.rb
     // fails CI when it falls behind the newest published release.
-    public static let fallbackShortVersion = "0.4.5"
+    public static let fallbackShortVersion = "0.4.6"
 
     private static let licenseURL = URL(
         string: "https://github.com/drumih/turbo-fieldfare/blob/main/LICENSE")!
