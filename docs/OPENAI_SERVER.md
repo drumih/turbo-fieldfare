@@ -193,6 +193,10 @@ Endpoints:
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/files`, `GET /v1/files`, `GET /v1/files/{id}`,
+  `GET /v1/files/{id}/content`, `DELETE /v1/files/{id}`
+- `POST /v1/batches`, `GET /v1/batches`, `GET /v1/batches/{id}`,
+  `POST /v1/batches/{id}/cancel`
 
 Chat Completions supports JSON and Server-Sent Events responses. Set
 `"stream": true` for streaming. Set
@@ -203,9 +207,18 @@ Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
 `max_completion_tokens`, and function-tool fields.
 
-The server supports one model and one choice. It does not support the Responses
-API, legacy Completions, embeddings, multimodal input, structured output,
-batching, log probabilities, or remote model switching.
+The server supports one model and one choice. Batch accepts OpenAI-format JSONL
+input files for non-streaming `/v1/chat/completions` with `completion_window`
+set to `"24h"`. `output_expires_after` is supported with `anchor` set to
+`"created_at"` and `seconds` from 3,600 through 2,592,000; it removes generated
+output and error JSONL files after that interval, and their File objects expose
+`expires_at`. It does not support the Responses API, legacy Completions,
+embeddings, multimodal input, structured output, log probabilities, or remote
+model switching. Batch and Files data is discarded on server restart.
+
+An invalid JSONL input file produces a Batch with status `failed` and a
+structured `errors` list. Invalid `POST /v1/batches` parameters still return an
+HTTP error envelope.
 
 Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
 KV contexts use more memory. On an 8 GB Mac, run one model process at a time and

@@ -136,6 +136,7 @@ public struct OpenAIStreamOptions: Codable, Equatable, Sendable {
 }
 
 public struct OpenAIChatRequest: Codable, Equatable, Sendable {
+    public let customID: String?
     public let model: String
     public let messages: [OpenAIChatMessage]
     public let stream: Bool?
@@ -158,6 +159,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
+        case customID = "custom_id"
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -169,6 +171,32 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
     }
+}
+
+public struct OpenAIBatchCreateRequest: Codable, Equatable, Sendable {
+    public struct OutputExpiresAfter: Codable, Equatable, Sendable {
+        public let anchor: String
+        public let seconds: Int
+    }
+
+    public let inputFileID: String
+    public let endpoint: String
+    public let completionWindow: String
+    public let metadata: [String: String]?
+    public let outputExpiresAfter: OutputExpiresAfter?
+
+    enum CodingKeys: String, CodingKey {
+        case inputFileID = "input_file_id"
+        case endpoint
+        case completionWindow = "completion_window"
+        case metadata
+        case outputExpiresAfter = "output_expires_after"
+    }
+}
+
+/// Deprecated local convenience envelope retained during migration to Files + Batch JSONL.
+struct LegacyOpenAIChatBatchRequest: Codable, Sendable {
+    let requests: [OpenAIChatRequest]
 }
 
 public struct OpenAIUsage: Codable, Equatable, Sendable {

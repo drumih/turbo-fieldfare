@@ -267,6 +267,17 @@ private actor FailingServerBackend: ServerInferenceBackend {
     }
 }
 
+private actor BatchFailingServerBackend: ServerInferenceBackend {
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        throw ServerRequestError.invalid(message: "synthetic failure",
+                                         param: nil,
+                                         code: "synthetic_failure")
+    }
+}
+
 @Suite("OpenAI HTTP server", .serialized)
 struct HTTPServerTests {
     @Test func healthModelsAndNonStreamingCompletion() async throws {
@@ -471,6 +482,510 @@ struct HTTPServerTests {
         #expect(text.contains(#""code":"internal_error""#))
         #expect(!text.contains("sensitiveFailure"))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func batchRunsNonStreamingRequestsInOrder() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TurboFieldfareBatchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend(),
+            batchOutputDirectory: outputDirectory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"requests":[
+          {"custom_id":"first","model":"test-model","messages":[{"role":"user","content":"first"}]},
+          {"model":"test-model","messages":[{"role":"user","content":"second"}]}
+        ]}
+        """#.utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["object"] as? String == "batch")
+        let batchID = try #require(object["id"] as? String)
+        #expect(object["output_file_id"] is NSNull || object["output_file_id"] == nil)
+        #expect((object["request_counts"] as? [String: Any])?["total"] as? Int == 2)
+
+        let listData = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/batches?limit=1")!).0
+        let list = try #require(JSONSerialization.jsonObject(with: listData) as? [String: Any])
+        #expect(list["object"] as? String == "list")
+        #expect((list["data"] as? [[String: Any]])?.first?["id"] as? String == batchID)
+        #expect(list["has_more"] as? Bool == false)
+
+        var status = ""
+        var outputFileID: String?
+        var usage: [String: Any]?
+        for _ in 0..<100 {
+            let statusData = try await URLSession.shared.data(
+                from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(batchID)")!).0
+            let snapshot = try #require(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+            status = try #require(snapshot["status"] as? String)
+            if status == "completed" {
+                outputFileID = try #require(snapshot["output_file_id"] as? String)
+                usage = try #require(snapshot["usage"] as? [String: Any])
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(status == "completed")
+        #expect(outputFileID?.hasPrefix("file-") == true)
+        #expect((usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int == 0)
+        let outputData = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(try #require(outputFileID))/content")!).0
+        let output = String(decoding: outputData, as: UTF8.self)
+        let filesData = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files?purpose=batch_output&limit=1&order=desc")!).0
+        let filesObject = try #require(JSONSerialization.jsonObject(with: filesData) as? [String: Any])
+        let files = try #require(filesObject["data"] as? [[String: Any]])
+        let listedOutput = try #require(files.first { $0["id"] as? String == outputFileID })
+        #expect(listedOutput["purpose"] as? String == "batch_output")
+        #expect(filesObject["has_more"] as? Bool == false)
+        let lines = output.split(separator: "\n")
+        #expect(lines.count == 2)
+        #expect(lines[0].contains("\"custom_id\":\"first\""))
+        #expect(lines.allSatisfy { $0.contains("\"status_code\":200") })
+
+        var reuseOutput = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        reuseOutput.httpMethod = "POST"
+        reuseOutput.setValue("application/json", forHTTPHeaderField: "content-type")
+        reuseOutput.httpBody = Data(#"{"input_file_id":"\#(try #require(outputFileID))","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (reuseData, reuseResponse) = try await URLSession.shared.data(for: reuseOutput)
+        #expect((reuseResponse as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: reuseData, as: UTF8.self).contains("input_file_id"))
+
+        try await server.shutdown()
+    }
+
+    @Test func fileUploadRequiresMultipartContentType() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{}".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 415)
+        #expect(String(decoding: data, as: UTF8.self).contains("unsupported_media_type"))
+        try await server.shutdown()
+    }
+
+    @Test func batchRejectsStreamingItems() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"requests":[{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}]}
+        """#.utf8)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("unsupported_value"))
+
+        try await server.shutdown()
+    }
+
+    @Test func batchRejectsOversizedMetadataBeforeReadingInputFile() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let metadata = Dictionary(uniqueKeysWithValues: (0..<17).map { ("key\($0)", "value") })
+        let body: [String: Any] = ["input_file_id": "file-missing", "endpoint": "/v1/chat/completions",
+                                   "completion_window": "24h", "metadata": metadata]
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("metadata"))
+        try await server.shutdown()
+    }
+
+    @Test func malformedBatchJSONUsesInvalidJSONError() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data("{".utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("invalid_json"))
+        try await server.shutdown()
+    }
+
+    @Test func batchAcceptsOpenAIFileAndJSONLContract() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "batch-test-boundary"
+        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n" +
+            #"{"custom_id":"row-2","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"again"}]}}"# + "\n"
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, fileResponse) = try await URLSession.shared.data(for: upload)
+        #expect((fileResponse as? HTTPURLResponse)?.statusCode == 200)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        let files = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files")!).0
+        #expect((try #require(JSONSerialization.jsonObject(with: files) as? [String: Any]))["data"] as? [[String: Any]] != nil)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h","metadata":{"source":"http-test"},"output_expires_after":{"anchor":"created_at","seconds":3600}}"#.utf8)
+        let (batchData, batchResponse) = try await URLSession.shared.data(for: create)
+        #expect((batchResponse as? HTTPURLResponse)?.statusCode == 200)
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        #expect(batch["object"] as? String == "batch")
+        #expect(batch["model"] as? String == "test-model")
+        #expect(batch["input_file_id"] as? String == fileID)
+        #expect(batch["completion_window"] as? String == "24h")
+        #expect((batch["metadata"] as? [String: Any])?["source"] as? String == "http-test")
+        #expect((batch["request_counts"] as? [String: Any])?["total"] as? Int == 2)
+        #expect(batch["errors"] is NSNull || batch["errors"] == nil)
+        #expect((batch["expires_at"] as? Int ?? 0) > (batch["created_at"] as? Int ?? 0))
+        let batchID = try #require(batch["id"] as? String)
+        var outputFileID: String?
+        for _ in 0..<20 {
+            let statusData = try await URLSession.shared.data(
+                from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(batchID)")!).0
+            let status = try #require(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+            if status["status"] as? String == "completed" {
+                outputFileID = try #require(status["output_file_id"] as? String)
+                break
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let output = try #require(outputFileID)
+        let outputFile = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(output)")!).0
+        let outputObject = try #require(JSONSerialization.jsonObject(with: outputFile) as? [String: Any])
+        #expect((outputObject["expires_at"] as? Int ?? 0) > (outputObject["created_at"] as? Int ?? 0))
+        let outputLines = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/files/\(output)/content")!).0
+        #expect(String(decoding: outputLines, as: UTF8.self).split(separator: "\n").count == 2)
+        try await server.shutdown()
+    }
+
+    @Test func batchRejectsInvalidOutputExpiryPolicy() async throws {
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let body: [String: Any] = ["input_file_id": "file-missing", "endpoint": "/v1/chat/completions",
+                                   "completion_window": "24h",
+                                   "output_expires_after": ["anchor": "created_at", "seconds": 1]]
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains("output_expires_after"))
+        try await server.shutdown()
+    }
+
+    @Test func invalidBatchJSONLReturnsFailedBatchWithErrors() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareInvalidBatchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "invalid-batch-boundary"
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\nnot-json\n\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, _) = try await URLSession.shared.data(for: upload)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (batchData, response) = try await URLSession.shared.data(for: create)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        #expect(batch["status"] as? String == "failed")
+        let errors = try #require(batch["errors"] as? [String: Any])
+        #expect(errors["object"] as? String == "list")
+        let data = try #require(errors["data"] as? [[String: Any]])
+        #expect(!(data).isEmpty)
+        #expect(data[0]["line"] as? Int == 1)
+        try await server.shutdown()
+    }
+
+    @Test func blankBatchJSONLLineReturnsItsLineNumber() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBlankBatchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "blank-batch-boundary"
+        let requestLine = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"#
+        let secondRequestLine = requestLine.replacingOccurrences(of: "row-1", with: "row-2")
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\nnot-json\n\n\(requestLine)\n\(secondRequestLine)\n\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, _) = try await URLSession.shared.data(for: upload)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (batchData, _) = try await URLSession.shared.data(for: create)
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        let errors = try #require(batch["errors"] as? [String: Any])
+        let data = try #require(errors["data"] as? [[String: Any]])
+        #expect(data.map { $0["line"] as? Int } == [1, 2])
+        try await server.shutdown()
+    }
+
+    @Test func batchFilesAreDiscardedOnServerRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareRestartBatchTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                             backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let firstChannel = try await first.start(port: 0)
+        let firstPort = try #require(firstChannel.localAddress?.port)
+        let boundary = "restart-batch-boundary"
+        let jsonl = #"{"custom_id":"row-1","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(firstPort)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, _) = try await URLSession.shared.data(for: upload)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        try await first.shutdown()
+
+        let second = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let secondChannel = try await second.start(port: 0)
+        let secondPort = try #require(secondChannel.localAddress?.port)
+        let (_, response) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(secondPort)/v1/files/\(fileID)")!)
+        #expect((response as? HTTPURLResponse)?.statusCode == 404)
+        try await second.shutdown()
+    }
+
+    @Test func expiredBatchOutputFileIsRemoved() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareExpiredOutputTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BatchFileStore(directory: directory)
+        let id = "file-expired-output"
+        let output = directory.appendingPathComponent(id).appendingPathExtension("jsonl")
+        try Data("{}\n".utf8).write(to: output)
+        _ = try await store.registerBatchOutput(id, expiresAt: Int(Date().timeIntervalSince1970) - 1)
+        #expect((await store.get(id))?.id == nil)
+        for _ in 0..<20 where FileManager.default.fileExists(atPath: output.path) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
+    @Test func batchFileSizeLimitReturnsOpenAIError() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchFileSizeTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = BatchFileStore(directory: directory, maximumInputBytes: 3)
+        do {
+            _ = try await store.create(filename: "input.jsonl", purpose: "batch", contents: Data("1234".utf8))
+            Issue.record("expected batch file size rejection")
+        } catch let error as ServerRequestError {
+            #expect(error.envelope.error.code == "invalid_value")
+            #expect(error.envelope.error.param == "file")
+        }
+    }
+
+    @Test func batchRejectsMoreThanFiftyThousandJSONLRequests() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TurboFieldfareBatchLimitTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1,
+                                              backend: ScriptedServerBackend(), batchOutputDirectory: directory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let boundary = "batch-limit-boundary"
+        let line = #"{"custom_id":"row","method":"POST","url":"/v1/chat/completions","body":{"model":"test-model","messages":[{"role":"user","content":"hi"}]}}"# + "\n"
+        let jsonl = String(repeating: line, count: 50_001)
+        let multipart = "--\(boundary)\r\nContent-Disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.jsonl\"\r\nContent-Type: application/jsonl\r\n\r\n\(jsonl)\r\n--\(boundary)--\r\n"
+        var upload = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/files")!)
+        upload.httpMethod = "POST"
+        upload.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "content-type")
+        upload.httpBody = Data(multipart.utf8)
+        let (fileData, uploadResponse) = try await URLSession.shared.data(for: upload)
+        #expect((uploadResponse as? HTTPURLResponse)?.statusCode == 200)
+        let file = try #require(JSONSerialization.jsonObject(with: fileData) as? [String: Any])
+        let fileID = try #require(file["id"] as? String)
+        var create = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        create.httpMethod = "POST"
+        create.setValue("application/json", forHTTPHeaderField: "content-type")
+        create.httpBody = Data(#"{"input_file_id":"\#(fileID)","endpoint":"/v1/chat/completions","completion_window":"24h"}"#.utf8)
+        let (batchData, response) = try await URLSession.shared.data(for: create)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        let errors = try #require(batch["errors"] as? [String: Any])
+        let errorsData = try #require(errors["data"] as? [[String: Any]])
+        #expect(errorsData[0]["message"] as? String == "batch input may contain at most 50,000 requests")
+        try await server.shutdown()
+    }
+
+    @Test func batchListPaginatesWithAfterCursor() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 3,
+            backend: ScriptedServerBackend(delayNanoseconds: 20_000_000))
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var createdIDs: [String] = []
+        for index in 0..<3 {
+            var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = Data(#"""
+            {"requests":[{"model":"test-model","messages":[{"role":"user","content":"\#(index)"}]}]}
+            """#.utf8)
+            let data = try await URLSession.shared.data(for: request).0
+            let batch = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            createdIDs.append(try #require(batch["id"] as? String))
+        }
+
+        let firstPage = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/batches?limit=2")!).0
+        let firstObject = try #require(JSONSerialization.jsonObject(with: firstPage) as? [String: Any])
+        let firstData = try #require(firstObject["data"] as? [[String: Any]])
+        #expect(firstData.count == 2)
+        #expect(firstObject["has_more"] as? Bool == true)
+        let after = try #require(firstObject["last_id"] as? String)
+
+        let secondPage = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/batches?limit=2&after=\(after)")!).0
+        let secondObject = try #require(JSONSerialization.jsonObject(with: secondPage) as? [String: Any])
+        #expect((secondObject["data"] as? [[String: Any]])?.count == 1)
+        #expect(secondObject["has_more"] as? Bool == false)
+        #expect(Set(createdIDs).count == 3)
+
+        try await server.shutdown()
+    }
+
+    @Test func batchCancellationReachesCancelledWithoutFailure() async throws {
+        let backend = CancellableServerBackend()
+        let server = TurboFieldfareHTTPServer(modelID: "test-model", queueLimit: 1, backend: backend)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"requests":[
+          {"model":"test-model","messages":[{"role":"user","content":"one"}]},
+          {"model":"test-model","messages":[{"role":"user","content":"two"}]}
+        ]}
+        """#.utf8)
+        let batchData = try await URLSession.shared.data(for: request).0
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        let id = try #require(batch["id"] as? String)
+        for _ in 0..<100 where await backend.startedCount == 0 {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(await backend.startedCount == 1)
+
+        var cancellation = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)/cancel")!)
+        cancellation.httpMethod = "POST"
+        let cancellationData = try await URLSession.shared.data(for: cancellation).0
+        #expect(String(decoding: cancellationData, as: UTF8.self).contains("cancelling"))
+
+        var status = ""
+        var counts: [String: Any] = [:]
+        for _ in 0..<100 {
+            let statusData = try await URLSession.shared.data(
+                from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
+            let snapshot = try #require(JSONSerialization.jsonObject(with: statusData) as? [String: Any])
+            status = try #require(snapshot["status"] as? String)
+            counts = try #require(snapshot["request_counts"] as? [String: Any])
+            if status == "cancelled" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(status == "cancelled")
+        #expect(counts["failed"] as? Int == 0)
+        #expect(await backend.cancellationCount == 1)
+
+        try await server.shutdown()
+    }
+
+    @Test func batchFailureWritesJSONLErrorRecord() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TurboFieldfareBatchFailureTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+        let server = TurboFieldfareHTTPServer(modelID: "test-model",
+                                              queueLimit: 1,
+                                              backend: BatchFailingServerBackend(),
+                                              batchOutputDirectory: outputDirectory)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/batches")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"requests":[{"custom_id":"will-fail","model":"test-model","messages":[{"role":"user","content":"fail"}]}]}
+        """#.utf8)
+        let batchData = try await URLSession.shared.data(for: request).0
+        let batch = try #require(JSONSerialization.jsonObject(with: batchData) as? [String: Any])
+        let id = try #require(batch["id"] as? String)
+        var status = ""
+        for _ in 0..<100 {
+            let data = try await URLSession.shared.data(
+                from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
+            status = try #require((JSONSerialization.jsonObject(with: data) as? [String: Any])?["status"] as? String)
+            if status == "completed" { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(status == "completed")
+        let final = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/v1/batches/\(id)")!).0
+        let finalObject = try #require(JSONSerialization.jsonObject(with: final) as? [String: Any])
+        let errorFileID = try #require(finalObject["error_file_id"] as? String)
+        #expect(finalObject["output_file_id"] is NSNull || finalObject["output_file_id"] == nil)
+        let output = try String(contentsOf: outputDirectory.appendingPathComponent(errorFileID)
+            .appendingPathExtension("jsonl"), encoding: .utf8)
+        #expect(output.contains("\"custom_id\":\"will-fail\""))
+        #expect(output.contains("\"response\":null"))
+        #expect(output.contains("\"synthetic_failure\""))
+        #expect(output.contains("\"type\":\"invalid_request_error\""))
 
         try await server.shutdown()
     }

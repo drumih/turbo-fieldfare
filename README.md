@@ -258,6 +258,28 @@ remote authentication or TLS.
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.
 
+#### Batch requests
+
+The local server implements the OpenAI Files → Batch flow for non-streaming
+`/v1/chat/completions`: upload a `.jsonl` file with `purpose=batch` to `POST
+/v1/files`, then create a batch with its `input_file_id`, endpoint, and
+`completion_window: "24h"`; optional `output_expires_after` accepts
+`{"anchor":"created_at","seconds":3600...2592000}` and removes generated
+output/error JSONL after that interval. Each JSONL line contains `custom_id`, `method`,
+`url`, and the normal Chat Completions `body`.
+
+If a stored JSONL input fails Batch validation, creation returns a Batch in
+`failed` state with an `errors` list; malformed Batch request parameters still
+return the usual HTTP error envelope.
+
+`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, and `GET /v1/batches`
+provide lifecycle status. Download `output_file_id` and, when present,
+`error_file_id` through `GET /v1/files/{id}/content`. Requests run through the
+same single-model queue as interactive requests; only Chat Completions batches
+are supported. Generated File objects expose the optional `expires_at` when an
+expiry policy is set. Batch and Files state is in-memory/process-local and is
+removed when the server restarts.
+
 ## Test and contribute
 
 Run the public test suite serially:
