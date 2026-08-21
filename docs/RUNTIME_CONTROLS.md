@@ -74,3 +74,29 @@ During chunked prefill, the phase label reports exact progress, for example
 `Prefill (128/514)`. Errors and unsupported configurations appear only when
 they occur. RDADVISE remains experimental and is off by default. A measured
 result is a data point, not a performance ceiling.
+
+## Prompt-cache diagnostics
+
+A prompt-cache miss reaches the client as `cached=0` and nothing else, so a
+cold start, a changed tool set, a client that rewrote its history, and a bridge
+that failed to encode all read identically from outside. A miss never breaks a
+response — it silently pays full prefill — which is why it goes unnoticed.
+
+Set `TFF_LOG_CACHE=1` to print the failed condition to stderr as
+`[cache-miss] <reason>`. The reasons cover both directions of the cache:
+
+| Stage | Example reason |
+| --- | --- |
+| Publish rejected | `publish rejected: kvPosition=… reason=…` |
+| Nothing stored | `no entry stored (cold start, or the previous publish was rejected)` |
+| Domain or tools changed | `tool set changed` |
+| History diverged | `client rewrote the preceding N messages` |
+| Bridge failed | `tool-result bridge failed to encode: <error>` |
+
+Publish failures matter most: a rejected publish leaves nothing for the next
+request to match, so a single event reads as a permanently dead cache rather
+than the one-off it was.
+
+Reasons name conditions and counts, never message content, so the variable is
+safe to leave on. It is read per miss, and the reason string is built only when
+the variable is set.

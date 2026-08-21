@@ -195,6 +195,69 @@ struct ServerPromptCacheTests {
         #expect(cache.entry == nil)
     }
 
+    /// The logged reason must name the condition that actually failed.
+    ///
+    /// The reasons live beside the guards rather than inside them, so nothing
+    /// but a test notices when a condition is added to one and not the other —
+    /// and a diagnostic that names the wrong cause is worse than none.
+    @Test func missReasonsNameTheConditionThatFailed() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let initial = request(messages: [
+            GFTokenizer.Message(role: .user, content: "first"),
+        ])
+        var cache = ServerPromptCache()
+
+        #expect(cache.entryMissReason(domain: domain, request: initial)
+            .contains("no entry stored"))
+
+        let prompt = tokenizer.encode(
+            try tokenizer.applyChatTemplate(initial.messages),
+            addBOS: false)
+        cache.publish(
+            domain: domain,
+            request: initial,
+            content: "answer",
+            calls: [],
+            result: rawResult(
+                prompt: prompt,
+                kvBacked: prompt + tokenizer.encode("answer", addBOS: false),
+                boundary: tokenizer.endOfTurnID,
+                reason: .endOfTurn))
+        let entry = try #require(cache.entry)
+
+        var otherDomain = domain
+        otherDomain = ServerPromptCacheDomain(
+            modelID: "other",
+            sourceSnapshotHash: domain.sourceSnapshotHash,
+            runtimeProfileHash: domain.runtimeProfileHash,
+            maximumContext: domain.maximumContext,
+            kvStorage: domain.kvStorage,
+            fp16RingEnabled: domain.fp16RingEnabled,
+            templateSHA256: domain.templateSHA256)
+        #expect(cache.entryMissReason(domain: otherDomain, request: initial)
+            .contains("domain changed"))
+
+        let withTools = request(
+            messages: initial.messages,
+            tools: [GFTokenizer.FunctionDefinition(
+                name: "ls",
+                description: "list a directory",
+                parameters: .object(["type": .string("object")]))])
+        #expect(cache.entryMissReason(domain: domain, request: withTools)
+            .contains("tool set changed"))
+
+        #expect(cache.historyMissReason(entry: entry, request: initial)
+            .contains("history did not extend"))
+
+        let rewritten = request(messages: [
+            GFTokenizer.Message(role: .user, content: "rewritten"),
+            GFTokenizer.Message(role: .assistant, content: "answer"),
+            GFTokenizer.Message(role: .user, content: "second"),
+        ])
+        #expect(cache.historyMissReason(entry: entry, request: rewritten)
+            .contains("rewrote the preceding"))
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = []
