@@ -195,6 +195,64 @@ struct ServerPromptCacheTests {
         #expect(cache.entry == nil)
     }
 
+    /// A verbatim-repeated tool call must keep its cache; the unique-match
+    /// rule refused this shape and dropped the cache from that turn on.
+    @Test func repeatedIdenticalToolCallKeepsTheBoundaryResolvable() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let tools = [GFTokenizer.FunctionDefinition(
+            name: "ls",
+            description: "list a directory",
+            parameters: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "path": .object(["type": .string("string")]),
+                ]),
+            ]))]
+        let call = { (id: String) in
+            GFTokenizer.HistoricalToolCall(
+                id: id,
+                name: "ls",
+                arguments: .object(["path": .string(".")]))
+        }
+        let first = GFTokenizer.Message(
+            role: .assistant, content: nil, toolCalls: [call("call_1")])
+        let firstResult = GFTokenizer.Message(
+            role: .tool, content: "pkg/", toolCallID: "call_1", name: "ls")
+        // Byte-identical to the first call; only the call id differs.
+        let repeated = GFTokenizer.Message(
+            role: .assistant, content: nil, toolCalls: [call("call_2")])
+        let repeatedResult = GFTokenizer.Message(
+            role: .tool, content: "pkg/", toolCallID: "call_2", name: "ls")
+        let cachedMessages = [
+            GFTokenizer.Message(role: .user, content: "list the tree"),
+            first,
+            firstResult,
+        ]
+
+        let bridge = try tokenizer.encodeToolResultContinuation(
+            cachedMessages: cachedMessages,
+            assistant: repeated,
+            incomingMessages: cachedMessages + [repeated, repeatedResult],
+            tools: tools)
+
+        // Both twins are followed by a response; only the counts tell a
+        // twin-anchored bridge apart.
+        #expect(bridge.first == tokenizer.toolResponseID)
+        #expect(bridge.filter { $0 == tokenizer.toolResponseID }.count == 1)
+        #expect(!bridge.contains(tokenizer.toolCallStartID))
+
+        // A diverged cached history cannot anchor by position and still refuses.
+        let diverged = [GFTokenizer.Message(role: .user, content: "list the other tree")]
+            + cachedMessages.dropFirst()
+        #expect(throws: (any Error).self) {
+            try tokenizer.encodeToolResultContinuation(
+                cachedMessages: diverged,
+                assistant: repeated,
+                incomingMessages: cachedMessages + [repeated, repeatedResult],
+                tools: tools)
+        }
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = []

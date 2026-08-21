@@ -400,12 +400,21 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         let callStart = starts[starts.count - callCount]
         let callSequence = Array(prefix[callStart...callEnd])
-        let matches = full.subsequenceStartIndices(matching: callSequence)
-        guard matches.count == 1 else {
-            throw GFTokenizerError.invalidChatTemplate(
-                "cached assistant tool-call boundary is ambiguous")
+        // A verbatim-repeated call renders an identical token sequence, so
+        // requiring a unique match dropped the cache for the rest of the
+        // conversation. The boundary is positional whenever both renders agree
+        // through the call block; otherwise only a unique match is trusted.
+        let suffixStart: Int
+        if full.count > callEnd, full[...callEnd] == prefix[...callEnd] {
+            suffixStart = callEnd + 1
+        } else {
+            let matches = full.subsequenceStartIndices(matching: callSequence)
+            guard matches.count == 1 else {
+                throw GFTokenizerError.invalidChatTemplate(
+                    "cached assistant tool-call boundary is ambiguous")
+            }
+            suffixStart = matches[0] + callSequence.count
         }
-        let suffixStart = matches[0] + callSequence.count
         let suffix = Array(full[suffixStart...])
         guard suffix.first == toolResponseID else {
             throw GFTokenizerError.invalidChatTemplate(
