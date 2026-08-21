@@ -256,7 +256,9 @@ authorize and run every tool call. Keep the server on loopback; it has no
 remote authentication or TLS.
 
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
-OpenCode setup, prompt reuse, tool handling, and the supported API subset.
+OpenCode setup, prompt reuse, tool handling, and the supported API subset. To
+install TurboFieldfare and register the agent skill in a single run, follow the
+[Agent guide](docs/AGENT_GUIDE.md).
 
 ## Test and contribute
 
@@ -337,6 +339,7 @@ audited entries as optional evidence.
 Useful entry points:
 
 - [Local OpenAI-compatible server](docs/OPENAI_SERVER.md)
+- [Agent guide (installation + skill)](docs/AGENT_GUIDE.md)
 - [System design](docs/SYSTEM_DESIGN.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [The experiments that shaped TurboFieldfare](docs/OPTIMIZATION_JOURNEY.md)
