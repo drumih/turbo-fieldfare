@@ -43,7 +43,7 @@ public final class VisionLinearBF16 {
         }
     }
 
-    private let pipeline: MTLComputePipelineState
+    private let pipeline: MTLComputePipelineState?
     private let mlxPipelines: [Int: MTLComputePipelineState]
     private let registerPipeline: MTLComputePipelineState?
     private let registerGeGLUPipeline: MTLComputePipelineState?
@@ -62,25 +62,22 @@ public final class VisionLinearBF16 {
 
     public init(context: MetalContext,
                 environment: [String: String] = ProcessInfo.processInfo.environment) throws {
-        let library = try MetalContext.privateLibrary(device: context.device, module: "tensorops")
-        guard let function = library.makeFunction(name: "mpp_vision_linear_bf16") else {
-            throw MetalError.missingFunction("mpp_vision_linear_bf16")
-        }
-        pipeline = try context.device.makeComputePipelineState(function: function)
         let registerAttention = environment[
             "TURBO_FIELDFARE_VISION_REGISTER_ATTENTION"] == "1"
         let registerMLP = environment["TURBO_FIELDFARE_VISION_REGISTER_MLP"] == "1"
+        let mode: PathMode
         if environment["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1"
             || (registerAttention && registerMLP) {
-            registerMode = .all
+            mode = .all
         } else if registerAttention {
-            registerMode = .attention
+            mode = .attention
         } else if registerMLP {
-            registerMode = .mlp
+            mode = .mlp
         } else {
-            registerMode = .disabled
+            mode = .disabled
         }
-        if registerMode != .disabled {
+        registerMode = mode
+        if mode != .disabled {
             let library = try MetalContext.privateLibrary(
                 device: context.device, module: "vision_register_gemm")
             guard let function = library.makeFunction(name: "tff_vision_register_gemm"),
@@ -95,9 +92,9 @@ public final class VisionLinearBF16 {
             registerPipeline = nil
             registerGeGLUPipeline = nil
         }
+        var loadedMLXPipelines: [Int: MTLComputePipelineState] = [:]
         if let path = environment["TURBO_FIELDFARE_VISION_MLX_GEMM_METALLIB"] {
             let mlxLibrary = try context.device.makeLibrary(URL: URL(fileURLWithPath: path))
-            var values: [Int: MTLComputePipelineState] = [:]
             for alignN in [false, true] {
                 for alignK in [false, true] {
                     let constants = MTLFunctionConstantValues()
@@ -114,13 +111,23 @@ public final class VisionLinearBF16 {
                         name: "steel_gemm_fused_nax_nt_bfloat16_bfloat16_"
                             + "bm64_bn128_bk256_wm2_wn4",
                         constantValues: constants)
-                    values[(alignN ? 2 : 0) | (alignK ? 1 : 0)] = try context.device
-                        .makeComputePipelineState(function: function)
+                    loadedMLXPipelines[
+                        (alignN ? 2 : 0) | (alignK ? 1 : 0)
+                    ] = try context.device.makeComputePipelineState(function: function)
                 }
             }
-            mlxPipelines = values
+        }
+        mlxPipelines = loadedMLXPipelines
+        if mode == .all || !loadedMLXPipelines.isEmpty {
+            pipeline = nil
         } else {
-            mlxPipelines = [:]
+            let library = try MetalContext.privateLibrary(
+                device: context.device, module: "tensorops",
+                includeVisionTensorOps: true)
+            guard let function = library.makeFunction(name: "mpp_vision_linear_bf16") else {
+                throw MetalError.missingFunction("mpp_vision_linear_bf16")
+            }
+            pipeline = try context.device.makeComputePipelineState(function: function)
         }
     }
 
@@ -157,6 +164,9 @@ public final class VisionLinearBF16 {
                 output: output, outputOffset: outputOffset,
                 m: m, n: n, k: k)
             return Metadata(tileM: 64, tileN: 128, tileK: 256)
+        }
+        guard let pipeline else {
+            preconditionFailure("no vision linear path is available for this shape")
         }
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             return Metadata(tileM: 64, tileN: 32, tileK: 64)

@@ -2,6 +2,9 @@ import Metal
 import Testing
 @testable import TurboFieldfare
 
+private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
+    .supportsFamily(.apple8) == true
+
 @Suite struct VisionAttentionTests {
     /// The layout is the caller's decision, signalled by the row stride: the
     /// runtime fuses only when the linear path can also write the padded
@@ -9,7 +12,9 @@ import Testing
     /// row-major Q/K/V when it cannot. Reading those as 80-stride head-major
     /// used to fail a precondition on every image whenever the register MLP or
     /// the MLX GEMM override was set on its own.
-    @Test func rowMajorInputsAreHonouredEvenWhenTheFusedLayoutIsAvailable() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision MPP tensor shapes require Apple8 or newer"))
+    func rowMajorInputsAreHonouredEvenWhenTheFusedLayoutIsAvailable() throws {
         let context = try MetalContext()
         let attention = try VisionAttention(
             context: context,
@@ -98,7 +103,9 @@ import Testing
     /// MPP kernel the environment asked for must still run — through the
     /// pad/unpad roundtrip — rather than silently degrading to the native
     /// kernel while `variant` reported otherwise.
-    @Test func mppWithoutThePaddedStoreStillRunsTheMPPKernel() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision MPP tensor shapes require Apple8 or newer"))
+    func mppWithoutThePaddedStoreStillRunsTheMPPKernel() throws {
         let context = try MetalContext()
         let attention = try VisionAttention(
             context: context,
@@ -210,18 +217,22 @@ import Testing
             length: q.count * MemoryLayout<UInt16>.stride,
             options: .storageModeShared))
 
-        let environments: [[String: String]] = [
+        var environments: [[String: String]] = [
             ["TURBO_FIELDFARE_VISION_ATTENTION_Q8": "1"],
             [:],
-            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1"],
-            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
-             "TURBO_FIELDFARE_VISION_PAD_ROUNDTRIP": "1"],
-            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
-             "TURBO_FIELDFARE_VISION_ATTENTION_PARALLEL_SOFTMAX": "1"],
-            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
-             "TURBO_FIELDFARE_VISION_ATTENTION_SERIAL_SOFTMAX": "1"],
             ["TURBO_FIELDFARE_VISION_ATTENTION_PAD80": "1"],
         ]
+        if visionMPPTensorOpsAvailable {
+            environments.append(contentsOf: [
+                ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1"],
+                ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
+                 "TURBO_FIELDFARE_VISION_PAD_ROUNDTRIP": "1"],
+                ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
+                 "TURBO_FIELDFARE_VISION_ATTENTION_PARALLEL_SOFTMAX": "1"],
+                ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1",
+                 "TURBO_FIELDFARE_VISION_ATTENTION_SERIAL_SOFTMAX": "1"],
+            ])
+        }
         for environment in environments {
             let attention = try VisionAttention(
                 context: context,
@@ -273,7 +284,9 @@ import Testing
     /// The parallel softmax phase changes only the tile-sum reduction order, so at
     /// production shape it must stay within BF16 rounding of the serial phase.
     /// A layout or lane-grouping mistake would show here as a gross difference.
-    @Test func parallelSoftmaxStaysWithinRoundingOfSerialPhase() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision MPP tensor shapes require Apple8 or newer"))
+    func parallelSoftmaxStaysWithinRoundingOfSerialPhase() throws {
         let context = try MetalContext()
         let length = 512
         let heads = 4

@@ -139,6 +139,29 @@ import Testing
         #expect(first === second, "the same module was compiled twice for one device")
     }
 
+    @Test func defaultKernelSelectionFallsBackWithoutVisionTensorOps() {
+        let unsupported = VisionRuntime.resolvedKernelEnvironment(
+            [:], supportsVisionTensorOps: false)
+        #expect(unsupported["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == nil)
+        #expect(unsupported["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1")
+
+        let supported = VisionRuntime.resolvedKernelEnvironment(
+            [:], supportsVisionTensorOps: true)
+        #expect(supported["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == "1")
+        #expect(supported["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1")
+
+        let explicit = VisionRuntime.resolvedKernelEnvironment(
+            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1"],
+            supportsVisionTensorOps: false)
+        #expect(explicit["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == "1")
+
+        let baseline = VisionRuntime.resolvedKernelEnvironment(
+            ["TURBO_FIELDFARE_VISION_BASELINE_KERNELS": "1"],
+            supportsVisionTensorOps: true)
+        #expect(baseline["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == nil)
+        #expect(baseline["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == nil)
+    }
+
     private static func writeSolidPNG(width: Int, height: Int, to url: URL) throws {
         let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
         let bitmap = try #require(CGContext(

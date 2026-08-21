@@ -108,6 +108,8 @@ kernel void mpp_prefill_affine_threadgroup_f16(
     }
 }
 
+#if defined(TURBO_FIELDFARE_VISION_TENSOROPS)
+
 kernel void mpp_vision_linear_bf16(
     device bfloat* activations [[buffer(0)]],
     device const bfloat* weights [[buffer(1)]],
@@ -189,6 +191,8 @@ kernel void mpp_vision_linear_bf16(
         }
     }
 }
+
+#endif
 
 constant constexpr int kMPPAffineApple10TileM = 64;
 constant constexpr int kMPPAffineApple10TileN = 64;
@@ -395,6 +399,8 @@ kernel void mpp_prefill_affine_threadgroup_bf16_apple10_v1(
         }
     }
 }
+
+#if defined(TURBO_FIELDFARE_VISION_TENSOROPS)
 
 constant constexpr int kVisionAttentionQueries = 16;
 constant constexpr int kVisionAttentionKeys = 64;
@@ -719,5 +725,7 @@ kernel void mpp_vision_attention_bf16_pv80(
         Q, K, V, O, sequenceLength, numHeads, layout, tg, lid, simdLane,
         simdIndex, scoreTile, weightTile, rowMax, rowSum, oldScale, nextMaxTile);
 }
+
+#endif
 
 #endif // __HAVE_TENSOR__

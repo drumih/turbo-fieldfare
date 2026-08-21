@@ -3,6 +3,9 @@ import Metal
 import Testing
 @testable import TurboFieldfare
 
+private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
+    .supportsFamily(.apple8) == true
+
 @Suite struct VisionLinearBF16Tests {
     @Test func nativePathsProduceExpectedConstantProduct() throws {
         let context = try MetalContext()
@@ -16,10 +19,13 @@ import Testing
         let input = try buffer(count: m * k, value: 0.125)
         let weights = try buffer(count: n * k, value: 0.25)
 
-        for environment in [
-            [String: String](),
+        var environments: [[String: String]] = [
             ["TURBO_FIELDFARE_VISION_REGISTER_GEMM": "1"],
-        ] {
+        ]
+        if visionMPPTensorOpsAvailable {
+            environments.insert([:], at: 0)
+        }
+        for environment in environments {
             // A fresh output per variant, poisoned rather than zeroed: sharing
             // one buffer meant the second variant was compared against what the
             // first had written, so a kernel that dispatched nothing passed.
@@ -98,7 +104,9 @@ import Testing
         #expect(maximumTailError < 0.016)
     }
 
-    @Test func registerMatchesMPPReductionAtProductionK() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision MPP tensor shapes require Apple8 or newer"))
+    func registerMatchesMPPReductionAtProductionK() throws {
         let context = try MetalContext()
         let m = 64, n = 32, k = 1_152
         let inputBits = (0..<(m * k)).map {

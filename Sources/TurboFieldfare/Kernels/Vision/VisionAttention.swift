@@ -124,7 +124,8 @@ public final class VisionAttention {
             variant = .mppTensorOps72
             queryTile = 16
             let library = try MetalContext.privateLibrary(
-                device: context.device, module: "tensorops")
+                device: context.device, module: "tensorops",
+                includeVisionTensorOps: true)
             let pv80 = environment[
                 "TURBO_FIELDFARE_VISION_ATTENTION_PV80"] == "1"
             guard let function = library.makeFunction(

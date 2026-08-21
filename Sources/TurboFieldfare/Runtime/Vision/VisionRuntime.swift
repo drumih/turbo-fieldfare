@@ -202,6 +202,20 @@ public final class VisionRuntime {
             directoryURL: companion,
             compatibleTextSourceSnapshotHash: source,
             compatibleTextManifestSha256: textManifestSHA)
+        let runtimeEnvironment = resolvedKernelEnvironment(
+            environment,
+            supportsVisionTensorOps: context.device.supportsFamily(.apple8))
+        return try VisionRuntime(
+            context: context,
+            store: store,
+            useLease: useLease,
+            environment: runtimeEnvironment)
+    }
+
+    static func resolvedKernelEnvironment(
+        _ environment: [String: String],
+        supportsVisionTensorOps: Bool
+    ) -> [String: String] {
         var runtimeEnvironment = environment
         if environment["TURBO_FIELDFARE_VISION_BASELINE_KERNELS"] != "1" {
             let explicitAttention = [
@@ -211,7 +225,7 @@ public final class VisionRuntime {
                 "TURBO_FIELDFARE_VISION_ATTENTION_PAD80",
                 "TURBO_FIELDFARE_VISION_MLX_METALLIB",
             ].contains { environment[$0] != nil }
-            if !explicitAttention {
+            if !explicitAttention && supportsVisionTensorOps {
                 runtimeEnvironment["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] = "1"
             }
             let explicitLinear = [
@@ -224,11 +238,7 @@ public final class VisionRuntime {
                 runtimeEnvironment["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] = "1"
             }
         }
-        return try VisionRuntime(
-            context: context,
-            store: store,
-            useLease: useLease,
-            environment: runtimeEnvironment)
+        return runtimeEnvironment
     }
 
     init(context: MetalContext, store: VisionWeightStore,
