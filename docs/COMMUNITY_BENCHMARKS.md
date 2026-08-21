@@ -159,6 +159,9 @@ all affect decode speed.
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 61 / 511 | 15.713 tok/s | One submitted run |
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 430 / 669 | 17.826 tok/s | One submitted run |
 | [Matt 'Smartis' W](https://github.com/0xSmartis) · [issue #69](https://github.com/drumih/turbo-fieldfare/issues/69) | M2 Pro Mac mini | 16 GB | Internal SSD | 3,015 / 604 | 15.755 tok/s | One submitted run |
+| [Eli Smith](https://github.com/eliliam) · [issue #139](https://github.com/drumih/turbo-fieldfare/issues/139) | M2 Pro MacBook Pro | 16 GB | Internal SSD | 61 / 511 | 11.749 tok/s | One submitted run |
+| [Eli Smith](https://github.com/eliliam) · [issue #139](https://github.com/drumih/turbo-fieldfare/issues/139) | M2 Pro MacBook Pro | 16 GB | Internal SSD | 430 / 669 | 10.428 tok/s | One submitted run |
+| [Eli Smith](https://github.com/eliliam) · [issue #139](https://github.com/drumih/turbo-fieldfare/issues/139) | M2 Pro MacBook Pro | 16 GB | Internal SSD | 3,015 / 604 | 9.384 tok/s | One submitted run |
 | [elroyonline](https://github.com/elroyonline) · [issue #59](https://github.com/drumih/turbo-fieldfare/issues/59) | M2 Max Mac Studio | 32 GB | External PCIe NVMe | 61 / 511 | 25.310 tok/s | One submitted run |
 | [elroyonline](https://github.com/elroyonline) · [issue #59](https://github.com/drumih/turbo-fieldfare/issues/59) | M2 Max Mac Studio | 32 GB | External PCIe NVMe | 430 / 669 | 25.172 tok/s | One submitted run |
 | [elroyonline](https://github.com/elroyonline) · [issue #59](https://github.com/drumih/turbo-fieldfare/issues/59) | M2 Max Mac Studio | 32 GB | External PCIe NVMe | 3,015 / 604 | 23.730 tok/s | One submitted run |
