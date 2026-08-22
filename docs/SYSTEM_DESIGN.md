@@ -440,7 +440,8 @@ references lead to the supporting code and tests.
 The current runtime supports text and image input with the pinned Gemma 4
 26B-A4B instruction checkpoint. Image support is optional. The vision tower
 and projector live in a separate companion pack, so an installation without
-that pack has the footprint it had before. See [Images](#images).
+that pack has the footprint it had before. The image tower requires M2 or
+newer; text-only inference remains available on M1. See [Images](#images).
 
 The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Manual acceptance
 covers the Mac app at 8K and CLI stress at 64K. Audio input, video input,

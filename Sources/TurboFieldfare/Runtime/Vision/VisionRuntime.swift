@@ -165,6 +165,7 @@ public final class VisionRuntime {
         visionPackURL: URL? = nil,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> VisionRuntime {
+        try requireSupportedDevice(context.device)
         let manifest = try ManifestReader.load(
             directoryURL: textModelURL,
             expecting: .gemma4_26B_A4B)
@@ -202,9 +203,7 @@ public final class VisionRuntime {
             directoryURL: companion,
             compatibleTextSourceSnapshotHash: source,
             compatibleTextManifestSha256: textManifestSHA)
-        let runtimeEnvironment = resolvedKernelEnvironment(
-            environment,
-            supportsVisionTensorOps: context.device.supportsFamily(.apple8))
+        let runtimeEnvironment = resolvedKernelEnvironment(environment)
         return try VisionRuntime(
             context: context,
             store: store,
@@ -213,8 +212,7 @@ public final class VisionRuntime {
     }
 
     static func resolvedKernelEnvironment(
-        _ environment: [String: String],
-        supportsVisionTensorOps: Bool
+        _ environment: [String: String]
     ) -> [String: String] {
         var runtimeEnvironment = environment
         if environment["TURBO_FIELDFARE_VISION_BASELINE_KERNELS"] != "1" {
@@ -225,7 +223,7 @@ public final class VisionRuntime {
                 "TURBO_FIELDFARE_VISION_ATTENTION_PAD80",
                 "TURBO_FIELDFARE_VISION_MLX_METALLIB",
             ].contains { environment[$0] != nil }
-            if !explicitAttention && supportsVisionTensorOps {
+            if !explicitAttention {
                 runtimeEnvironment["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] = "1"
             }
             let explicitLinear = [
@@ -239,6 +237,26 @@ public final class VisionRuntime {
             }
         }
         return runtimeEnvironment
+    }
+
+    public static func isSupported(on device: MTLDevice) -> Bool {
+        device.supportsFamily(.apple8)
+    }
+
+    public static var isSupportedOnDefaultDevice: Bool {
+        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        return isSupported(on: device)
+    }
+
+    public static func requireSupportedDevice(_ device: MTLDevice) throws {
+        try requireSupportedDevice(supportsApple8: isSupported(on: device))
+    }
+
+    static func requireSupportedDevice(supportsApple8: Bool) throws {
+        guard supportsApple8 else {
+            throw VisionRuntimeError.unsupportedKernel(
+                "the image tower requires an M2 or newer Apple Silicon Mac")
+        }
     }
 
     init(context: MetalContext, store: VisionWeightStore,

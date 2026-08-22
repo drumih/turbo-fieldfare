@@ -15,12 +15,14 @@ public enum VisionSectionVisibility {
     /// installed and healthy, so it costs space only while it is actionable.
     public static func shows(
         visionRuntimeEnabled: Bool,
+        visionRuntimeSupported: Bool = true,
         isModelInstalled: Bool,
         isVisionPackInstalled: Bool,
         isCompanionOperationInProgress: Bool,
         installState: AppModelInstallState
     ) -> Bool {
         guard visionRuntimeEnabled else { return false }
+        if !visionRuntimeSupported { return true }
         if !isModelInstalled { return true }
         if !isVisionPackInstalled { return true }
         if isCompanionOperationInProgress { return true }

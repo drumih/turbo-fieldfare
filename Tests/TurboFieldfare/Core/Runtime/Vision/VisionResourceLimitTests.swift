@@ -64,8 +64,8 @@ import Testing
     /// private storage — the natural choice for a caller building buffers only
     /// GPU kernels consume. The validation added to prevent GPU faults must
     /// throw, not fault first.
-    @Test(.enabled(if: Self.visionModelURL != nil,
-                   "scratch/gemma4.gturbo and its vision pack are not installed"))
+    @Test(.enabled(if: Self.visionModelURL != nil && Self.supportsVisionRuntime,
+                   "requires an installed vision model on M2 or newer"))
     func privateStoragePositionsAreRefusedRatherThanDereferenced() throws {
         let modelURL = try #require(Self.visionModelURL)
         let context = try MetalContext()
@@ -98,8 +98,8 @@ import Testing
     /// left a zero-byte `.<name>.use.lock` there that nothing ever removes. The
     /// existence check in front of it had already been added for exactly this
     /// reason; the validity check still ran after the lease.
-    @Test(.enabled(if: Self.visionModelURL != nil,
-                   "scratch/gemma4.gturbo and its vision pack are not installed"))
+    @Test(.enabled(if: Self.visionModelURL != nil && Self.supportsVisionRuntime,
+                   "requires an installed vision model on M2 or newer"))
     func aDirectoryThatIsNotAPackLeavesNoLockFileBehind() throws {
         let modelURL = try #require(Self.visionModelURL)
         let manager = FileManager.default
@@ -139,27 +139,50 @@ import Testing
         #expect(first === second, "the same module was compiled twice for one device")
     }
 
-    @Test func defaultKernelSelectionFallsBackWithoutVisionTensorOps() {
-        let unsupported = VisionRuntime.resolvedKernelEnvironment(
-            [:], supportsVisionTensorOps: false)
-        #expect(unsupported["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == nil)
-        #expect(unsupported["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1")
+    @Test func imageTowerFailsClosedBeforeApple8() throws {
+        #expect {
+            try VisionRuntime.requireSupportedDevice(supportsApple8: false)
+        } throws: { error in
+            guard case VisionRuntimeError.unsupportedKernel(let detail) = error else {
+                return false
+            }
+            return detail.contains("M2 or newer")
+        }
+        try VisionRuntime.requireSupportedDevice(supportsApple8: true)
+    }
 
-        let supported = VisionRuntime.resolvedKernelEnvironment(
-            [:], supportsVisionTensorOps: true)
-        #expect(supported["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == "1")
-        #expect(supported["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1")
+    @Test(.enabled(if: !Self.supportsVisionRuntime,
+                   "requires an Apple7 or older Metal device"))
+    func unsupportedDeviceIsRejectedBeforeModelIO() throws {
+        let context = try MetalContext()
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-model-\(UUID().uuidString)")
+        #expect {
+            _ = try VisionRuntime.open(textModelURL: missing, context: context)
+        } throws: { error in
+            guard case VisionRuntimeError.unsupportedKernel(let detail) = error else {
+                return false
+            }
+            return detail.contains("M2 or newer")
+        }
+    }
 
-        let explicit = VisionRuntime.resolvedKernelEnvironment(
-            ["TURBO_FIELDFARE_VISION_ATTENTION_MPP": "1"],
-            supportsVisionTensorOps: false)
-        #expect(explicit["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == "1")
+    @Test func defaultKernelSelectionKeepsPromotedAndBaselinePathsDistinct() {
+        let promoted = VisionRuntime.resolvedKernelEnvironment([:])
+        #expect(promoted["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == "1")
+        #expect(promoted["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == "1")
 
         let baseline = VisionRuntime.resolvedKernelEnvironment(
-            ["TURBO_FIELDFARE_VISION_BASELINE_KERNELS": "1"],
-            supportsVisionTensorOps: true)
+            ["TURBO_FIELDFARE_VISION_BASELINE_KERNELS": "1"])
         #expect(baseline["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == nil)
         #expect(baseline["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == nil)
+
+        let explicit = VisionRuntime.resolvedKernelEnvironment([
+            "TURBO_FIELDFARE_VISION_ATTENTION_Q8": "1",
+            "TURBO_FIELDFARE_VISION_REGISTER_ATTENTION": "1",
+        ])
+        #expect(explicit["TURBO_FIELDFARE_VISION_ATTENTION_MPP"] == nil)
+        #expect(explicit["TURBO_FIELDFARE_VISION_REGISTER_GEMM"] == nil)
     }
 
     private static func writeSolidPNG(width: Int, height: Int, to url: URL) throws {
@@ -203,6 +226,10 @@ import Testing
     }
 
     static var visionModelURL: URL? { visionModelURL() }
+
+    static var supportsVisionRuntime: Bool {
+        MTLCreateSystemDefaultDevice()?.supportsFamily(.apple8) == true
+    }
 
     @Test func osSidecarsDoNotInvalidateAPack() {
         for name in [".DS_Store", "._manifest.json", "._vision_weights.bin",

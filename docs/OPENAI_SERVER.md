@@ -247,7 +247,9 @@ context. Bodies and images over their limits return HTTP 413.
 
 `GET /v1/models` reports `capabilities` as `["text", "image"]` when a valid
 companion pack is loaded and `["text"]` otherwise. `GET /health` reports the
-same state under `vision`, as `ready`, `missing`, or `invalid`.
+same state under `vision`, as `ready`, `missing`, `invalid`, or `unsupported`.
+`unsupported` means the image tower cannot run on this Mac; it requires M2 or
+newer. Text requests remain available.
 
 Choose the pack and the residency policy with `--vision-pack <dir>` and
 `--vision-residency on-demand|keep-ready`.

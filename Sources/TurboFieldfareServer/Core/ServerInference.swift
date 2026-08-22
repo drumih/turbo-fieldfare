@@ -573,7 +573,12 @@ public actor ServerModelSession: ServerInferenceBackend {
         // text-serving load must fail.
         let resolvedVisionPackURL = visionPackURL
             ?? (try? VisionPackLocation.companionURL(forTextModel: modelDirectory))
-        if let resolvedVisionPackURL,
+        if let hardwareCapability = Self.hardwareVisionCapability(
+            supportsVisionRuntime: VisionRuntime.isSupported(on: context.device)) {
+            visionRuntime = nil
+            visionCapability = hardwareCapability
+            ServerLog.visionRuntimeUnsupported()
+        } else if let resolvedVisionPackURL,
            FileManager.default.fileExists(atPath: resolvedVisionPackURL.path) {
             do {
                 visionRuntime = try VisionRuntime.open(
@@ -582,9 +587,14 @@ public actor ServerModelSession: ServerInferenceBackend {
                     visionPackURL: resolvedVisionPackURL)
                 visionCapability = "ready"
             } catch {
-                ServerLog.visionPackInvalid(at: resolvedVisionPackURL, error: error)
                 visionRuntime = nil
-                visionCapability = "invalid"
+                visionCapability = Self.unavailableVisionCapability(for: error)
+                if visionCapability == "unsupported" {
+                    ServerLog.visionRuntimeUnsupported(
+                        at: resolvedVisionPackURL, error: error)
+                } else {
+                    ServerLog.visionPackInvalid(at: resolvedVisionPackURL, error: error)
+                }
             }
         } else {
             visionRuntime = nil
@@ -602,6 +612,22 @@ public actor ServerModelSession: ServerInferenceBackend {
                                   visionRuntime: visionRuntime,
                                   visionCapability: visionCapability,
                                   visionResidencyPolicy: visionResidencyPolicy)
+    }
+
+    static func hardwareVisionCapability(
+        supportsVisionRuntime: Bool
+    ) -> String? {
+        supportsVisionRuntime ? nil : "unsupported"
+    }
+
+    static func unavailableVisionCapability(for error: Error) -> String {
+        guard let runtimeError = error as? VisionRuntimeError else {
+            return "invalid"
+        }
+        if case .unsupportedKernel = runtimeError {
+            return "unsupported"
+        }
+        return "invalid"
     }
 
     private init(context: MetalContext,

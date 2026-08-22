@@ -7,6 +7,23 @@ import UniformTypeIdentifiers
 @testable import TurboFieldfare
 @testable import TurboFieldfareServerCore
 
+@Suite("Server vision capability")
+struct ServerVisionCapabilityTests {
+    @Test func unsupportedHardwareDominatesPackAvailability() {
+        #expect(ServerModelSession.hardwareVisionCapability(
+            supportsVisionRuntime: false) == "unsupported")
+        #expect(ServerModelSession.hardwareVisionCapability(
+            supportsVisionRuntime: true) == nil)
+    }
+
+    @Test func unsupportedHardwareDoesNotInvalidateThePack() {
+        #expect(ServerModelSession.unavailableVisionCapability(
+            for: VisionRuntimeError.unsupportedKernel("requires M2")) == "unsupported")
+        #expect(ServerModelSession.unavailableVisionCapability(
+            for: VisionPackError.invalidMetadata("bad manifest")) == "invalid")
+    }
+}
+
 /// How a request's images are read on the way into a prefill.
 ///
 /// The count that lays out an image's placeholder span and the encode that

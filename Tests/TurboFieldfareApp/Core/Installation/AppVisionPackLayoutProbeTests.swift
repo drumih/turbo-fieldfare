@@ -53,6 +53,34 @@ import Testing
         #expect(!app.isVisionPackInstalled)
     }
 
+    @MainActor
+    @Test func unsupportedHardwareIsNotOfferedAVisionInstall() throws {
+        let model = try makeCompleteModelInstall("unsupported-vision-hardware")
+        defer { try? FileManager.default.removeItem(at: model) }
+        let installer = MockVisionPackInstallerClient(events: [.checking])
+        let supported = AppModel(
+            modelDirectory: model,
+            visionInstaller: installer,
+            visionRuntimeSupported: true)
+        let unsupported = AppModel(
+            modelDirectory: model,
+            visionInstaller: installer,
+            visionRuntimeSupported: false)
+
+        #expect(supported.canInstallVisionPack,
+                "the fixture did not otherwise qualify for installation")
+        #expect(!unsupported.canInstallVisionPack)
+        unsupported.installVisionPack()
+        #expect(unsupported.visionInstallState == .idle,
+                "unsupported hardware started a companion download")
+
+        unsupported.visionInstallState = .readyToActivate(model)
+        #expect(!unsupported.canActivateVisionPack)
+        unsupported.activateVisionPack()
+        #expect(installer.activationCount == 0,
+                "unsupported hardware started companion activation")
+    }
+
     private static func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vision-layout-probe-\(UUID().uuidString)",

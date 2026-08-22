@@ -36,6 +36,7 @@ struct TurboFieldfareMacApp: App {
     init() {
         let model = AppModel(
             client: DecodeServiceInferenceClient(),
+            visionRuntimeSupported: AppModel.currentDeviceSupportsVisionRuntime,
             settingsPersistenceEnabled: true)
         _model = State(initialValue: model)
         MainActor.assumeIsolated { ForegroundAppDelegate.model = model }

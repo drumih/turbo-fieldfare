@@ -7,7 +7,9 @@ private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
     .supportsFamily(.apple8) == true
 
 @Suite struct VisionLinearBF16Tests {
-    @Test func nativePathsProduceExpectedConstantProduct() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision linear kernels require Apple8 or newer"))
+    func nativePathsProduceExpectedConstantProduct() throws {
         let context = try MetalContext()
         let m = 128, n = 256, k = 1_152
         func buffer(count: Int, value: Float) throws -> MTLBuffer {
@@ -19,13 +21,10 @@ private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
         let input = try buffer(count: m * k, value: 0.125)
         let weights = try buffer(count: n * k, value: 0.25)
 
-        var environments: [[String: String]] = [
+        for environment in [
+            [String: String](),
             ["TURBO_FIELDFARE_VISION_REGISTER_GEMM": "1"],
-        ]
-        if visionMPPTensorOpsAvailable {
-            environments.insert([:], at: 0)
-        }
-        for environment in environments {
+        ] {
             // A fresh output per variant, poisoned rather than zeroed: sharing
             // one buffer meant the second variant was compared against what the
             // first had written, so a kernel that dispatched nothing passed.
@@ -49,7 +48,9 @@ private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
         }
     }
 
-    @Test func registerPathHandlesNonconstantTailShape() throws {
+    @Test(.enabled(if: visionMPPTensorOpsAvailable,
+                   "vision linear kernels require Apple8 or newer"))
+    func registerPathHandlesNonconstantTailShape() throws {
         let context = try MetalContext()
         let m = 79, n = 272, k = 23
         let inputBits = (0..<(m * k)).map { index in
@@ -105,7 +106,7 @@ private let visionMPPTensorOpsAvailable = MTLCreateSystemDefaultDevice()?
     }
 
     @Test(.enabled(if: visionMPPTensorOpsAvailable,
-                   "vision MPP tensor shapes require Apple8 or newer"))
+                   "vision linear kernels require Apple8 or newer"))
     func registerMatchesMPPReductionAtProductionK() throws {
         let context = try MetalContext()
         let m = 64, n = 32, k = 1_152

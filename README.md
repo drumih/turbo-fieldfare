@@ -127,7 +127,8 @@ and execute. Audio and video are not supported.
 Images are supported through a vision tower, which installs as a companion
 pack beside the text model. Install it once and the app, CLI, and server all
 accept images. Without it they tell you image support is unavailable, and the
-text runtime is untouched.
+text runtime is untouched. The image tower requires an M2 or newer Apple
+Silicon Mac; text-only inference remains available on M1.
 
 [System design](docs/SYSTEM_DESIGN.md#images) covers how the tower runs and
 what it costs on an 8 GB machine.
@@ -363,9 +364,9 @@ TurboFieldfare currently includes:
   the sliding-window layers, and routed experts are released while the tower
   runs
 
-Current scope is text and image input from the pinned Gemma 4 26B-A4B
-instruction checkpoint on Apple Silicon Macs with at least 8 GB of RAM.
-Audio and video are out of scope.
+Current scope is text input from the pinned Gemma 4 26B-A4B instruction
+checkpoint on Apple Silicon Macs with at least 8 GB of RAM, plus image input
+on M2 or newer Macs. Audio and video are out of scope.
 
 ### Future work
 

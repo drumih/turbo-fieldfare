@@ -120,6 +120,11 @@ public final class AppModel {
     private var installETAEstimator = DownloadETAEstimator()
     private var visionInstallETAEstimator = DownloadETAEstimator()
     private let attachmentStore: AppImageAttachmentStore
+    public let isVisionRuntimeSupported: Bool
+
+    public static var currentDeviceSupportsVisionRuntime: Bool {
+        VisionRuntime.isSupportedOnDefaultDevice
+    }
 
     public init(modelDirectory: URL? = nil,
                 client: any AppInferenceClient = RealInferenceClient(),
@@ -127,6 +132,7 @@ public final class AppModel {
                 visionInstaller: any AppVisionPackInstallerClient = RepackVisionPackInstallerClient(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 attachmentStore: AppImageAttachmentStore = AppImageAttachmentStore(),
+                visionRuntimeSupported: Bool = true,
                 settingsPersistenceEnabled: Bool = false) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
@@ -162,6 +168,7 @@ public final class AppModel {
         self.visionInstaller = visionInstaller
         self.memorySampler = memorySampler
         self.attachmentStore = attachmentStore
+        self.isVisionRuntimeSupported = visionRuntimeSupported
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
@@ -247,6 +254,7 @@ public final class AppModel {
     }
 
     public var canInstallVisionPack: Bool {
+        guard isVisionRuntimeSupported else { return false }
         // A layout with nowhere to put a companion cannot be repaired by
         // downloading one, so do not offer to.
         guard visionInstallationStatus != .unsupportedLayout else { return false }
@@ -257,6 +265,7 @@ public final class AppModel {
     }
 
     public var canActivateVisionPack: Bool {
+        guard isVisionRuntimeSupported else { return false }
         guard case .readyToActivate = visionInstallState else { return false }
         return canBeginVisionCompanionOperation
     }
@@ -551,12 +560,11 @@ public final class AppModel {
     /// offered an Add-images button with no tower behind it, and the failure
     /// only surfaced when the user pressed Generate.
     public var isImageInputAvailable: Bool {
-        isVisionPackInstalled
+        isVisionRuntimeSupported && isVisionPackInstalled
     }
 
-    /// Kept as a constant while callers are updated: image support is part of
-    /// the product, and the companion pack is the only thing that decides
-    /// whether a given install can use it.
+    /// Image support is part of this build. Hardware support and companion-pack
+    /// availability are separate so the inspector can explain either absence.
     public var visionRuntimeEnabled: Bool { true }
 
     /// Room left for the prompt when working out how many images fit. The

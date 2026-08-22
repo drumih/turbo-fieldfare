@@ -37,6 +37,15 @@ enum ServerLog {
         write("vision pack at \(url.path) is invalid: \(String(reflecting: error))")
     }
 
+    static func visionRuntimeUnsupported(at url: URL, error: Error) {
+        write("vision runtime for pack at \(url.path) is unsupported: "
+            + String(reflecting: error))
+    }
+
+    static func visionRuntimeUnsupported() {
+        write("vision runtime is unsupported: the image tower requires an M2 or newer Mac")
+    }
+
     /// A prefix that could not be continued because its bridge failed to
     /// render. Carries the underlying error, because this miss means the
     /// template and the cached turn disagree, which no other miss does.

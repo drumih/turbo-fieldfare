@@ -541,5 +541,8 @@ import TurboFieldfare
 
         #expect(AppModel(modelDirectory: withPack).isImageInputAvailable)
         #expect(!AppModel(modelDirectory: withoutPack).isImageInputAvailable)
+        #expect(!AppModel(modelDirectory: withPack, visionRuntimeSupported: false)
+            .isImageInputAvailable,
+                "an installed pack exposed image input on unsupported hardware")
     }
 }

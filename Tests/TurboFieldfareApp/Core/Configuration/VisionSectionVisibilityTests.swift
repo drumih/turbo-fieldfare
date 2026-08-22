@@ -10,9 +10,11 @@ import Testing
                        packInstalled: Bool,
                        operating: Bool = false,
                        state: AppModelInstallState = .idle,
-                       runtimeEnabled: Bool = true) -> Bool {
+                       runtimeEnabled: Bool = true,
+                       runtimeSupported: Bool = true) -> Bool {
         VisionSectionVisibility.shows(
             visionRuntimeEnabled: runtimeEnabled,
+            visionRuntimeSupported: runtimeSupported,
             isModelInstalled: modelInstalled,
             isVisionPackInstalled: packInstalled,
             isCompanionOperationInProgress: operating,
@@ -54,5 +56,12 @@ import Testing
         #expect(!shows(modelInstalled: true, packInstalled: false, runtimeEnabled: false))
         #expect(!shows(modelInstalled: true, packInstalled: true,
                        operating: true, runtimeEnabled: false))
+    }
+
+    @Test func unsupportedHardwareKeepsTheExplanationVisible() {
+        #expect(shows(modelInstalled: false, packInstalled: false,
+                      runtimeSupported: false))
+        #expect(shows(modelInstalled: true, packInstalled: true,
+                      runtimeSupported: false))
     }
 }

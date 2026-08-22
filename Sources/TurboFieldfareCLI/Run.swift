@@ -52,8 +52,16 @@ public func run(args: Args,
                 stderr: FileHandle = .standardError) async -> RunResult {
     do {
         let modelURL = URL(fileURLWithPath: args.model)
-        let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
         let input = try parseInput(args: args)
+        var selectedDevice: MTLDevice?
+        if input.hasImages {
+            guard let device = MTLCreateSystemDefaultDevice() else {
+                return errored(stderr, "no Metal device", 1)
+            }
+            try VisionRuntime.requireSupportedDevice(device)
+            selectedDevice = device
+        }
+        let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
         var promptIds: [Int32]
         var multimodalMessages: [MultimodalMessage]?
         var imageURLs: [UUID: URL] = [:]
@@ -95,7 +103,7 @@ public func run(args: Args,
         // Hoisted above the `auto` estimate, which needs a device to read image
         // geometry. Planning never touches the GPU, but building the plan does
         // need the device the run will use.
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        guard let device = selectedDevice ?? MTLCreateSystemDefaultDevice() else {
             return errored(stderr, "no Metal device", 1)
         }
 

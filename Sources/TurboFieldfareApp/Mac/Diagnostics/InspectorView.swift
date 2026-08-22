@@ -34,6 +34,7 @@ struct InspectorView: View {
      private var showsVisionSection: Bool {
         VisionSectionVisibility.shows(
             visionRuntimeEnabled: model.visionRuntimeEnabled,
+            visionRuntimeSupported: model.isVisionRuntimeSupported,
             isModelInstalled: model.isModelInstalled,
             isVisionPackInstalled: model.isVisionPackInstalled,
             isCompanionOperationInProgress: model.isVisionCompanionOperationInProgress,
@@ -47,7 +48,7 @@ struct InspectorView: View {
                     .font(.caption)
                     .foregroundStyle(visionStatusColor)
             }
-            if !model.isVisionPackInstalled {
+            if model.isVisionRuntimeSupported && !model.isVisionPackInstalled {
                 LabeledContent("Download") {
                     Text(MetricFormat.storage(
                         model.visionInstallDescriptor.approximateDownloadBytes))
@@ -76,7 +77,12 @@ struct InspectorView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            if case .failed(let message) = model.visionInstallState {
+            if !model.isVisionRuntimeSupported {
+                Text("Image support requires an M2 or newer Mac. "
+                    + "Text generation remains available on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if case .failed(let message) = model.visionInstallState {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -128,9 +134,11 @@ struct InspectorView: View {
                         model.discardVisionPackDownload()
                     }
                     .disabled(!model.canDiscardVisionPackDownload)
-                    Button("Activate", action: model.activateVisionPack)
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!model.canActivateVisionPack)
+                    if model.isVisionRuntimeSupported {
+                        Button("Activate", action: model.activateVisionPack)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canActivateVisionPack)
+                    }
                 } else if model.isVisionPackInstalled {
                     Button("Remove", role: .destructive) {
                         model.requestVisionPackRemoval()
@@ -149,11 +157,13 @@ struct InspectorView: View {
                         }
                         .disabled(!model.canDiscardVisionPackDownload)
                     }
-                    Button(visionInstallButtonLabel) {
-                        model.installVisionPack()
+                    if model.isVisionRuntimeSupported {
+                        Button(visionInstallButtonLabel) {
+                            model.installVisionPack()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!model.canInstallVisionPack)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canInstallVisionPack)
                 }
             }
         }
@@ -172,6 +182,7 @@ struct InspectorView: View {
     }
 
     private var visionStatusLabel: String {
+        guard model.isVisionRuntimeSupported else { return "Requires M2 or newer" }
         if model.visionInstallState != .idle {
             return model.visionInstallPhaseLabel
         }
@@ -184,6 +195,7 @@ struct InspectorView: View {
     }
 
     private var visionStatusColor: Color {
+        guard model.isVisionRuntimeSupported else { return .secondary }
         switch model.visionInstallationStatus {
         case .partial: return .orange
         case .missing, .complete, .unsupportedLayout: return .secondary

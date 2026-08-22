@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Metal
 import TurboFieldfare
 @testable import TurboFieldfareCLICore
 
@@ -188,5 +189,29 @@ import TurboFieldfare
             ["--model", "m.gturbo", "--prompt", "hi", "--vision-residency", "keep-ready"])
         #expect(explicit.visionResidency == .keepReady,
                 "the opt-in is still reachable")
+    }
+
+    @Test(.enabled(
+        if: MTLCreateSystemDefaultDevice()?.supportsFamily(.apple8) == false,
+        "requires an Apple7 or older Metal device"))
+    func apple7ImageRunRejectsHardwareBeforeReadingTheModel() async throws {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-cli-model-\(UUID().uuidString).gturbo")
+        let arguments = try Args.parse([
+            "--model", missing.path,
+            "--chat-prompt", "describe",
+            "--image", missing.appendingPathComponent("missing.png").path,
+        ])
+        let errors = Pipe()
+
+        let result = await run(args: arguments, stderr: errors.fileHandleForWriting)
+        errors.fileHandleForWriting.closeFile()
+        let message = String(
+            decoding: errors.fileHandleForReading.readDataToEndOfFile(),
+            as: UTF8.self)
+
+        #expect(result.exitCode == 1)
+        #expect(message.contains("M2 or newer"),
+                "model IO masked the unsupported-hardware error: \(message)")
     }
 }
