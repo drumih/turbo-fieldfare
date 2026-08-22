@@ -102,7 +102,7 @@ extension Args {
       --seed <uint64>            Deterministic sampling seed (default off).
       --stop <string>            Stop substring (repeatable).
       --quiet                    Suppress the timing footer.
-      --expert-cache-slots <n>   Expert-cache slots: 8, 16, 24, or 32 (default 16).
+            --expert-cache-slots <n>   Expert-cache slots: 8, 16, 24, or 32 (default 24).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.

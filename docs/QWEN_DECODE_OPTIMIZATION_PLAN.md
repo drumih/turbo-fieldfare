@@ -1,7 +1,8 @@
 # Qwen decode optimization plan
 
-Status: DeltaNet recurrent-kernel candidate accepted; stacked Phase 3 subset
-promising, confirmation pending
+Status: DeltaNet and Phase 3 merged; full Phase 3 verification below the 15%
+gate; Phase 4 rejected; corrected fused greedy head and follow-up evidence
+stashed for later review
 
 Planning review: GPT-5.6 Luna, 2026-08-21
 
@@ -30,6 +31,169 @@ completion shape, with 64 generated tokens:
 The slot experiment does not show a meaningful decode improvement from 24 or
 32 slots. Keep 16-slot LFU as the control unless a later, valid experiment
 reverses that result.
+
+### Artifact location and weight I/O
+
+The verified Qwen artifact was moved on 2026-08-22 from purgeable
+`/private/tmp/qwen36-35b-a3b-4bit.gturbo` to the gitignored persistent path
+`scratch/qwen36-35b-a3b-4bit.gturbo`. Both directories are on the same internal
+APFS device, and the move preserved directory inode `26195355`, so it was an
+atomic rename rather than an 18 GB copy. The manifest SHA-256 remains
+`90f353b07d3bdfa7c226dfa461d02fc80bc07c26c9b0a73635d7e07cb1145940`; the
+verified-install receipt SHA-256 remains
+`72735217ec7f80e35c631359d3ea5116b280e174ee153d1a2d0754ad2c50ba47`.
+
+Location does not change the runtime's read strategy or raw SSD performance.
+`model_weights.bin` is mmap-backed and can incur page faults under memory
+pressure. Routed experts are different: each layer file is opened lazily and
+expert cache misses use explicit `pread` into a fixed per-layer Metal-visible
+slot cache. The diagnostic expert-fetch timer therefore includes cache-plan
+miss service and filesystem-cache effects; it is not proof that every logical
+byte reached the physical SSD. Recent 256-token rows recorded 48,100 cache hits,
+33,500 misses, and about 59.3 GB of logical estimated expert bytes, so streamed
+expert I/O remains material even though moving the artifact cannot reduce it.
+
+On 2026-08-22, diagnostic schema version 2 added opt-in routed-expert read
+count, summed worker time, and maximum single-read time globally and per layer.
+The production read path remains unchanged when diagnostics are disabled. One
+controlled release-server row used the persistent artifact, 16-slot LFU, the
+standard process warmup, and a 256-token completion. It passed token-count,
+diagnostic-attribution, resource-sampling, and memory-pressure checks and
+measured 17.00 tok/s with 0.996878 wall-time attribution. The row recorded:
+
+| Metric | Result |
+| --- | ---: |
+| Expert-fetch wall time | 5,356.3 ms |
+| Summed parallel read-worker time | 15,593.7 ms |
+| Cache hits / misses | 48,100 / 33,500 |
+| Average successful miss read | 0.465 ms |
+| Maximum single read | 10.135 ms |
+| Summed worker time / fetch wall | 2.91x |
+| Top layer / top 5 / top 10 fetch share | 4.83% / 21.47% / 35.59% |
+
+The summed read time is parallel worker time and must not be added to fetch
+wall time. The broad per-layer distribution falsifies the current hypothesis
+that a few pathological layers or APFS extents dominate fetch wall. One
+10.135 ms read outlier exists, but it cannot explain 5.356 seconds of aggregate
+fetch wall. The next I/O candidate should reduce cache-miss demand or improve
+admission quality; do not duplicate or repack the 18 GB artifact for extent
+testing from this evidence. Larger LFU caches and LRU have already failed to
+provide a new mechanism worth repeating.
+
+The external harness initially rejected newer schemas before measurement
+because it accepted only version 1. The completed rows used an in-memory adapter
+that mapped only `schema_version` to 1 for the existing validator; all
+decode-step, attribution, completion, token-ID, resource, and memory-pressure
+checks remained active. Update the external harness to accept schema version 3
+before using this row in a formal interleaved comparison.
+
+### Cache-direction follow-up
+
+Diagnostic schema version 3 adds opt-in per-layer routed-expert IDs and routing
+weights for every decode step. This permits exact offline policy replay without
+changing the production cache or issuing speculative reads. A validated
+256-token trace under 16-slot LFU reproduced 48,100 hits and 33,500 misses at
+16.84 tok/s with 0.995591 attribution. Resource sampling and memory-pressure
+checks passed.
+
+One warmup replay followed by one scored replay of the same 40-layer route
+stream found no better memory-neutral replacement policy:
+
+| Policy | Miss change versus LFU |
+| --- | ---: |
+| Lifetime LFU | control |
+| Decayed LFU | +0.07% to +4.80% |
+| Route-weighted LFU | +1.28% |
+| Decayed route-weighted LFU | +1.32% to +6.67% |
+| Segmented LFU/LRU | 0.00% to +14.58% |
+| LRU | +14.58% |
+| Reuse-interval prediction, held out | +14.67% to +17.77% |
+
+A fixed-total heterogeneous allocation trained on the first half of the trace
+reduced held-out misses by only 0.86%. Even an allocation selected with
+knowledge of the held-out half reduced them by only 2.50%. By contrast,
+future-aware Belady replacement reduced misses by 19.07%, from 32,886 to
+26,616 on the warmed replay. Capacity is therefore not the absolute limit, but
+the tested online recency, frequency, route-weight, reuse-interval, and
+per-layer-allocation signals do not recover the oracle gap.
+
+Because the current runtime is much faster than the historical slot-capacity
+experiment, 24-slot LFU was screened again and then measured with three warmup
+and five interleaved 256-token cycles against 16-slot LFU:
+
+| Metric | 16 slots | 24 slots | Change |
+| --- | ---: | ---: | ---: |
+| Median decode | 17.26 tok/s | 17.94 tok/s | +3.94% |
+| Cache misses | 33,500 | 26,145 | -21.96% |
+| Expert-fetch wall | 4,977.4 ms | 4,354.5 ms | -12.51% |
+| Summed read-worker time | 14,127.7 ms | 11,211.8 ms | -20.64% |
+| Median peak backend RSS | 1.275 GB | 1.676 GB | +0.401 GB |
+| Minimum available memory | 3.941 GB | 3.586 GB | -0.355 GB |
+
+All measured rows had exact token parity, valid attribution and resource
+samples, and valid memory-pressure snapshots. The generated rates were
+17.18/17.26/17.32/17.14/17.76 tok/s for 16 slots and
+17.48/18.23/17.94/17.62/18.29 tok/s for 24 slots. The throughput gain is real
+but misses the 15% acceptance gate and spends additional memory. A later
+combined comparison below determines its production disposition.
+
+The correctness-proven fused Qwen greedy head, Qwen-specific LM-head function
+constants, and 24-slot LFU cache were then measured together against the active
+16-slot runtime. Three warmups and five interleaved 256-token cycles produced
+17.77 tok/s for the control and 18.96 tok/s for the combined candidate, a
+6.70% median gain. Control rates were 17.77/17.69/18.18/17.92/17.77 tok/s;
+candidate rates were 19.13/19.06/18.60/18.53/18.96 tok/s. Every row produced
+the exact expected output SHA-256
+`62578360fa5015aaf9505788a93e824e1b6463a3566fce8e2e7ec5fad9c341ff`.
+
+This stack is now the production default: fused greedy output remains selected
+unless logits are explicitly requested, and LFU uses 24 cache slots by default.
+The combined gain is useful but still below the 15% project acceptance gate, so
+it is an integrated incremental stack rather than a gate-clearing phase result.
+The separately tested fused shared/routed combine remains excluded because its
+3.92% subset result was noisy and did not receive equivalent formal validation.
+
+After integration, a fresh release build was confirmed with diagnostics off,
+24-slot LFU, one 64-token process warmup, and one 256-token measured request. It
+produced 18.53 tok/s and the same expected output hash. Peak backend RSS was
+1.760 GB, minimum available memory was 4.071 GB, and peak wired memory was
+5.775 GB across 34 resource samples. This confirms the source-built result lies
+within the formal candidate range; it is not an additional formal comparison.
+
+A subsequent current-runtime 32-slot screen confirmed that more capacity does
+not continue the throughput trend. Offline replay predicted 19,653 misses,
+40.24% fewer than 16 slots, and the live row recorded 20,746 misses. Despite
+that hit-rate improvement, the validated row fell to 16.19 tok/s, expert-fetch
+wall rose to 4,776.0 ms, peak backend RSS reached 1.928 GB, and peak wired
+memory reached 6.245 GB. Attribution was 0.995234 and memory-pressure and
+resource checks passed. This agrees with the historical 32-slot result: the
+additional resident buffers reduce read count but increase enough memory and
+system cost to lose end-to-end throughput. Do not promote 32 slots or spend a
+formal interleaved campaign on it without a new memory-cost mechanism.
+
+The schema-3 runs used an in-memory external-harness adapter that mapped only
+the schema number to version 1 for the unchanged validator. All token-count,
+token-ID, attribution, resource, and pressure checks remained active. The
+formal comparison output is at
+`/private/tmp/turbo-fieldfare-qwen-cache-slots-interleaved/comparison.json`.
+
+Absolute throughput across these experiments must not be read as a source
+regression. A three-cycle alternating check of the current binary measured a
+17.89 tok/s median with diagnostics disabled and 17.77 tok/s with schema-3
+diagnostics enabled, only 0.67% instrumentation overhead, with exact output
+hash parity. More importantly, the preserved Qwen-specialized fused binary
+whose historical median was 18.88 tok/s produced 18.06 tok/s under the current
+host state with the same output hash. Historical fused runs had 5.303-5.394 GB
+minimum available memory; current comparable rows had 4.384-4.491 GB. Thus the
+headline difference from 18.9 to the high-17 range combines a stashed roughly
+1% fused-head optimization with same-binary host and filesystem-cache drift.
+Use interleaved same-session deltas, not absolute rates from different runs, to
+judge changes.
+
+Use the persistent path in future CLI, server, and benchmark commands. Temporary
+external harnesses that still name `/private/tmp/qwen36-35b-a3b-4bit.gturbo`
+must be given the new artifact argument rather than recreating or duplicating
+the model.
 
 A separate 4,002-token Qwen request completed in 893.452 seconds with 106 output
 tokens. Live stack samples observed work in `PreadExpertStreamer` and `pread`,
@@ -344,41 +508,46 @@ dependency changed.
 
 This candidate clears the 15% performance gate with exact parity and passes the
 correctness, lifecycle, and resource gates, so the recurrent-kernel change is
-accepted. Phase 4 remains deferred because measured expert-fetch wait does not
-provide enough headroom to justify an I/O-overlap candidate.
+accepted.
 
-### Stacked Phase 3 subset experiment
+### Stacked Phase 3 full verification
 
-After the recurrent-kernel change was merged, the Phase 3 synchronization
-candidate was reapplied as a separate stacked experiment. A short alternating
-A/B run compared merged DeltaNet `main` against DeltaNet plus Phase 3 using one
-64-token warmup cycle and three measured cycles per arm. This intentionally
-reduced protocol answers whether stacking is still promising; it is not the
-full three-target, five-measurement acceptance run.
+After Phase 3 merged, a full alternating A/B sweep compared commit `62b29f7`
+(DeltaNet only) against merged commit `42b898d` (DeltaNet plus Phase 3). The
+protocol used three warmup cycles and five measured cycles per arm at 64, 256,
+and 512 completion tokens. The baseline release binary SHA-256 was
+`28f63249cdbacff86ec84e9a366e679788905f5bae02d660431f0aaa11bab671`; the
+candidate release binary SHA-256 was
+`a0b7f2996ef7019f2ed5bdd262e7452e801b63cb39540ab6649defe151ece683`.
 
-| Completion target | DeltaNet only | DeltaNet + Phase 3 | Change | Submissions per decode step |
+| Completion target | DeltaNet-only median | Phase 3 median | Change | Submissions per decode step |
 | ---: | ---: | ---: | ---: | ---: |
-| 64 tokens | 16.34 tok/s | 18.82 tok/s | +15.18% | 122 -> 82 |
+| 64 tokens | 15.35 tok/s | 17.21 tok/s | +12.12% | 122 -> 82 |
+| 256 tokens | 15.49 tok/s | 17.58 tok/s | +13.49% | 122 -> 82 |
+| 512 tokens | 15.32 tok/s | 17.42 tok/s | +13.71% | 122 -> 82 |
 
-Baseline samples were 16.34, 16.44, and 16.14 tok/s. Candidate samples were
-18.82, 18.96, and 18.42 tok/s. Exact token IDs and output SHA-256 matched across
-arms. The minimum attribution ratio was 0.998083, all eight resource samples
-were valid, maximum peak RSS was 1.492 GB, and minimum available memory was
-5.326 GB. The package suite passed 765 tests across 141 suites, the release
-build passed, and no model process remained after the run.
+All 16 arm processes completed their workloads. Resource sampling produced
+1,121 valid samples with no unavailable fields; maximum peak RSS was 1.549 GB,
+and minimum available memory was 4.327 GB. A supplemental fresh-process row per
+arm confirmed exact token parity at all three lengths with output SHA-256 values
+`8e65e1b5adf49bd49523cffc8ee00c4d896927019d76abbc541b2ca861f61ddf`,
+`62578360fa5015aaf9505788a93e824e1b6463a3566fce8e2e7ec5fad9c341ff`, and
+`50286bf4360a7ed31e4011fd3e0ff360b2fad7c1c8c55bac700882e4b91b90d1`.
 
-The subset result supports retaining the stacked candidate for review, but its
-15.18% median gain is close to the acceptance threshold. Treat it as promising
-rather than accepted until a confirmation run establishes that the gain holds
-outside this reduced 64-token sample.
+The harness stopped before writing its final comparison report because the
+64-token row failed the configured gate. The remaining medians were calculated
+from the five completed measured samples per arm. The full sweep supersedes the
+earlier three-sample 64-token result: Phase 3 consistently improves decode and
+preserves exact output, but all three medians fall below the plan's 15%
+acceptance threshold.
 
 ## Phase 4: overlap exact-demand expert I/O
 
-Attempt this only when Phase 1 shows that expert-fetch wait has enough
-theoretical headroom to clear the 15% gate. Do not infer this from stack samples
-or estimated bytes alone.
+Phase 4 began after the recurrent-kernel and Phase 3 changes merged. The earlier
+profile attributed only 6-7% of baseline forward time to expert-fetch wait, so
+this remained an evidence-gathering candidate rather than a presumed win.
 
-Evaluate this as a separate candidate before stacking it with Phase 3:
+The decode-only implementation used this schedule:
 
 1. Submit mixer/router work.
 2. Queue shared-expert work.
@@ -387,6 +556,182 @@ Evaluate this as a separate candidate before stacking it with Phase 3:
 5. Start exact expert fetch while shared-expert GPU work executes.
 6. Await shared-expert and expert-fetch completion.
 7. Submit routed expert/combine work.
+
+Mixer/router, shared expert, and routed combine remained on the same Metal
+queue. Queue order preserved the normalized-input dependency, while the
+asynchronous pread overlapped the already-committed shared-expert command.
+Every downstream error path drained the submitted shared command before
+returning, and routed combine was not encoded until both fetch and shared
+completion succeeded. Prefill and cross-layer scheduling were unchanged.
+
+### Phase 4 measurement result
+
+A short alternating A/B run compared merged Phase 3 against Phase 4 using one
+64-token warmup cycle and three measured cycles per arm. The baseline release
+binary SHA-256 was
+`6886e35655d5902de07fbee7b6d9ce56262efa11afe640e5150e68a30752b1fc`; the
+candidate release binary SHA-256 was
+`e5166ad864e062365bab750fc4361dbd1f66ca7df0ec64beecf7ae32c9b31768`.
+
+| Completion target | Phase 3 baseline | Phase 4 candidate | Change | Submissions per decode step |
+| ---: | ---: | ---: | ---: | ---: |
+| 64 tokens | 18.53 tok/s | 18.91 tok/s | +2.05% | 82 -> 122 |
+
+Baseline samples were 18.54, 18.53, and 17.92 tok/s. Candidate samples were
+18.91, 18.89, and 18.97 tok/s. Exact token IDs and output SHA-256 matched across
+arms, diagnostic attribution remained above 0.998, and no validation errors
+occurred. All eight resource samples were valid, maximum peak RSS was 1.355 GB,
+and minimum available memory was 5.291 GB. The focused recurrent suite passed 4
+tests, the full package suite passed 765 tests across 141 suites, and the release
+build completed.
+
+The candidate was rejected because the +2.05% median improvement was well below
+the 15% acceptance gate. Separating shared-expert work also restored the third
+per-layer command buffer, undoing Phase 3's 82-submission decode shape. The
+runtime candidate was rolled back completely; only this measured result remains.
+
+## Fused greedy LM-head candidate
+
+This candidate reused `LMHeadChainInt4` for Qwen's untied 2,048-wide,
+248,320-row output projection. Pure greedy generation performed the final BF16
+RMSNorm, INT4 projection, and GPU argmax without materializing or scanning full
+FP16 logits on the CPU. Chunked prefill applied the same fused chain to its final
+hidden row and returned a greedy-token seed. The runner factory passed
+`RuntimeConfiguration.headPath` into Qwen construction, so sampled generation
+and the server retained the existing full-logits path.
+
+### Correctness diagnosis and repair
+
+The first standalone run reported 21.973 tok/s, but its repeated-token output
+was invalid. `QwenForwardRunner` exposed `usesFusedGreedyHead` and
+`lastGreedyToken` without declaring `FusedGreedyLogitProducer` conformance.
+`RawCompletion` therefore ignored the correctly computed fused token and sampled
+an unwritten logits buffer. A same-hidden diagnostic confirmed that the fused
+head selected token `264`, matching materialized logits, while the generation
+loop emitted stale token `623`.
+
+The repair added the missing protocol conformance. Prompt-state snapshots also
+saved and restored `lastGreedyToken`, and exact fused replay seeded directly
+from that token rather than stale logits. A focused poisoned-logits regression
+test covered this replay contract. All temporary Metal, score-rounding, and
+logging probes were removed.
+
+The corrected candidate binary SHA-256 was
+`a843075e4ea92162f237d54cc66f8512d4dfc051431ce0ef7ab2260d14e39038`.
+A fresh cold two-token comparison and fresh cached 64-, 256-, and 512-token
+comparisons matched exact token IDs across the logits and fused binaries.
+
+### Corrected formal performance result
+
+A corrected formal alternating comparison used three warmup cycles and five
+measured cycles per arm at all three completion targets. All 16 arm processes
+completed every workload and cleaned up their listeners. The harness verified
+64-token parity, then stopped at the configured 15% performance gate; the
+supplemental fresh comparisons established parity at the remaining targets.
+The retained server logs produced these cached-request duration medians:
+
+| Completion target | Logits median | Fused median | Duration reduction |
+| ---: | ---: | ---: | ---: |
+| 64 tokens | 3.376 s | 3.406 s | -0.88% |
+| 256 tokens | 13.924 s | 13.503 s | +3.12% |
+| 512 tokens | 27.771 s | 27.619 s | +0.55% |
+
+Resource and lifecycle checks passed. Sampling captured 1,018 valid rows with a
+1.617 GB maximum process-group RSS and at least 4.863 GB available memory. No
+model process or listener remained after the run.
+
+The corrected formal sweep does not reproduce the invalid 21.973 tok/s result
+and does not clear the 15% performance gate. Never cite that invalid-output run
+as valid throughput. Its apparent speed also coincided with unusually low
+expert-fetch wait, so most of the difference did not come from the head.
+
+### Qwen head specialization follow-up
+
+Corrected diagnostics showed why head work cannot recover 21.973 tok/s by
+itself. At 512 tokens, removing CPU sampling saved about 362 ms and the fused
+projection saved about 133 ms, while forward execution still took more than 27
+seconds.
+
+The generic fused kernel did leave a smaller safe opportunity: only Gemma's
+2,816 by 262,144 head used compile-time Metal function constants. A Qwen-specific
+2,048 by 248,320 pipeline was added without changing kernel arithmetic. A
+one-warmup, three-measurement alternating 256-token subset compared the corrected
+generic fused binary against the specialized fused binary. Exact token IDs and
+output SHA-256 matched.
+
+| Path | Measured decode rates | Median | Median fused-head time |
+| --- | --- | ---: | ---: |
+| Generic fused | 18.70, 18.60, 18.83 tok/s | 18.70 tok/s | 698.69 ms |
+| Qwen-specialized fused | 18.91, 18.80, 18.88 tok/s | 18.88 tok/s | 677.44 ms |
+
+The specialization improved median head time by 3.04% and end-to-end decode by
+0.96%. This is discovery evidence rather than a formal acceptance run. It is
+the only post-correctness optimization retained in the stash because it
+preserved exact output, added no runtime control surface, and directly improved
+the measured phase.
+
+### Post-head decode follow-ups
+
+Four arithmetic-preserving Qwen decode candidates were measured after the head
+specialization. All preserved exact 256-token output SHA-256
+`62578360fa5015aaf9505788a93e824e1b6463a3566fce8e2e7ec5fad9c341ff`, but none
+cleared the 15% gate, so all runtime changes were removed.
+
+| Candidate | Discovery result | Decision |
+| --- | ---: | --- |
+| Routed MoE function constants (`D=2048`, `F=512`, top-k 8) | 18.84 -> 18.87 tok/s (+0.16%); routed-combine median 3,225.46 -> 3,191.59 ms | Reject as neutral |
+| Fuse shared/routed combine with residual add | 64-token median 15.29 -> 15.89 tok/s (+3.92%); combine median 926.95 -> 909.27 ms | Reject below gate and above run noise |
+| Reuse one routed-expert Metal argument buffer | 17.31 -> 17.22 tok/s (-0.52%) | Reject as neutral-negative |
+| Add Qwen shared-expert INT4 function constants | 17.85 -> 17.37 tok/s (-2.69%); shared-phase median 5,097.01 -> 5,206.19 ms | Reject as regression |
+
+The combine/residual candidate was bit-exact against the original two-kernel
+sequence by explicitly retaining the intermediate FP16 rounding. Its first
+256-token pair showed a small local reduction, but later rows suffered broad
+host slowdown in mixer and expert-fetch phases while available memory declined.
+A shorter three-warmup, five-measurement 64-token confirmation retained exact
+parity and valid resource sampling, but the intended phase improved only 1.91%
+and individual rows varied much more than the change. It is the only rejected
+follow-up worth reconsidering experimentally, after finer GPU timing exists.
+
+The argument-buffer run was stable, retained identical 48,100 cache hits and
+33,500 misses per row, and confirmed that eliminating those allocations does
+not improve throughput. The shared-expert specialization was slower in every
+measured comparison.
+
+These results narrow the remaining opportunity: launch and setup reductions in
+the routed tail are too small on this host. Future work should begin with finer
+GPU timing inside the combined mixer/shared/router command buffer before
+changing another kernel, because its current wall-time counters overlap and do
+not identify which enclosed encoder dominates.
+
+### Current disposition and recovery
+
+The corrected fused-head implementation, Qwen head specialization, replay test,
+and an older copy of this evidence were stashed on 2026-08-22 from branch
+`perf/qwen-fused-greedy-head` with message
+`qwen fused greedy head correctness and optimization evidence`. The five source
+and test changes have since been integrated manually into the diagnostics-enabled
+worktree, together with the 24-slot LFU production default. The stash remains an
+independent recovery point, and no commit was made. Because stash indices can
+move, locate the entry by message before restoring its files:
+
+```bash
+git stash list
+git restore --source=stash@{N} -- \
+  Sources/TurboFieldfare/Kernels/Fusions/LMHeadChainInt4.swift \
+  Sources/TurboFieldfare/Runtime/Generation/RawCompletion.swift \
+  Sources/TurboFieldfare/Runtime/Inference/ForwardRunnerFactory.swift \
+  Sources/TurboFieldfare/Runtime/Inference/QwenForwardRunner.swift \
+  Tests/TurboFieldfare/Core/Runtime/Generation/RawCompletionLoopTests+Continuation.swift
+```
+
+The stash changes those five files plus an older copy of this plan. Applying the
+whole stash is also possible, but it may conflict with the newer evidence in
+this document; keep the current plan when resolving that conflict. Before the
+stash was created, 766 tests in 141 suites passed, the release build passed, all
+23 Markdown files passed link validation, source diagnostics and
+`git diff --check` were clean, the server default remained logits-first, and no
+model process or listener remained.
 
 Useful patterns from
 [`RealForwardRunner.swift`](../Sources/TurboFieldfare/Runtime/Inference/RealForwardRunner.swift)
@@ -492,6 +837,19 @@ and an interleaved same-host control.
 - [x] Enforce the 15% same-host median improvement gate; reject the candidate
   below threshold.
 - [x] Profile the rejected candidate again.
-- [x] Defer exact-demand I/O overlap because measured fetch wait is too small.
+- [x] Implement and measure exact-demand I/O overlap; reject it below the 15%
+  gate and restore the merged Phase 3 runtime.
 - [x] Accept the DeltaNet recurrent-kernel candidate after all correctness and
   resource gates pass.
+- [x] Fix fused greedy-head token handoff and cached replay; verify exact parity.
+- [x] Measure the corrected fused head and Qwen-specific head specialization.
+- [x] Measure and reject four below-gate post-head decode follow-ups.
+- [x] Add opt-in expert-read count, summed-time, and maximum-latency diagnostics;
+  measure one controlled 256-token row and reject the concentrated-tail I/O
+  hypothesis.
+- [x] Add opt-in route-and-weight tracing; replay memory-neutral replacement and
+  allocation candidates and quantify the Belady upper bound.
+- [x] Integrate the correctness-proven fused Qwen head and promote 24-slot LFU
+  after their valid combined comparison gained 6.70% with exact output parity.
+- [ ] Add non-overlapping GPU timing inside the combined mixer/shared/router
+  command buffer before selecting another optimization candidate.

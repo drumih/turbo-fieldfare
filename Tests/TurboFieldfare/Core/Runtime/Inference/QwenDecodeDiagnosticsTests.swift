@@ -17,7 +17,10 @@ struct QwenDecodeDiagnosticsTests {
             routedExpertCount: 8,
             routedExpertCacheHitCount: 5,
             routedExpertCacheMissCount: 3,
-            routedExpertEstimatedBytes: 1234)
+            routedExpertEstimatedBytes: 1234,
+            expertReadCount: 3,
+            expertReadNanos: 24,
+            expertReadMaxNanos: 11)
 
         #expect(diagnostics.wallNanos == 100)
         #expect(diagnostics.embeddingNanos == 10)
@@ -33,6 +36,9 @@ struct QwenDecodeDiagnosticsTests {
         #expect(diagnostics.routedExpertCacheHitCount == 5)
         #expect(diagnostics.routedExpertCacheMissCount == 3)
         #expect(diagnostics.routedExpertEstimatedBytes == 1234)
+        #expect(diagnostics.expertReadCount == 3)
+        #expect(diagnostics.expertReadNanos == 24)
+        #expect(diagnostics.expertReadMaxNanos == 11)
         #expect(diagnostics.layers.isEmpty)
     }
 
@@ -41,12 +47,15 @@ struct QwenDecodeDiagnosticsTests {
         accumulator.addSamplingNanos(20)
 
         let aggregate = accumulator.makeDiagnostics(decodeLoopWallNanos: 100)
-        #expect(aggregate.schemaVersion == 1)
+        #expect(aggregate.schemaVersion == 3)
         #expect(aggregate.decodeStepCount == 0)
         #expect(aggregate.forwardWallNanos == 0)
         #expect(aggregate.samplingNanos == 20)
         #expect(aggregate.attributedWallNanos == 20)
         #expect(aggregate.residualWallNanos == 80)
+        #expect(aggregate.expertReadCount == 0)
+        #expect(aggregate.expertReadNanos == 0)
+        #expect(aggregate.expertReadMaxNanos == 0)
         #expect(aggregate.layers.isEmpty)
     }
 
@@ -72,11 +81,19 @@ struct QwenDecodeDiagnosticsTests {
             routePlanningNanos: 5,
             sharedExpertNanos: 30,
             routedExpertCombineNanos: 15,
+            expertReadCount: 1,
+            expertReadNanos: 9,
+            expertReadMaxNanos: 9,
             layers: [
                 QwenDecodeLayerDiagnostics(layer: 0,
                                            isFullAttention: true,
                                            elapsedNanos: 40,
-                                           expertFetchNanos: 10),
+                                           expertFetchNanos: 10,
+                                           expertReadCount: 1,
+                                           expertReadNanos: 9,
+                                           expertReadMaxNanos: 9,
+                                           routedExperts: [4, 7],
+                                           routingWeights: [0.75, 0.25]),
                 QwenDecodeLayerDiagnostics(layer: 1,
                                            isFullAttention: false,
                                            elapsedNanos: 30,
@@ -102,11 +119,19 @@ struct QwenDecodeDiagnosticsTests {
             routePlanningNanos: 10,
             sharedExpertNanos: 40,
             routedExpertCombineNanos: 20,
+            expertReadCount: 2,
+            expertReadNanos: 21,
+            expertReadMaxNanos: 12,
             layers: [
                 QwenDecodeLayerDiagnostics(layer: 0,
                                            isFullAttention: true,
                                            elapsedNanos: 60,
-                                           expertFetchNanos: 15),
+                                           expertFetchNanos: 15,
+                                           expertReadCount: 2,
+                                           expertReadNanos: 21,
+                                           expertReadMaxNanos: 12,
+                                           routedExperts: [7, 9],
+                                           routingWeights: [0.6, 0.4]),
                 QwenDecodeLayerDiagnostics(layer: 1,
                                            isFullAttention: false,
                                            elapsedNanos: 40,
@@ -132,11 +157,19 @@ struct QwenDecodeDiagnosticsTests {
         #expect(aggregate.routedExpertCacheHitCount == 5)
         #expect(aggregate.routedExpertCacheMissCount == 3)
         #expect(aggregate.routedExpertEstimatedBytes == 300)
+        #expect(aggregate.expertReadCount == 3)
+        #expect(aggregate.expertReadNanos == 30)
+        #expect(aggregate.expertReadMaxNanos == 12)
         #expect(aggregate.samplingNanos == 50)
         #expect(aggregate.attributedWallNanos == 300)
         #expect(aggregate.residualWallNanos == 50)
         #expect(aggregate.layers.map(\.elapsedNanos) == [100, 70])
         #expect(aggregate.layers.map(\.expertFetchNanos) == [25, 50])
+        #expect(aggregate.layers.map(\.expertReadCount) == [3, 0])
+        #expect(aggregate.layers.map(\.expertReadNanos) == [30, 0])
+        #expect(aggregate.layers.map(\.expertReadMaxNanos) == [12, 0])
+        #expect(aggregate.layers[0].routedExpertTrace == [[4, 7], [7, 9]])
+        #expect(aggregate.layers[0].routingWeightTrace == [[0.75, 0.25], [0.6, 0.4]])
     }
 
     @Test func aggregateSaturatesCounterOverflow() {
@@ -161,10 +194,16 @@ struct QwenDecodeDiagnosticsTests {
             routePlanningNanos: .max,
             sharedExpertNanos: .max,
             routedExpertCombineNanos: .max,
+            expertReadCount: .max,
+            expertReadNanos: .max,
+            expertReadMaxNanos: .max,
             layers: [QwenDecodeLayerDiagnostics(layer: 0,
                                                  isFullAttention: true,
                                                  elapsedNanos: .max,
-                                                 expertFetchNanos: .max)]))
+                                                 expertFetchNanos: .max,
+                                                 expertReadCount: .max,
+                                                 expertReadNanos: .max,
+                                                 expertReadMaxNanos: .max)]))
         accumulator.add(QwenDecodeDiagnostics(
             wallNanos: 1,
             embeddingNanos: 1,
@@ -185,17 +224,29 @@ struct QwenDecodeDiagnosticsTests {
             routePlanningNanos: 1,
             sharedExpertNanos: 1,
             routedExpertCombineNanos: 1,
+            expertReadCount: 1,
+            expertReadNanos: 1,
+            expertReadMaxNanos: 1,
             layers: [QwenDecodeLayerDiagnostics(layer: 0,
                                                  isFullAttention: true,
                                                  elapsedNanos: 1,
-                                                 expertFetchNanos: 1)]))
+                                                 expertFetchNanos: 1,
+                                                 expertReadCount: 1,
+                                                 expertReadNanos: 1,
+                                                 expertReadMaxNanos: 1)]))
 
         let aggregate = accumulator.makeDiagnostics(decodeLoopWallNanos: .max)
         #expect(aggregate.forwardWallNanos == .max)
         #expect(aggregate.commandBufferSubmissionCount == .max)
         #expect(aggregate.routerEvaluationCount == .max)
         #expect(aggregate.routedExpertEstimatedBytes == .max)
+        #expect(aggregate.expertReadCount == .max)
+        #expect(aggregate.expertReadNanos == .max)
+        #expect(aggregate.expertReadMaxNanos == .max)
         #expect(aggregate.layers.first?.elapsedNanos == .max)
         #expect(aggregate.layers.first?.expertFetchNanos == .max)
+        #expect(aggregate.layers.first?.expertReadCount == .max)
+        #expect(aggregate.layers.first?.expertReadNanos == .max)
+        #expect(aggregate.layers.first?.expertReadMaxNanos == .max)
     }
 }

@@ -32,7 +32,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
 
-    public init(expertCacheSlots: Int = 16,
+    public init(expertCacheSlots: Int = 24,
                 expertCachePolicy: RuntimeExpertCachePolicy = .lfu,
                 rdadvisePolicy: RDAdvicePolicyMode = .off,
                 prefillEnabled: Bool = true,

@@ -92,6 +92,11 @@ public struct RoutedExpertFetchPlan: Sendable {
     }
 }
 
+struct RoutedExpertFetchResult {
+    let views: [TensorView]
+    let readDiagnostics: ExpertReadDiagnostics
+}
+
 extension Model {
     public func qwenDeltaNetWeights(layer L: Int) throws -> QwenDeltaNetWeights {
         let prefix = "language_model.model.layers.\(L).linear_attn"
@@ -230,6 +235,28 @@ extension Model {
                         buffers,
                         layer: plan.layer,
                         experts: plan.experts))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    func fetchRoutedExpertsWithDiagnostics(plan: RoutedExpertFetchPlan) async throws
+        -> RoutedExpertFetchResult {
+        try ensureLayerOpened(plan.layer)
+        let streamer = streamersQueue.sync { streamersBox.streamers[plan.layer]! }
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let execution = try streamer.executeExpertCachePlanWithDiagnostics(
+                        plan.cachePlan)
+                    continuation.resume(returning: RoutedExpertFetchResult(
+                        views: Self.makeExpertViews(
+                            execution.buffers,
+                            layer: plan.layer,
+                            experts: plan.experts),
+                        readDiagnostics: execution.readDiagnostics))
                 } catch {
                     continuation.resume(throwing: error)
                 }

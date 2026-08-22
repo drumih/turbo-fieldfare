@@ -48,6 +48,25 @@ public struct ExpertCachePlan: Sendable, Equatable {
     }
 }
 
+public struct ExpertReadDiagnostics: Sendable, Equatable {
+    public let readCount: Int
+    public let totalNanos: UInt64
+    public let maxNanos: UInt64
+
+    public init(readCount: Int = 0,
+                totalNanos: UInt64 = 0,
+                maxNanos: UInt64 = 0) {
+        self.readCount = readCount
+        self.totalNanos = totalNanos
+        self.maxNanos = maxNanos
+    }
+}
+
+struct ExpertCacheExecution {
+    let buffers: [(buffer: MTLBuffer, offset: UInt64, size: UInt64)]
+    let readDiagnostics: ExpertReadDiagnostics
+}
+
 public enum ExpertCachePolicy: String, Sendable {
     case lru
     case lfu
@@ -269,20 +288,46 @@ public final class PreadExpertStreamer: @unchecked Sendable {
 
     public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
         -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
+        try executeExpertCachePlan(plan, collectReadDiagnostics: false).buffers
+    }
+
+    func executeExpertCachePlanWithDiagnostics(_ plan: ExpertCachePlan) throws
+        -> ExpertCacheExecution {
+        try executeExpertCachePlan(plan, collectReadDiagnostics: true)
+    }
+
+    private func executeExpertCachePlan(_ plan: ExpertCachePlan,
+                                        collectReadDiagnostics: Bool) throws
+        -> ExpertCacheExecution {
         precondition(plan.experts.count <= slotCount,
                      "expert cache plan exceeds slot count")
         precondition(plan.assignedSlots.count == plan.experts.count,
                      "expert cache plan slot count mismatch")
 
         let errorLock = NSLock()
+        let diagnosticsLock = NSLock()
         nonisolated(unsafe) var firstError: Error?
+        nonisolated(unsafe) var readCount = 0
+        nonisolated(unsafe) var totalReadNanos: UInt64 = 0
+        nonisolated(unsafe) var maxReadNanos: UInt64 = 0
         DispatchQueue.concurrentPerform(iterations: plan.misses.count) { missOffset in
             let index = plan.misses[missOffset]
             do {
+                let start = collectReadDiagnostics
+                    ? clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                    : 0
                 _ = try self.loadExpert(
                     layer: 0,
                     expert: plan.experts[index],
                     slot: plan.assignedSlots[index])
+                if collectReadDiagnostics {
+                    let elapsed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start
+                    diagnosticsLock.lock()
+                    readCount += 1
+                    totalReadNanos &+= elapsed
+                    maxReadNanos = max(maxReadNanos, elapsed)
+                    diagnosticsLock.unlock()
+                }
             } catch {
                 errorLock.lock()
                 if firstError == nil { firstError = error }
@@ -297,7 +342,12 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         }
         cacheLock.unlock()
 
-        return expertCachePlanBuffers(plan)
+        return ExpertCacheExecution(
+            buffers: expertCachePlanBuffers(plan),
+            readDiagnostics: ExpertReadDiagnostics(
+                readCount: readCount,
+                totalNanos: totalReadNanos,
+                maxNanos: maxReadNanos))
     }
 
     public func expertCachePlanBuffers(_ plan: ExpertCachePlan)

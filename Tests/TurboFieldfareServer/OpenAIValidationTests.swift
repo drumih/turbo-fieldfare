@@ -564,7 +564,7 @@ struct ServerArgumentTests {
         #expect(arguments.maxContext == 16_384)
         #expect(arguments.queueLimit == 4)
         #expect(arguments.promptCacheMode == .singlePrefix)
-        #expect(arguments.expertCacheSlots == 16)
+        #expect(arguments.expertCacheSlots == 24)
         #expect(arguments.expertCachePolicy == .lfu)
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)

@@ -84,6 +84,28 @@ extension PreadExpertStreamerTests {
     }
   }
 
+  @Test func plannedCacheDiagnosticsMeasureOnlyMissReads() throws {
+    let url = try Self.writeSyntheticLayer()
+    defer { try? FileManager.default.removeItem(at: url) }
+    let device = try MetalContext().device
+    let streamer = try PreadExpertStreamer(
+      layout: Self.makeLayout(path: url.path), device: device, slotCount: 4)
+
+    _ = try streamer.loadExpertsCached(experts: [0])
+    let experts = [0, 1, 2]
+    let plan = streamer.planExpertsCached(experts: experts)
+    let execution = try streamer.executeExpertCachePlanWithDiagnostics(plan)
+
+    #expect(execution.readDiagnostics.readCount == 2)
+    #expect(execution.readDiagnostics.totalNanos > 0)
+    #expect(execution.readDiagnostics.maxNanos > 0)
+    #expect(execution.readDiagnostics.maxNanos <= execution.readDiagnostics.totalNanos)
+    for (index, result) in execution.buffers.enumerated() {
+      let got = Self.bytes(of: result.buffer, offset: 0, count: Self.expertStride)
+      #expect(got.allSatisfy { $0 == Self.tagByte(experts[index]) })
+    }
+  }
+
   @Test func plannedCacheBuffersExposeReservedSlotsBeforeExecute() throws {
     let url = try Self.writeSyntheticLayer()
     defer { try? FileManager.default.removeItem(at: url) }

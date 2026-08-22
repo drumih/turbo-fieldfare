@@ -60,7 +60,7 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
 
-    public init(expertCacheSlots: Int = 16,
+    public init(expertCacheSlots: Int = 24,
                 expertCachePolicy: AppExpertCachePolicy = .lfu,
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
@@ -98,8 +98,8 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public static func slotsLabel(for slots: Int) -> String {
         switch slots {
         case 8: "8, -0.8 GB"
-        case 16: "16, Default"
-        case 24: "24, +0.8 GB"
+        case 16: "16, -0.8 GB"
+        case 24: "24, Default"
         case 32: "32, +1.61 GB"
         default: "\(slots)"
         }

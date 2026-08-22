@@ -9,6 +9,7 @@ import Metal
 /// tail because Qwen's residual block and untied output head are different.
 private struct QwenPromptStateSnapshot {
     let position: Int
+    let greedyToken: UInt32
     let deltaStates: [Int: QwenGatedDeltaNetSnapshot]
     let fullCaches: [Int: QwenFullAttentionKVSnapshot]
 }
@@ -19,6 +20,12 @@ private struct QwenDecodeDiagnosticsAccumulator {
     var layerNanos: UInt64 = 0
     var logitsNanos: UInt64 = 0
     var expertFetchNanos: UInt64 = 0
+    var expertReadCount = 0
+    var expertReadNanos: UInt64 = 0
+    var expertReadMaxNanos: UInt64 = 0
+    var currentLayerExpertReadMaxNanos: UInt64 = 0
+    var currentLayerRoutedExperts: [Int] = []
+    var currentLayerRoutingWeights: [Float] = []
     var mixerNanos: UInt64 = 0
     var routerNanos: UInt64 = 0
     var routePlanningNanos: UInt64 = 0
@@ -56,6 +63,9 @@ private struct QwenDecodeDiagnosticsAccumulator {
             routePlanningNanos: routePlanningNanos,
             sharedExpertNanos: sharedExpertNanos,
             routedExpertCombineNanos: routedExpertCombineNanos,
+            expertReadCount: expertReadCount,
+            expertReadNanos: expertReadNanos,
+            expertReadMaxNanos: expertReadMaxNanos,
             layers: layers)
     }
 }
@@ -72,6 +82,8 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
     private let attention: QwenFullAttention
     private let moe: QwenMoE
     private let head: QwenUntiedLMHead
+    private let fusionHead: LMHeadChainInt4
+    private let useFusedGreedyHead: Bool
     private let prefillEmbed: PrefillEmbedLookupInt4
     private let prefillRMSNorm: PrefillRMSNorm
     private let prefillProjection: QwenPrefillProjectionBatch
@@ -115,6 +127,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
     private let sharedActScratch: MTLBuffer
     private let routeIndices: MTLBuffer
     private let routeWeights: MTLBuffer
+    private let greedyTokenBuffer: MTLBuffer
 
     public let maxContext: Int
     private var position = 0
@@ -126,7 +139,8 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
 
     public init(model: Model,
                 context: MetalContext,
-                maxContext: Int) throws {
+                maxContext: Int,
+                runtimeConfiguration: RuntimeConfiguration = .production) throws {
         guard model.config.modelFamily == .qwen36MoeText else {
             throw ModelError.archMismatch(field: "modelFamily",
                                            expected: "qwen36MoeText",
@@ -151,6 +165,11 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             context: context,
             geometry: QwenLMHeadGeometry(vocabularySize: config.vocabSize,
                                           hiddenSize: config.hiddenSize))
+        self.fusionHead = try LMHeadChainInt4(
+            context: context,
+            maxD: config.hiddenSize,
+            maxVocab: config.vocabSize)
+        self.useFusedGreedyHead = runtimeConfiguration.headPath == .fusedRows
         self.prefillEmbed = try PrefillEmbedLookupInt4(context: context)
         self.prefillRMSNorm = try PrefillRMSNorm(context: context)
         self.prefillProjection = try QwenPrefillProjectionBatch(context: context)
@@ -231,6 +250,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         self.routeIndices = try makeBuffer(config.topKExperts,
                                            stride: MemoryLayout<UInt32>.stride)
         self.routeWeights = try makeBuffer(config.topKExperts)
+        self.greedyTokenBuffer = try makeBuffer(1, stride: MemoryLayout<UInt32>.stride)
 
         var caches = Array<QwenFullAttentionKVCache?>(
             repeating: nil,
@@ -295,6 +315,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         }
         promptStateSnapshot = QwenPromptStateSnapshot(
             position: position,
+            greedyToken: lastGreedyToken,
             deltaStates: savedDeltaStates,
             fullCaches: savedFullCaches)
     }
@@ -313,6 +334,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             fullCaches[layer]?.restore(state)
         }
         position = snapshot.position
+        lastGreedyToken = snapshot.greedyToken
     }
 
     public func prefillChunked(tokens: ArraySlice<Int32>,
@@ -395,35 +417,59 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             workCounter.recordChunkPass()
         }
 
+        let finalNorm = model.finalNorm
+        let lmHead = model.lmHead
+        let useFusedHead = useFusedGreedyHead && outputMode == .greedyIfAvailable
         try runSync { commandBuffer in
-            let finalNorm = model.finalNorm
-            let lmHead = model.lmHead
-            prefillFinalRowHead.encodeLogits(
-                commandBuffer: commandBuffer,
-                hiddenBlock: scratch.hidden,
-                row: tokenCount - 1,
-                rowStrideElements: config.hiddenSize,
-                normWeight: finalNorm.buffer,
-                normWeightOffset: Int(finalNorm.offset),
-                weights: lmHead.buffer,
-                weightsOffset: Int(lmHead.offset),
-                scales: lmHead.buffer,
-                scalesOffset: Int(lmHead.scaleOffset),
-                biases: lmHead.buffer,
-                biasesOffset: Int(lmHead.biasOffset),
-                logits: logits,
-                d: UInt32(config.hiddenSize),
-                vocab: UInt32(config.vocabSize),
-                rmsEps: 1e-6)
+            if useFusedHead {
+                fusionHead.encodeGreedyDecode(
+                    commandBuffer: commandBuffer,
+                    hidden: scratch.hidden,
+                    hiddenOffset: (tokenCount - 1) * config.hiddenSize
+                        * MemoryLayout<Float16>.stride,
+                    normWeight: finalNorm.buffer,
+                    normOffset: Int(finalNorm.offset),
+                    weights: lmHead.buffer,
+                    weightsOffset: Int(lmHead.offset),
+                    scales: lmHead.buffer,
+                    scalesOffset: Int(lmHead.scaleOffset),
+                    biases: lmHead.buffer,
+                    biasesOffset: Int(lmHead.biasOffset),
+                    outToken: greedyTokenBuffer,
+                    d: UInt32(config.hiddenSize),
+                    vocab: UInt32(config.vocabSize))
+            } else {
+                prefillFinalRowHead.encodeLogits(
+                    commandBuffer: commandBuffer,
+                    hiddenBlock: scratch.hidden,
+                    row: tokenCount - 1,
+                    rowStrideElements: config.hiddenSize,
+                    normWeight: finalNorm.buffer,
+                    normWeightOffset: Int(finalNorm.offset),
+                    weights: lmHead.buffer,
+                    weightsOffset: Int(lmHead.offset),
+                    scales: lmHead.buffer,
+                    scalesOffset: Int(lmHead.scaleOffset),
+                    biases: lmHead.buffer,
+                    biasesOffset: Int(lmHead.biasOffset),
+                    logits: logits,
+                    d: UInt32(config.hiddenSize),
+                    vocab: UInt32(config.vocabSize),
+                    rmsEps: 1e-6)
+            }
         }
-        let values = logits.contents().assumingMemoryBound(to: Float16.self)
-        var bestIndex = 0
-        var bestValue = values[0]
-        for index in 1..<config.vocabSize where values[index] > bestValue {
-            bestIndex = index
-            bestValue = values[index]
+        if useFusedHead {
+            lastGreedyToken = greedyTokenBuffer.contents().load(as: UInt32.self)
+        } else {
+            let values = logits.contents().assumingMemoryBound(to: Float16.self)
+            var bestIndex = 0
+            var bestValue = values[0]
+            for index in 1..<config.vocabSize where values[index] > bestValue {
+                bestIndex = index
+                bestValue = values[index]
+            }
+            lastGreedyToken = UInt32(bestIndex)
         }
-        lastGreedyToken = UInt32(bestIndex)
         workCounter.recordChunkPass()
         position += tokenCount
         for row in 0..<tokenCount {
@@ -431,7 +477,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         }
         workCounter.recordCommandBuffers(commandBufferSubmissionCount - commandBufferStart)
         return PrefillResult(newPosition: position,
-                             seed: .logitsWritten,
+                             seed: useFusedHead ? .greedyToken(lastGreedyToken) : .logitsWritten,
                              work: workCounter.diagnostics)
     }
 
@@ -486,6 +532,11 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             try Task.checkCancellation()
             let layerDecodeStart = nowNanos()
             let expertFetchStart = activeDecodeDiagnostics?.expertFetchNanos ?? 0
+            let expertReadCountStart = activeDecodeDiagnostics?.expertReadCount ?? 0
+            let expertReadNanosStart = activeDecodeDiagnostics?.expertReadNanos ?? 0
+            activeDecodeDiagnostics?.currentLayerExpertReadMaxNanos = 0
+            activeDecodeDiagnostics?.currentLayerRoutedExperts = []
+            activeDecodeDiagnostics?.currentLayerRoutingWeights = []
             activeDecodeDiagnostics?.layerCount += 1
             let isFullAttention = config.fullAttentionLayerMask[layer] != 0
             if isFullAttention {
@@ -500,7 +551,14 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                 layer: layer,
                 isFullAttention: isFullAttention,
                 elapsedNanos: nowNanos() - layerDecodeStart,
-                expertFetchNanos: layerExpertFetchNanos)
+                expertFetchNanos: layerExpertFetchNanos,
+                expertReadCount: (activeDecodeDiagnostics?.expertReadCount ?? 0)
+                    - expertReadCountStart,
+                expertReadNanos: (activeDecodeDiagnostics?.expertReadNanos ?? 0)
+                    - expertReadNanosStart,
+                expertReadMaxNanos: activeDecodeDiagnostics?.currentLayerExpertReadMaxNanos ?? 0,
+                routedExperts: activeDecodeDiagnostics?.currentLayerRoutedExperts ?? [],
+                routingWeights: activeDecodeDiagnostics?.currentLayerRoutingWeights ?? [])
             activeDecodeDiagnostics?.layers.append(layerDiagnostics)
         }
         activeDecodeDiagnostics?.layerNanos = nowNanos() - layerStart
@@ -510,38 +568,59 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             let finalNorm = model.finalNorm
             let lmHead = model.lmHead
             try runSync { commandBuffer in
-                prefillFinalRowHead.encodeLogits(
-                    commandBuffer: commandBuffer,
-                    hiddenBlock: hidden,
-                    row: 0,
-                    rowStrideElements: config.hiddenSize,
-                    normWeight: finalNorm.buffer,
-                    normWeightOffset: Int(finalNorm.offset),
-                    weights: lmHead.buffer,
-                    weightsOffset: Int(lmHead.offset),
-                    scales: lmHead.buffer,
-                    scalesOffset: Int(lmHead.scaleOffset),
-                    biases: lmHead.buffer,
-                    biasesOffset: Int(lmHead.biasOffset),
-                    logits: logits,
-                    d: UInt32(config.hiddenSize),
-                    vocab: UInt32(config.vocabSize),
-                    rmsEps: 1e-6)
+                if useFusedGreedyHead {
+                    fusionHead.encodeGreedyDecode(
+                        commandBuffer: commandBuffer,
+                        hidden: hidden,
+                        normWeight: finalNorm.buffer,
+                        normOffset: Int(finalNorm.offset),
+                        weights: lmHead.buffer,
+                        weightsOffset: Int(lmHead.offset),
+                        scales: lmHead.buffer,
+                        scalesOffset: Int(lmHead.scaleOffset),
+                        biases: lmHead.buffer,
+                        biasesOffset: Int(lmHead.biasOffset),
+                        outToken: greedyTokenBuffer,
+                        d: UInt32(config.hiddenSize),
+                        vocab: UInt32(config.vocabSize))
+                } else {
+                    prefillFinalRowHead.encodeLogits(
+                        commandBuffer: commandBuffer,
+                        hiddenBlock: hidden,
+                        row: 0,
+                        rowStrideElements: config.hiddenSize,
+                        normWeight: finalNorm.buffer,
+                        normWeightOffset: Int(finalNorm.offset),
+                        weights: lmHead.buffer,
+                        weightsOffset: Int(lmHead.offset),
+                        scales: lmHead.buffer,
+                        scalesOffset: Int(lmHead.scaleOffset),
+                        biases: lmHead.buffer,
+                        biasesOffset: Int(lmHead.biasOffset),
+                        logits: logits,
+                        d: UInt32(config.hiddenSize),
+                        vocab: UInt32(config.vocabSize),
+                        rmsEps: 1e-6)
+                }
             }
-            let values = logits.contents().assumingMemoryBound(to: Float16.self)
-            var bestIndex = 0
-            var bestValue = values[0]
-            for index in 1..<config.vocabSize where values[index] > bestValue {
-                bestIndex = index
-                bestValue = values[index]
+            if useFusedGreedyHead {
+                lastGreedyToken = greedyTokenBuffer.contents().load(as: UInt32.self)
+            } else {
+                let values = logits.contents().assumingMemoryBound(to: Float16.self)
+                var bestIndex = 0
+                var bestValue = values[0]
+                for index in 1..<config.vocabSize where values[index] > bestValue {
+                    bestIndex = index
+                    bestValue = values[index]
+                }
+                lastGreedyToken = UInt32(bestIndex)
             }
-            lastGreedyToken = UInt32(bestIndex)
             activeDecodeDiagnostics?.logitsNanos = nowNanos() - logitsStart
         }
         position += 1
     }
 
-    public let usesFusedGreedyHead = false
+    public var usesFusedGreedyHead: Bool { useFusedGreedyHead }
     public private(set) var lastGreedyToken: UInt32 = 0
 
     private func encodeLayer(layer: Int) async throws {
@@ -828,6 +907,12 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         let routePlanningStart = nowNanos()
         let indices = routeIndices.contents().assumingMemoryBound(to: UInt32.self)
         let experts = (0..<config.topKExperts).map { Int(indices[$0]) }
+        if activeDecodeDiagnostics != nil {
+            let weights = routeWeights.contents().assumingMemoryBound(to: Float16.self)
+            activeDecodeDiagnostics?.currentLayerRoutedExperts = experts
+            activeDecodeDiagnostics?.currentLayerRoutingWeights =
+                (0..<config.topKExperts).map { Float(weights[$0]) }
+        }
         guard let plan = try model.planRoutedExperts(layer: layer, experts: experts) else {
             throw ModelError.indexCorrupt(detail: "Qwen layer \(layer) has no expert plan")
         }
@@ -838,9 +923,23 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             layer: layer,
             missCount: plan.misses.count)
         activeDecodeDiagnostics?.routePlanningNanos += nowNanos() - routePlanningStart
-        let expertFetchStart = nowNanos()
-        let expertViews = try await model.fetchRoutedExperts(plan: plan)
-        activeDecodeDiagnostics?.expertFetchNanos += nowNanos() - expertFetchStart
+        let expertViews: [TensorView]
+        if var diagnostics = activeDecodeDiagnostics {
+            let expertFetchStart = nowNanos()
+            let fetchResult = try await model.fetchRoutedExpertsWithDiagnostics(plan: plan)
+            diagnostics.expertFetchNanos += nowNanos() - expertFetchStart
+            diagnostics.expertReadCount += fetchResult.readDiagnostics.readCount
+            diagnostics.expertReadNanos += fetchResult.readDiagnostics.totalNanos
+            diagnostics.expertReadMaxNanos = max(
+                diagnostics.expertReadMaxNanos,
+                fetchResult.readDiagnostics.maxNanos)
+            diagnostics.currentLayerExpertReadMaxNanos =
+                fetchResult.readDiagnostics.maxNanos
+            activeDecodeDiagnostics = diagnostics
+            expertViews = fetchResult.views
+        } else {
+            expertViews = try await model.fetchRoutedExperts(plan: plan)
+        }
         guard let argumentBuffer = moe.makeRoutedArgumentBuffer(
             routedBlobs: expertViews.map(\.buffer)) else {
             throw ModelError.residentBufferWrapFailed
@@ -1289,3 +1388,5 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
     }
 
 }
+
+extension QwenForwardRunner: FusedGreedyLogitProducer {}

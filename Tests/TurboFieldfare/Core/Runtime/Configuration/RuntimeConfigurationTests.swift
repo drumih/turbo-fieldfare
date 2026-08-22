@@ -5,7 +5,7 @@ import Testing
     @Test func productionDefaultsAreStable() {
         let runtime = RuntimeConfiguration.production
         #expect(runtime.fp16RingEnabled)
-        #expect(runtime.expertCacheSlots == 16)
+        #expect(runtime.expertCacheSlots == 24)
         #expect(runtime.expertCachePolicy == .lfu)
         #expect(runtime.rdadvisePolicy == .off)
         #expect(!runtime.rdadviseEnabled)

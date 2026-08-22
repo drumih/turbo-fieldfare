@@ -224,7 +224,9 @@ public func runRawCompletion(producer: any LogitProducer,
     var prefillWork: PrefillWorkDiagnostics?
     let prefillTokens = promptIds[cachedPromptTokens...]
     if prefillTokens.isEmpty {
-        prefillSeed = .logitsWritten
+        prefillSeed = fusedGreedy
+            ? .greedyToken(fusedRunner!.lastGreedyToken)
+            : .logitsWritten
         onProgress(.prefill(done: cachedPromptTokens, total: promptIds.count))
     } else {
         switch prefillConfig.mode {
