@@ -42,8 +42,24 @@ public struct DecodeLoadRequest: Codable, Sendable {
     }
 }
 
+public struct DecodeGenerationMessage: Codable, Sendable, Equatable {
+    public enum Role: String, Codable, Sendable {
+        case system
+        case user
+        case assistant
+    }
+
+    public var role: Role
+    public var content: String
+
+    public init(role: Role, content: String) {
+        self.role = role
+        self.content = content
+    }
+}
+
 public struct DecodeGenerationRequest: Codable, Sendable {
-    public var prompt: String
+    public var messages: [DecodeGenerationMessage]
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
@@ -51,11 +67,31 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
 
+    public var prompt: String {
+        messages.last(where: { $0.role == .user })?.content ?? ""
+    }
+
     public init(prompt: String, maxNewTokens: Int, maxContextTokens: Int,
                 temperature: Float, repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
                 generationID: UUID = UUID()) {
-        self.prompt = prompt
+        self.messages = [DecodeGenerationMessage(role: .user, content: prompt)]
+        self.maxNewTokens = maxNewTokens
+        self.maxContextTokens = maxContextTokens
+        self.temperature = temperature
+        self.repetitionPenalty = repetitionPenalty
+        self.runtimeOptions = runtimeOptions
+        self.generationID = generationID
+    }
+
+    public init(messages: [DecodeGenerationMessage],
+                maxNewTokens: Int,
+                maxContextTokens: Int,
+                temperature: Float,
+                repetitionPenalty: Float = 1,
+                runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
+                generationID: UUID = UUID()) {
+        self.messages = messages
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature

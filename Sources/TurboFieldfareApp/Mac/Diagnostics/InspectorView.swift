@@ -39,6 +39,10 @@ struct InspectorView: View {
                     .help("Copy model path")
                 }
             }
+            Button("Choose Model Folder…") {
+                ModelLocationPicker.choose(for: model)
+            }
+            .disabled(model.loadState.isLoading)
             if model.canUnloadModel {
                 Button("Unload Model", action: model.unloadModel)
             }

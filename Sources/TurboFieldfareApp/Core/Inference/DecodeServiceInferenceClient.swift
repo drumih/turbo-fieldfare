@@ -5,7 +5,8 @@ import TurboFieldfare
 import TurboFieldfareDecodeProtocol
 
 public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
-    AppInferenceMemoryReporting, AppInferenceTranscriptReporting, @unchecked Sendable {
+    AppGenerationContextReporting, AppInferenceMemoryReporting,
+    AppInferenceTranscriptReporting, @unchecked Sendable {
     private struct Connection {
         var input: FileHandle?
         var responses: DecodeServiceResponseRouter?
@@ -34,6 +35,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         let handles = try await Task.detached(priority: .userInitiated) { [self] in
             try ensureProcess()
         }.value
+        async let localTokenizer = GFTokenizer.load(
+            forModelDirectory: modelDirectory)
         let request = DecodeLoadRequest(
             modelPath: modelDirectory.path, maxContextTokens: maxContextTokens,
             runtimeOptions: Self.decodeRuntimeOptions(options),
@@ -50,6 +53,11 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         default:
             throw AppInferenceError.modelLoadFailed(
                 "decode service returned \(event.kind.rawValue) for a load request")
+        }
+        do {
+            _ = try await localTokenizer
+        } catch {
+            throw AppInferenceError.tokenizerUnavailable("\(error)")
         }
         inferenceMemory.withLock { $0 = event.currentMemoryBytes }
         connection.withLock { $0.loadedDirectory = modelDirectory.standardizedFileURL }
@@ -79,7 +87,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     let generationID = UUID()
                     generationTranscriptMailbox.reset()
                     let command = DecodeGenerationRequest(
-                        prompt: request.prompt, maxNewTokens: request.maxNewTokens,
+                        messages: request.messages.map(Self.decodeGenerationMessage),
+                        maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
                         repetitionPenalty: request.repetitionPenalty,
@@ -154,6 +163,17 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 self?.cancel()
             }
         }
+    }
+
+    public func prepare(_ request: AppGenerationRequest) async throws
+        -> AppGenerationRequest {
+        try await AppGenerationContextWindow.prepareUsingModelTokenizer(request)
+    }
+
+    public func prepareWithContextReport(_ request: AppGenerationRequest) async throws
+        -> AppPreparedGenerationRequest {
+        try await AppGenerationContextWindow
+            .prepareUsingModelTokenizerWithReport(request)
     }
 
     public func cancel() {
@@ -356,6 +376,17 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: options.rdadvisePolicy.rawValue,
             modelVerification: options.modelVerification.rawValue)
+    }
+
+    private static func decodeGenerationMessage(
+        _ message: AppGenerationMessage
+    ) -> DecodeGenerationMessage {
+        let role: DecodeGenerationMessage.Role = switch message.role {
+        case .system: .system
+        case .user: .user
+        case .assistant: .assistant
+        }
+        return DecodeGenerationMessage(role: role, content: message.content)
     }
 
     private static func removeLaunchJob(label: String) {

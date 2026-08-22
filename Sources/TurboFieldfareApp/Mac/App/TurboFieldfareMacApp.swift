@@ -25,6 +25,8 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
 struct TurboFieldfareMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
     @State private var model: AppModel
+    @AppStorage(AppAppearance.storageKey)
+    private var appearanceRawValue = AppAppearance.system.rawValue
 
     init() {
         _model = State(initialValue: AppModel(
@@ -35,10 +37,12 @@ struct TurboFieldfareMacApp: App {
     var body: some Scene {
         Window("TurboFieldfare", id: "main") {
             RootView(model: model)
-                .frame(minWidth: 1040, minHeight: 560)
+                .preferredColorScheme(
+                    AppAppearance.resolve(appearanceRawValue)
+                        .preferredColorScheme)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 1040, height: 720)
+        .defaultSize(width: 1280, height: 760)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -49,6 +53,11 @@ struct TurboFieldfareMacApp: App {
                             icon: MacAppIcon.load()))
                 }
             }
+            CommandMenu("Chat") {
+                Button("New Chat") { model.createChat() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.isRunning)
+            }
             CommandMenu("Generation") {
                 Button("Cancel Generation") { model.cancel() }
                     .keyboardShortcut(".", modifiers: .command)
@@ -57,6 +66,10 @@ struct TurboFieldfareMacApp: App {
                     .disabled(!model.canCancelInstall)
             }
             CommandMenu("Model") {
+                Button("Choose Model Folder…") {
+                    ModelLocationPicker.choose(for: model)
+                }
+                .disabled(model.isRunning || model.isInstallingModel || model.loadState.isLoading)
                 Button("Load Model", action: model.loadModel)
                     .disabled(!model.canLoadModel)
                 Button("Reload Model", action: model.reloadModel)
@@ -80,6 +93,14 @@ struct TurboFieldfareMacApp: App {
                 Picker("After Sending", selection: sentPromptBehaviorBinding) {
                     ForEach(AppSentPromptBehavior.allCases) { behavior in
                         Text(behavior.settingsLabel).tag(behavior)
+                    }
+                }
+            }
+            CommandMenu("Appearance") {
+                Picker("Appearance", selection: $appearanceRawValue) {
+                    ForEach(AppAppearance.allCases) { appearance in
+                        Label(appearance.label, systemImage: appearance.systemImage)
+                            .tag(appearance.rawValue)
                     }
                 }
             }

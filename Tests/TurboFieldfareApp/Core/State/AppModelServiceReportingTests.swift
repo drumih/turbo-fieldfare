@@ -39,6 +39,54 @@ import Testing
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText == "You:\nnew prompt")
     }
+
+    @MainActor
+    @Test func switchingCompletedChatsUsesPersistedAnswerAfterMailboxReset() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "AppModelMailboxChatSwitchTests-\(UUID().uuidString)",
+                isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent(
+            "model.gturbo",
+            isDirectory: true)
+        let first = AppChat(
+            title: "First",
+            messages: [
+                AppChatMessage(role: .user, content: "First question"),
+                AppChatMessage(role: .assistant, content: "First answer"),
+            ])
+        let second = AppChat(
+            title: "Second",
+            messages: [
+                AppChatMessage(role: .user, content: "Second question"),
+                AppChatMessage(role: .assistant, content: "Second answer"),
+            ])
+        try AppChatFileStore.save(
+            AppChatArchive(
+                selectedChatID: first.id,
+                chats: [first, second]),
+            forModelDirectory: modelDirectory)
+        let client = ReportingInferenceClient(memoryBytes: 0)
+        let model = AppModel(
+            modelDirectory: modelDirectory,
+            client: client,
+            settingsPersistenceEnabled: true)
+
+        #expect(client.generationTranscriptMailbox.completeText.isEmpty)
+        #expect(model.outputText == "First answer")
+        #expect(model.outputResponsePlainText == "First answer")
+
+        client.generationTranscriptMailbox.append("stale mailbox")
+        model.selectChat(id: second.id)
+
+        #expect(client.generationTranscriptMailbox.completeText.isEmpty)
+        #expect(model.outputText == "Second answer")
+        #expect(model.outputResponsePlainText == "Second answer")
+        #expect(model.outputConversationPlainText.contains("Second answer"))
+        #expect(!model.outputConversationPlainText.contains("First answer"))
+        model.flushChatPersistence()
+    }
 }
 
 private final class ReportingInferenceClient: AppInferenceClient,

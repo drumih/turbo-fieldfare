@@ -98,7 +98,8 @@ import TurboFieldfareDecodeProtocol
                 do {
                     let options = try appRuntimeOptions(request.runtimeOptions)
                     let generation = AppGenerationRequest(
-                        modelDirectory: modelDirectory, prompt: request.prompt,
+                        modelDirectory: modelDirectory,
+                        messages: request.messages.map(appGenerationMessage),
                         maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
@@ -172,6 +173,17 @@ import TurboFieldfareDecodeProtocol
             modelVerification: modelVerification)
         try resolved.validate()
         return resolved
+    }
+
+    private static func appGenerationMessage(
+        _ message: DecodeGenerationMessage
+    ) -> AppGenerationMessage {
+        let role: AppGenerationMessage.Role = switch message.role {
+        case .system: .system
+        case .user: .user
+        case .assistant: .assistant
+        }
+        return AppGenerationMessage(role: role, content: message.content)
     }
 
     private static func argument(after name: String) -> String? {
