@@ -106,6 +106,11 @@ OpenCode:
       "models": {
         "gemma-4-26b-a4b-it": {
           "name": "Gemma 4 26B-A4B IT",
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          },
           "limit": {
             "context": 16384,
             "output": 4096
@@ -118,6 +123,13 @@ OpenCode:
 ```
 
 Select `turbofieldfare/gemma-4-26b-a4b-it` in OpenCode.
+
+`attachment` and `modalities` are what make images work. OpenCode decides whether
+a model accepts images from this configuration, not from the `capabilities` field
+`/v1/models` returns, so without them it refuses an image with "this model does
+not support image input" before sending anything. Images then reach the server
+through OpenCode's `read` tool, which returns image files as attachments; ask it
+to read the file explicitly.
 
 Pi uses its `openai-completions` adapter:
 
@@ -137,6 +149,7 @@ Pi uses its `openai-completions` adapter:
         "id": "gemma-4-26b-a4b-it",
         "name": "Gemma 4 26B-A4B IT",
         "reasoning": false,
+        "input": ["text", "image"],
         "contextWindow": 16384,
         "maxTokens": 4096
       }]
@@ -146,6 +159,12 @@ Pi uses its `openai-completions` adapter:
 ```
 
 Keep the client context setting at or below the server's `--max-context`.
+
+Pi's `input` field declares image support the same way OpenCode's `modalities`
+does. With it, `pi -p @photo.png "What is in this image?"` sends the image as a
+base64 data URL in an `image_url` part, which is the shape this server accepts;
+its RPC interface takes an explicit `images` array and produces the same
+request.
 
 ## Prompt reuse
 
@@ -204,7 +223,7 @@ Supported options include `temperature`, `top_p`, `top_k`,
 `max_completion_tokens`, and function-tool fields.
 
 The server supports one model and one choice. It does not support the Responses
-API, legacy Completions, embeddings, multimodal input, structured output,
+API, legacy Completions, embeddings, structured output,
 batching, log probabilities, or remote model switching.
 
 Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
@@ -214,3 +233,23 @@ watch memory pressure.
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not
 prompt text, tool arguments, headers, or request bodies.
+
+## Images
+
+`messages[].content` accepts `image_url` parts in user messages. An
+`image_url` on any other role returns HTTP 400. The URL must be a data URL,
+and `detail` must be absent or set to `auto`.
+
+Image bytes go to disk as the request body arrives, so a large upload does not
+sit in memory. Before any pixel is decoded, the server works out how many
+tokens the images will occupy and rejects the request if they do not fit the
+context. Bodies and images over their limits return HTTP 413.
+
+`GET /v1/models` reports `capabilities` as `["text", "image"]` when a valid
+companion pack is loaded and `["text"]` otherwise. `GET /health` reports the
+same state under `vision`, as `ready`, `missing`, `invalid`, or `unsupported`.
+`unsupported` means the image tower cannot run on this Mac; it requires M2 or
+newer. Text requests remain available.
+
+Choose the pack and the residency policy with `--vision-pack <dir>` and
+`--vision-residency on-demand|keep-ready`.

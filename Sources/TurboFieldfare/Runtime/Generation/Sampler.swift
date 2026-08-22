@@ -43,6 +43,16 @@ public struct GenerationConfig: Sendable {
             throw GeneratorError.invalidGenerationConfig(
                 "temperature must be finite and nonnegative")
         }
+        // Its sibling above has been checked since this method existed; this one
+        // never was, so an infinite penalty reached the kernel and quietly
+        // degraded the output instead of refusing. Every CLI float guard without
+        // an upper bound admits infinity, and the result was a count that broke
+        // into another language and then apologised for itself, where the
+        // baseline counted correctly to eight.
+        guard repetitionPenalty.isFinite, repetitionPenalty > 0 else {
+            throw GeneratorError.invalidGenerationConfig(
+                "repetitionPenalty must be finite and greater than zero")
+        }
         if let topK, !(1...256).contains(topK) {
             throw GeneratorError.invalidGenerationConfig(
                 "topK must be between 1 and 256")

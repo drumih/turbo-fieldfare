@@ -51,8 +51,11 @@ def published_versions
   releases = JSON.parse(response.body)
   return [] unless releases.is_a?(Array)
 
+  # Prereleases are rejected with drafts: an rc tag becoming "latest" pushes
+  # the real latest release into the floor slot, and the check then silently
+  # accepts a version two releases behind.
   releases
-    .reject { |release| release["draft"] }
+    .reject { |release| release["draft"] || release["prerelease"] }
     .map { |release| release["tag_name"].to_s.delete_prefix("v") }
     .reject(&:empty?)
     .sort { |left, right| compare(right, left) }

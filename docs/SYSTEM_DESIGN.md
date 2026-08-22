@@ -1,7 +1,7 @@
 # System design
 
 TurboFieldfare is a Swift and Metal runtime for Gemma 4 26B-A4B on Apple
-Silicon. The text-only installation is about 14.3 GB, but the target machine
+Silicon. The text installation is about 14.3 GB, but the target machine
 has 8 GB of memory. The runtime keeps the common weights and working state
 available to Metal. It stores routed experts in per-layer files and reads only
 the experts chosen for the current token or prefill chunk.
@@ -241,7 +241,7 @@ flowchart LR
 
 ## Instruction framing
 
-The Mac app and CLI `--messages-file` mode use the pinned text-only Gemma 4 chat
+The Mac app and CLI `--messages-file` mode use the pinned Gemma 4 chat
 format. The app wraps one user prompt. `--messages-file` accepts user and
 assistant messages plus optional leading system guidance. Assistant messages
 render with Gemma's `model` role. The separate loopback server uses the pinned
@@ -437,14 +437,16 @@ references lead to the supporting code and tests.
 
 ## Scope and limitations
 
-The current runtime supports text-only generation with the pinned Gemma 4
-26B-A4B instruction checkpoint. The source model supports image input, but
-TurboFieldfare omits its vision tower.
+The current runtime supports text and image input with the pinned Gemma 4
+26B-A4B instruction checkpoint. Image support is optional. The vision tower
+and projector live in a separate companion pack, so an installation without
+that pack has the footprint it had before. The image tower requires M2 or
+newer; text-only inference remains available on M1. See [Images](#images).
 
-The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Published app
-and CLI acceptance evidence covers up to 4K. Vision input, training,
-fine-tuning, server batching, remote serving, and general model support are
-outside the current scope. The optional HTTP server is loopback-only, owns one
+The Mac app offers 4K, 8K, 16K, 32K, and 64K context lengths. Manual acceptance
+covers the Mac app at 8K and CLI stress at 64K. Audio input, video input,
+training, fine-tuning, server batching, remote serving, and general model
+support are outside the current scope. The optional HTTP server is loopback-only, owns one
 warm model, serializes generation, and retains one verified conversational KV
 prefix by default. It retains only that prefix. See the
 [local server guide](OPENAI_SERVER.md).
@@ -462,3 +464,50 @@ default.
 - [The experiments that shaped TurboFieldfare](OPTIMIZATION_JOURNEY.md)
 - [Complete experiment inventory](experiments/EXPERIMENT_INVENTORY.md)
 - [Implementation references](IMPLEMENTATION_REFERENCES.md)
+
+## Images
+
+Image support ships as a companion pack, `<name>.vision.gturbo`, installed
+beside the text model. The pack's manifest records the SHA-256 of the text
+manifest it was built against, so a pack cannot be used with a model it does
+not match. When the pack is absent or fails verification, the text runtime
+runs unchanged and image input is unavailable.
+
+Preprocessing reads the image header before anything else. Orientation, colour
+space, and pixel dimensions come from metadata, and the number of tokens an
+image will occupy follows from its dimensions. A request whose images cannot
+fit the selected context is rejected at that point, before any pixel is
+decoded.
+
+The tower then runs on bounded scratch. Attention is tiled with an online
+softmax, so the full attention matrix is never allocated. The runtime keeps
+the projected features and releases the rest.
+
+Projected features enter the language model as whole spans of rows. Within the
+25 sliding-window layers, the rows of one image attend to each other in both
+directions. The 5 full-attention layers stay causal, and text rows stay causal
+in every layer. An image span prefills as one chunk, so it is never split
+across a chunk boundary. The chunk scratch and the KV ring are sized for the
+largest pooled span rather than for the text chunk size.
+
+Two residency policies decide what the tower costs while it is idle.
+
+Load on demand is the default. Before encoding, the runtime releases the
+routed-expert streamers and their slot scratch, then recreates them for
+language prefill. This is what stops the tower and the expert cache from being
+resident at the same time on an 8 GB machine.
+
+Keep ready maps the tower during the load and leaves it mapped. It spends
+memory to save latency on repeated image work. Page advice is not a guarantee
+of residency; the operating system can still reclaim those pages.
+
+Large images remain metadata-bounded: at most 50 million source pixels, 32,768
+pixels on either side, and 200,000,000 decoded bytes for one surface. This
+admits an 8-bit 8,000x6,000 camera image while rejecting sources beyond the
+pixel boundary before decode.
+
+In one functional pass on the 8 GB M2, 48 MP JPEG and PNG completed under both
+residency policies at 2,224 to 2,229 MiB peak footprint. Per-row system
+swapouts ranged from 0 to 383 MiB. Five smaller images at a 64K context
+completed at 3,357 MiB footprint with 425 MiB of swapouts. These figures are
+observed costs, not rejection thresholds; on-demand remains the default.

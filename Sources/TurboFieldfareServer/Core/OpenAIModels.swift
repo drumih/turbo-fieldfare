@@ -20,21 +20,34 @@ public struct OpenAIErrorEnvelope: Codable, Equatable, Sendable {
     }
 }
 
-public struct OpenAITextPart: Codable, Equatable, Sendable {
+public struct OpenAIImageURL: Codable, Equatable, Sendable {
+    public let url: String
+    public let detail: String?
+}
+
+public struct OpenAIContentPart: Codable, Equatable, Sendable {
     public let type: String
     public let text: String?
+    public let imageURL: OpenAIImageURL?
+
+    enum CodingKeys: String, CodingKey {
+        case type, text
+        case imageURL = "image_url"
+    }
 }
+
+public typealias OpenAITextPart = OpenAIContentPart
 
 public enum OpenAIMessageContent: Codable, Equatable, Sendable {
     case text(String)
-    case parts([OpenAITextPart])
+    case parts([OpenAIContentPart])
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let text = try? container.decode(String.self) {
             self = .text(text)
         } else {
-            self = .parts(try container.decode([OpenAITextPart].self))
+            self = .parts(try container.decode([OpenAIContentPart].self))
         }
     }
 
@@ -46,20 +59,6 @@ public enum OpenAIMessageContent: Codable, Equatable, Sendable {
         }
     }
 
-    func textValue() throws -> String {
-        switch self {
-        case .text(let text):
-            return text
-        case .parts(let parts):
-            guard parts.allSatisfy({ $0.type == "text" && $0.text != nil }) else {
-                throw ServerRequestError.invalid(
-                    message: "only text content parts are supported",
-                    param: "messages",
-                    code: "unsupported_content")
-            }
-            return parts.compactMap(\.text).joined()
-        }
-    }
 }
 
 public struct OpenAIFunctionCall: Codable, Equatable, Sendable {
@@ -213,10 +212,20 @@ public struct OpenAIModelList: Codable, Equatable, Sendable {
         public let object: String
         public let created: Int
         public let ownedBy: String
+        public let capabilities: [String]?
 
         enum CodingKeys: String, CodingKey {
-            case id, object, created
+            case id, object, created, capabilities
             case ownedBy = "owned_by"
+        }
+
+        public init(id: String, object: String, created: Int,
+                    ownedBy: String, capabilities: [String]? = nil) {
+            self.id = id
+            self.object = object
+            self.created = created
+            self.ownedBy = ownedBy
+            self.capabilities = capabilities
         }
     }
 
@@ -245,11 +254,70 @@ public enum ServerRequestError: Error, Equatable, Sendable {
 
 public struct ValidatedChatRequest: Sendable {
     public let messages: [GFTokenizer.Message]
+    public let multimodalMessages: [MultimodalMessage]?
+    public let imageFiles: [UUID: URL]
+    /// Content SHA-256 of each message's images, in order, aligned with
+    /// `messages`. Staged image UUIDs are fresh per request, so they cannot
+    /// identify an image across turns; the content hash can. Empty for
+    /// text-only requests.
+    public let imageIdentities: [[String]]
     public let tools: [GFTokenizer.FunctionDefinition]
     public let stream: Bool
     public let includeUsage: Bool
     public let generationConfig: GenerationConfig
     public let maximumCompletionTokens: Int
+    /// Every staging directory this request's image files live in. The parser
+    /// and the validator's store each stage under their own lease, and a
+    /// request may carry files from both, so dropping either would delete
+    /// files the other path staged before `generate` reads them.
+    fileprivate let attachmentLeases: [ServerAttachmentLease]
+
+    public init(
+        messages: [GFTokenizer.Message],
+        multimodalMessages: [MultimodalMessage]? = nil,
+        imageFiles: [UUID: URL] = [:],
+        imageIdentities: [[String]] = [],
+        tools: [GFTokenizer.FunctionDefinition],
+        stream: Bool,
+        includeUsage: Bool,
+        generationConfig: GenerationConfig,
+        maximumCompletionTokens: Int
+    ) {
+        self.messages = messages
+        self.multimodalMessages = multimodalMessages
+        self.imageFiles = imageFiles
+        self.imageIdentities = imageIdentities
+        self.tools = tools
+        self.stream = stream
+        self.includeUsage = includeUsage
+        self.generationConfig = generationConfig
+        self.maximumCompletionTokens = maximumCompletionTokens
+        self.attachmentLeases = []
+    }
+
+    fileprivate init(
+        messages: [GFTokenizer.Message],
+        multimodalMessages: [MultimodalMessage]?,
+        imageFiles: [UUID: URL],
+        imageIdentities: [[String]],
+        tools: [GFTokenizer.FunctionDefinition],
+        stream: Bool,
+        includeUsage: Bool,
+        generationConfig: GenerationConfig,
+        maximumCompletionTokens: Int,
+        attachmentLeases: [ServerAttachmentLease]
+    ) {
+        self.messages = messages
+        self.multimodalMessages = multimodalMessages
+        self.imageFiles = imageFiles
+        self.imageIdentities = imageIdentities
+        self.tools = tools
+        self.stream = stream
+        self.includeUsage = includeUsage
+        self.generationConfig = generationConfig
+        self.maximumCompletionTokens = maximumCompletionTokens
+        self.attachmentLeases = attachmentLeases
+    }
 }
 
 private enum OpenAIToolName {
@@ -279,6 +347,17 @@ private enum OpenAIToolName {
 public enum OpenAIRequestValidator {
     public static func validate(_ request: OpenAIChatRequest,
                                 modelID: String) throws -> ValidatedChatRequest {
+        try validate(
+            request,
+            modelID: modelID,
+            preStagedImages: [:],
+            attachmentLease: nil)
+    }
+
+    static func validate(_ request: OpenAIChatRequest,
+                         modelID: String,
+                         preStagedImages: [String: ServerStagedImage],
+                         attachmentLease: ServerAttachmentLease?) throws -> ValidatedChatRequest {
         guard request.model == modelID else { throw ServerRequestError.unknownModel }
         guard request.n == nil || request.n == 1 else {
             throw invalid("only n=1 is supported", "n", "unsupported_value")
@@ -338,7 +417,10 @@ public enum OpenAIRequestValidator {
         }
 
         let tools = try (includeTools ? request.tools ?? [] : []).map(validateTool)
-        let messages = try validateMessages(request.messages)
+        let validatedMessages = try validateMessages(
+            request.messages,
+            preStagedImages: preStagedImages,
+            attachmentLease: attachmentLease)
         let config = GenerationConfig(maxNewTokens: maximum,
                                       temperature: temperature,
                                       topK: topK,
@@ -346,12 +428,16 @@ public enum OpenAIRequestValidator {
                                       repetitionPenalty: repetitionPenalty,
                                       seed: request.seed,
                                       stopStrings: request.stop?.values ?? [])
-        return ValidatedChatRequest(messages: messages,
+        return ValidatedChatRequest(messages: validatedMessages.messages,
+                                    multimodalMessages: validatedMessages.multimodal,
+                                    imageFiles: validatedMessages.imageFiles,
+                                    imageIdentities: validatedMessages.imageIdentities,
                                     tools: tools,
                                     stream: request.stream ?? false,
                                     includeUsage: request.streamOptions?.includeUsage ?? false,
                                     generationConfig: config,
-                                    maximumCompletionTokens: maximum)
+                                    maximumCompletionTokens: maximum,
+                                    attachmentLeases: validatedMessages.leases)
     }
 
     private static func validateTool(_ tool: OpenAITool) throws -> GFTokenizer.FunctionDefinition {
@@ -370,9 +456,17 @@ public enum OpenAIRequestValidator {
         try validateSchemaKeys(tool.function.parameters)
         let parameters = try GemmaToolSchema.adapted(
             tool.function.parameters, toolName: name)
-        guard (try? parameters.jinjaSendableValue()) != nil else {
-            throw invalid("tool schema contains a number that cannot be represented exactly",
-                          "tools", "invalid_tool_schema")
+        do {
+            guard (try? parameters.jinjaSendableValue()) != nil else {
+                throw invalid("tool schema contains a number that cannot be represented exactly",
+                              "tools", "invalid_tool_schema")
+            }
+        } catch {
+            // Carry the underlying cause: "cannot be represented exactly" alone
+            // does not say which value, and this surfaces to a remote client.
+            throw invalid(
+                "tool schema cannot be represented exactly: \(error)",
+                "tools", "invalid_tool_schema")
         }
         return GFTokenizer.FunctionDefinition(name: name,
                                               description: tool.function.description ?? "",
@@ -410,12 +504,29 @@ public enum OpenAIRequestValidator {
         }
     }
 
-    private static func validateMessages(_ input: [OpenAIChatMessage]) throws -> [GFTokenizer.Message] {
+    private struct ValidatedMessages {
+        let messages: [GFTokenizer.Message]
+        let multimodal: [MultimodalMessage]?
+        let imageFiles: [UUID: URL]
+        let imageIdentities: [[String]]
+        let leases: [ServerAttachmentLease]
+    }
+
+    private static func validateMessages(
+        _ input: [OpenAIChatMessage],
+        preStagedImages: [String: ServerStagedImage],
+        attachmentLease: ServerAttachmentLease?
+    ) throws -> ValidatedMessages {
         guard !input.isEmpty else {
             throw invalid("messages must not be empty", "messages", "invalid_message")
         }
         var knownCalls: [String: (name: String, resolved: Bool)] = [:]
         var result: [GFTokenizer.Message] = []
+        var multimodal: [MultimodalMessage] = []
+        var imageFiles: [UUID: URL] = [:]
+        var imageIdentities: [[String]] = []
+        var messageIdentities: [String] = []
+        var store: ServerAttachmentStore?
         var sawConversationMessage = false
         for message in input {
             guard let role = GFTokenizer.Role(rawValue: message.role) else {
@@ -430,7 +541,67 @@ public enum OpenAIRequestValidator {
             } else {
                 sawConversationMessage = true
             }
-            let content = try message.content?.textValue()
+            var orderedContent: [MultimodalContentPart] = []
+            let content: String?
+            switch message.content {
+            case nil:
+                content = nil
+            case .text(let text):
+                content = text
+                orderedContent = [.text(text)]
+            case .parts(let parts):
+                var joined = ""
+                for part in parts {
+                    switch part.type {
+                    case "text":
+                        guard let text = part.text else {
+                            throw invalid("text content part requires text",
+                                          "messages", "invalid_message")
+                        }
+                        joined += text
+                        orderedContent.append(.text(text))
+                    case "image_url":
+                        guard role == .user else {
+                            throw invalid("image_url is supported only in user messages",
+                                          "messages", "unsupported_content")
+                        }
+                        guard let image = part.imageURL else {
+                            throw invalid("image_url content part requires an image_url object",
+                                          "messages", "invalid_message")
+                        }
+                        guard image.detail == nil || image.detail == "auto" else {
+                            throw invalid("image detail must be absent or auto",
+                                          "messages", "unsupported_value")
+                        }
+                        let staged: ServerStagedImage
+                        let prefix = "turbofieldfare-attachment:"
+                        if image.url.hasPrefix(prefix) {
+                            let token = String(image.url.dropFirst(prefix.count))
+                            guard let existing = preStagedImages[token] else {
+                                throw invalid("image attachment lease is missing",
+                                              "messages", "invalid_image")
+                            }
+                            staged = existing
+                        } else {
+                            if store == nil { store = try ServerAttachmentStore() }
+                            staged = try store!.stage(dataURL: image.url)
+                        }
+                        imageFiles[staged.id] = staged.fileURL
+                        messageIdentities.append(staged.sha256)
+                        orderedContent.append(.image(id: staged.id))
+                    default:
+                        throw invalid("unsupported content part \(part.type)",
+                                      "messages", "unsupported_content")
+                    }
+                }
+                content = joined
+            }
+            // The semantic bound on images is the context budget, checked
+            // against the model's actual context in `ServerModelSession.prepare`
+            // where the per-image token cost is known. Staging enforces its own
+            // per-file, per-request, and count resource caps; no further count
+            // check belongs here.
+
             let calls: [GFTokenizer.HistoricalToolCall] = try (message.toolCalls ?? []).map { call in
                 guard role == .assistant, call.type == "function",
                       !call.id.isEmpty, knownCalls[call.id] == nil else {
@@ -447,10 +618,17 @@ public enum OpenAIRequestValidator {
                     throw invalid("historical tool arguments must be a JSON object",
                                   "messages", "invalid_tool_arguments")
                 }
-                guard (try? arguments.gemmaToolArgumentBody()) != nil,
-                      (try? arguments.jinjaSendableValue()) != nil else {
+                do {
+                    guard (try? arguments.gemmaToolArgumentBody()) != nil,
+                          (try? arguments.jinjaSendableValue()) != nil else {
+                        throw invalid(
+                            "historical tool arguments cannot be represented exactly",
+                            "messages", "invalid_message")
+                    }
+                } catch {
                     throw invalid(
-                        "historical tool arguments cannot be represented exactly",
+                        "historical tool arguments cannot be represented exactly: "
+                            + "\(error)",
                         "messages",
                         "invalid_tool_arguments")
                 }
@@ -478,8 +656,24 @@ public enum OpenAIRequestValidator {
                                               toolCalls: calls,
                                               toolCallID: message.toolCallID,
                                               name: message.name))
+            if orderedContent.isEmpty, let content {
+                orderedContent = [.text(content)]
+            }
+            multimodal.append(MultimodalMessage(
+                role: role,
+                content: orderedContent,
+                toolCalls: calls,
+                toolCallID: message.toolCallID,
+                name: message.name))
+            imageIdentities.append(messageIdentities)
+            messageIdentities = []
         }
-        return result
+        return ValidatedMessages(
+            messages: result,
+            multimodal: imageFiles.isEmpty ? nil : multimodal,
+            imageFiles: imageFiles,
+            imageIdentities: imageFiles.isEmpty ? [] : imageIdentities,
+            leases: [attachmentLease, store?.lease].compactMap { $0 })
     }
 
     private static func invalid(_ message: String,

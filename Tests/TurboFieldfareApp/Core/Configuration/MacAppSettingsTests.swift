@@ -275,6 +275,62 @@ import Testing
         #expect(!model.showPromptExamples)
     }
 
+    /// Phase D item 15. The newer-version branch says "Every key decodes with
+    /// `decodeIfPresent`, so it reads cleanly", and that is false: nine keys use
+    /// a hard `decode`. So a version-3 file whose schema moved any of those nine
+    /// throws inside `JSONDecoder().decode` *before* the version guard is
+    /// reached, and lands in the `catch` that deletes the file - destroying a
+    /// newer build's settings, which is the exact outcome that branch exists to
+    /// prevent. A version bump that cannot change the schema protects nothing.
+    @Test func aNewerSettingsFileSurvivesAKeyThisBuildDoesNotKnow() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: modelDirectory)
+
+        // A plausible version 3: `topP` became `topProbability`. Everything else
+        // this build knows is still present and still valid.
+        let newer = """
+        {
+          "version": 3,
+          "contextTokens": 8192,
+          "expertCacheSlots": 16,
+          "temperature": 0.2,
+          "topKEnabled": true,
+          "topK": 64,
+          "topPEnabled": true,
+          "topProbability": 0.95,
+          "prefillEnabled": true
+        }
+        """
+        try Data(newer.utf8).write(to: fileURL)
+
+        let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: modelDirectory)
+
+        #expect(settings == MacAppSettings(), "this build must run on defaults")
+        #expect(FileManager.default.fileExists(atPath: fileURL.path),
+                "a newer build's settings file was deleted by an older build")
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == newer,
+                "a newer build's settings file was rewritten by an older build")
+    }
+
+    /// Phase D item 16. RDADVISE is a Picker in `InspectorView` bound to
+    /// `runtimeOptions.rdadvisePolicy`, and `RUNTIME_CONTROLS.md` lists it as an
+    /// app control - but it had no `CodingKey`, so every relaunch silently
+    /// reverted it while the UI kept offering it as a persistent setting.
+    @Test func rdadviseSurvivesARelaunch() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+
+        try MacAppSettingsFileStore.save(
+            MacAppSettings(rdadvisePolicy: .bounded),
+            forModelDirectory: modelDirectory)
+        let reloaded = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: modelDirectory)
+
+        #expect(reloaded.rdadvisePolicy == .bounded)
+    }
+
     private func makeTemporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacAppSettingsTests-\(UUID().uuidString)",
@@ -284,4 +340,34 @@ import Testing
             withIntermediateDirectories: true)
         return root
     }
+    @Test func visionResidencyRoundTrips() throws {
+        let initial = MacAppSettings(visionResidencyPolicy: .keepReady)
+        let decoded = try JSONDecoder().decode(
+            MacAppSettings.self,
+            from: JSONEncoder().encode(initial))
+
+        #expect(decoded == initial)
+    }
+
+    @MainActor
+    @Test func changingModelDirectoryStillReleasesTheImageTower() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
+        let second = root.appendingPathComponent("second/model.gturbo", isDirectory: true)
+        try MacAppSettingsFileStore.save(
+            MacAppSettings(visionResidencyPolicy: .onDemand),
+            forModelDirectory: first)
+        try MacAppSettingsFileStore.save(
+            MacAppSettings(visionResidencyPolicy: .keepReady),
+            forModelDirectory: second)
+        let model = AppModel(modelDirectory: first, settingsPersistenceEnabled: true)
+        #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand)
+
+        model.setModelURL(second)
+
+        #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand,
+                "a persisted keep-ready came back through the model path change")
+    }
+
 }

@@ -9,7 +9,7 @@ public enum AppExpertCachePolicy: String, CaseIterable, Sendable, Identifiable {
     public var label: String { rawValue.uppercased() }
 }
 
-public enum AppRDAdvicePolicy: String, CaseIterable, Sendable, Identifiable {
+public enum AppRDAdvicePolicy: String, Codable, CaseIterable, Sendable, Identifiable {
     case off
     case `default`
     case bounded
@@ -59,19 +59,22 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
+    public var visionResidencyPolicy: VisionResidencyPolicy
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: AppExpertCachePolicy = .lfu,
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: AppRDAdvicePolicy = .off,
-                modelVerification: AppModelVerification = .fullSha256) {
+                modelVerification: AppModelVerification = .fullSha256,
+                visionResidencyPolicy: VisionResidencyPolicy = .onDemand) {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
         self.prefillChunkTokens = prefillChunkTokens
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
+        self.visionResidencyPolicy = visionResidencyPolicy
     }
 
     public func validate() throws {
@@ -82,6 +85,15 @@ public struct AppRuntimeOptions: Equatable, Sendable {
         guard Self.allowedPrefillChunkTokens.contains(prefillChunkTokens) else {
             throw AppInferenceError.invalidRequest(
                 "prefill chunk size must be one of \(Self.allowedPrefillChunkTokens)")
+        }
+        // Refused here rather than inside the first prefill chunk, which is
+        // after the model load and, on an image turn, after every attachment
+        // has already been encoded on the GPU.
+        let minimumSlots = RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        guard !prefillEnabled || expertCacheSlots >= minimumSlots else {
+            throw AppInferenceError.invalidRequest(
+                "Prefill needs at least \(minimumSlots) expert cache slots, and Slots is set to "
+                    + "\(expertCacheSlots). Raise Slots to \(minimumSlots) or turn Prefill off.")
         }
     }
 
@@ -124,6 +136,7 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
     public var expertCachePolicy: AppExpertCachePolicy
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
+    public var visionResidencyPolicy: VisionResidencyPolicy
     public var forceLogitsHead: Bool
 
     public init(modelDirectory: URL,
@@ -136,6 +149,26 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
         self.expertCachePolicy = options.expertCachePolicy
         self.rdadvisePolicy = options.rdadvisePolicy
         self.modelVerification = options.modelVerification
+        self.visionResidencyPolicy = options.visionResidencyPolicy
         self.forceLogitsHead = forceLogitsHead
+    }
+
+    /// The options this session was actually loaded with. A run has to be built
+    /// from these rather than from the current settings, or a pending change the
+    /// user has not reloaded for is refused by the loaded session.
+    ///
+    /// Prefill is passed in because it is deliberately not part of this key:
+    /// it is chosen per request and changing it must not make a loaded
+    /// session stale.
+    public func options(prefillEnabled: Bool,
+                        prefillChunkTokens: Int) -> AppRuntimeOptions {
+        AppRuntimeOptions(
+            expertCacheSlots: expertCacheSlots,
+            expertCachePolicy: expertCachePolicy,
+            prefillEnabled: prefillEnabled,
+            prefillChunkTokens: prefillChunkTokens,
+            rdadvisePolicy: rdadvisePolicy,
+            modelVerification: modelVerification,
+            visionResidencyPolicy: visionResidencyPolicy)
     }
 }

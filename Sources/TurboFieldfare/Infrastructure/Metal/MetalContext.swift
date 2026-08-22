@@ -82,6 +82,7 @@ public final class MetalContext: @unchecked Sendable {
         "utility",
         "fused",
         "prefill",
+        "vision",
     ]
 
     /// Bundle locations for runtime shader modules.
@@ -97,6 +98,9 @@ public final class MetalContext: @unchecked Sendable {
         "rope": "Metal/Primitives",
         "tensorops": "Metal/TensorCore",
         "utility": "Metal/Primitives",
+        "vision": "Metal/Vision",
+        "vision_register_gemm": "Metal/Vision",
+        "vision_resize": "Metal/Vision",
     ]
 
     private static func shaderURL(module: String) -> URL? {
@@ -124,20 +128,49 @@ public final class MetalContext: @unchecked Sendable {
         }
     }
 
-    /// Compile a shader module separately from the shared runtime library.
-    public static func moduleLibrary(device: MTLDevice, module: String) throws -> MTLLibrary {
+    /// Compile one shader module into its own library, leaving the shared
+    /// runtime library untouched.
+    ///
+    /// Cached per device, module, math mode and source variant: libraries are
+    /// immutable, and
+    /// one `VisionRuntime` init otherwise compiles the identical tensorops
+    /// source three times (linear, attention, projector) on every load.
+    public static func privateLibrary(device: MTLDevice, module: String,
+                                      mathMode: MTLMathMode? = nil,
+                                      includeVisionTensorOps: Bool = false) throws
+        -> MTLLibrary {
+        let key = "\(ObjectIdentifier(device).hashValue)#\(module)"
+            + "#\(mathMode?.rawValue ?? -1)#\(includeVisionTensorOps)"
+        privateLibraryLock.lock()
+        defer { privateLibraryLock.unlock() }
+        if let cached = privateLibraryCache[key] {
+            return cached
+        }
         guard let url = shaderURL(module: module) else {
             throw MetalError.missingShaderResource(module)
         }
         let src = try String(contentsOf: url, encoding: .utf8)
         let opts = MTLCompileOptions()
         opts.languageVersion = .version4_0
+        if let mathMode {
+            opts.mathMode = mathMode
+        }
+        if includeVisionTensorOps {
+            opts.preprocessorMacros = [
+                "TURBO_FIELDFARE_VISION_TENSOROPS": NSNumber(value: true)
+            ]
+        }
         do {
-            return try device.makeLibrary(source: src, options: opts)
+            let library = try device.makeLibrary(source: src, options: opts)
+            privateLibraryCache[key] = library
+            return library
         } catch {
             throw MetalError.libraryCompileFailed("\(error)")
         }
     }
+
+    private static let privateLibraryLock = NSLock()
+    private static nonisolated(unsafe) var privateLibraryCache: [String: MTLLibrary] = [:]
 
     public func pipeline(_ name: String) throws -> MTLComputePipelineState {
         try pipeline(name, constants: [])
