@@ -5,7 +5,7 @@ import Testing
 
 extension RawCompletionLoopTests {
     final class ContinuationProducer: ChunkedPrefillRunner, PromptStateSnapshotting,
-        @unchecked Sendable
+        FusedGreedyLogitProducer, @unchecked Sendable
     {
         let vocabSize: Int
         private let terminalToken: Int32
@@ -16,11 +16,20 @@ extension RawCompletionLoopTests {
         private(set) var saveCalls = 0
         private(set) var prefillRanges: [Range<Int>] = []
         private var savedPosition: Int?
+        private var savedGreedyToken: UInt32?
+        let usesFusedGreedyHead: Bool
+        private(set) var lastGreedyToken: UInt32
 
-        init(vocabSize: Int, terminalToken: Int32, position: Int) {
+        init(vocabSize: Int,
+             terminalToken: Int32,
+             position: Int,
+             usesFusedGreedyHead: Bool = false,
+             greedyToken: UInt32 = 0) {
             self.vocabSize = vocabSize
             self.terminalToken = terminalToken
             self.continuationPosition = position
+            self.usesFusedGreedyHead = usesFusedGreedyHead
+            self.lastGreedyToken = greedyToken
         }
 
         func reset() {
@@ -38,6 +47,7 @@ extension RawCompletionLoopTests {
         func savePromptState() {
             saveCalls += 1
             savedPosition = continuationPosition
+            savedGreedyToken = lastGreedyToken
         }
 
         func restorePromptState(expectedPosition: Int) throws {
@@ -45,6 +55,7 @@ extension RawCompletionLoopTests {
                 throw PrefillError.prefillCursorMismatch("test snapshot cursor mismatch")
             }
             continuationPosition = expectedPosition
+            lastGreedyToken = savedGreedyToken ?? 0
             restoreCalls.append(expectedPosition)
         }
 
@@ -183,6 +194,37 @@ extension RawCompletionLoopTests {
         #expect(result.kvPosition == prompt.count)
         #expect(result.uncommittedBoundaryTokenIDs == [tokenizer.eosID])
         #expect(result.promptLogits == scratch.captureLogits())
+    }
+
+    @Test func exactReplayUsesRestoredFusedGreedySeed() async throws {
+        let context = try MetalContext()
+        let tokenizer = try await GFTokenizer.load()
+        let prompt = tokenizer.encode("one two three", addBOS: true)
+        let greedyToken = tokenizer.encode("a", addBOS: false).first!
+        let producer = ContinuationProducer(
+            vocabSize: tokenizer.vocabSize,
+            terminalToken: tokenizer.eosID,
+            position: prompt.count,
+            usesFusedGreedyHead: true,
+            greedyToken: UInt32(bitPattern: greedyToken))
+        producer.savePromptState()
+        let scratch = try RawCompletionScratch(context: context, vocab: tokenizer.vocabSize)
+        producer.writeTerminal(to: scratch.logits)
+
+        let result = try await runRawCompletion(
+            producer: producer,
+            tokenizer: tokenizer,
+            promptIds: prompt,
+            config: GenerationConfig(maxNewTokens: 1, temperature: 0),
+            context: context,
+            scratch: scratch,
+            prefillConfig: .defaultChunked,
+            start: .replay(cachedPromptTokens: prompt.count)
+        ) { _ in }
+
+        #expect(producer.restoreCalls == [prompt.count])
+        #expect(producer.prefillRanges.isEmpty)
+        #expect(result.uncommittedBoundaryTokenIDs == [greedyToken])
     }
 
     @Test func replayRejectsPartialPromptBeforeMutatingProducer() async throws {

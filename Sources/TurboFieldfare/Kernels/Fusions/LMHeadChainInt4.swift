@@ -8,15 +8,13 @@ final class LMHeadChainInt4 {
     private static let rowSummaryStride = 2
     private static let realDecodeD: UInt32 = 2816
     private static let realDecodeVocab: UInt32 = 262144
-    private static let realDecodeHeadConstants: [MetalFunctionConstant] = [
-        MetalFunctionConstant(index: 10, value: .uint32(realDecodeD)),
-        MetalFunctionConstant(index: 11, value: .uint32(realDecodeVocab)),
-        MetalFunctionConstant(index: 13, value: .bool(true)),
-    ]
+    private static let qwenDecodeD: UInt32 = 2048
+    private static let qwenDecodeVocab: UInt32 = 248320
 
     private let rms: RMSNorm
     private let rowGreedy: MTLComputePipelineState
     private let rowGreedySpecialized: MTLComputePipelineState
+    private let rowGreedyQwenSpecialized: MTLComputePipelineState
     private let rowReducer: MTLComputePipelineState
     private let xNormedBuffer: MTLBuffer
     private let rowSummariesBuffer: MTLBuffer
@@ -30,7 +28,12 @@ final class LMHeadChainInt4 {
         self.rowGreedy = try context.pipeline("lm_head_greedy_int4_rows_chunk_raw")
         self.rowGreedySpecialized = try context.pipeline(
             "lm_head_greedy_int4_rows_chunk_raw",
-            constants: Self.realDecodeHeadConstants)
+            constants: Self.headConstants(d: Self.realDecodeD,
+                                          vocab: Self.realDecodeVocab))
+        self.rowGreedyQwenSpecialized = try context.pipeline(
+            "lm_head_greedy_int4_rows_chunk_raw",
+            constants: Self.headConstants(d: Self.qwenDecodeD,
+                                          vocab: Self.qwenDecodeVocab))
         self.rowReducer = try context.pipeline("lm_head_greedy_int4_rows_reduce")
         self.maxD = maxD
         self.maxVocab = maxVocab
@@ -86,8 +89,15 @@ final class LMHeadChainInt4 {
                         eps: rmsEps)
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            let specialized = d == Self.realDecodeD && vocab == Self.realDecodeVocab
-            encoder.setComputePipelineState(specialized ? rowGreedySpecialized : rowGreedy)
+            let pipeline: MTLComputePipelineState
+            if d == Self.realDecodeD && vocab == Self.realDecodeVocab {
+                pipeline = rowGreedySpecialized
+            } else if d == Self.qwenDecodeD && vocab == Self.qwenDecodeVocab {
+                pipeline = rowGreedyQwenSpecialized
+            } else {
+                pipeline = rowGreedy
+            }
+            encoder.setComputePipelineState(pipeline)
             encoder.setBuffer(xNormedBuffer, offset: 0, index: 0)
             encoder.setBuffer(weights, offset: weightsOffset, index: 1)
             encoder.setBuffer(scales, offset: scalesOffset, index: 2)
@@ -119,5 +129,14 @@ final class LMHeadChainInt4 {
             encoder.dispatchThreads(threadgroupSize, threadsPerThreadgroup: threadgroupSize)
             encoder.endEncoding()
         }
+    }
+
+    private static func headConstants(d: UInt32,
+                                      vocab: UInt32) -> [MetalFunctionConstant] {
+        [
+            MetalFunctionConstant(index: 10, value: .uint32(d)),
+            MetalFunctionConstant(index: 11, value: .uint32(vocab)),
+            MetalFunctionConstant(index: 13, value: .bool(true)),
+        ]
     }
 }

@@ -9,15 +9,30 @@ public struct QwenDecodeLayerDiagnostics: Sendable, Equatable {
     public let isFullAttention: Bool
     public let elapsedNanos: UInt64
     public let expertFetchNanos: UInt64
+    public let expertReadCount: Int
+    public let expertReadNanos: UInt64
+    public let expertReadMaxNanos: UInt64
+    public let routedExperts: [Int]
+    public let routingWeights: [Float]
 
     public init(layer: Int,
                 isFullAttention: Bool,
                 elapsedNanos: UInt64,
-                expertFetchNanos: UInt64) {
+                expertFetchNanos: UInt64,
+                expertReadCount: Int = 0,
+                expertReadNanos: UInt64 = 0,
+                expertReadMaxNanos: UInt64 = 0,
+                routedExperts: [Int] = [],
+                routingWeights: [Float] = []) {
         self.layer = layer
         self.isFullAttention = isFullAttention
         self.elapsedNanos = elapsedNanos
         self.expertFetchNanos = expertFetchNanos
+        self.expertReadCount = expertReadCount
+        self.expertReadNanos = expertReadNanos
+        self.expertReadMaxNanos = expertReadMaxNanos
+        self.routedExperts = routedExperts
+        self.routingWeights = routingWeights
     }
 }
 
@@ -27,6 +42,9 @@ public struct QwenDecodeDiagnostics: Sendable, Equatable {
     public let layerNanos: UInt64
     public let logitsNanos: UInt64
     public let expertFetchNanos: UInt64
+    public let expertReadCount: Int
+    public let expertReadNanos: UInt64
+    public let expertReadMaxNanos: UInt64
     public let mixerNanos: UInt64
     public let routerNanos: UInt64
     public let routePlanningNanos: UInt64
@@ -62,12 +80,18 @@ public struct QwenDecodeDiagnostics: Sendable, Equatable {
                 routePlanningNanos: UInt64 = 0,
                 sharedExpertNanos: UInt64 = 0,
                 routedExpertCombineNanos: UInt64 = 0,
+                expertReadCount: Int = 0,
+                expertReadNanos: UInt64 = 0,
+                expertReadMaxNanos: UInt64 = 0,
                 layers: [QwenDecodeLayerDiagnostics] = []) {
         self.wallNanos = wallNanos
         self.embeddingNanos = embeddingNanos
         self.layerNanos = layerNanos
         self.logitsNanos = logitsNanos
         self.expertFetchNanos = expertFetchNanos
+        self.expertReadCount = expertReadCount
+        self.expertReadNanos = expertReadNanos
+        self.expertReadMaxNanos = expertReadMaxNanos
         self.mixerNanos = mixerNanos
         self.routerNanos = routerNanos
         self.routePlanningNanos = routePlanningNanos
@@ -92,22 +116,37 @@ public struct QwenDecodeLayerAggregate: Codable, Sendable, Equatable {
     public let decodeStepCount: Int
     public let elapsedNanos: UInt64
     public let expertFetchNanos: UInt64
+    public let expertReadCount: Int
+    public let expertReadNanos: UInt64
+    public let expertReadMaxNanos: UInt64
+    public let routedExpertTrace: [[Int]]
+    public let routingWeightTrace: [[Float]]
 
     public init(layer: Int,
                 isFullAttention: Bool,
                 decodeStepCount: Int,
                 elapsedNanos: UInt64,
-                expertFetchNanos: UInt64) {
+                expertFetchNanos: UInt64,
+                expertReadCount: Int = 0,
+                expertReadNanos: UInt64 = 0,
+                expertReadMaxNanos: UInt64 = 0,
+                routedExpertTrace: [[Int]] = [],
+                routingWeightTrace: [[Float]] = []) {
         self.layer = layer
         self.isFullAttention = isFullAttention
         self.decodeStepCount = decodeStepCount
         self.elapsedNanos = elapsedNanos
         self.expertFetchNanos = expertFetchNanos
+        self.expertReadCount = expertReadCount
+        self.expertReadNanos = expertReadNanos
+        self.expertReadMaxNanos = expertReadMaxNanos
+        self.routedExpertTrace = routedExpertTrace
+        self.routingWeightTrace = routingWeightTrace
     }
 }
 
 public struct QwenDecodeDiagnosticsAggregate: Codable, Sendable, Equatable {
-    public static let currentSchemaVersion = 1
+    public static let currentSchemaVersion = 3
 
     public let schemaVersion: Int
     public let decodeStepCount: Int
@@ -121,6 +160,9 @@ public struct QwenDecodeDiagnosticsAggregate: Codable, Sendable, Equatable {
     public let routePlanningNanos: UInt64
     public let sharedExpertNanos: UInt64
     public let expertFetchNanos: UInt64
+    public let expertReadCount: Int
+    public let expertReadNanos: UInt64
+    public let expertReadMaxNanos: UInt64
     public let routedExpertCombineNanos: UInt64
     public let samplingNanos: UInt64
     public let commandBufferSubmissionCount: Int
@@ -156,6 +198,9 @@ public struct QwenDecodeDiagnosticsAggregate: Codable, Sendable, Equatable {
         routedExpertEstimatedBytes: UInt64,
         attributedWallNanos: UInt64,
         residualWallNanos: UInt64,
+        expertReadCount: Int = 0,
+        expertReadNanos: UInt64 = 0,
+        expertReadMaxNanos: UInt64 = 0,
         layers: [QwenDecodeLayerAggregate] = []) {
         self.schemaVersion = schemaVersion
         self.decodeStepCount = decodeStepCount
@@ -169,6 +214,9 @@ public struct QwenDecodeDiagnosticsAggregate: Codable, Sendable, Equatable {
         self.routePlanningNanos = routePlanningNanos
         self.sharedExpertNanos = sharedExpertNanos
         self.expertFetchNanos = expertFetchNanos
+        self.expertReadCount = expertReadCount
+        self.expertReadNanos = expertReadNanos
+        self.expertReadMaxNanos = expertReadMaxNanos
         self.routedExpertCombineNanos = routedExpertCombineNanos
         self.samplingNanos = samplingNanos
         self.commandBufferSubmissionCount = commandBufferSubmissionCount
@@ -195,6 +243,9 @@ public struct QwenDecodeDiagnosticsAggregate: Codable, Sendable, Equatable {
         case routePlanningNanos = "route_planning_nanos"
         case sharedExpertNanos = "shared_expert_nanos"
         case expertFetchNanos = "expert_fetch_nanos"
+        case expertReadCount = "expert_read_count"
+        case expertReadNanos = "expert_read_nanos"
+        case expertReadMaxNanos = "expert_read_max_nanos"
         case routedExpertCombineNanos = "routed_expert_combine_nanos"
         case samplingNanos = "sampling_nanos"
         case commandBufferSubmissionCount = "command_buffer_submission_count"
@@ -232,6 +283,9 @@ struct QwenDecodeDiagnosticsAggregateAccumulator {
     private(set) var routePlanningNanos: UInt64 = 0
     private(set) var sharedExpertNanos: UInt64 = 0
     private(set) var expertFetchNanos: UInt64 = 0
+    private(set) var expertReadCount = 0
+    private(set) var expertReadNanos: UInt64 = 0
+    private(set) var expertReadMaxNanos: UInt64 = 0
     private(set) var routedExpertCombineNanos: UInt64 = 0
     private(set) var samplingNanos: UInt64 = 0
     private(set) var commandBufferSubmissionCount = 0
@@ -253,6 +307,9 @@ struct QwenDecodeDiagnosticsAggregateAccumulator {
         routePlanningNanos = saturatedAdd(routePlanningNanos, diagnostics.routePlanningNanos)
         sharedExpertNanos = saturatedAdd(sharedExpertNanos, diagnostics.sharedExpertNanos)
         expertFetchNanos = saturatedAdd(expertFetchNanos, diagnostics.expertFetchNanos)
+        expertReadCount = saturatedAdd(expertReadCount, diagnostics.expertReadCount)
+        expertReadNanos = saturatedAdd(expertReadNanos, diagnostics.expertReadNanos)
+        expertReadMaxNanos = max(expertReadMaxNanos, diagnostics.expertReadMaxNanos)
         routedExpertCombineNanos = saturatedAdd(
             routedExpertCombineNanos, diagnostics.routedExpertCombineNanos)
         commandBufferSubmissionCount = saturatedAdd(
@@ -274,7 +331,12 @@ struct QwenDecodeDiagnosticsAggregateAccumulator {
                     isFullAttention: layer.isFullAttention,
                     decodeStepCount: 1,
                     elapsedNanos: layer.elapsedNanos,
-                    expertFetchNanos: layer.expertFetchNanos))
+                    expertFetchNanos: layer.expertFetchNanos,
+                    expertReadCount: layer.expertReadCount,
+                    expertReadNanos: layer.expertReadNanos,
+                    expertReadMaxNanos: layer.expertReadMaxNanos,
+                    routedExpertTrace: [layer.routedExperts],
+                    routingWeightTrace: [layer.routingWeights]))
                 continue
             }
             let current = layers[index]
@@ -284,7 +346,15 @@ struct QwenDecodeDiagnosticsAggregateAccumulator {
                 decodeStepCount: saturatedAdd(current.decodeStepCount, 1),
                 elapsedNanos: saturatedAdd(current.elapsedNanos, layer.elapsedNanos),
                 expertFetchNanos: saturatedAdd(current.expertFetchNanos,
-                                               layer.expertFetchNanos))
+                                               layer.expertFetchNanos),
+                expertReadCount: saturatedAdd(current.expertReadCount,
+                                              layer.expertReadCount),
+                expertReadNanos: saturatedAdd(current.expertReadNanos,
+                                              layer.expertReadNanos),
+                expertReadMaxNanos: max(current.expertReadMaxNanos,
+                                        layer.expertReadMaxNanos),
+                routedExpertTrace: current.routedExpertTrace + [layer.routedExperts],
+                routingWeightTrace: current.routingWeightTrace + [layer.routingWeights])
         }
     }
 
@@ -319,6 +389,9 @@ struct QwenDecodeDiagnosticsAggregateAccumulator {
             routedExpertEstimatedBytes: routedExpertEstimatedBytes,
             attributedWallNanos: attributedWallNanos,
             residualWallNanos: residualWallNanos,
+            expertReadCount: expertReadCount,
+            expertReadNanos: expertReadNanos,
+            expertReadMaxNanos: expertReadMaxNanos,
             layers: layers)
     }
 }

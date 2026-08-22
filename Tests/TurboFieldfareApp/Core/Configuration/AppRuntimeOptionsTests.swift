@@ -6,7 +6,7 @@ import TurboFieldfare
 @Suite struct AppRuntimeOptionsTests {
     @Test func defaultsMatchProduction() throws {
         let options = AppRuntimeOptions()
-        #expect(options.expertCacheSlots == 16)
+        #expect(options.expertCacheSlots == 24)
         #expect(options.expertCachePolicy == .lfu)
         #expect(options.prefillEnabled)
         #expect(options.prefillChunkTokens == 128)
@@ -16,7 +16,7 @@ import TurboFieldfare
         let runtime = try options.resolvedRuntimeConfiguration(forceLogitsHead: false)
         #expect(runtime == .production)
         #expect(options.resultSummary ==
-            "Cache 16 LFU, prefill 128, FP16 KV, RDADVISE off, full SHA-256")
+            "Cache 24 LFU, prefill 128, FP16 KV, RDADVISE off, full SHA-256")
     }
 
     @Test func everyPublicChoiceMapsToRuntime() throws {
@@ -70,7 +70,7 @@ import TurboFieldfare
 
         var variants: [AppRuntimeOptions] = []
         var value = base
-        value.expertCacheSlots = 24; variants.append(value)
+        value.expertCacheSlots = 16; variants.append(value)
         value = base; value.expertCachePolicy = .lru; variants.append(value)
         value = base; value.rdadvisePolicy = .bounded; variants.append(value)
         value = base; value.modelVerification = .trustedInstall; variants.append(value)

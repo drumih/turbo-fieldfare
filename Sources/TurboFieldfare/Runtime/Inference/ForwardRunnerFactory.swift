@@ -16,7 +16,8 @@ public enum ForwardRunnerFactory {
             return try QwenForwardRunner(
                 model: model,
                 context: context,
-                maxContext: maxContext)
+                maxContext: maxContext,
+                runtimeConfiguration: runtimeConfiguration)
         }
     }
 }

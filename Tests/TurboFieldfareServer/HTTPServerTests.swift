@@ -337,7 +337,10 @@ struct HTTPServerTests {
             routedExpertCacheMissCount: 1,
             routedExpertEstimatedBytes: 64,
             attributedWallNanos: 10,
-            residualWallNanos: 0)
+            residualWallNanos: 0,
+            expertReadCount: 1,
+            expertReadNanos: 7,
+            expertReadMaxNanos: 7)
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
             queueLimit: 1,
@@ -355,9 +358,12 @@ struct HTTPServerTests {
         let data = try await URLSession.shared.data(for: request).0
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let exported = try #require(object["turbo_fieldfare_diagnostics"] as? [String: Any])
-        #expect(exported["schema_version"] as? Int == 1)
+        #expect(exported["schema_version"] as? Int == 3)
         #expect(exported["decode_step_count"] as? Int == 1)
         #expect(exported["routed_expert_estimated_bytes"] as? Int == 64)
+        #expect(exported["expert_read_count"] as? Int == 1)
+        #expect(exported["expert_read_nanos"] as? Int == 7)
+        #expect(exported["expert_read_max_nanos"] as? Int == 7)
         #expect(object["turbo_fieldfare_token_ids"] as? [Int] == [11, 22, 33])
 
         try await server.shutdown()

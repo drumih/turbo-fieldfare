@@ -46,7 +46,7 @@ its runtime settings at startup, so changing one means restarting the process.
 
 ## Run an experiment
 
-1. Start from 4K context, 16 expert-cache slots, prefill on, and RDADVISE off.
+1. Start from 4K context, 24 expert-cache slots, prefill on, and RDADVISE off.
 2. Keep the prompt and generation controls fixed.
 3. Record a baseline after a warmup.
 4. Change one runtime control and reload the app model, or start a new CLI run.

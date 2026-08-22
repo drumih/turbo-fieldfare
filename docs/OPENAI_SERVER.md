@@ -62,7 +62,7 @@ defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
   --rdadvise bounded
 ```
 
-Without these flags the server runs the production defaults: 16 expert-cache
+Without these flags the server runs the production defaults: 24 expert-cache
 slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
 off. Values are validated before the model loads, so an unsupported one exits
 with the usage text rather than failing partway through startup. Chunked
