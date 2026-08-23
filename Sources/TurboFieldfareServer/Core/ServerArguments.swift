@@ -12,6 +12,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let expertCachePolicy: RuntimeExpertCachePolicy
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
+    public let prefillWatchdogProtectionEnabled: Bool
     public let rdadvisePolicy: RDAdvicePolicyMode
 
     public static let usage = """
@@ -29,6 +30,8 @@ public struct ServerArguments: Equatable, Sendable {
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
       --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, or 128 (default 128).
+      --prefill-watchdog-protection on|off
+                                 Bound long full-attention Metal work (default on).
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.
@@ -59,6 +62,7 @@ public struct ServerArguments: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
+            prefillWatchdogProtectionEnabled: prefillWatchdogProtectionEnabled,
             forceLogitsHead: forceLogitsHead)
     }
 
@@ -73,6 +77,7 @@ public struct ServerArguments: Equatable, Sendable {
         var expertCachePolicy = RuntimeExpertCachePolicy.lfu
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
+        var prefillWatchdogProtectionEnabled = true
         var rdadvisePolicy = RDAdvicePolicyMode.off
         var index = 0
         while index < input.count {
@@ -136,6 +141,14 @@ public struct ServerArguments: Equatable, Sendable {
                     throw ServerArgumentError.invalid("--prefill-chunk-tokens must be 32, 64, or 128")
                 }
                 prefillChunkTokens = parsed
+            case "--prefill-watchdog-protection":
+                switch value {
+                case "on": prefillWatchdogProtectionEnabled = true
+                case "off": prefillWatchdogProtectionEnabled = false
+                default:
+                    throw ServerArgumentError.invalid(
+                        "--prefill-watchdog-protection must be on or off")
+                }
             case "--rdadvise":
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
                     throw ServerArgumentError.invalid(
@@ -157,6 +170,8 @@ public struct ServerArguments: Equatable, Sendable {
                                expertCachePolicy: expertCachePolicy,
                                prefillPolicy: prefillPolicy,
                                prefillChunkTokens: prefillChunkTokens,
+                               prefillWatchdogProtectionEnabled:
+                                prefillWatchdogProtectionEnabled,
                                rdadvisePolicy: rdadvisePolicy)
     }
 }

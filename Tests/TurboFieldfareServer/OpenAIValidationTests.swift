@@ -568,6 +568,7 @@ struct ServerArgumentTests {
         #expect(arguments.expertCachePolicy == .lfu)
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)
+        #expect(arguments.prefillWatchdogProtectionEnabled)
         #expect(arguments.rdadvisePolicy == .off)
     }
 
@@ -597,12 +598,14 @@ struct ServerArgumentTests {
             "--expert-cache-policy", "lru",
             "--prefill", "on",
             "--prefill-chunk-tokens", "64",
+            "--prefill-watchdog-protection", "off",
             "--rdadvise", "adaptive",
         ])
         #expect(arguments.expertCacheSlots == 32)
         #expect(arguments.expertCachePolicy == .lru)
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 64)
+        #expect(!arguments.prefillWatchdogProtectionEnabled)
         #expect(arguments.rdadvisePolicy == .adaptive)
 
         let configuration = try arguments.resolvedRuntimeConfiguration()
@@ -610,6 +613,7 @@ struct ServerArgumentTests {
         #expect(configuration.expertCachePolicy == .lru)
         #expect(configuration.prefillPolicy == .chunked)
         #expect(configuration.prefillChunkTokens == 64)
+        #expect(!configuration.prefillWatchdogProtectionEnabled)
         #expect(configuration.rdadvisePolicy == .adaptive)
     }
 
@@ -640,6 +644,7 @@ struct ServerArgumentTests {
         ["--expert-cache-policy", "mru"],
         ["--prefill", "maybe"],
         ["--prefill-chunk-tokens", "256"],
+        ["--prefill-watchdog-protection", "automatic"],
         ["--rdadvise", "eager"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {

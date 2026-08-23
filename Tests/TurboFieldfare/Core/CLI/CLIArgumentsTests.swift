@@ -70,7 +70,7 @@ import TurboFieldfare
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--seed", "--stop", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
-            "--rdadvise", "--help",
+            "--prefill-watchdog-protection", "--rdadvise", "--help",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
@@ -84,6 +84,7 @@ import TurboFieldfare
             "--expert-cache-policy", "lru",
             "--prefill", "off",
             "--prefill-chunk-tokens", "64",
+            "--prefill-watchdog-protection", "off",
             "--rdadvise", "adaptive",
         ])
 
@@ -91,6 +92,7 @@ import TurboFieldfare
         #expect(arguments.expertCachePolicy == .lru)
         #expect(arguments.prefillPolicy == .off)
         #expect(arguments.prefillChunkTokens == 64)
+        #expect(!arguments.prefillWatchdogProtectionEnabled)
         #expect(arguments.rdadvisePolicy == .adaptive)
 
         let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: true)
@@ -98,6 +100,7 @@ import TurboFieldfare
         #expect(runtime.modelExpertCachePolicy == .lru)
         #expect(runtime.prefillPolicy == .off)
         #expect(runtime.prefillChunkTokens == 64)
+        #expect(!runtime.prefillWatchdogProtectionEnabled)
         #expect(runtime.rdadvisePolicy == .adaptive)
         #expect(runtime.headPath == .logits)
     }
@@ -139,6 +142,10 @@ import TurboFieldfare
         #expect(try Args.parse([
             "--model", "m.gturbo", "--prompt", "hi", "--prefill", "off",
         ]).prefillPolicy == .off)
+        #expect(try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi",
+            "--prefill-watchdog-protection", "off",
+        ]).prefillWatchdogProtectionEnabled == false)
     }
 
     @Test func unsupportedRuntimeOptionValuesAreRejected() {
@@ -147,6 +154,7 @@ import TurboFieldfare
             ("--expert-cache-policy", "fifo"),
             ("--prefill", "yes"),
             ("--prefill-chunk-tokens", "256"),
+            ("--prefill-watchdog-protection", "automatic"),
             ("--rdadvise", "automatic"),
         ]
         for (flag, value) in invalidValues {

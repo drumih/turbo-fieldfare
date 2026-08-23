@@ -29,6 +29,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
+    public let prefillWatchdogProtectionEnabled: Bool
     public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
 
@@ -37,6 +38,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 rdadvisePolicy: RDAdvicePolicyMode = .off,
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
+                prefillWatchdogProtectionEnabled: Bool = true,
                 prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
                 forceLogitsHead: Bool = false) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
@@ -48,6 +50,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         self.rdadvisePolicy = rdadvisePolicy
         self.prefillPolicy = prefillEnabled ? .chunked : .off
         self.prefillChunkTokens = prefillChunkTokens
+        self.prefillWatchdogProtectionEnabled = prefillWatchdogProtectionEnabled
         self.prefillAttentionPath = prefillAttentionPath
         self.headPath = forceLogitsHead ? .logits : .fusedRows
     }

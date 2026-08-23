@@ -69,7 +69,8 @@ final class PrefillAttention {
                              out: MTLBuffer, outOffset: Int = 0,
                              params: PrefillAttentionParams,
                              kvRingCapacity: UInt32 = 0,
-                             path: RuntimePrefillAttentionPath = .causalTiled) {
+                             path: RuntimePrefillAttentionPath = .causalTiled,
+                             watchdogProtectionEnabled: Bool = true) {
         validate(params)
 
         let requestsTensorOps = path == .fullTensorOps2DPreferred
@@ -111,7 +112,8 @@ final class PrefillAttention {
         let spans = Self.querySpans(queryCount: Int(params.queryCount),
                                     kvValidCount: Int(params.kvValidCount),
                                     fullAttentionShape: fullAttentionShape,
-                                    useTensorOps: useTensorOps)
+                                    useTensorOps: useTensorOps,
+                                    watchdogProtectionEnabled: watchdogProtectionEnabled)
         for span in spans {
             guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
             enc.label = "prefill.attention queries=\(span.lowerBound)..<\(span.upperBound) kv=\(params.kvValidCount)"
@@ -154,10 +156,12 @@ final class PrefillAttention {
     static func querySpans(queryCount: Int,
                            kvValidCount: Int,
                            fullAttentionShape: Bool,
-                           useTensorOps: Bool) -> [Range<Int>] {
+                           useTensorOps: Bool,
+                           watchdogProtectionEnabled: Bool = true) -> [Range<Int>] {
         precondition(queryCount > 0, "queryCount must be positive")
         let rows: Int
-        if !useTensorOps
+        if watchdogProtectionEnabled
+            && !useTensorOps
             && fullAttentionShape
             && kvValidCount > longContextThreshold {
             rows = max(

@@ -220,6 +220,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// `forceLogitsHead: true` or they read a never-written buffer.
     private let useFusedGreedyHead: Bool
     private let prefillAttentionPath: RuntimePrefillAttentionPath
+    private let prefillWatchdogProtectionEnabled: Bool
     public let rdadviseEnabled: Bool
     public let rdadvisePolicyMode: RDAdvicePolicyMode
     private var rdadviseSkipUntilPosition: Int = -1
@@ -234,6 +235,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.maxContext = maxContext
         self.useFusedGreedyHead = runtimeConfiguration.headPath == .fusedRows
         self.prefillAttentionPath = runtimeConfiguration.prefillAttentionPath
+        self.prefillWatchdogProtectionEnabled =
+            runtimeConfiguration.prefillWatchdogProtectionEnabled
         let useFP16Ring = runtimeConfiguration.fp16RingEnabled
         self.rdadvisePolicyMode = runtimeConfiguration.rdadvisePolicy
         self.rdadviseAdaptiveState = RDAdviceAdaptivePolicyState(
@@ -877,6 +880,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     ? UInt32(ringCapacity)
                     : 0
                 let needsBoundedTiledAttention = isFull
+                    && prefillWatchdogProtectionEnabled
                     && !ctx.device.supportsFamily(.apple10)
                     && startPosition + t > PrefillAttention.longContextThreshold
                 if needsBoundedTiledAttention {
@@ -905,7 +909,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                             outOffset: span.lowerBound * qDim * MemoryLayout<Float16>.stride,
                             params: batchParams,
                             kvRingCapacity: activeRingCapacity,
-                            path: prefillAttentionPath)
+                            path: prefillAttentionPath,
+                            watchdogProtectionEnabled: true)
                         attentionCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=attention queries=\(span.lowerBound)..<\(span.upperBound)"
                         attentionCB.commit()
                         try waitForCompletion(attentionCB)
@@ -919,7 +924,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   out: scratch.attentionOutput,
                                                   params: params,
                                                   kvRingCapacity: activeRingCapacity,
-                                                  path: prefillAttentionPath)
+                                                  path: prefillAttentionPath,
+                                                  watchdogProtectionEnabled:
+                                                    prefillWatchdogProtectionEnabled)
                 }
             } else {
                 throw PrefillError.chunkedUnsupported(

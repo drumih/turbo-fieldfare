@@ -35,6 +35,7 @@ model, so an unsupported combination fails immediately with the usage text.
 | Expert-cache policy | LFU | `--expert-cache-policy lfu\|lru` | LFU | Chooses which expert is evicted when the cache is full. |
 | Prompt prefill | On, off | `--prefill on\|off` | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
 | Prefill chunk size | 128 | `--prefill-chunk-tokens 32\|64\|128` | 128 | Sets the number of prompt tokens processed by each chunked-prefill step. It has no effect while prefill is off. |
+| Prefill watchdog protection | On | `--prefill-watchdog-protection on\|off` | On | Bounds pre-Apple10 full-attention command-buffer work beyond 4K. Turning it off may improve long-prefill throughput but can trigger `Impacting Interactivity` Metal failures. |
 | RDADVISE | Off, Default, Bounded, Adaptive | `--rdadvise off\|default\|bounded\|adaptive` | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
 
 In the app, changing context length, expert-cache slots, or RDADVISE requires a

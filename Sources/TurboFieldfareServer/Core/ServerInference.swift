@@ -427,6 +427,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             runtime.rdadvisePolicy.rawValue,
             runtime.prefillPolicy.rawValue,
             String(runtime.prefillChunkTokens),
+            String(runtime.prefillWatchdogProtectionEnabled),
             runtime.headPath.rawValue,
         ].joined(separator: ":")
         let runtimeDigest = SHA256.hash(data: Data(runtimeIdentity.utf8))

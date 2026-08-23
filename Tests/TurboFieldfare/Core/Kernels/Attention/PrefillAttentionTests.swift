@@ -225,6 +225,12 @@ import TurboFieldfareValidationSupport
             useTensorOps: false) == [0..<1, 1..<2, 2..<3])
         #expect(PrefillAttention.querySpans(
             queryCount: 128,
+            kvValidCount: 32_768,
+            fullAttentionShape: true,
+            useTensorOps: false,
+            watchdogProtectionEnabled: false) == [0..<128])
+        #expect(PrefillAttention.querySpans(
+            queryCount: 128,
             kvValidCount: 8_192,
             fullAttentionShape: false,
             useTensorOps: false) == [0..<128])

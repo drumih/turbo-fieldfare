@@ -17,6 +17,7 @@ public struct Args: Equatable, Sendable {
     public var expertCachePolicy: RuntimeExpertCachePolicy
     public var prefillPolicy: RuntimePrefillPolicy
     public var prefillChunkTokens: Int
+    public var prefillWatchdogProtectionEnabled: Bool
     public var rdadvisePolicy: RDAdvicePolicyMode
 
     public init(model: String,
@@ -35,6 +36,7 @@ public struct Args: Equatable, Sendable {
                 expertCachePolicy: RuntimeExpertCachePolicy = RuntimeConfiguration.production.expertCachePolicy,
                 prefillPolicy: RuntimePrefillPolicy = RuntimeConfiguration.production.prefillPolicy,
                 prefillChunkTokens: Int = RuntimeConfiguration.production.prefillChunkTokens,
+                prefillWatchdogProtectionEnabled: Bool = RuntimeConfiguration.production.prefillWatchdogProtectionEnabled,
                 rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy) {
         self.model = model
         self.prompt = prompt
@@ -52,6 +54,7 @@ public struct Args: Equatable, Sendable {
         self.expertCachePolicy = expertCachePolicy
         self.prefillPolicy = prefillPolicy
         self.prefillChunkTokens = prefillChunkTokens
+        self.prefillWatchdogProtectionEnabled = prefillWatchdogProtectionEnabled
         self.rdadvisePolicy = rdadvisePolicy
     }
 }
@@ -104,6 +107,8 @@ extension Args {
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
       --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, or 128 (default 128).
+      --prefill-watchdog-protection on|off
+                                  Bound long full-attention Metal work (default on).
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive (default off).
       --help                     Show this message.
     """
@@ -131,6 +136,7 @@ extension Args {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
+            prefillWatchdogProtectionEnabled: prefillWatchdogProtectionEnabled,
             forceLogitsHead: forceLogitsHead)
     }
 
@@ -152,6 +158,8 @@ extension Args {
         var expertCachePolicy = runtimeDefaults.expertCachePolicy
         var prefillPolicy = runtimeDefaults.prefillPolicy
         var prefillChunkTokens = runtimeDefaults.prefillChunkTokens
+        var prefillWatchdogProtectionEnabled =
+            runtimeDefaults.prefillWatchdogProtectionEnabled
         var rdadvisePolicy = runtimeDefaults.rdadvisePolicy
 
         var index = 0
@@ -240,6 +248,13 @@ extension Args {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
                 prefillChunkTokens = parsed
+            case "--prefill-watchdog-protection":
+                let value = try takeValue(argv, &index, flag: flag)
+                switch value {
+                case "on": prefillWatchdogProtectionEnabled = true
+                case "off": prefillWatchdogProtectionEnabled = false
+                default: throw ArgsError.invalidValue(flag: flag, value: value)
+                }
             case "--rdadvise":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
@@ -277,6 +292,8 @@ extension Args {
                              expertCachePolicy: expertCachePolicy,
                              prefillPolicy: prefillPolicy,
                              prefillChunkTokens: prefillChunkTokens,
+                             prefillWatchdogProtectionEnabled:
+                                prefillWatchdogProtectionEnabled,
                              rdadvisePolicy: rdadvisePolicy)
         _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         return arguments
