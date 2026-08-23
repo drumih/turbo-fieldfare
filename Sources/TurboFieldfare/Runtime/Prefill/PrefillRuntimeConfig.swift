@@ -146,6 +146,8 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
     public let commandBufferCount: Int
     public let embeddingNanos: UInt64
     public let mixerNanos: UInt64
+    public let deltaNetMixerNanos: UInt64
+    public let fullAttentionMixerNanos: UInt64
     public let moePrepareNanos: UInt64
     public let expertFetchNanos: UInt64
     public let routedMoENanos: UInt64
@@ -158,6 +160,8 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
                 commandBufferCount: Int,
                 embeddingNanos: UInt64 = 0,
                 mixerNanos: UInt64 = 0,
+                deltaNetMixerNanos: UInt64 = 0,
+                fullAttentionMixerNanos: UInt64 = 0,
                 moePrepareNanos: UInt64 = 0,
                 expertFetchNanos: UInt64 = 0,
                 routedMoENanos: UInt64 = 0,
@@ -169,6 +173,8 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
         self.commandBufferCount = commandBufferCount
         self.embeddingNanos = embeddingNanos
         self.mixerNanos = mixerNanos
+        self.deltaNetMixerNanos = deltaNetMixerNanos
+        self.fullAttentionMixerNanos = fullAttentionMixerNanos
         self.moePrepareNanos = moePrepareNanos
         self.expertFetchNanos = expertFetchNanos
         self.routedMoENanos = routedMoENanos
@@ -183,6 +189,8 @@ struct PrefillWorkCounter {
     private(set) var commandBufferCount = 0
     private(set) var embeddingNanos: UInt64 = 0
     private(set) var mixerNanos: UInt64 = 0
+    private(set) var deltaNetMixerNanos: UInt64 = 0
+    private(set) var fullAttentionMixerNanos: UInt64 = 0
     private(set) var moePrepareNanos: UInt64 = 0
     private(set) var expertFetchNanos: UInt64 = 0
     private(set) var routedMoENanos: UInt64 = 0
@@ -205,6 +213,8 @@ struct PrefillWorkCounter {
     mutating func recordStageTimings(
         embedding: UInt64 = 0,
         mixer: UInt64 = 0,
+        deltaNetMixer: UInt64 = 0,
+        fullAttentionMixer: UInt64 = 0,
         moePrepare: UInt64 = 0,
         expertFetch: UInt64 = 0,
         routedMoE: UInt64 = 0,
@@ -213,6 +223,8 @@ struct PrefillWorkCounter {
     ) {
         embeddingNanos += embedding
         mixerNanos += mixer
+        deltaNetMixerNanos += deltaNetMixer
+        fullAttentionMixerNanos += fullAttentionMixer
         moePrepareNanos += moePrepare
         expertFetchNanos += expertFetch
         routedMoENanos += routedMoE
@@ -227,6 +239,8 @@ struct PrefillWorkCounter {
         recordStageTimings(
             embedding: diagnostics.embeddingNanos,
             mixer: diagnostics.mixerNanos,
+            deltaNetMixer: diagnostics.deltaNetMixerNanos,
+            fullAttentionMixer: diagnostics.fullAttentionMixerNanos,
             moePrepare: diagnostics.moePrepareNanos,
             expertFetch: diagnostics.expertFetchNanos,
             routedMoE: diagnostics.routedMoENanos,
@@ -250,6 +264,8 @@ struct PrefillWorkCounter {
                                       commandBufferCount: commandBufferCount,
                                       embeddingNanos: embeddingNanos,
                                       mixerNanos: mixerNanos,
+                                      deltaNetMixerNanos: deltaNetMixerNanos,
+                                      fullAttentionMixerNanos: fullAttentionMixerNanos,
                                       moePrepareNanos: moePrepareNanos,
                                       expertFetchNanos: expertFetchNanos,
                                       routedMoENanos: routedMoENanos,

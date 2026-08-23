@@ -166,8 +166,10 @@ kernel void qwen_prefill_gated_delta_recurrent(
     constant uint& key_stride [[buffer(13)]],
     constant uint& value_stride [[buffer(14)]],
     constant uint& output_stride [[buffer(15)]],
-    uint head [[thread_position_in_grid]]) {
-    if (head >= value_heads) return;
+    uint2 gid [[thread_position_in_grid]]) {
+    const uint value_index = gid.x;
+    const uint head = gid.y;
+    if (head >= value_heads || value_index >= value_dim) return;
 
     const uint key_head = head * key_heads / value_heads;
     const uint q_base = key_head * key_dim;
@@ -195,32 +197,27 @@ kernel void qwen_prefill_gated_delta_recurrent(
         const float state_beta = beta[token * value_heads + head];
 
         for (uint i = 0; i < key_dim; ++i) {
-            for (uint j = 0; j < value_dim; ++j) {
-                state[state_base + i * value_dim + j] *= state_decay;
-            }
+            state[state_base + i * value_dim + value_index] *= state_decay;
         }
 
-        for (uint j = 0; j < value_dim; ++j) {
-            float memory = 0.0f;
-            for (uint i = 0; i < key_dim; ++i) {
-                memory = fma(state[state_base + i * value_dim + j],
-                             float(key[k_token + k_base + i]) * k_norm, memory);
-            }
-            const float delta = (float(value[v_token + v_base + j]) - memory) * state_beta;
-            for (uint i = 0; i < key_dim; ++i) {
-                state[state_base + i * value_dim + j] +=
-                    float(key[k_token + k_base + i]) * k_norm * delta;
-            }
+        float memory = 0.0f;
+        for (uint i = 0; i < key_dim; ++i) {
+            memory = fma(state[state_base + i * value_dim + value_index],
+                         float(key[k_token + k_base + i]) * k_norm, memory);
+        }
+        const float delta =
+            (float(value[v_token + v_base + value_index]) - memory) * state_beta;
+        for (uint i = 0; i < key_dim; ++i) {
+            state[state_base + i * value_dim + value_index] +=
+                float(key[k_token + k_base + i]) * k_norm * delta;
         }
 
-        for (uint j = 0; j < value_dim; ++j) {
-            float result = 0.0f;
-            for (uint i = 0; i < key_dim; ++i) {
-                result = fma(state[state_base + i * value_dim + j],
-                             float(query[q_token + q_base + i]) * q_norm * q_scale,
-                             result);
-            }
-            output[out_token + v_base + j] = half(result);
+        float result = 0.0f;
+        for (uint i = 0; i < key_dim; ++i) {
+            result = fma(state[state_base + i * value_dim + value_index],
+                         float(query[q_token + q_base + i]) * q_norm * q_scale,
+                         result);
         }
+        output[out_token + v_base + value_index] = half(result);
     }
 }

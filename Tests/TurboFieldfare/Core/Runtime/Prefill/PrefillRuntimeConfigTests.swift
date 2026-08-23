@@ -84,6 +84,8 @@ import Testing
                                               commandBufferCount: 160,
                                               embeddingNanos: 1,
                                               mixerNanos: 2,
+                                              deltaNetMixerNanos: 8,
+                                              fullAttentionMixerNanos: 9,
                                               moePrepareNanos: 3,
                                               expertFetchNanos: 4,
                                               routedMoENanos: 5,
@@ -95,6 +97,8 @@ import Testing
                                               commandBufferCount: 80,
                                               embeddingNanos: 10,
                                               mixerNanos: 20,
+                                              deltaNetMixerNanos: 80,
+                                              fullAttentionMixerNanos: 90,
                                               moePrepareNanos: 30,
                                               expertFetchNanos: 40,
                                               routedMoENanos: 50,
@@ -108,6 +112,8 @@ import Testing
         #expect(diagnostics.commandBufferCount == 240)
         #expect(diagnostics.embeddingNanos == 11)
         #expect(diagnostics.mixerNanos == 22)
+        #expect(diagnostics.deltaNetMixerNanos == 88)
+        #expect(diagnostics.fullAttentionMixerNanos == 99)
         #expect(diagnostics.moePrepareNanos == 33)
         #expect(diagnostics.expertFetchNanos == 44)
         #expect(diagnostics.routedMoENanos == 55)

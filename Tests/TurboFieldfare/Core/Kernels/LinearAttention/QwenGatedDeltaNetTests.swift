@@ -78,10 +78,10 @@ import TurboFieldfareValidationSupport
         #expect(actual == expected.map { Float(Float16($0)) })
     }
 
-    @Test func batchedStatefulOperatorsMatchScalarSequence() throws {
+    @Test(arguments: [1, 2, 31, 32, 127, 128])
+    func batchedStatefulOperatorsMatchScalarSequence(tokenCount: Int) throws {
         let context = try MetalContext()
         let batchKernel = try QwenPrefillDeltaNet(context: context)
-        let tokenCount = 5
         let channels = 5
         var rng = SplitMix64(seed: 0xC0B)
         let inputRows = (0..<tokenCount).map { _ in

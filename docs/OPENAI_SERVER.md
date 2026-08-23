@@ -89,6 +89,8 @@ Qwen prefill adds an optional nested `prefill` object:
 | `command_buffer_count` | Metal command buffers submitted during prefill |
 | `embedding_nanos` | Token embedding wall time |
 | `mixer_nanos` | RMSNorm, attention or DeltaNet, residual, and post-attention norm wall time |
+| `deltanet_mixer_nanos` | Portion of `mixer_nanos` spent in DeltaNet layers |
+| `full_attention_mixer_nanos` | Portion of `mixer_nanos` spent in full-attention layers |
 | `moe_prepare_nanos` | Shared expert, router, route grouping, and metadata preparation wall time |
 | `expert_fetch_nanos` | Routed expert binding and fetch wall time |
 | `routed_moe_nanos` | Streamed routed-expert execution wall time |

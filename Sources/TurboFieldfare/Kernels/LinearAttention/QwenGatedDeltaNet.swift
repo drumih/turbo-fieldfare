@@ -299,7 +299,15 @@ final class QwenPrefillDeltaNet {
         encoder.setBytes(&keyStride, length: MemoryLayout<UInt32>.stride, index: 13)
         encoder.setBytes(&valueStride, length: MemoryLayout<UInt32>.stride, index: 14)
         encoder.setBytes(&outputStride, length: MemoryLayout<UInt32>.stride, index: 15)
-        dispatch(encoder, pipeline: recurrentPSO, count: state.geometry.valueHeads)
+        let width = min(
+            state.geometry.valueHeadDim,
+            recurrentPSO.maxTotalThreadsPerThreadgroup)
+        encoder.dispatchThreads(
+            MTLSize(
+                width: state.geometry.valueHeadDim,
+                height: state.geometry.valueHeads,
+                depth: 1),
+            threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
         encoder.endEncoding()
     }
 

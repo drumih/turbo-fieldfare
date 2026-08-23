@@ -356,6 +356,8 @@ struct HTTPServerTests {
                                                commandBufferCount: 99,
                                                embeddingNanos: 1,
                                                mixerNanos: 2,
+                                               deltaNetMixerNanos: 8,
+                                               fullAttentionMixerNanos: 9,
                                                moePrepareNanos: 3,
                                                expertFetchNanos: 4,
                                                routedMoENanos: 5,
@@ -383,6 +385,8 @@ struct HTTPServerTests {
         let prefill = try #require(exported["prefill"] as? [String: Any])
         #expect(prefill["execution_path"] as? String == "chunked")
         #expect(prefill["command_buffer_count"] as? Int == 99)
+        #expect(prefill["deltanet_mixer_nanos"] as? Int == 8)
+        #expect(prefill["full_attention_mixer_nanos"] as? Int == 9)
         #expect(prefill["expert_fetch_nanos"] as? Int == 4)
         #expect(prefill["attributed_wall_nanos"] as? Int == 28)
         #expect(object["turbo_fieldfare_token_ids"] as? [Int] == [11, 22, 33])

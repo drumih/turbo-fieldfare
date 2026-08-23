@@ -16,6 +16,8 @@ private struct QwenPromptStateSnapshot {
 
 private struct QwenPrefillStageTimings {
     var mixerNanos: UInt64 = 0
+    var deltaNetMixerNanos: UInt64 = 0
+    var fullAttentionMixerNanos: UInt64 = 0
     var moePrepareNanos: UInt64 = 0
     var expertFetchNanos: UInt64 = 0
     var routedMoENanos: UInt64 = 0
@@ -23,6 +25,8 @@ private struct QwenPrefillStageTimings {
 
     mutating func merge(_ other: Self) {
         mixerNanos += other.mixerNanos
+        deltaNetMixerNanos += other.deltaNetMixerNanos
+        fullAttentionMixerNanos += other.fullAttentionMixerNanos
         moePrepareNanos += other.moePrepareNanos
         expertFetchNanos += other.expertFetchNanos
         routedMoENanos += other.routedMoENanos
@@ -438,6 +442,8 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         }
         workCounter.recordStageTimings(
             mixer: layerTimings.mixerNanos,
+            deltaNetMixer: layerTimings.deltaNetMixerNanos,
+            fullAttentionMixer: layerTimings.fullAttentionMixerNanos,
             moePrepare: layerTimings.moePrepareNanos,
             expertFetch: layerTimings.expertFetchNanos,
             routedMoE: layerTimings.routedMoENanos,
@@ -789,6 +795,11 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         timings.mixerNanos = mixerElapsed >= attributedMoE
             ? mixerElapsed - attributedMoE
             : 0
+        if isFull {
+            timings.fullAttentionMixerNanos = timings.mixerNanos
+        } else {
+            timings.deltaNetMixerNanos = timings.mixerNanos
+        }
         return timings
     }
 

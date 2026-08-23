@@ -490,6 +490,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 "command_buffer_count": prefill.commandBufferCount,
                 "embedding_nanos": prefill.embeddingNanos,
                 "mixer_nanos": prefill.mixerNanos,
+                "deltanet_mixer_nanos": prefill.deltaNetMixerNanos,
+                "full_attention_mixer_nanos": prefill.fullAttentionMixerNanos,
                 "moe_prepare_nanos": prefill.moePrepareNanos,
                 "expert_fetch_nanos": prefill.expertFetchNanos,
                 "routed_moe_nanos": prefill.routedMoENanos,
