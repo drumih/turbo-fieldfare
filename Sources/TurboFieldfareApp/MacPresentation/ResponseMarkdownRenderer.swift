@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftMath
 
 @MainActor
 public struct ResponseMarkdownRenderer {
@@ -35,6 +36,26 @@ public struct ResponseMarkdownRenderer {
         let kind: BlockKind
     }
 
+    private struct MathSpan {
+        let latex: String
+        let displayMode: Bool
+    }
+
+    private struct MathExtraction {
+        let maskedSource: String
+        let spans: [MathSpan]
+    }
+
+    private static let mathPlaceholder = "\u{FFFC}"
+
+    private static let displayMathPattern = try! NSRegularExpression(
+        pattern: #"\$\$([^\$]+?)\$\$"#,
+        options: [.dotMatchesLineSeparators])
+
+    private static let inlineMathPattern = try! NSRegularExpression(
+        pattern: #"(?<!\$)\$(?!\$)(?!\s)([^\$\n]+?)(?<!\s)\$(?!\$)"#,
+        options: [])
+
     public init() {}
 
     public func render(_ source: String) -> Result {
@@ -42,7 +63,8 @@ public struct ResponseMarkdownRenderer {
             return Result(attributedString: NSAttributedString(), usedFallback: false)
         }
         guard !requiresRawFallback(source) else { return fallback(source) }
-        let presentationSource = source.replacingOccurrences(
+        let mathExtraction = extractMathSpans(from: source)
+        let presentationSource = mathExtraction.maskedSource.replacingOccurrences(
             of: #"(?m)^([ \t]*\*\*[^*\n]+\*\*[ \t]*)\n(?=\S)"#,
             with: "$1\n\n",
             options: .regularExpression)
@@ -86,6 +108,9 @@ public struct ResponseMarkdownRenderer {
             }
 
             guard output.length > 0 else { return fallback(source) }
+            if !mathExtraction.spans.isEmpty {
+                substituteMathPlaceholders(in: output, spans: mathExtraction.spans)
+            }
             return Result(attributedString: output, usedFallback: false)
         } catch {
             return fallback(source)
@@ -305,6 +330,93 @@ public struct ResponseMarkdownRenderer {
             break
         }
         return style
+    }
+
+    private func extractMathSpans(from source: String) -> MathExtraction {
+        var spans: [MathSpan] = []
+        var working = source as NSString
+
+        func replaceMatches(
+            _ regex: NSRegularExpression,
+            displayMode: Bool,
+            accept: (String) -> Bool = { _ in true }
+        ) {
+            let matches = regex.matches(
+                in: working as String,
+                range: NSRange(location: 0, length: working.length))
+            guard !matches.isEmpty else { return }
+
+            var result = ""
+            var lastEnd = 0
+            for match in matches {
+                let contentRange = match.range(at: 1)
+                guard contentRange.location != NSNotFound else { continue }
+                let content = working.substring(with: contentRange)
+                guard accept(content) else { continue }
+
+                result += working.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+                result += Self.mathPlaceholder
+                spans.append(MathSpan(latex: content, displayMode: displayMode))
+                lastEnd = match.range.location + match.range.length
+            }
+            result += working.substring(from: lastEnd)
+            working = result as NSString
+        }
+
+        replaceMatches(Self.displayMathPattern, displayMode: true)
+        replaceMatches(Self.inlineMathPattern, displayMode: false, accept: looksLikeMath)
+
+        return MathExtraction(maskedSource: working as String, spans: spans)
+    }
+
+    private func looksLikeMath(_ content: String) -> Bool {
+        let mathIndicators = CharacterSet(charactersIn: #"\^_{}=<>+"#)
+        if content.rangeOfCharacter(from: mathIndicators) != nil { return true }
+        if content.contains(" ") { return false }
+        return content.rangeOfCharacter(from: .letters) != nil
+    }
+
+    private func substituteMathPlaceholders(
+        in output: NSMutableAttributedString,
+        spans: [MathSpan]
+    ) {
+        var searchStart = 0
+        for span in spans {
+            let searchRange = NSRange(location: searchStart, length: output.length - searchStart)
+            let found = (output.string as NSString).range(
+                of: Self.mathPlaceholder, options: [], range: searchRange)
+            guard found.location != NSNotFound else { break }
+
+            let replacement = renderMathAttachment(latex: span.latex, displayMode: span.displayMode)
+            output.replaceCharacters(in: found, with: replacement)
+            searchStart = found.location + replacement.length
+        }
+    }
+
+    private func renderMathAttachment(latex: String, displayMode: Bool) -> NSAttributedString {
+        let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawFallback = displayMode ? "$$\(trimmed)$$" : "$\(trimmed)$"
+        guard !trimmed.isEmpty else {
+            return NSAttributedString(string: rawFallback, attributes: baseAttributes())
+        }
+
+        var mathImage = MathImage(
+            latex: trimmed,
+            fontSize: NSFont.systemFontSize + (displayMode ? 3 : 0),
+            textColor: NSColor.labelColor,
+            labelMode: displayMode ? .display : .text,
+            textAlignment: .center)
+        let (error, image, layout) = mathImage.asImage()
+        guard error == nil, let image, let layout, image.size.width > 0, image.size.height > 0 else {
+            return NSAttributedString(
+                string: rawFallback,
+                attributes: attributes(inlineIntent: .code, link: nil, block: .paragraph))
+        }
+
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        attachment.bounds = CGRect(x: 0, y: -layout.descent, width: image.size.width, height: image.size.height)
+        return NSAttributedString(attachment: attachment)
     }
 
     private func fallback(_ source: String) -> Result {

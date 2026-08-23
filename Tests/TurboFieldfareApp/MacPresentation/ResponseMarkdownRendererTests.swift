@@ -83,13 +83,59 @@ import Testing
         }
     }
 
-    @Test func latexRemainsReadableText() {
+    @Test func inlineLatexRendersAsMathAttachment() {
         let source = "Cosine is $\\frac{u \\cdot v}{||u|| ||v||}$."
         let result = ResponseMarkdownRenderer().render(source)
 
         #expect(!result.usedFallback)
-        #expect(result.attributedString.string.contains("\\frac"))
-        #expect(result.attributedString.string.contains("\\cdot"))
+        #expect(!result.attributedString.string.contains("\\frac"))
+        #expect(!result.attributedString.string.contains("\\cdot"))
+
+        let attachmentRange = (result.attributedString.string as NSString)
+            .range(of: "\u{FFFC}")
+        #expect(attachmentRange.location != NSNotFound)
+        let attachment = result.attributedString.attribute(
+            .attachment, at: attachmentRange.location, effectiveRange: nil) as? NSTextAttachment
+        #expect(attachment?.image != nil)
+    }
+
+    @Test func displayLatexRendersAsMathAttachment() {
+        let source = "The integral is $$\\int_0^1 x^2\\,dx$$ over the unit interval."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(!result.attributedString.string.contains("\\int"))
+
+        let attachmentRange = (result.attributedString.string as NSString)
+            .range(of: "\u{FFFC}")
+        #expect(attachmentRange.location != NSNotFound)
+        let attachment = result.attributedString.attribute(
+            .attachment, at: attachmentRange.location, effectiveRange: nil) as? NSTextAttachment
+        #expect(attachment?.image != nil)
+    }
+
+    @Test func currencyLikeDollarSignsAreNotTreatedAsMath() {
+        let renderer = ResponseMarkdownRenderer()
+        let samples = [
+            "Prices ranged from $5 to $10 this week.",
+            "It costs $5 dollars today.",
+        ]
+
+        for source in samples {
+            let result = renderer.render(source)
+            #expect(!result.usedFallback)
+            #expect(result.attributedString.string == source)
+            #expect(!result.attributedString.string.contains("\u{FFFC}"))
+        }
+    }
+
+    @Test func malformedLatexFallsBackToRawDelimitedText() {
+        let source = "Broken math: $\\frac{1}{$ end."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(!result.attributedString.string.contains("\u{FFFC}"))
+        #expect(result.attributedString.string.contains("\\frac{1}{"))
     }
 
     @Test func boldOnlyModelHeadingStaysOnItsOwnLine() {
