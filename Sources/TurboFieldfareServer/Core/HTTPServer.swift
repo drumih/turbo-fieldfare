@@ -343,9 +343,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             ]],
             "usage": usageObject(completion.usage),
         ]
-        if diagnosticsEnabled,
-           let diagnostics = completion.qwenDecodeDiagnostics,
-           let diagnosticsObject = diagnosticsJSONValue(diagnostics) {
+          if diagnosticsEnabled,
+              let diagnosticsObject = diagnosticsJSONValue(
+                    decode: completion.qwenDecodeDiagnostics,
+                    prefill: completion.prefillWorkDiagnostics) {
             object["turbo_fieldfare_diagnostics"] = diagnosticsObject
         }
         if diagnosticsEnabled {
@@ -427,9 +428,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 "choices": [],
                 "usage": usageObject(completion.usage),
             ]
-            if diagnosticsEnabled,
-               let diagnostics = completion.qwenDecodeDiagnostics,
-               let diagnosticsObject = diagnosticsJSONValue(diagnostics) {
+                if diagnosticsEnabled,
+                    let diagnosticsObject = diagnosticsJSONValue(
+                         decode: completion.qwenDecodeDiagnostics,
+                         prefill: completion.prefillWorkDiagnostics) {
                 usageChunk["turbo_fieldfare_diagnostics"] = diagnosticsObject
             }
             if diagnosticsEnabled {
@@ -464,10 +466,39 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     private func diagnosticsJSONValue(
-        _ diagnostics: QwenDecodeDiagnosticsAggregate
+        decode: QwenDecodeDiagnosticsAggregate?,
+        prefill: PrefillWorkDiagnostics?
     ) -> Any? {
-        guard let data = try? JSONEncoder().encode(diagnostics) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data)
+        var object: [String: Any] = [:]
+        if let decode,
+           let data = try? JSONEncoder().encode(decode),
+           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            object = decoded
+        }
+        if let prefill {
+            let attributed = prefill.embeddingNanos
+                + prefill.mixerNanos
+                + prefill.moePrepareNanos
+                + prefill.expertFetchNanos
+                + prefill.routedMoENanos
+                + prefill.moeReduceNanos
+                + prefill.finalHeadNanos
+            object["prefill"] = [
+                "execution_path": prefill.executionPath.rawValue,
+                "scalar_forward_count": prefill.scalarForwardCount,
+                "chunk_pass_count": prefill.chunkPassCount,
+                "command_buffer_count": prefill.commandBufferCount,
+                "embedding_nanos": prefill.embeddingNanos,
+                "mixer_nanos": prefill.mixerNanos,
+                "moe_prepare_nanos": prefill.moePrepareNanos,
+                "expert_fetch_nanos": prefill.expertFetchNanos,
+                "routed_moe_nanos": prefill.routedMoENanos,
+                "moe_reduce_nanos": prefill.moeReduceNanos,
+                "final_head_nanos": prefill.finalHeadNanos,
+                "attributed_wall_nanos": attributed,
+            ]
+        }
+        return object.isEmpty ? nil : object
     }
 
     private func writeStreamChunk(_ context: ChannelHandlerContext,

@@ -14,19 +14,22 @@ public struct ServerCompletion: Equatable, Sendable {
     public let finishReason: String
     public let usage: OpenAIUsage
     public let qwenDecodeDiagnostics: QwenDecodeDiagnosticsAggregate?
+    public let prefillWorkDiagnostics: PrefillWorkDiagnostics?
 
     public init(content: String,
                 toolCalls: [ParsedToolCall],
                 finishReason: String,
                 usage: OpenAIUsage,
-            generatedTokenIDs: [Int32] = [],
-                qwenDecodeDiagnostics: QwenDecodeDiagnosticsAggregate? = nil) {
+                generatedTokenIDs: [Int32] = [],
+                qwenDecodeDiagnostics: QwenDecodeDiagnosticsAggregate? = nil,
+                prefillWorkDiagnostics: PrefillWorkDiagnostics? = nil) {
         self.content = content
         self.toolCalls = toolCalls
         self.generatedTokenIDs = generatedTokenIDs
         self.finishReason = finishReason
         self.usage = usage
         self.qwenDecodeDiagnostics = qwenDecodeDiagnostics
+        self.prefillWorkDiagnostics = prefillWorkDiagnostics
     }
 }
 
@@ -682,7 +685,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                                totalTokens: result.prefillTokens + result.newTokens,
                                cachedTokens: result.cachedPromptTokens),
             generatedTokenIDs: generatedTokenIDs,
-            qwenDecodeDiagnostics: result.qwenDecodeDiagnostics)
+            qwenDecodeDiagnostics: result.qwenDecodeDiagnostics,
+            prefillWorkDiagnostics: result.prefillWork)
     }
 
     private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {

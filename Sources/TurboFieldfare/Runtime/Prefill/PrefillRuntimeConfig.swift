@@ -144,15 +144,36 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
     public let scalarForwardCount: Int
     public let chunkPassCount: Int
     public let commandBufferCount: Int
+    public let embeddingNanos: UInt64
+    public let mixerNanos: UInt64
+    public let moePrepareNanos: UInt64
+    public let expertFetchNanos: UInt64
+    public let routedMoENanos: UInt64
+    public let moeReduceNanos: UInt64
+    public let finalHeadNanos: UInt64
 
     public init(executionPath: PrefillExecutionPath,
                 scalarForwardCount: Int,
                 chunkPassCount: Int,
-                commandBufferCount: Int) {
+                commandBufferCount: Int,
+                embeddingNanos: UInt64 = 0,
+                mixerNanos: UInt64 = 0,
+                moePrepareNanos: UInt64 = 0,
+                expertFetchNanos: UInt64 = 0,
+                routedMoENanos: UInt64 = 0,
+                moeReduceNanos: UInt64 = 0,
+                finalHeadNanos: UInt64 = 0) {
         self.executionPath = executionPath
         self.scalarForwardCount = scalarForwardCount
         self.chunkPassCount = chunkPassCount
         self.commandBufferCount = commandBufferCount
+        self.embeddingNanos = embeddingNanos
+        self.mixerNanos = mixerNanos
+        self.moePrepareNanos = moePrepareNanos
+        self.expertFetchNanos = expertFetchNanos
+        self.routedMoENanos = routedMoENanos
+        self.moeReduceNanos = moeReduceNanos
+        self.finalHeadNanos = finalHeadNanos
     }
 }
 
@@ -160,6 +181,13 @@ struct PrefillWorkCounter {
     private(set) var scalarForwardCount = 0
     private(set) var chunkPassCount = 0
     private(set) var commandBufferCount = 0
+    private(set) var embeddingNanos: UInt64 = 0
+    private(set) var mixerNanos: UInt64 = 0
+    private(set) var moePrepareNanos: UInt64 = 0
+    private(set) var expertFetchNanos: UInt64 = 0
+    private(set) var routedMoENanos: UInt64 = 0
+    private(set) var moeReduceNanos: UInt64 = 0
+    private(set) var finalHeadNanos: UInt64 = 0
 
     mutating func recordScalarForward() {
         scalarForwardCount += 1
@@ -174,10 +202,36 @@ struct PrefillWorkCounter {
         commandBufferCount += count
     }
 
+    mutating func recordStageTimings(
+        embedding: UInt64 = 0,
+        mixer: UInt64 = 0,
+        moePrepare: UInt64 = 0,
+        expertFetch: UInt64 = 0,
+        routedMoE: UInt64 = 0,
+        moeReduce: UInt64 = 0,
+        finalHead: UInt64 = 0
+    ) {
+        embeddingNanos += embedding
+        mixerNanos += mixer
+        moePrepareNanos += moePrepare
+        expertFetchNanos += expertFetch
+        routedMoENanos += routedMoE
+        moeReduceNanos += moeReduce
+        finalHeadNanos += finalHead
+    }
+
     mutating func merge(_ diagnostics: PrefillWorkDiagnostics) {
         scalarForwardCount += diagnostics.scalarForwardCount
         chunkPassCount += diagnostics.chunkPassCount
         commandBufferCount += diagnostics.commandBufferCount
+        recordStageTimings(
+            embedding: diagnostics.embeddingNanos,
+            mixer: diagnostics.mixerNanos,
+            moePrepare: diagnostics.moePrepareNanos,
+            expertFetch: diagnostics.expertFetchNanos,
+            routedMoE: diagnostics.routedMoENanos,
+            moeReduce: diagnostics.moeReduceNanos,
+            finalHead: diagnostics.finalHeadNanos)
     }
 
     var diagnostics: PrefillWorkDiagnostics? {
@@ -193,7 +247,14 @@ struct PrefillWorkCounter {
         return PrefillWorkDiagnostics(executionPath: path,
                                       scalarForwardCount: scalarForwardCount,
                                       chunkPassCount: chunkPassCount,
-                                      commandBufferCount: commandBufferCount)
+                                      commandBufferCount: commandBufferCount,
+                                      embeddingNanos: embeddingNanos,
+                                      mixerNanos: mixerNanos,
+                                      moePrepareNanos: moePrepareNanos,
+                                      expertFetchNanos: expertFetchNanos,
+                                      routedMoENanos: routedMoENanos,
+                                      moeReduceNanos: moeReduceNanos,
+                                      finalHeadNanos: finalHeadNanos)
     }
 }
 

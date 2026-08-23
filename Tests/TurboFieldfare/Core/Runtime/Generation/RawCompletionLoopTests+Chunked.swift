@@ -42,7 +42,14 @@ extension RawCompletionLoopTests {
         let work = PrefillWorkDiagnostics(executionPath: .scalarFallback,
                           scalarForwardCount: promptIDs.count,
                           chunkPassCount: 0,
-                          commandBufferCount: promptIDs.count * 4)
+                          commandBufferCount: promptIDs.count * 4,
+                          embeddingNanos: 1,
+                          mixerNanos: 2,
+                          moePrepareNanos: 3,
+                          expertFetchNanos: 4,
+                          routedMoENanos: 5,
+                          moeReduceNanos: 6,
+                          finalHeadNanos: 7)
         let producer = ChunkedTestProducer(vocabSize: tokenizer.vocabSize,
                            firstToken: tokenA,
                            work: work)

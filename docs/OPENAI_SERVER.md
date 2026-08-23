@@ -72,11 +72,29 @@ requires `--prefill off`.
 The settings are fixed for the life of the process. Restart the server to
 change them.
 
-Pass `--diagnostics` to include the versioned Qwen decode diagnostics object in
-responses. For non-streaming requests it is a top-level
-`turbo_fieldfare_diagnostics` field. For streaming requests it is included only
-in the final usage chunk; diagnostics also cause that usage chunk to be sent
-when `include_usage` was not requested.
+Pass `--diagnostics` to include Qwen decode and prefill diagnostics in responses.
+For non-streaming requests, `turbo_fieldfare_diagnostics` is a top-level field.
+For streaming requests, it is included only in the final usage chunk;
+diagnostics also cause that usage chunk to be sent when `include_usage` was not
+requested. Responses omit the field when diagnostics are disabled.
+
+Decode fields remain in the versioned top-level diagnostics object. Chunked
+Qwen prefill adds an optional nested `prefill` object:
+
+| Field | Meaning |
+| --- | --- |
+| `execution_path` | Prefill implementation used: `scalarFallback`, `chunked`, or `mixed` |
+| `scalar_forward_count` | Scalar forward passes performed during prefill |
+| `chunk_pass_count` | Chunked prefill passes performed |
+| `command_buffer_count` | Metal command buffers submitted during prefill |
+| `embedding_nanos` | Token embedding wall time |
+| `mixer_nanos` | RMSNorm, attention or DeltaNet, residual, and post-attention norm wall time |
+| `moe_prepare_nanos` | Shared expert, router, route grouping, and metadata preparation wall time |
+| `expert_fetch_nanos` | Routed expert binding and fetch wall time |
+| `routed_moe_nanos` | Streamed routed-expert execution wall time |
+| `moe_reduce_nanos` | Routed reduction, shared gate combination, and residual wall time |
+| `final_head_nanos` | Final normalization and language-model head wall time |
+| `attributed_wall_nanos` | Sum of the seven stage timing fields |
 
 ## Connect a client
 
