@@ -50,7 +50,24 @@ public final class MPPPrefillInt4QMM {
         var apple10PSO: MTLComputePipelineState?
         var apple10BF16PSO: MTLComputePipelineState?
         var unavailableReason: String?
+        let apple10FunctionName: String? = switch variant {
+        case .control:
+            nil
+        case .apple10V1:
+            "mpp_prefill_affine_threadgroup_f16_apple10_v1"
+        case .apple10BF16:
+            "mpp_prefill_affine_threadgroup_bf16_apple10_v1"
+        }
         do {
+            if let apple10FunctionName {
+                guard context.device.supportsFamily(.apple10) else {
+                    throw NSError(
+                        domain: "MPPPrefillInt4QMM",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "\(apple10FunctionName) needs an Apple10 GPU family device"])
+                }
+            }
             let library = try MetalContext.privateLibrary(device: context.device, module: "tensorops")
             guard let controlFunction = library.makeFunction(
                 name: "mpp_prefill_affine_threadgroup_f16") else {
@@ -62,27 +79,18 @@ public final class MPPPrefillInt4QMM {
             }
             controlPSO = try context.device.makeComputePipelineState(
                 function: controlFunction)
-            if variant == .apple10V1 || variant == .apple10BF16 {
+            if let apple10FunctionName {
                 // Name the function this variant actually needs, and say when
                 // the device is the reason. The BF16 (vision projector) variant
                 // used to report the f16 symbol as missing, blaming a symbol
                 // that is present and hiding the real cause.
-                let name = variant == .apple10BF16
-                    ? "mpp_prefill_affine_threadgroup_bf16_apple10_v1"
-                    : "mpp_prefill_affine_threadgroup_f16_apple10_v1"
-                guard context.device.supportsFamily(.apple10) else {
+                guard let apple10Function = library.makeFunction(
+                    name: apple10FunctionName) else {
                     throw NSError(
                         domain: "MPPPrefillInt4QMM",
                         code: 2,
                         userInfo: [NSLocalizedDescriptionKey:
-                            "\(name) needs an Apple10 GPU family device"])
-                }
-                guard let apple10Function = library.makeFunction(name: name) else {
-                    throw NSError(
-                        domain: "MPPPrefillInt4QMM",
-                        code: 2,
-                        userInfo: [NSLocalizedDescriptionKey:
-                            "\(name) symbol unavailable"])
+                            "\(apple10FunctionName) symbol unavailable"])
                 }
                 if variant == .apple10BF16 {
                     apple10BF16PSO = try context.device.makeComputePipelineState(
