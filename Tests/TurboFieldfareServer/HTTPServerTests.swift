@@ -8,13 +8,16 @@ import Testing
 private actor ScriptedServerBackend: ServerInferenceBackend {
     let delayNanoseconds: UInt64
     let qwenDecodeDiagnostics: QwenDecodeDiagnosticsAggregate?
+    let prefillWorkDiagnostics: PrefillWorkDiagnostics?
     let generatedTokenIDs: [Int32]
 
     init(delayNanoseconds: UInt64 = 0,
          qwenDecodeDiagnostics: QwenDecodeDiagnosticsAggregate? = nil,
+         prefillWorkDiagnostics: PrefillWorkDiagnostics? = nil,
          generatedTokenIDs: [Int32] = []) {
         self.delayNanoseconds = delayNanoseconds
         self.qwenDecodeDiagnostics = qwenDecodeDiagnostics
+        self.prefillWorkDiagnostics = prefillWorkDiagnostics
         self.generatedTokenIDs = generatedTokenIDs
     }
 
@@ -32,7 +35,8 @@ private actor ScriptedServerBackend: ServerInferenceBackend {
             finishReason: "stop",
             usage: OpenAIUsage(promptTokens: 3, completionTokens: 1, totalTokens: 4),
             generatedTokenIDs: generatedTokenIDs,
-            qwenDecodeDiagnostics: qwenDecodeDiagnostics)
+            qwenDecodeDiagnostics: qwenDecodeDiagnostics,
+            prefillWorkDiagnostics: prefillWorkDiagnostics)
     }
 }
 
@@ -345,6 +349,18 @@ struct HTTPServerTests {
             modelID: "test-model",
             queueLimit: 1,
             backend: ScriptedServerBackend(qwenDecodeDiagnostics: diagnostics,
+                                           prefillWorkDiagnostics: PrefillWorkDiagnostics(
+                                               executionPath: .chunked,
+                                               scalarForwardCount: 0,
+                                               chunkPassCount: 65,
+                                               commandBufferCount: 99,
+                                               embeddingNanos: 1,
+                                               mixerNanos: 2,
+                                               moePrepareNanos: 3,
+                                               expertFetchNanos: 4,
+                                               routedMoENanos: 5,
+                                               moeReduceNanos: 6,
+                                               finalHeadNanos: 7),
                                            generatedTokenIDs: [11, 22, 33]),
             diagnosticsEnabled: true)
         let channel = try await server.start(port: 0)
@@ -364,6 +380,11 @@ struct HTTPServerTests {
         #expect(exported["expert_read_count"] as? Int == 1)
         #expect(exported["expert_read_nanos"] as? Int == 7)
         #expect(exported["expert_read_max_nanos"] as? Int == 7)
+        let prefill = try #require(exported["prefill"] as? [String: Any])
+        #expect(prefill["execution_path"] as? String == "chunked")
+        #expect(prefill["command_buffer_count"] as? Int == 99)
+        #expect(prefill["expert_fetch_nanos"] as? Int == 4)
+        #expect(prefill["attributed_wall_nanos"] as? Int == 28)
         #expect(object["turbo_fieldfare_token_ids"] as? [Int] == [11, 22, 33])
 
         try await server.shutdown()
@@ -395,7 +416,14 @@ struct HTTPServerTests {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
             queueLimit: 1,
-            backend: ScriptedServerBackend(qwenDecodeDiagnostics: diagnostics),
+            backend: ScriptedServerBackend(
+                qwenDecodeDiagnostics: diagnostics,
+                prefillWorkDiagnostics: PrefillWorkDiagnostics(
+                    executionPath: .chunked,
+                    scalarForwardCount: 0,
+                    chunkPassCount: 2,
+                    commandBufferCount: 3,
+                    mixerNanos: 4)),
             diagnosticsEnabled: true)
         let channel = try await server.start(port: 0)
         let port = try #require(channel.localAddress?.port)
@@ -410,6 +438,7 @@ struct HTTPServerTests {
         #expect(text.components(separatedBy: "turbo_fieldfare_diagnostics").count == 2)
         let diagnosticsRange = try #require(text.range(of: "turbo_fieldfare_diagnostics"))
         #expect(text[diagnosticsRange.lowerBound...].contains("\"decode_step_count\":0"))
+        #expect(text[diagnosticsRange.lowerBound...].contains("\"mixer_nanos\":4"))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
 
         try await server.shutdown()

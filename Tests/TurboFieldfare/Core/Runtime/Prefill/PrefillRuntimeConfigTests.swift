@@ -81,16 +81,37 @@ import Testing
         counter.merge(PrefillWorkDiagnostics(executionPath: .chunked,
                                               scalarForwardCount: 0,
                                               chunkPassCount: 42,
-                                              commandBufferCount: 160))
+                                              commandBufferCount: 160,
+                                              embeddingNanos: 1,
+                                              mixerNanos: 2,
+                                              moePrepareNanos: 3,
+                                              expertFetchNanos: 4,
+                                              routedMoENanos: 5,
+                                              moeReduceNanos: 6,
+                                              finalHeadNanos: 7))
         counter.merge(PrefillWorkDiagnostics(executionPath: .chunked,
                                               scalarForwardCount: 0,
                                               chunkPassCount: 21,
-                                              commandBufferCount: 80))
+                                              commandBufferCount: 80,
+                                              embeddingNanos: 10,
+                                              mixerNanos: 20,
+                                              moePrepareNanos: 30,
+                                              expertFetchNanos: 40,
+                                              routedMoENanos: 50,
+                                              moeReduceNanos: 60,
+                                              finalHeadNanos: 70))
 
         let diagnostics = try #require(counter.diagnostics)
         #expect(diagnostics.executionPath == .chunked)
         #expect(diagnostics.scalarForwardCount == 0)
         #expect(diagnostics.chunkPassCount == 63)
         #expect(diagnostics.commandBufferCount == 240)
+        #expect(diagnostics.embeddingNanos == 11)
+        #expect(diagnostics.mixerNanos == 22)
+        #expect(diagnostics.moePrepareNanos == 33)
+        #expect(diagnostics.expertFetchNanos == 44)
+        #expect(diagnostics.routedMoENanos == 55)
+        #expect(diagnostics.moeReduceNanos == 66)
+        #expect(diagnostics.finalHeadNanos == 77)
     }
 }
