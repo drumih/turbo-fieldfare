@@ -135,7 +135,8 @@ extension Args {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            forceLogitsHead: forceLogitsHead)
+            forceLogitsHead: forceLogitsHead,
+            qwenGPUStageTimingEnabled: diagnosticsJSONPath != nil)
     }
 
     public static func parse(_ argv: [String]) throws -> Args {

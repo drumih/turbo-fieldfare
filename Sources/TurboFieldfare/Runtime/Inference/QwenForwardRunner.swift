@@ -34,6 +34,109 @@ private struct QwenPrefillStageTimings {
     }
 }
 
+enum QwenGPUStageMarker: Int, CaseIterable {
+    case beforeMixer
+    case beforeSharedExpert
+    case beforeRouter
+    case afterRouter
+}
+
+enum QwenRoutedGPUStageMarker: Int, CaseIterable {
+    case beforePhase1
+    case beforePhase2
+    case beforeCombine
+    case afterCombine
+}
+
+final class QwenGPUStageTimer {
+    private let sampleBuffer: MTLCounterSampleBuffer
+    private let markerBuffer: MTLBuffer
+
+    init?(device: MTLDevice) {
+        guard device.supportsCounterSampling(.atStageBoundary),
+              let timestampSet = device.counterSets?.first(where: { counterSet in
+                  counterSet.counters.contains {
+                      $0.name == MTLCommonCounter.timestamp.rawValue
+                  }
+              }) else {
+            return nil
+        }
+        let descriptor = MTLCounterSampleBufferDescriptor()
+        descriptor.counterSet = timestampSet
+        descriptor.label = "Qwen decode GPU stage timestamps"
+        descriptor.storageMode = .shared
+        descriptor.sampleCount = QwenGPUStageTimings.sampleCount
+        guard let sampleBuffer = try? device.makeCounterSampleBuffer(
+                  descriptor: descriptor),
+              let markerBuffer = device.makeBuffer(
+                  length: MemoryLayout<UInt32>.stride,
+                  options: .storageModeShared) else {
+            return nil
+        }
+        self.sampleBuffer = sampleBuffer
+        self.markerBuffer = markerBuffer
+    }
+
+    func encodeMarker(_ marker: QwenGPUStageMarker,
+                      commandBuffer: MTLCommandBuffer) -> Bool {
+        encodeMarker(index: marker.rawValue, commandBuffer: commandBuffer)
+    }
+
+    func encodeMarker(_ marker: QwenRoutedGPUStageMarker,
+                      commandBuffer: MTLCommandBuffer) -> Bool {
+        encodeMarker(index: marker.rawValue, commandBuffer: commandBuffer)
+    }
+
+    private func encodeMarker(index: Int,
+                              commandBuffer: MTLCommandBuffer) -> Bool {
+        let descriptor = MTLBlitPassDescriptor()
+        guard let attachment = descriptor.sampleBufferAttachments[0] else {
+            return false
+        }
+        attachment.sampleBuffer = sampleBuffer
+        attachment.startOfEncoderSampleIndex = index * 2
+        attachment.endOfEncoderSampleIndex = index * 2 + 1
+        guard let encoder = commandBuffer.makeBlitCommandEncoder(
+                  descriptor: descriptor) else {
+            return false
+        }
+        encoder.fill(buffer: markerBuffer,
+                     range: 0..<markerBuffer.length,
+                     value: UInt8(index))
+        encoder.endEncoding()
+        return true
+    }
+
+    func resolve() -> QwenGPUStageTimings? {
+        resolvedTimestamps().flatMap(QwenGPUStageTimings.init(timestamps:))
+    }
+
+    func resolveRouted() -> QwenRoutedGPUStageTimings? {
+        resolvedTimestamps().flatMap(QwenRoutedGPUStageTimings.init(timestamps:))
+    }
+
+    private func resolvedTimestamps() -> [UInt64]? {
+        do {
+            guard let data = try sampleBuffer.resolveCounterRange(
+                      0..<QwenGPUStageTimings.sampleCount) else {
+                return nil
+            }
+            let timestamps: [UInt64] = data.withUnsafeBytes { bytes in
+                bytes.bindMemory(to: MTLCounterResultTimestamp.self).map(\.timestamp)
+            }
+            return timestamps
+        } catch {
+            return nil
+        }
+    }
+}
+
+private struct QwenCommandBufferTimings {
+    let encodingNanos: UInt64
+    let commitNanos: UInt64
+    let waitNanos: UInt64
+}
+
 private struct QwenDecodeDiagnosticsAccumulator {
     var wallNanos: UInt64 = 0
     var embeddingNanos: UInt64 = 0
@@ -46,10 +149,24 @@ private struct QwenDecodeDiagnosticsAccumulator {
     var currentLayerExpertReadMaxNanos: UInt64 = 0
     var currentLayerRoutedExperts: [Int] = []
     var currentLayerRoutingWeights: [Float] = []
+    var currentLayerGPUStageTimings: QwenGPUStageTimings?
+    var currentLayerRoutedGPUStageTimings: QwenRoutedGPUStageTimings?
     var mixerNanos: UInt64 = 0
     var routerNanos: UInt64 = 0
     var routePlanningNanos: UInt64 = 0
     var sharedExpertNanos: UInt64 = 0
+    var routedSetupNanos: UInt64 = 0
+    var routedCommandBufferEncodingNanos: UInt64 = 0
+    var routedCommandBufferCommitNanos: UInt64 = 0
+    var routedCommandBufferWaitNanos: UInt64 = 0
+    var gpuStageTimingSampleCount = 0
+    var gpuMixerNanos: UInt64 = 0
+    var gpuSharedExpertNanos: UInt64 = 0
+    var gpuRouterNanos: UInt64 = 0
+    var routedGPUStageTimingSampleCount = 0
+    var gpuRoutedPhase1Nanos: UInt64 = 0
+    var gpuRoutedPhase2Nanos: UInt64 = 0
+    var gpuRoutedCombineNanos: UInt64 = 0
     var routedExpertCombineNanos: UInt64 = 0
     var layerCount = 0
     var fullAttentionLayerCount = 0
@@ -82,6 +199,18 @@ private struct QwenDecodeDiagnosticsAccumulator {
             routerNanos: routerNanos,
             routePlanningNanos: routePlanningNanos,
             sharedExpertNanos: sharedExpertNanos,
+            routedSetupNanos: routedSetupNanos,
+            routedCommandBufferEncodingNanos: routedCommandBufferEncodingNanos,
+            routedCommandBufferCommitNanos: routedCommandBufferCommitNanos,
+            routedCommandBufferWaitNanos: routedCommandBufferWaitNanos,
+            gpuStageTimingSampleCount: gpuStageTimingSampleCount,
+            gpuMixerNanos: gpuMixerNanos,
+            gpuSharedExpertNanos: gpuSharedExpertNanos,
+            gpuRouterNanos: gpuRouterNanos,
+            routedGPUStageTimingSampleCount: routedGPUStageTimingSampleCount,
+            gpuRoutedPhase1Nanos: gpuRoutedPhase1Nanos,
+            gpuRoutedPhase2Nanos: gpuRoutedPhase2Nanos,
+            gpuRoutedCombineNanos: gpuRoutedCombineNanos,
             routedExpertCombineNanos: routedExpertCombineNanos,
             expertReadCount: expertReadCount,
             expertReadNanos: expertReadNanos,
@@ -114,6 +243,8 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
     private let deltaStates: QwenGatedDeltaNetStateManager
     private let fullCaches: [QwenFullAttentionKVCache?]
     private let prefillScratchCache = QwenPrefillScratchCache()
+    private let detailedDecodeTimingsEnabled: Bool
+    private let gpuStageTimer: QwenGPUStageTimer?
 
     private let hidden: MTLBuffer
     private let normed: MTLBuffer
@@ -175,6 +306,10 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         self.context = context
         self.config = model.config
         self.maxContext = maxContext
+        self.detailedDecodeTimingsEnabled = runtimeConfiguration.qwenGPUStageTimingEnabled
+        self.gpuStageTimer = runtimeConfiguration.qwenGPUStageTimingEnabled
+            ? QwenGPUStageTimer(device: context.device)
+            : nil
         self.embed = try EmbedLookupInt4(context: context)
         self.rms = try RMSNorm(context: context)
         self.deltaNet = try QwenGatedDeltaNet(context: context)
@@ -561,16 +696,33 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
     private func finishCurrentToken(into logits: MTLBuffer,
                                     emitHead: Bool) async throws {
 
+        // Schema-5 markers require separate front and routed command buffers.
+        if !detailedDecodeTimingsEnabled {
+            try await finishCurrentTokenChained(into: logits, emitHead: emitHead)
+            position += 1
+            return
+        }
+
         let layerStart = nowNanos()
         for layer in 0..<config.numLayers {
             try Task.checkCancellation()
             let layerDecodeStart = nowNanos()
             let expertFetchStart = activeDecodeDiagnostics?.expertFetchNanos ?? 0
+            let routePlanningStart = activeDecodeDiagnostics?.routePlanningNanos ?? 0
+            let routedSetupStart = activeDecodeDiagnostics?.routedSetupNanos ?? 0
+            let routedCommandBufferEncodingStart =
+                activeDecodeDiagnostics?.routedCommandBufferEncodingNanos ?? 0
+            let routedCommandBufferCommitStart =
+                activeDecodeDiagnostics?.routedCommandBufferCommitNanos ?? 0
+            let routedCommandBufferWaitStart =
+                activeDecodeDiagnostics?.routedCommandBufferWaitNanos ?? 0
             let expertReadCountStart = activeDecodeDiagnostics?.expertReadCount ?? 0
             let expertReadNanosStart = activeDecodeDiagnostics?.expertReadNanos ?? 0
             activeDecodeDiagnostics?.currentLayerExpertReadMaxNanos = 0
             activeDecodeDiagnostics?.currentLayerRoutedExperts = []
             activeDecodeDiagnostics?.currentLayerRoutingWeights = []
+            activeDecodeDiagnostics?.currentLayerGPUStageTimings = nil
+            activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings = nil
             activeDecodeDiagnostics?.layerCount += 1
             let isFullAttention = config.fullAttentionLayerMask[layer] != 0
             if isFullAttention {
@@ -586,11 +738,40 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                 isFullAttention: isFullAttention,
                 elapsedNanos: nowNanos() - layerDecodeStart,
                 expertFetchNanos: layerExpertFetchNanos,
+                routePlanningNanos: (activeDecodeDiagnostics?.routePlanningNanos ?? 0)
+                    - routePlanningStart,
+                routedSetupNanos: (activeDecodeDiagnostics?.routedSetupNanos ?? 0)
+                    - routedSetupStart,
+                routedCommandBufferEncodingNanos:
+                    (activeDecodeDiagnostics?.routedCommandBufferEncodingNanos ?? 0)
+                    - routedCommandBufferEncodingStart,
+                routedCommandBufferCommitNanos:
+                    (activeDecodeDiagnostics?.routedCommandBufferCommitNanos ?? 0)
+                    - routedCommandBufferCommitStart,
+                routedCommandBufferWaitNanos:
+                    (activeDecodeDiagnostics?.routedCommandBufferWaitNanos ?? 0)
+                    - routedCommandBufferWaitStart,
                 expertReadCount: (activeDecodeDiagnostics?.expertReadCount ?? 0)
                     - expertReadCountStart,
                 expertReadNanos: (activeDecodeDiagnostics?.expertReadNanos ?? 0)
                     - expertReadNanosStart,
                 expertReadMaxNanos: activeDecodeDiagnostics?.currentLayerExpertReadMaxNanos ?? 0,
+                gpuStageTimingSampled:
+                    activeDecodeDiagnostics?.currentLayerGPUStageTimings != nil,
+                gpuMixerNanos:
+                    activeDecodeDiagnostics?.currentLayerGPUStageTimings?.mixerNanos ?? 0,
+                gpuSharedExpertNanos:
+                    activeDecodeDiagnostics?.currentLayerGPUStageTimings?.sharedExpertNanos ?? 0,
+                gpuRouterNanos:
+                    activeDecodeDiagnostics?.currentLayerGPUStageTimings?.routerNanos ?? 0,
+                routedGPUStageTimingSampled:
+                    activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings != nil,
+                gpuRoutedPhase1Nanos:
+                    activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings?.phase1Nanos ?? 0,
+                gpuRoutedPhase2Nanos:
+                    activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings?.phase2Nanos ?? 0,
+                gpuRoutedCombineNanos:
+                    activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings?.combineNanos ?? 0,
                 routedExperts: activeDecodeDiagnostics?.currentLayerRoutedExperts ?? [],
                 routingWeights: activeDecodeDiagnostics?.currentLayerRoutingWeights ?? [])
             activeDecodeDiagnostics?.layers.append(layerDiagnostics)
@@ -599,65 +780,68 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
 
         if emitHead {
             let logitsStart = nowNanos()
-            let finalNorm = model.finalNorm
-            let lmHead = model.lmHead
             try runSync { commandBuffer in
-                if useFusedGreedyHead {
-                    fusionHead.encodeGreedyDecode(
-                        commandBuffer: commandBuffer,
-                        hidden: hidden,
-                        normWeight: finalNorm.buffer,
-                        normOffset: Int(finalNorm.offset),
-                        weights: lmHead.buffer,
-                        weightsOffset: Int(lmHead.offset),
-                        scales: lmHead.buffer,
-                        scalesOffset: Int(lmHead.scaleOffset),
-                        biases: lmHead.buffer,
-                        biasesOffset: Int(lmHead.biasOffset),
-                        outToken: greedyTokenBuffer,
-                        d: UInt32(config.hiddenSize),
-                        vocab: UInt32(config.vocabSize))
-                } else {
-                    prefillFinalRowHead.encodeLogits(
-                        commandBuffer: commandBuffer,
-                        hiddenBlock: hidden,
-                        row: 0,
-                        rowStrideElements: config.hiddenSize,
-                        normWeight: finalNorm.buffer,
-                        normWeightOffset: Int(finalNorm.offset),
-                        weights: lmHead.buffer,
-                        weightsOffset: Int(lmHead.offset),
-                        scales: lmHead.buffer,
-                        scalesOffset: Int(lmHead.scaleOffset),
-                        biases: lmHead.buffer,
-                        biasesOffset: Int(lmHead.biasOffset),
-                        logits: logits,
-                        d: UInt32(config.hiddenSize),
-                        vocab: UInt32(config.vocabSize),
-                        rmsEps: 1e-6)
-                }
+                encodeFinalHead(commandBuffer: commandBuffer, logits: logits)
             }
-            if useFusedGreedyHead {
-                lastGreedyToken = greedyTokenBuffer.contents().load(as: UInt32.self)
-            } else {
-                let values = logits.contents().assumingMemoryBound(to: Float16.self)
-                var bestIndex = 0
-                var bestValue = values[0]
-                for index in 1..<config.vocabSize where values[index] > bestValue {
-                    bestIndex = index
-                    bestValue = values[index]
-                }
-                lastGreedyToken = UInt32(bestIndex)
-            }
+            captureFinalHeadResult(logits: logits)
             activeDecodeDiagnostics?.logitsNanos = nowNanos() - logitsStart
         }
         position += 1
+    }
+
+    private func finishCurrentTokenChained(into logits: MTLBuffer,
+                                           emitHead: Bool) async throws {
+        let layerStart = nowNanos()
+        var moeWeights = try encodeLayerFront(layer: 0)
+
+        for layer in 0..<config.numLayers {
+            try Task.checkCancellation()
+            activeDecodeDiagnostics?.layerCount += 1
+            if config.fullAttentionLayerMask[layer] != 0 {
+                activeDecodeDiagnostics?.fullAttentionLayerCount += 1
+            } else {
+                activeDecodeDiagnostics?.deltaNetLayerCount += 1
+            }
+
+            let nextLayer = layer + 1
+            let nextMoEWeights = nextLayer < config.numLayers
+                ? try model.qwenMoEWeights(layer: nextLayer)
+                : nil
+            try await encodeRoutedMoE(
+                layer: layer,
+                moeWeights: moeWeights
+            ) { commandBuffer in
+                if let nextMoEWeights {
+                    try self.encodeLayerFrontUnmeasured(
+                        commandBuffer: commandBuffer,
+                        layer: nextLayer,
+                        moeWeights: nextMoEWeights)
+                } else if emitHead {
+                    self.encodeFinalHead(commandBuffer: commandBuffer, logits: logits)
+                }
+            }
+            if let nextMoEWeights {
+                moeWeights = nextMoEWeights
+            }
+        }
+        activeDecodeDiagnostics?.layerNanos = nowNanos() - layerStart
+
+        if emitHead {
+            let logitsStart = nowNanos()
+            captureFinalHeadResult(logits: logits)
+            activeDecodeDiagnostics?.logitsNanos = nowNanos() - logitsStart
+        }
     }
 
     public var usesFusedGreedyHead: Bool { useFusedGreedyHead }
     public private(set) var lastGreedyToken: UInt32 = 0
 
     private func encodeLayer(layer: Int) async throws {
+        let moeWeights = try encodeLayerFront(layer: layer)
+        try await encodeRoutedMoE(layer: layer, moeWeights: moeWeights)
+    }
+
+    private func encodeLayerFront(layer: Int) throws -> QwenMoEWeights {
         let inputNorm = try model.inputNorm(layer: layer)
         let postAttentionNorm = try model.postAttnNorm(layer: layer)
         let moeWeights = try model.qwenMoEWeights(layer: layer)
@@ -667,51 +851,29 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         let mixerStart = nowNanos()
         var sharedExpertStart = mixerStart
         var routerStart = mixerStart
+        var gpuMarkersComplete = gpuStageTimer != nil
 
         try runSync { commandBuffer in
-            rms.encodeBF16W(commandBuffer: commandBuffer,
-                            x: hidden,
-                            weight: inputNorm.buffer,
-                            weightOffset: Int(inputNorm.offset),
-                            out: normed,
-                            d: UInt32(config.hiddenSize),
-                            eps: 1e-6)
-            if isFull {
-                try encodeFullAttention(commandBuffer: commandBuffer, layer: layer)
-            } else {
-                try encodeDeltaNet(commandBuffer: commandBuffer, layer: layer)
+            if let gpuStageTimer {
+                gpuMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforeMixer, commandBuffer: commandBuffer) && gpuMarkersComplete
             }
-            deltaElementwise.encodeResidualAdd(commandBuffer: commandBuffer,
-                                               lhs: hidden,
-                                               rhs: mixerOutput,
-                                               output: hidden,
-                                               count: UInt32(config.hiddenSize))
-            rms.encodeBF16W(commandBuffer: commandBuffer,
-                            x: hidden,
-                            weight: postAttentionNorm.buffer,
-                            weightOffset: Int(postAttentionNorm.offset),
-                            out: normed,
-                            d: UInt32(config.hiddenSize),
-                            eps: 1e-6)
+            try encodeLayerMixer(commandBuffer: commandBuffer,
+                                 layer: layer,
+                                 inputNorm: inputNorm,
+                                 postAttentionNorm: postAttentionNorm,
+                                 isFull: isFull)
+            if let gpuStageTimer {
+                gpuMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforeSharedExpert, commandBuffer: commandBuffer) && gpuMarkersComplete
+            }
             sharedExpertStart = nowNanos()
-            let sharedGate = sharedProjection(moeWeights.sharedExpertGate,
-                                               rows: config.intermediateSize,
-                                               cols: config.hiddenSize)
-            let sharedUp = sharedProjection(moeWeights.sharedExpertUp,
-                                             rows: config.intermediateSize,
-                                             cols: config.hiddenSize)
-            let sharedDown = sharedProjection(moeWeights.sharedExpertDown,
-                                               rows: config.hiddenSize,
-                                               cols: config.intermediateSize)
-            try moe.encodeSharedExpert(commandBuffer: commandBuffer,
-                                       x: normed,
-                                       gate: sharedGate,
-                                       up: sharedUp,
-                                       down: sharedDown,
-                                       y: sharedOutput,
-                                       scratchGate: sharedGateScratch,
-                                       scratchUp: sharedUpScratch,
-                                       scratchAct: sharedActScratch)
+            try encodeSharedExpert(commandBuffer: commandBuffer,
+                                   moeWeights: moeWeights)
+            if let gpuStageTimer {
+                gpuMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforeRouter, commandBuffer: commandBuffer) && gpuMarkersComplete
+            }
             routerStart = nowNanos()
             moe.encodeRouter(commandBuffer: commandBuffer,
                              weights: router.buffer,
@@ -725,13 +887,160 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                              outWeights: routeWeights,
                              numExperts: UInt32(config.numExperts),
                              d: UInt32(config.hiddenSize))
+            if let gpuStageTimer {
+                gpuMarkersComplete = gpuStageTimer.encodeMarker(
+                    .afterRouter, commandBuffer: commandBuffer) && gpuMarkersComplete
+            }
         }
         let moeCompleted = nowNanos()
         activeDecodeDiagnostics?.mixerNanos += moeCompleted - mixerStart
         activeDecodeDiagnostics?.sharedExpertNanos += moeCompleted - sharedExpertStart
         activeDecodeDiagnostics?.routerNanos += moeCompleted - routerStart
+        if gpuMarkersComplete, let gpuTimings = gpuStageTimer?.resolve() {
+            activeDecodeDiagnostics?.gpuStageTimingSampleCount += 1
+            activeDecodeDiagnostics?.gpuMixerNanos += gpuTimings.mixerNanos
+            activeDecodeDiagnostics?.gpuSharedExpertNanos += gpuTimings.sharedExpertNanos
+            activeDecodeDiagnostics?.gpuRouterNanos += gpuTimings.routerNanos
+            activeDecodeDiagnostics?.currentLayerGPUStageTimings = gpuTimings
+        }
+        return moeWeights
+    }
 
-        try await encodeRoutedMoE(layer: layer, moeWeights: moeWeights)
+    private func encodeLayerFrontUnmeasured(commandBuffer: MTLCommandBuffer,
+                                            layer: Int,
+                                            moeWeights: QwenMoEWeights) throws {
+        let inputNorm = try model.inputNorm(layer: layer)
+        let postAttentionNorm = try model.postAttnNorm(layer: layer)
+        let isFull = config.fullAttentionLayerMask[layer] != 0
+        activeDecodeDiagnostics?.routerEvaluationCount += 1
+        try encodeLayerMixer(commandBuffer: commandBuffer,
+                             layer: layer,
+                             inputNorm: inputNorm,
+                             postAttentionNorm: postAttentionNorm,
+                             isFull: isFull)
+        try encodeSharedExpert(commandBuffer: commandBuffer,
+                               moeWeights: moeWeights)
+        let router = moeWeights.router
+        moe.encodeRouter(commandBuffer: commandBuffer,
+                         weights: router.buffer,
+                         weightsOffset: Int(router.offset),
+                         scales: router.buffer,
+                         scalesOffset: Int(router.scaleOffset),
+                         biases: router.buffer,
+                         biasesOffset: Int(router.biasOffset),
+                         hidden: normed,
+                         outIndices: routeIndices,
+                         outWeights: routeWeights,
+                         numExperts: UInt32(config.numExperts),
+                         d: UInt32(config.hiddenSize))
+    }
+
+    private func encodeLayerMixer(commandBuffer: MTLCommandBuffer,
+                                  layer: Int,
+                                  inputNorm: TensorView,
+                                  postAttentionNorm: TensorView,
+                                  isFull: Bool) throws {
+        rms.encodeBF16W(commandBuffer: commandBuffer,
+                        x: hidden,
+                        weight: inputNorm.buffer,
+                        weightOffset: Int(inputNorm.offset),
+                        out: normed,
+                        d: UInt32(config.hiddenSize),
+                        eps: 1e-6)
+        if isFull {
+            try encodeFullAttention(commandBuffer: commandBuffer, layer: layer)
+        } else {
+            try encodeDeltaNet(commandBuffer: commandBuffer, layer: layer)
+        }
+        deltaElementwise.encodeResidualAdd(commandBuffer: commandBuffer,
+                                           lhs: hidden,
+                                           rhs: mixerOutput,
+                                           output: hidden,
+                                           count: UInt32(config.hiddenSize))
+        rms.encodeBF16W(commandBuffer: commandBuffer,
+                        x: hidden,
+                        weight: postAttentionNorm.buffer,
+                        weightOffset: Int(postAttentionNorm.offset),
+                        out: normed,
+                        d: UInt32(config.hiddenSize),
+                        eps: 1e-6)
+    }
+
+    private func encodeSharedExpert(commandBuffer: MTLCommandBuffer,
+                                    moeWeights: QwenMoEWeights) throws {
+        let sharedGate = sharedProjection(moeWeights.sharedExpertGate,
+                                           rows: config.intermediateSize,
+                                           cols: config.hiddenSize)
+        let sharedUp = sharedProjection(moeWeights.sharedExpertUp,
+                                         rows: config.intermediateSize,
+                                         cols: config.hiddenSize)
+        let sharedDown = sharedProjection(moeWeights.sharedExpertDown,
+                                           rows: config.hiddenSize,
+                                           cols: config.intermediateSize)
+        try moe.encodeSharedExpert(commandBuffer: commandBuffer,
+                                   x: normed,
+                                   gate: sharedGate,
+                                   up: sharedUp,
+                                   down: sharedDown,
+                                   y: sharedOutput,
+                                   scratchGate: sharedGateScratch,
+                                   scratchUp: sharedUpScratch,
+                                   scratchAct: sharedActScratch)
+    }
+
+    private func encodeFinalHead(commandBuffer: MTLCommandBuffer,
+                                 logits: MTLBuffer) {
+        let finalNorm = model.finalNorm
+        let lmHead = model.lmHead
+        if useFusedGreedyHead {
+            fusionHead.encodeGreedyDecode(
+                commandBuffer: commandBuffer,
+                hidden: hidden,
+                normWeight: finalNorm.buffer,
+                normOffset: Int(finalNorm.offset),
+                weights: lmHead.buffer,
+                weightsOffset: Int(lmHead.offset),
+                scales: lmHead.buffer,
+                scalesOffset: Int(lmHead.scaleOffset),
+                biases: lmHead.buffer,
+                biasesOffset: Int(lmHead.biasOffset),
+                outToken: greedyTokenBuffer,
+                d: UInt32(config.hiddenSize),
+                vocab: UInt32(config.vocabSize))
+        } else {
+            prefillFinalRowHead.encodeLogits(
+                commandBuffer: commandBuffer,
+                hiddenBlock: hidden,
+                row: 0,
+                rowStrideElements: config.hiddenSize,
+                normWeight: finalNorm.buffer,
+                normWeightOffset: Int(finalNorm.offset),
+                weights: lmHead.buffer,
+                weightsOffset: Int(lmHead.offset),
+                scales: lmHead.buffer,
+                scalesOffset: Int(lmHead.scaleOffset),
+                biases: lmHead.buffer,
+                biasesOffset: Int(lmHead.biasOffset),
+                logits: logits,
+                d: UInt32(config.hiddenSize),
+                vocab: UInt32(config.vocabSize),
+                rmsEps: 1e-6)
+        }
+    }
+
+    private func captureFinalHeadResult(logits: MTLBuffer) {
+        if useFusedGreedyHead {
+            lastGreedyToken = greedyTokenBuffer.contents().load(as: UInt32.self)
+            return
+        }
+        let values = logits.contents().assumingMemoryBound(to: Float16.self)
+        var bestIndex = 0
+        var bestValue = values[0]
+        for index in 1..<config.vocabSize where values[index] > bestValue {
+            bestIndex = index
+            bestValue = values[index]
+        }
+        lastGreedyToken = UInt32(bestIndex)
     }
 
     private func encodePrefillLayer(layer: Int,
@@ -912,7 +1221,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                 hiddenStrideElements: UInt32(config.hiddenSize),
                 binding: fetch.binding,
                 offsets: offsets)
-            try withExtendedLifetime((fetch, argumentBuffer)) {
+            _ = try withExtendedLifetime((fetch, argumentBuffer)) {
                 try runSync { commandBuffer in
                     _ = prefillGroupedMoE.encodeStreamedBatched(
                         commandBuffer: commandBuffer,
@@ -962,8 +1271,11 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             return timings
     }
 
-    private func encodeRoutedMoE(layer: Int,
-                                 moeWeights: QwenMoEWeights) async throws {
+    private func encodeRoutedMoE(
+        layer: Int,
+        moeWeights: QwenMoEWeights,
+        appending appendCommands: ((MTLCommandBuffer) throws -> Void)? = nil
+    ) async throws {
         let routePlanningStart = nowNanos()
         let indices = routeIndices.contents().assumingMemoryBound(to: UInt32.self)
         let experts = (0..<config.topKExperts).map { Int(indices[$0]) }
@@ -1000,6 +1312,7 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         } else {
             expertViews = try await model.fetchRoutedExperts(plan: plan)
         }
+        let routedSetupStart = detailedDecodeTimingsEnabled ? nowNanos() : 0
         guard let argumentBuffer = moe.makeRoutedArgumentBuffer(
             routedBlobs: expertViews.map(\.buffer)) else {
             throw ModelError.residentBufferWrapFailed
@@ -1009,8 +1322,18 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         let sharedGate = sharedProjection(moeWeights.sharedRouterGate,
                                            rows: 1,
                                            cols: config.hiddenSize)
+        if detailedDecodeTimingsEnabled {
+            activeDecodeDiagnostics?.routedSetupNanos += nowNanos() - routedSetupStart
+        }
         let routedExpertCombineStart = nowNanos()
-        try runSync { commandBuffer in
+        var routedGPUMarkersComplete = gpuStageTimer != nil
+        let commandTimings = try runSync(
+            collectTimings: detailedDecodeTimingsEnabled
+        ) { commandBuffer in
+            if let gpuStageTimer {
+                routedGPUMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforePhase1, commandBuffer: commandBuffer) && routedGPUMarkersComplete
+            }
             moe.encodeRoutedPhase1(commandBuffer: commandBuffer,
                                    routedArgBuffer: argumentBuffer,
                                    routedBlobs: expertBuffers,
@@ -1019,6 +1342,10 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                                    acts: moeActs,
                                    d: UInt32(config.hiddenSize),
                                    f: UInt32(config.moeIntermediateSize))
+            if let gpuStageTimer {
+                routedGPUMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforePhase2, commandBuffer: commandBuffer) && routedGPUMarkersComplete
+            }
             moe.encodeRoutedPhase2(commandBuffer: commandBuffer,
                                    routedArgBuffer: argumentBuffer,
                                    routedBlobs: expertBuffers,
@@ -1029,6 +1356,10 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                                    y: routedOutput,
                                    d: UInt32(config.hiddenSize),
                                    f: UInt32(config.moeIntermediateSize))
+            if let gpuStageTimer {
+                routedGPUMarkersComplete = gpuStageTimer.encodeMarker(
+                    .beforeCombine, commandBuffer: commandBuffer) && routedGPUMarkersComplete
+            }
             moe.encodeSharedGateAndCombine(commandBuffer: commandBuffer,
                                            x: normed,
                                            gate: sharedGate,
@@ -1041,9 +1372,28 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                                                rhs: combinedOutput,
                                                output: hidden,
                                                count: UInt32(config.hiddenSize))
+            if let gpuStageTimer {
+                routedGPUMarkersComplete = gpuStageTimer.encodeMarker(
+                    .afterCombine, commandBuffer: commandBuffer) && routedGPUMarkersComplete
+            }
+            try appendCommands?(commandBuffer)
         }
         activeDecodeDiagnostics?.routedExpertCombineNanos += nowNanos()
             - routedExpertCombineStart
+        if let commandTimings {
+            activeDecodeDiagnostics?.routedCommandBufferEncodingNanos +=
+                commandTimings.encodingNanos
+            activeDecodeDiagnostics?.routedCommandBufferCommitNanos +=
+                commandTimings.commitNanos
+            activeDecodeDiagnostics?.routedCommandBufferWaitNanos += commandTimings.waitNanos
+        }
+        if routedGPUMarkersComplete, let gpuTimings = gpuStageTimer?.resolveRouted() {
+            activeDecodeDiagnostics?.routedGPUStageTimingSampleCount += 1
+            activeDecodeDiagnostics?.gpuRoutedPhase1Nanos += gpuTimings.phase1Nanos
+            activeDecodeDiagnostics?.gpuRoutedPhase2Nanos += gpuTimings.phase2Nanos
+            activeDecodeDiagnostics?.gpuRoutedCombineNanos += gpuTimings.combineNanos
+            activeDecodeDiagnostics?.currentLayerRoutedGPUStageTimings = gpuTimings
+        }
     }
 
     private let zeroBuffer: MTLBuffer
@@ -1427,20 +1777,32 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         blit.endEncoding()
     }
 
-    private func runSync(_ body: (MTLCommandBuffer) throws -> Void) throws {
+    @discardableResult
+    private func runSync(collectTimings: Bool = false,
+                         _ body: (MTLCommandBuffer) throws -> Void) throws
+        -> QwenCommandBufferTimings? {
+        let encodingStart = collectTimings ? nowNanos() : 0
         guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
         try body(commandBuffer)
+        let commitStart = collectTimings ? nowNanos() : 0
         commandBuffer.commit()
+        let waitStart = collectTimings ? nowNanos() : 0
         commandBufferSubmissionCount += 1
         commandBuffer.waitUntilCompleted()
+        let completed = collectTimings ? nowNanos() : 0
         if let error = commandBuffer.error {
             throw error
         }
         guard commandBuffer.status == .completed else {
             throw ModelError.residentBufferWrapFailed
         }
+        guard collectTimings else { return nil }
+        return QwenCommandBufferTimings(
+            encodingNanos: commitStart - encodingStart,
+            commitNanos: waitStart - commitStart,
+            waitNanos: completed - waitStart)
     }
 
     private func nowNanos() -> UInt64 {

@@ -81,6 +81,52 @@ requested. Responses omit the field when diagnostics are disabled.
 Decode fields remain in the versioned top-level diagnostics object. Chunked
 Qwen prefill adds an optional nested `prefill` object:
 
+Qwen decode diagnostics schema version 5 includes non-overlapping GPU timestamps
+for both decode command buffers. The first group covers the combined
+mixer/shared-expert/router command buffer:
+
+| Field | Meaning |
+| --- | --- |
+| `gpu_stage_timing_sample_count` | Number of decoded layer executions with a complete valid timestamp sample |
+| `gpu_mixer_nanos` | Exclusive GPU time from the mixer boundary to the shared-expert boundary |
+| `gpu_shared_expert_nanos` | Exclusive GPU time from the shared-expert boundary to the router boundary |
+| `gpu_router_nanos` | Exclusive GPU time from the router boundary to the end boundary |
+
+Each `layers` entry exposes the corresponding `gpuStageTimingSampleCount`,
+`gpuMixerNanos`, `gpuSharedExpertNanos`, and `gpuRouterNanos` totals. A fully
+sampled response has one sample per decoded layer execution. Unsupported or
+invalid Metal counter samples leave the count and duration totals at zero.
+
+Schema version 5 adds the routed tail:
+
+| Field | Meaning |
+| --- | --- |
+| `routed_setup_nanos` | CPU wall time for routed argument-buffer and weight-view setup after expert fetch |
+| `routed_command_buffer_encoding_nanos` | CPU wall time to create and encode the routed command buffer |
+| `routed_command_buffer_commit_nanos` | CPU wall time spent submitting the routed command buffer with `commit()` |
+| `routed_command_buffer_wait_nanos` | Host wall time blocked for routed command-buffer completion |
+| `routed_gpu_stage_timing_sample_count` | Number of decoded layer executions with a complete valid routed timestamp sample |
+| `gpu_routed_phase1_nanos` | Exclusive GPU time for routed gate/up projection and activation |
+| `gpu_routed_phase2_nanos` | Exclusive GPU time for routed down projection and weighted reduction |
+| `gpu_routed_combine_nanos` | Exclusive GPU time for shared gating, routed/shared combination, and residual add |
+
+Each `layers` entry exposes the corresponding camel-case routed fields. A fully
+sampled response has one front-stage and one routed-stage sample per decoded
+layer execution. CPU wall fields overlap their enclosing stage totals, and GPU
+durations execute inside command-buffer wait time; do not add overlapping
+fields to estimate total decode time. Zero durations without a positive sample
+count are not measurements. Timestamp markers and host substage clocks are
+enabled only by diagnostics mode and do not change the production path when
+diagnostics are disabled.
+
+The optimized production decode schedule chains routed layer N with the front
+of layer N+1. Diagnostics mode retains separate front and routed command
+buffers so schema-5 timestamps remain independently attributable. Diagnostic
+throughput and command-buffer counts therefore describe the measurement
+schedule, not the optimized production schedule.
+
+Chunked Qwen prefill uses these nested fields:
+
 | Field | Meaning |
 | --- | --- |
 | `execution_path` | Prefill implementation used: `scalarFallback`, `chunked`, or `mixed` |

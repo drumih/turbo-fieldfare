@@ -21,7 +21,7 @@ public actor TurboFieldfareHTTPServer {
     public init(modelID: String,
                 queueLimit: Int,
                 backend: any ServerInferenceBackend,
-                heartbeatInterval: TimeAmount = .seconds(5),
+                heartbeatInterval: TimeAmount = .milliseconds(250),
                 diagnosticsEnabled: Bool = false,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
@@ -169,10 +169,14 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        activeTask?.cancel()
-        activeTask = nil
+        cancelActiveTask()
         childChannels.remove(context.channel)
         context.fireChannelInactive()
+    }
+
+    private func cancelActiveTask() {
+        activeTask?.cancel()
+        activeTask = nil
     }
 
     private func route(head: HTTPRequestHead,
@@ -372,6 +376,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
         let contextBox = SendableContext(context)
         let promise = context.eventLoop.makePromise(of: Void.self)
+        promise.futureResult.whenFailure { [weak self] _ in
+            self?.cancelActiveTask()
+        }
         context.eventLoop.execute {
             contextBox.value.write(self.wrapOutboundOut(.head(head)),
                 promise: nil)
@@ -508,20 +515,28 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
         let contextBox = SendableContext(context)
         context.eventLoop.execute {
+            let promise = contextBox.value.eventLoop.makePromise(of: Void.self)
+            promise.futureResult.whenFailure { [weak self] _ in
+                self?.cancelActiveTask()
+            }
             var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count + 8)
             buffer.writeString("data: ")
             buffer.writeBytes(data)
             buffer.writeString("\n\n")
             contextBox.value.writeAndFlush(
-                self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+                self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: promise)
         }
     }
 
     private func writeHeartbeat(_ context: ChannelHandlerContext) {
+        let promise = context.eventLoop.makePromise(of: Void.self)
+        promise.futureResult.whenFailure { [weak self] _ in
+            self?.cancelActiveTask()
+        }
         let buffer = context.channel.allocator.buffer(string: ": ping\n\n")
         context.writeAndFlush(
             wrapOutboundOut(.body(.byteBuffer(buffer))),
-            promise: nil)
+            promise: promise)
     }
 
     private func handleAsyncError(_ error: Error,

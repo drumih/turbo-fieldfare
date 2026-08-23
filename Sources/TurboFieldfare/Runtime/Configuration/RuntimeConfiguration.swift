@@ -31,6 +31,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let prefillChunkTokens: Int
     public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
+    public let qwenGPUStageTimingEnabled: Bool
 
     public init(expertCacheSlots: Int = 24,
                 expertCachePolicy: RuntimeExpertCachePolicy = .lfu,
@@ -38,7 +39,8 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
-                forceLogitsHead: Bool = false) {
+                forceLogitsHead: Bool = false,
+                qwenGPUStageTimingEnabled: Bool = false) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
         precondition(Self.allowedPrefillChunkTokens.contains(prefillChunkTokens),
@@ -50,6 +52,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         self.prefillChunkTokens = prefillChunkTokens
         self.prefillAttentionPath = prefillAttentionPath
         self.headPath = forceLogitsHead ? .logits : .fusedRows
+        self.qwenGPUStageTimingEnabled = qwenGPUStageTimingEnabled
     }
 
     public static var production: RuntimeConfiguration {

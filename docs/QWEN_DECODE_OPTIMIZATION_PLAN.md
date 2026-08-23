@@ -1,8 +1,7 @@
 # Qwen decode optimization plan
 
-Status: DeltaNet and Phase 3 merged; full Phase 3 verification below the 15%
-gate; Phase 4 rejected; corrected fused greedy head and follow-up evidence
-stashed for later review
+Status: DeltaNet, Phase 3, the fused Qwen head, 24-slot LFU, and cross-layer
+command chaining integrated; schema-5 routed-tail profiling complete
 
 Planning review: GPT-5.6 Luna, 2026-08-21
 
@@ -506,6 +505,13 @@ tokenizer-only Transformers installation did not include PyTorch, which is
 expected because inference remained in the Swift/Metal server. No repository
 dependency changed.
 
+A corrected gate rerun on 2026-08-23 measured queue admission rather than
+replacement completion and passed against the schema-4 release server. It
+completed the 4,002-token and 15,362-token workloads, passed 50 of 50 sequential
+requests and 10 of 10 restarts, released the queue 0.539 seconds after graceful
+disconnect, left no listener, and peaked at 1.814 GB process-group RSS. This
+supersedes the earlier disconnect timing while preserving the other G4 results.
+
 This candidate clears the 15% performance gate with exact parity and passes the
 correctness, lifecycle, and resource gates, so the recurrent-kernel change is
 accepted.
@@ -704,6 +710,214 @@ GPU timing inside the combined mixer/shared/router command buffer before
 changing another kernel, because its current wall-time counters overlap and do
 not identify which enclosed encoder dominates.
 
+### Non-overlapping GPU stage result
+
+Diagnostic schema version 4 brackets mixer, shared-expert, and router execution
+with four Metal stage-boundary marker passes in their existing command buffer.
+The timer is opt-in with diagnostics, defaults off, and reports a sample only
+when all eight boundary timestamps are valid and ordered. The release server
+SHA-256 was
+`5494bc0d2fccd79356a289a9c12e574a5c115eee50321a577839be5a693ebdd2`;
+the model manifest and verified-install SHA-256 values remained
+`90f353b07d3bdfa7c226dfa461d02fc80bc07c26c9b0a73635d7e07cb1145940` and
+`72735217ec7f80e35c631359d3ea5116b280e174ee153d1a2d0754ad2c50ba47`.
+
+Three alternating fresh-process 256-token cycles compared diagnostics off and
+on with 24-slot LFU, a 16,384-token context, single-prefix caching, and chunked
+prefill. Every diagnostics row resolved all 10,200 expected layer samples and
+produced the same output SHA-256 as its control:
+`62578360fa5015aaf9505788a93e824e1b6463a3566fce8e2e7ec5fad9c341ff`.
+
+| Metric | Result |
+| --- | ---: |
+| Diagnostics-off median | 18.02 tok/s |
+| Diagnostics-on median | 17.73 tok/s |
+| Instrumentation cost | 1.61% |
+| Maximum process-group RSS | 1.967 GB |
+| Minimum available memory | 4.891 GB |
+
+The three exclusive GPU-stage rows were stable:
+
+| Stage | Median total over 255 decode steps | Median share of measured GPU window |
+| --- | ---: | ---: |
+| Mixer | 168.163 ms | 81.62% |
+| Shared expert | 20.576 ms | 10.07% |
+| Router | 16.874 ms | 8.17% |
+
+Mixer dominates this three-stage GPU window, but the full window is only about
+0.81 ms per decode step and roughly 1.4% of end-to-end decode time. Eliminating
+it entirely cannot clear the 15% gate. Do not select another mixer-kernel
+micro-optimization from the 82% share alone. The next investigation should
+measure host command submission and synchronous waits against the routed-expert
+fetch/execute tail, then evaluate a redesign only if that larger interval has a
+credible overlap or batching mechanism.
+
+### Routed-tail timing result
+
+Diagnostic schema version 5 adds opt-in host clocks for routed setup, command
+encoding, commit, and completion wait, plus four Metal markers around routed
+phase 1, phase 2, and combine. The release server SHA-256 was
+`9160ae1c597a6d3390126fbb88fbaba2094a630bd6963bd103e54670d7f695ed`.
+
+Three alternating fresh-process 256-token cycles used the same 24-slot LFU,
+16,384-token context, single-prefix cache, and chunked-prefill settings as the
+schema-4 profile. Every diagnostics row resolved all 10,200 expected samples in
+both GPU groups. All six rows produced output SHA-256
+`62578360fa5015aaf9505788a93e824e1b6463a3566fce8e2e7ec5fad9c341ff`.
+
+| Metric | Result |
+| --- | ---: |
+| Diagnostics-off rates | 15.92, 16.29, 15.54 tok/s |
+| Diagnostics-on rates | 14.69, 14.92, 14.25 tok/s |
+| Diagnostics-off median | 15.92 tok/s |
+| Diagnostics-on median | 14.69 tok/s |
+| Observed median runtime overhead | 8.37% |
+| Maximum process-group RSS | 1.745 GB |
+| Minimum available memory | 4.099 GB |
+| Maximum wired memory | 5.967 GB |
+
+The three pairs varied too widely to treat 8.37% as a stable instrumentation
+cost. Diagnostics remain unsuitable for production throughput measurements;
+use diagnostics-off interleaved arms for candidate comparisons.
+
+The median diagnostics-on row spent 16,847.780 ms in forward execution. Host
+subfields were:
+
+| Routed host field | Median total | Share of forward |
+| --- | ---: | ---: |
+| Route planning | 72.071 ms | 0.43% |
+| Expert fetch | 4,442.438 ms | 26.37% |
+| Routed setup | 108.639 ms | 0.64% |
+| Command encoding | 278.042 ms | 1.65% |
+| Command commit | 29.436 ms | 0.17% |
+| Command completion wait | 4,211.043 ms | 25.00% |
+| Routed expert/combine wall | 4,518.642 ms | 26.82% |
+
+These fields are not additive. Command wait is inside routed expert/combine,
+and summed expert-read worker time overlaps within expert-fetch wall time. The
+median row recorded 26,145 reads, 55,455 cache hits, 26,145 misses, and
+11,190.565 ms of summed parallel worker time. Expert fetch plus routed
+expert/combine are sequential and account for 8,961.080 ms, or 53.19% of the
+median forward wall.
+
+The exclusive routed GPU intervals were much smaller:
+
+| Routed GPU stage | Median total | Share of routed GPU | Share of forward |
+| --- | ---: | ---: | ---: |
+| Phase 1 | 339.052 ms | 92.32% | 2.012% |
+| Phase 2 | 10.949 ms | 2.98% | 0.065% |
+| Combine | 17.254 ms | 4.70% | 0.102% |
+| Total | 367.255 ms | 100.00% | 2.180% |
+
+The routed command waited 412.847 microseconds per decoded layer execution,
+while the three bracketed GPU phases occupied 36.005 microseconds. The
+3,843.788 ms aggregate gap includes marker encoders and any queueing,
+residency, scheduling, and completion-notification cost outside the bracketed
+kernels. It must not be labeled removable launch overhead without a candidate
+comparison.
+
+Reject another phase-1, phase-2, combine, argument-buffer, or setup
+micro-optimization: even deleting the largest measured GPU stage cannot clear
+the 15% gate. Expert fetch remains material, but the cache-policy, capacity,
+allocation, and exact-demand overlap experiments above provide no new
+memory-safe mechanism to test.
+
+### Cross-layer command chaining result
+
+The selected prototype chains routed layer N with layer N+1's mixer, shared
+expert, and router in one command buffer. The final routed buffer also carries
+the language-model head. Queue order preserves exact layer arithmetic and
+recurrent/KV dependencies; fetched expert views remain alive until the combined
+command completes. The optimized schedule is:
+
+```text
+embedding + initial front + 40 routed/next-front-or-head = 42 submissions
+```
+
+A diagnostics-export probe with Metal timing disabled measured exactly 42
+forward-runner submissions per decoded step. Schema-5 diagnostics retain the
+unchained 82-submission schedule because their two independent marker groups
+require separate front and routed command buffers. Diagnostics output is
+therefore not a throughput measurement of the optimized schedule.
+
+Three fresh-process alternating diagnostics-off cycles at each completion
+length compared schema-5 baseline binary
+`9160ae1c597a6d3390126fbb88fbaba2094a630bd6963bd103e54670d7f695ed`
+with candidate binary
+`f7d8fa47fa5a2cc09405ed1a217ef1d1c406a410cfcd174890c67fb88e342d64`.
+Every row preserved exact output:
+
+| Completion target | Baseline median | Candidate median | Change | Output SHA-256 |
+| ---: | ---: | ---: | ---: | --- |
+| 64 tokens | 17.25 tok/s | 20.45 tok/s | +18.55% | `8e65e1b5...f61ddf` |
+| 256 tokens | 18.20 tok/s | 21.02 tok/s | +15.50% | `62578360...9c341ff` |
+| 512 tokens | 17.60 tok/s | 20.45 tok/s | +16.19% | `50286bf4...1b90d1` |
+
+The 18 measured arms produced 381 valid resource samples. Maximum process-group
+RSS was 1.794 GB, minimum available memory was 3.947 GB, and maximum wired
+memory was 6.165 GB. No resource row had unavailable fields.
+
+Relinking after a reversible command-count probe produced source-equivalent
+candidate binary
+`567ddc56ce1ceca35dac43103a8490b76f9e7804c36c01601fd6d548bb8c942a`.
+A fresh 256-token check retained exact output and measured 17.81 versus 20.92
+tok/s (+17.46%). The full G4 gate then passed against that exact binary:
+
+- 4,002-token prompt: 186 output tokens at 16.67 decode tok/s.
+- 15,362-token prompt: 64 output tokens at 12.03 decode tok/s.
+- 50 of 50 sequential requests passed.
+- Disconnect released admission in 0.536 seconds.
+- 10 of 10 restart cycles passed with no orphan listener.
+- All 548 resource samples were valid; peak RSS was 1.630 GB and minimum
+  available memory was 3.954 GB.
+
+The candidate clears the 15% gate at all three measured decode lengths, keeps
+exact output and the existing cache behavior, and passes package and G4
+validation. Cross-layer command chaining is accepted as the production decode
+schedule. Rollback is the isolated `finishCurrentTokenChained` dispatch and its
+encoder extractions; the schema-5 diagnostics path remains a working reference
+schedule.
+
+### Prompt-cache and process-cold assessment
+
+Three fresh server processes ran a 45-token A -> A -> B -> A sequence with 64
+generated tokens per request, 24-slot LFU, a 16,384-token context,
+single-prefix caching, chunked prefill, and schema-4 diagnostics. A and B differ
+inside the prompt, so B cannot continue A. All three cycles produced one stable
+hash for A across cold, replay, and post-B recomputation, and one stable hash
+for B.
+
+| Request | Median TTFT | Cached tokens | Median decode |
+| --- | ---: | ---: | ---: |
+| First A in a fresh process | 8.3608 s | 0 | 15.93 tok/s |
+| Immediate A replay | 0.0198 s | 45 | 18.55 tok/s |
+| Different prompt B | 1.2465 s | 0 | 18.29 tok/s |
+| A after B | 1.2431 s | 0 | 18.09 tok/s |
+
+The A-after-B result is within 0.3% of B and confirms that B replaces the only
+server entry and the runner's only private snapshot. Replay avoids about 1.23
+seconds of warmed prefill for this short prompt, but a multi-prefix cache is not
+a server-map-only change: snapshot identity and ownership must move into an
+explicit runner API. Each retained Qwen snapshot plus logits consumes about
+62.8 MiB at 45 tokens, 140.0 MiB at 4,002 tokens, 361.9 MiB at 15,362 tokens,
+and 381.9 MiB at the 16,384-token limit. The three measured processes peaked at
+2.127 GB RSS with at least 5.007 GB system memory available.
+
+Do not implement multi-prefix retention without a representative trace showing
+that interleaved active conversations lose enough reusable prefix work to clear
+the end-to-end gate. Such a change would require bounded eviction, explicit
+snapshot handles, restore/cancellation tests, and memory-pressure validation;
+the current single-prefix cache remains the production choice.
+
+Median process start-to-health was 1.6411 seconds. The first A prefill reported
+7.309 seconds of expert-fetch time, versus 0.695 seconds for warmed B, accounting
+for 6.614 seconds of the 7.114-second cold-to-warm TTFT gap. The server explicitly
+uses full SHA-256 integrity, and first routed-layer access verifies each layer
+before opening its streamer. This agrees with PF-11, where receipt-trusted load
+avoided 6.741 seconds of hashing. Keep full SHA-256 as the production server
+default: trusted-receipt mode is a distinct integrity-policy trade-off and its
+warmer page-cache state must not be reported as a compute-speed improvement.
+
 ### Current disposition and recovery
 
 The corrected fused-head implementation, Qwen head specialization, replay test,
@@ -851,5 +1065,9 @@ and an interleaved same-host control.
   allocation candidates and quantify the Belady upper bound.
 - [x] Integrate the correctness-proven fused Qwen head and promote 24-slot LFU
   after their valid combined comparison gained 6.70% with exact output parity.
-- [ ] Add non-overlapping GPU timing inside the combined mixer/shared/router
+- [x] Add non-overlapping GPU timing inside the combined mixer/shared/router
   command buffer before selecting another optimization candidate.
+- [x] Measure A -> A -> B -> A prompt-cache behavior and defer multi-prefix
+  retention pending a representative interleaved workload.
+- [x] Separate process readiness from first-request expert verification and
+  retain full SHA-256 as the production integrity policy.

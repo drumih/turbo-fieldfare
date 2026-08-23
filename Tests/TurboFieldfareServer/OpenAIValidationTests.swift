@@ -621,6 +621,16 @@ struct ServerArgumentTests {
         #expect(configuration.rdadvisePolicy == .adaptive)
     }
 
+    @Test func diagnosticsEnableQwenGPUStageTiming() throws {
+        let arguments = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--diagnostics",
+        ])
+
+        let configuration = try arguments.resolvedRuntimeConfiguration()
+        #expect(configuration.qwenGPUStageTimingEnabled)
+    }
+
     @Test func prefillOffIsResolvableBelowTheChunkedPrefillSlotFloor() throws {
         let arguments = try ServerArguments.parse([
             "--model", "model.gturbo",

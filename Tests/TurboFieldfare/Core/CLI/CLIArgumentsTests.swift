@@ -22,6 +22,16 @@ import TurboFieldfare
         #expect(runtime == RuntimeConfiguration.production)
     }
 
+    @Test func diagnosticsJSONEnablesQwenGPUStageTiming() throws {
+        let arguments = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi",
+            "--diagnostics-json", "diagnostics.json",
+        ])
+
+        let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        #expect(runtime.qwenGPUStageTimingEnabled)
+    }
+
     @Test func generationOptionsParseAndStopsRepeat() throws {
         let arguments = try Args.parse([
             "--model", "m.gturbo", "--prompt", "hi",

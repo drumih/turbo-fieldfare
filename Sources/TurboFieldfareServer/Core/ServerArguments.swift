@@ -61,7 +61,8 @@ public struct ServerArguments: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            forceLogitsHead: forceLogitsHead)
+            forceLogitsHead: forceLogitsHead,
+            qwenGPUStageTimingEnabled: diagnosticsEnabled)
     }
 
     public static func parse(_ input: [String]) throws -> ServerArguments {

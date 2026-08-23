@@ -331,6 +331,18 @@ struct HTTPServerTests {
             routerNanos: 1,
             routePlanningNanos: 1,
             sharedExpertNanos: 2,
+            routedSetupNanos: 3,
+            routedCommandBufferEncodingNanos: 4,
+            routedCommandBufferCommitNanos: 5,
+            routedCommandBufferWaitNanos: 6,
+            gpuStageTimingSampleCount: 4,
+            gpuMixerNanos: 11,
+            gpuSharedExpertNanos: 12,
+            gpuRouterNanos: 13,
+            routedGPUStageTimingSampleCount: 4,
+            gpuRoutedPhase1Nanos: 14,
+            gpuRoutedPhase2Nanos: 15,
+            gpuRoutedCombineNanos: 16,
             expertFetchNanos: 1,
             routedExpertCombineNanos: 1,
             samplingNanos: 3,
@@ -376,8 +388,20 @@ struct HTTPServerTests {
         let data = try await URLSession.shared.data(for: request).0
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let exported = try #require(object["turbo_fieldfare_diagnostics"] as? [String: Any])
-        #expect(exported["schema_version"] as? Int == 3)
+        #expect(exported["schema_version"] as? Int == 5)
         #expect(exported["decode_step_count"] as? Int == 1)
+        #expect(exported["gpu_stage_timing_sample_count"] as? Int == 4)
+        #expect(exported["gpu_mixer_nanos"] as? Int == 11)
+        #expect(exported["gpu_shared_expert_nanos"] as? Int == 12)
+        #expect(exported["gpu_router_nanos"] as? Int == 13)
+        #expect(exported["routed_setup_nanos"] as? Int == 3)
+        #expect(exported["routed_command_buffer_encoding_nanos"] as? Int == 4)
+        #expect(exported["routed_command_buffer_commit_nanos"] as? Int == 5)
+        #expect(exported["routed_command_buffer_wait_nanos"] as? Int == 6)
+        #expect(exported["routed_gpu_stage_timing_sample_count"] as? Int == 4)
+        #expect(exported["gpu_routed_phase1_nanos"] as? Int == 14)
+        #expect(exported["gpu_routed_phase2_nanos"] as? Int == 15)
+        #expect(exported["gpu_routed_combine_nanos"] as? Int == 16)
         #expect(exported["routed_expert_estimated_bytes"] as? Int == 64)
         #expect(exported["expert_read_count"] as? Int == 1)
         #expect(exported["expert_read_nanos"] as? Int == 7)
@@ -655,6 +679,41 @@ struct HTTPServerTests {
         """#.utf8)
         let data = try await URLSession.shared.data(for: request).0
         #expect(String(decoding: data, as: UTF8.self).contains(": ping\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func streamingDisconnectCancelsActiveGeneration() async throws {
+        let backend = CancellableServerBackend()
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: backend)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let socket = try connectedSocket(port: port)
+        let body = #"{"model":"test-model","messages":[{"role":"user","content":"wait"}],"stream":true}"#
+        try writeAll(socket: socket, text: httpRequest(
+            port: port, body: body, connection: "close"))
+
+        _ = try readUntil(
+            socket: socket,
+            timeoutMilliseconds: 2_000,
+            condition: { $0.contains(#""role":"assistant""#) })
+        let activeDeadline = ContinuousClock.now + .seconds(2)
+        while await backend.startedCount != 1, ContinuousClock.now < activeDeadline {
+            await Task.yield()
+        }
+        #expect(await backend.startedCount == 1)
+
+        Darwin.close(socket)
+          let cancellationDeadline = ContinuousClock.now + .seconds(1)
+        while await backend.cancellationCount != 1,
+              ContinuousClock.now < cancellationDeadline {
+            await Task.yield()
+        }
+        #expect(await backend.cancellationCount == 1)
+        #expect(await !server.hasActiveRequest)
 
         try await server.shutdown()
     }
