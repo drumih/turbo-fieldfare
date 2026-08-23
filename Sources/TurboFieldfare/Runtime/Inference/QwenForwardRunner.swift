@@ -22,6 +22,12 @@ private struct QwenPrefillStageTimings {
     var expertFetchNanos: UInt64 = 0
     var routedMoENanos: UInt64 = 0
     var moeReduceNanos: UInt64 = 0
+    var routedExpertCacheHitCount = 0
+    var routedExpertCacheMissCount = 0
+    var routedExpertEstimatedBytes: UInt64 = 0
+    var expertReadCount = 0
+    var expertReadNanos: UInt64 = 0
+    var expertReadMaxNanos: UInt64 = 0
 
     mutating func merge(_ other: Self) {
         mixerNanos += other.mixerNanos
@@ -31,6 +37,12 @@ private struct QwenPrefillStageTimings {
         expertFetchNanos += other.expertFetchNanos
         routedMoENanos += other.routedMoENanos
         moeReduceNanos += other.moeReduceNanos
+        routedExpertCacheHitCount += other.routedExpertCacheHitCount
+        routedExpertCacheMissCount += other.routedExpertCacheMissCount
+        routedExpertEstimatedBytes += other.routedExpertEstimatedBytes
+        expertReadCount += other.expertReadCount
+        expertReadNanos += other.expertReadNanos
+        expertReadMaxNanos = max(expertReadMaxNanos, other.expertReadMaxNanos)
     }
 }
 
@@ -583,6 +595,13 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             expertFetch: layerTimings.expertFetchNanos,
             routedMoE: layerTimings.routedMoENanos,
             moeReduce: layerTimings.moeReduceNanos)
+        workCounter.recordExpertReads(
+            cacheHits: layerTimings.routedExpertCacheHitCount,
+            cacheMisses: layerTimings.routedExpertCacheMissCount,
+            estimatedBytes: layerTimings.routedExpertEstimatedBytes,
+            readCount: layerTimings.expertReadCount,
+            readNanos: layerTimings.expertReadNanos,
+            readMaxNanos: layerTimings.expertReadMaxNanos)
 
         let finalNorm = model.finalNorm
         let lmHead = model.lmHead
@@ -1176,10 +1195,13 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
             weights: weights,
             queryCount: tokenCount,
             topK: config.topKExperts)
-        let tileExpertCount = min(16, model.routedExpertCacheSlotCount(layer: layer) ?? 16)
-        guard tileExpertCount > 0 else {
-            throw PrefillError.chunkedUnsupported("Qwen routed MoE has no expert-cache slots")
+        let schedulerConfig = PrefillRoutedTileSchedulerConfig()
+        let slotCount = model.routedExpertCacheSlotCount(layer: layer) ?? 16
+        guard schedulerConfig.fitsSlotBudget(slotCount: slotCount) else {
+            throw PrefillError.chunkedUnsupported(
+                "Qwen prefill routed tile depth \(schedulerConfig.maxPendingDepth) with \(schedulerConfig.tileExperts) experts/tile needs \((schedulerConfig.maxPendingDepth + 1) * schedulerConfig.tileExperts) slots, has \(slotCount)")
         }
+        let tileExpertCount = min(schedulerConfig.tileExperts, slotCount)
         let routes = try PrefillMoEGrouping.groupTokenExpertPairs(
             pairs,
             queryCount: tokenCount,
@@ -1193,21 +1215,122 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         let offsets = model.routedExpertOffsets(layer: layer)
         timings.moePrepareNanos = nowNanos() - prepareStart
 
-        for tileIndex in routes.tiles.indices {
+        struct PendingPrefillTile {
+            let tileIndex: Int
+            let commandBuffer: MTLCommandBuffer
+            let fetch: PrefillStreamedTileFetchResult
+            let argumentBuffer: PrefillStreamedTileArgumentBuffer
+            let includesTail: Bool
+        }
+        var pendingTiles: [PendingPrefillTile] = []
+        var tileLifetime = PrefillStreamedTileSlotLifetime()
+        func drainOldestPendingTile() throws {
+            guard !pendingTiles.isEmpty else { return }
+            let waitStart = nowNanos()
+            let pending = pendingTiles.removeFirst()
+            try withExtendedLifetime((pending.fetch, pending.argumentBuffer)) {
+                try waitForCompletion(pending.commandBuffer)
+            }
+            if !pending.fetch.plannedMissSlots.isEmpty {
+                try tileLifetime.complete(tileIndex: pending.tileIndex)
+            }
+            let elapsed = nowNanos() - waitStart
+            if pending.includesTail {
+                timings.moeReduceNanos += elapsed
+            } else {
+                timings.routedMoENanos += elapsed
+            }
+        }
+
+        let routedTileScheduler = PrefillRoutedTileScheduler(config: schedulerConfig)
+        for (tileIndex, tile) in routes.tiles.enumerated() {
             try Task.checkCancellation()
-            let tile = routes.tiles[tileIndex]
+            let expertIDs = try PrefillStreamedTileBinding.expertIDs(
+                forTile: tileIndex,
+                routes: routes)
+            var plannedFetch: RoutedExpertFetchPlan?
+            if !pendingTiles.isEmpty {
+                let pendingAssignedSlots = pendingTiles.flatMap(\.fetch.plannedAssignedSlots)
+                if !pendingAssignedSlots.isEmpty {
+                    let plan = try model.planRoutedExpertsIfPossible(
+                        layer: layer,
+                        experts: expertIDs,
+                        avoidingSlots: Set(pendingAssignedSlots))
+                    switch routedTileScheduler.decide(
+                        PrefillRoutedTileSchedulerInput(
+                            hasPendingTile: true,
+                            pendingDepth: pendingTiles.count,
+                            pendingAssignedSlots: pendingAssignedSlots,
+                            avoidingSlotPlanAvailable: plan != nil)) {
+                    case .prefetchNext:
+                        guard let plan else {
+                            throw ModelError.indexCorrupt(
+                                detail: "Qwen routed tile scheduler requested missing plan")
+                        }
+                        plannedFetch = plan
+                    case .drainBeforeIssue:
+                        try drainOldestPendingTile()
+                    case .issueWithoutPending:
+                        throw ModelError.indexCorrupt(
+                            detail: "Qwen routed tile scheduler ignored pending tile")
+                    }
+                } else {
+                    switch routedTileScheduler.decide(
+                        PrefillRoutedTileSchedulerInput(
+                            hasPendingTile: true,
+                            pendingDepth: pendingTiles.count,
+                            pendingAssignedSlots: [],
+                            avoidingSlotPlanAvailable: false)) {
+                    case .drainBeforeIssue:
+                        try drainOldestPendingTile()
+                    case .issueWithoutPending, .prefetchNext:
+                        throw ModelError.indexCorrupt(
+                            detail: "Qwen routed tile scheduler failed to drain empty-slot pending tile")
+                    }
+                }
+            } else {
+                switch routedTileScheduler.decide(
+                    PrefillRoutedTileSchedulerInput(
+                        hasPendingTile: false,
+                        pendingAssignedSlots: [],
+                        avoidingSlotPlanAvailable: false)) {
+                case .issueWithoutPending:
+                    break
+                case .prefetchNext, .drainBeforeIssue:
+                    throw ModelError.indexCorrupt(
+                        detail: "Qwen routed tile scheduler requested pending action without pending tile")
+                }
+            }
             let fetchStart = nowNanos()
             let fetch = try await PrefillStreamedTileBinding.fetchBindingForTile(
                 model: model,
                 layer: layer,
                 tileIndex: tileIndex,
-                routes: routes)
+                routes: routes,
+                plannedFetch: plannedFetch,
+                avoidingSlots: Set(pendingTiles.flatMap(\.fetch.plannedAssignedSlots)),
+                collectReadDiagnostics: true)
             timings.expertFetchNanos += nowNanos() - fetchStart
+            timings.routedExpertCacheHitCount += fetch.plannedHits
+            timings.routedExpertCacheMissCount += fetch.plannedMissIndices.count
+            timings.routedExpertEstimatedBytes += try model.routedExpertAdviceByteEstimate(
+                layer: layer,
+                missCount: fetch.plannedMissIndices.count)
+            timings.expertReadCount += fetch.readDiagnostics.readCount
+            timings.expertReadNanos += fetch.readDiagnostics.totalNanos
+            timings.expertReadMaxNanos = max(
+                timings.expertReadMaxNanos,
+                fetch.readDiagnostics.maxNanos)
             let routedStart = nowNanos()
             try fetch.binding.validateCoversPairs(
                 routes.sortedPairs,
                 pairStart: Int(tile.pairStart),
                 pairCount: Int(tile.pairCount))
+            if !fetch.plannedMissSlots.isEmpty {
+                try tileLifetime.begin(
+                    tileIndex: tileIndex,
+                    plannedSlots: fetch.plannedMissSlots)
+            }
             let argumentBuffer = try prefillGroupedMoE.makeStreamedArgumentBuffer(
                 device: context.device,
                 binding: fetch.binding)
@@ -1221,54 +1344,69 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
                 hiddenStrideElements: UInt32(config.hiddenSize),
                 binding: fetch.binding,
                 offsets: offsets)
-            _ = try withExtendedLifetime((fetch, argumentBuffer)) {
-                try runSync { commandBuffer in
-                    _ = prefillGroupedMoE.encodeStreamedBatched(
-                        commandBuffer: commandBuffer,
-                        hidden: scratch.normed,
-                        sortedPairs: metadata.sortedPairs,
-                        routePartials: scratch.routePartials,
-                        gateUpActScratch: scratch.routedActs,
-                        downScratch: scratch.routedDownScratch,
-                        argumentBuffer: argumentBuffer,
-                        binding: fetch.binding,
-                        params: params,
-                        pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
-                }
+            guard let commandBuffer = context.queue.makeCommandBuffer() else {
+                throw ModelError.residentBufferWrapFailed
             }
-            timings.routedMoENanos += nowNanos() - routedStart
-        }
-
-        let routedOutput = scratch.routedOutput
-        let reduceStart = nowNanos()
-        try runSync { commandBuffer in
-            prefillMoE.encodeReduceTokenMajor(
+            _ = prefillGroupedMoE.encodeStreamedBatched(
                 commandBuffer: commandBuffer,
+                hidden: scratch.normed,
+                sortedPairs: metadata.sortedPairs,
                 routePartials: scratch.routePartials,
-                routeWeights: scratch.routeWeights,
-                h2: routedOutput,
-                queryCount: UInt32(tokenCount),
-                topK: UInt32(config.topKExperts),
-                d: UInt32(config.hiddenSize))
-            moe.encodeSharedGateAndCombineBlock(
+                gateUpActScratch: scratch.routedActs,
+                downScratch: scratch.routedDownScratch,
+                argumentBuffer: argumentBuffer,
+                binding: fetch.binding,
+                params: params,
+                pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
+            let includesTail = tileIndex == routes.tiles.indices.last
+            if includesTail {
+                prefillMoE.encodeReduceTokenMajor(
+                    commandBuffer: commandBuffer,
+                    routePartials: scratch.routePartials,
+                    routeWeights: scratch.routeWeights,
+                    h2: scratch.routedOutput,
+                    queryCount: UInt32(tokenCount),
+                    topK: UInt32(config.topKExperts),
+                    d: UInt32(config.hiddenSize))
+                moe.encodeSharedGateAndCombineBlock(
+                    commandBuffer: commandBuffer,
+                    x: scratch.normed,
+                    gate: sharedRouterGate,
+                    sharedOutput: scratch.sharedOutput,
+                    routedOutput: scratch.routedOutput,
+                    y: scratch.combinedOutput,
+                    queryCount: tokenCount,
+                    d: UInt32(config.hiddenSize))
+                deltaElementwise.encodeResidualAddBatch(
+                    commandBuffer: commandBuffer,
+                    lhs: scratch.hidden,
+                    rhs: scratch.combinedOutput,
+                    output: scratch.hidden,
+                    tokenCount: UInt32(tokenCount),
+                    dimension: UInt32(config.hiddenSize))
+            }
+            commandBuffer.commit()
+            commandBufferSubmissionCount += 1
+            pendingTiles.append(PendingPrefillTile(
+                tileIndex: tileIndex,
                 commandBuffer: commandBuffer,
-                x: scratch.normed,
-                gate: sharedRouterGate,
-                sharedOutput: scratch.sharedOutput,
-                routedOutput: routedOutput,
-                y: scratch.combinedOutput,
-                queryCount: tokenCount,
-                d: UInt32(config.hiddenSize))
-            deltaElementwise.encodeResidualAddBatch(
-                commandBuffer: commandBuffer,
-                lhs: scratch.hidden,
-                rhs: scratch.combinedOutput,
-                output: scratch.hidden,
-                tokenCount: UInt32(tokenCount),
-                dimension: UInt32(config.hiddenSize))
+                fetch: fetch,
+                argumentBuffer: argumentBuffer,
+                includesTail: includesTail))
+            let encodingElapsed = nowNanos() - routedStart
+            if includesTail {
+                timings.moeReduceNanos += encodingElapsed
+            } else {
+                timings.routedMoENanos += encodingElapsed
+            }
+            while pendingTiles.count > schedulerConfig.maxPendingDepth {
+                try drainOldestPendingTile()
+            }
         }
-            timings.moeReduceNanos = nowNanos() - reduceStart
-            return timings
+        while !pendingTiles.isEmpty {
+            try drainOldestPendingTile()
+        }
+        return timings
     }
 
     private func encodeRoutedMoE(
@@ -1790,19 +1928,23 @@ public final class QwenForwardRunner: ChunkedPrefillRunner, PromptStateSnapshott
         commandBuffer.commit()
         let waitStart = collectTimings ? nowNanos() : 0
         commandBufferSubmissionCount += 1
-        commandBuffer.waitUntilCompleted()
+        try waitForCompletion(commandBuffer)
         let completed = collectTimings ? nowNanos() : 0
+        guard collectTimings else { return nil }
+        return QwenCommandBufferTimings(
+            encodingNanos: commitStart - encodingStart,
+            commitNanos: waitStart - commitStart,
+            waitNanos: completed - waitStart)
+    }
+
+    private func waitForCompletion(_ commandBuffer: MTLCommandBuffer) throws {
+        commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error {
             throw error
         }
         guard commandBuffer.status == .completed else {
             throw ModelError.residentBufferWrapFailed
         }
-        guard collectTimings else { return nil }
-        return QwenCommandBufferTimings(
-            encodingNanos: commitStart - encodingStart,
-            commitNanos: waitStart - commitStart,
-            waitNanos: completed - waitStart)
     }
 
     private func nowNanos() -> UInt64 {

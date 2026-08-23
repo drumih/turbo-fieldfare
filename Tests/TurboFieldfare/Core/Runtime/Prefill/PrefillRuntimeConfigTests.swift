@@ -90,7 +90,13 @@ import Testing
                                               expertFetchNanos: 4,
                                               routedMoENanos: 5,
                                               moeReduceNanos: 6,
-                                              finalHeadNanos: 7))
+                                              finalHeadNanos: 7,
+                                              routedExpertCacheHitCount: 8,
+                                              routedExpertCacheMissCount: 9,
+                                              routedExpertEstimatedBytes: 10,
+                                              expertReadCount: 11,
+                                              expertReadNanos: 12,
+                                              expertReadMaxNanos: 13))
         counter.merge(PrefillWorkDiagnostics(executionPath: .chunked,
                                               scalarForwardCount: 0,
                                               chunkPassCount: 21,
@@ -103,7 +109,13 @@ import Testing
                                               expertFetchNanos: 40,
                                               routedMoENanos: 50,
                                               moeReduceNanos: 60,
-                                              finalHeadNanos: 70))
+                                              finalHeadNanos: 70,
+                                              routedExpertCacheHitCount: 80,
+                                              routedExpertCacheMissCount: 90,
+                                              routedExpertEstimatedBytes: 100,
+                                              expertReadCount: 110,
+                                              expertReadNanos: 120,
+                                              expertReadMaxNanos: 130))
 
         let diagnostics = try #require(counter.diagnostics)
         #expect(diagnostics.executionPath == .chunked)
@@ -119,5 +131,11 @@ import Testing
         #expect(diagnostics.routedMoENanos == 55)
         #expect(diagnostics.moeReduceNanos == 66)
         #expect(diagnostics.finalHeadNanos == 77)
+        #expect(diagnostics.routedExpertCacheHitCount == 88)
+        #expect(diagnostics.routedExpertCacheMissCount == 99)
+        #expect(diagnostics.routedExpertEstimatedBytes == 110)
+        #expect(diagnostics.expertReadCount == 121)
+        #expect(diagnostics.expertReadNanos == 132)
+        #expect(diagnostics.expertReadMaxNanos == 130)
     }
 }

@@ -504,6 +504,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 "routed_moe_nanos": prefill.routedMoENanos,
                 "moe_reduce_nanos": prefill.moeReduceNanos,
                 "final_head_nanos": prefill.finalHeadNanos,
+                "routed_expert_cache_hit_count": prefill.routedExpertCacheHitCount,
+                "routed_expert_cache_miss_count": prefill.routedExpertCacheMissCount,
+                "routed_expert_estimated_bytes": prefill.routedExpertEstimatedBytes,
+                "expert_read_count": prefill.expertReadCount,
+                "expert_read_nanos": prefill.expertReadNanos,
+                "expert_read_max_nanos": prefill.expertReadMaxNanos,
                 "attributed_wall_nanos": attributed,
             ]
         }

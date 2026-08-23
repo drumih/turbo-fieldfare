@@ -153,6 +153,12 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
     public let routedMoENanos: UInt64
     public let moeReduceNanos: UInt64
     public let finalHeadNanos: UInt64
+    public let routedExpertCacheHitCount: Int
+    public let routedExpertCacheMissCount: Int
+    public let routedExpertEstimatedBytes: UInt64
+    public let expertReadCount: Int
+    public let expertReadNanos: UInt64
+    public let expertReadMaxNanos: UInt64
 
     public init(executionPath: PrefillExecutionPath,
                 scalarForwardCount: Int,
@@ -166,7 +172,13 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
                 expertFetchNanos: UInt64 = 0,
                 routedMoENanos: UInt64 = 0,
                 moeReduceNanos: UInt64 = 0,
-                finalHeadNanos: UInt64 = 0) {
+                finalHeadNanos: UInt64 = 0,
+                routedExpertCacheHitCount: Int = 0,
+                routedExpertCacheMissCount: Int = 0,
+                routedExpertEstimatedBytes: UInt64 = 0,
+                expertReadCount: Int = 0,
+                expertReadNanos: UInt64 = 0,
+                expertReadMaxNanos: UInt64 = 0) {
         self.executionPath = executionPath
         self.scalarForwardCount = scalarForwardCount
         self.chunkPassCount = chunkPassCount
@@ -180,6 +192,12 @@ public struct PrefillWorkDiagnostics: Sendable, Equatable {
         self.routedMoENanos = routedMoENanos
         self.moeReduceNanos = moeReduceNanos
         self.finalHeadNanos = finalHeadNanos
+        self.routedExpertCacheHitCount = routedExpertCacheHitCount
+        self.routedExpertCacheMissCount = routedExpertCacheMissCount
+        self.routedExpertEstimatedBytes = routedExpertEstimatedBytes
+        self.expertReadCount = expertReadCount
+        self.expertReadNanos = expertReadNanos
+        self.expertReadMaxNanos = expertReadMaxNanos
     }
 }
 
@@ -196,6 +214,12 @@ struct PrefillWorkCounter {
     private(set) var routedMoENanos: UInt64 = 0
     private(set) var moeReduceNanos: UInt64 = 0
     private(set) var finalHeadNanos: UInt64 = 0
+    private(set) var routedExpertCacheHitCount = 0
+    private(set) var routedExpertCacheMissCount = 0
+    private(set) var routedExpertEstimatedBytes: UInt64 = 0
+    private(set) var expertReadCount = 0
+    private(set) var expertReadNanos: UInt64 = 0
+    private(set) var expertReadMaxNanos: UInt64 = 0
 
     mutating func recordScalarForward() {
         scalarForwardCount += 1
@@ -232,6 +256,22 @@ struct PrefillWorkCounter {
         finalHeadNanos += finalHead
     }
 
+    mutating func recordExpertReads(
+        cacheHits: Int,
+        cacheMisses: Int,
+        estimatedBytes: UInt64,
+        readCount: Int,
+        readNanos: UInt64,
+        readMaxNanos: UInt64
+    ) {
+        routedExpertCacheHitCount += cacheHits
+        routedExpertCacheMissCount += cacheMisses
+        routedExpertEstimatedBytes += estimatedBytes
+        expertReadCount += readCount
+        expertReadNanos += readNanos
+        expertReadMaxNanos = max(expertReadMaxNanos, readMaxNanos)
+    }
+
     mutating func merge(_ diagnostics: PrefillWorkDiagnostics) {
         scalarForwardCount += diagnostics.scalarForwardCount
         chunkPassCount += diagnostics.chunkPassCount
@@ -246,6 +286,13 @@ struct PrefillWorkCounter {
             routedMoE: diagnostics.routedMoENanos,
             moeReduce: diagnostics.moeReduceNanos,
             finalHead: diagnostics.finalHeadNanos)
+        recordExpertReads(
+            cacheHits: diagnostics.routedExpertCacheHitCount,
+            cacheMisses: diagnostics.routedExpertCacheMissCount,
+            estimatedBytes: diagnostics.routedExpertEstimatedBytes,
+            readCount: diagnostics.expertReadCount,
+            readNanos: diagnostics.expertReadNanos,
+            readMaxNanos: diagnostics.expertReadMaxNanos)
     }
 
     var diagnostics: PrefillWorkDiagnostics? {
@@ -270,7 +317,13 @@ struct PrefillWorkCounter {
                                       expertFetchNanos: expertFetchNanos,
                                       routedMoENanos: routedMoENanos,
                                       moeReduceNanos: moeReduceNanos,
-                                      finalHeadNanos: finalHeadNanos)
+                                      finalHeadNanos: finalHeadNanos,
+                                      routedExpertCacheHitCount: routedExpertCacheHitCount,
+                                      routedExpertCacheMissCount: routedExpertCacheMissCount,
+                                      routedExpertEstimatedBytes: routedExpertEstimatedBytes,
+                                      expertReadCount: expertReadCount,
+                                      expertReadNanos: expertReadNanos,
+                                      expertReadMaxNanos: expertReadMaxNanos)
     }
 }
 

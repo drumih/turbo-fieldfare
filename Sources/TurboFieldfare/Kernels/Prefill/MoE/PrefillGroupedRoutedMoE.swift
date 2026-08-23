@@ -33,6 +33,7 @@ public struct PrefillStreamedTileFetchResult {
     public let plannedMissIndices: [Int]
     public let plannedAssignedSlots: [Int]
     public let plannedMissSlots: [Int]
+    public let readDiagnostics: ExpertReadDiagnostics
 
     public init(expertIDs: [Int],
                 binding: PrefillStreamedTileBinding,
@@ -40,7 +41,8 @@ public struct PrefillStreamedTileFetchResult {
                 plannedHits: Int,
                 plannedMissIndices: [Int],
                 plannedAssignedSlots: [Int],
-                plannedMissSlots: [Int]) {
+                plannedMissSlots: [Int],
+                readDiagnostics: ExpertReadDiagnostics = ExpertReadDiagnostics()) {
         self.expertIDs = expertIDs
         self.binding = binding
         self.usedPlannedFetch = usedPlannedFetch
@@ -48,6 +50,7 @@ public struct PrefillStreamedTileFetchResult {
         self.plannedMissIndices = plannedMissIndices
         self.plannedAssignedSlots = plannedAssignedSlots
         self.plannedMissSlots = plannedMissSlots
+        self.readDiagnostics = readDiagnostics
     }
 }
 
@@ -248,7 +251,8 @@ public struct PrefillStreamedTileBinding: Sendable, Equatable {
                                            tileIndex: Int,
                                            routes: PrefillMoEGroupedRoutes,
                                            plannedFetch: RoutedExpertFetchPlan? = nil,
-                                           avoidingSlots: Set<Int> = []) async throws
+                                           avoidingSlots: Set<Int> = [],
+                                           collectReadDiagnostics: Bool = false) async throws
         -> PrefillStreamedTileFetchResult {
         let expertIDs = try expertIDs(forTile: tileIndex, routes: routes)
         let plan = try plannedFetch ?? model.planRoutedExperts(layer: layer,
@@ -260,12 +264,20 @@ public struct PrefillStreamedTileBinding: Sendable, Equatable {
         let plannedMissIndices: [Int]
         let plannedAssignedSlots: [Int]
         let plannedMissSlots: [Int]
+        let readDiagnostics: ExpertReadDiagnostics
         if let plan {
             guard plan.layer == layer, plan.experts == expertIDs else {
                 throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
                     "preplanned fetch does not match tile \(tileIndex)")
             }
-            views = try await model.fetchRoutedExperts(plan: plan)
+            if collectReadDiagnostics {
+                let fetch = try await model.fetchRoutedExpertsWithDiagnostics(plan: plan)
+                views = fetch.views
+                readDiagnostics = fetch.readDiagnostics
+            } else {
+                views = try await model.fetchRoutedExperts(plan: plan)
+                readDiagnostics = ExpertReadDiagnostics()
+            }
             usedPlannedFetch = true
             plannedHits = plan.hits
             plannedMissIndices = plan.misses
@@ -273,6 +285,7 @@ public struct PrefillStreamedTileBinding: Sendable, Equatable {
             plannedMissSlots = plan.misses.map { plan.assignedSlots[$0] }
         } else {
             views = try await model.fetchRoutedExperts(layer: layer, experts: expertIDs)
+            readDiagnostics = ExpertReadDiagnostics()
             usedPlannedFetch = false
             plannedHits = 0
             plannedMissIndices = []
@@ -286,7 +299,8 @@ public struct PrefillStreamedTileBinding: Sendable, Equatable {
                                              plannedHits: plannedHits,
                                              plannedMissIndices: plannedMissIndices,
                                              plannedAssignedSlots: plannedAssignedSlots,
-                                             plannedMissSlots: plannedMissSlots)
+                                             plannedMissSlots: plannedMissSlots,
+                                             readDiagnostics: readDiagnostics)
     }
 
     public func validateCoversPairs(_ pairs: [PrefillTokenExpertPair],

@@ -162,12 +162,14 @@ extension PrefillGroupedRoutedMoETests {
       model: model,
       layer: 1,
       tileIndex: 0,
-      routes: routes)
+      routes: routes,
+      collectReadDiagnostics: true)
     let second = try await PrefillStreamedTileBinding.fetchBindingForTile(
       model: model,
       layer: 1,
       tileIndex: 0,
-      routes: routes)
+      routes: routes,
+      collectReadDiagnostics: true)
 
     #expect(first.expertIDs == [1, 3, 5])
     #expect(first.usedPlannedFetch)
@@ -178,6 +180,10 @@ extension PrefillGroupedRoutedMoETests {
     #expect(second.plannedHits == 3)
     #expect(second.plannedMissIndices.isEmpty)
     #expect(second.plannedMissSlots.isEmpty)
+    #expect(first.readDiagnostics.readCount == 3)
+    #expect(first.readDiagnostics.totalNanos > 0)
+    #expect(first.readDiagnostics.maxNanos > 0)
+    #expect(second.readDiagnostics == ExpertReadDiagnostics())
     for result in [first, second] {
       #expect(result.binding.views.allSatisfy { $0.offset == 0 })
       try result.binding.validateCoversPairs(

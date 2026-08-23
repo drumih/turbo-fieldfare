@@ -374,7 +374,13 @@ struct HTTPServerTests {
                                                expertFetchNanos: 4,
                                                routedMoENanos: 5,
                                                moeReduceNanos: 6,
-                                               finalHeadNanos: 7),
+                                               finalHeadNanos: 7,
+                                               routedExpertCacheHitCount: 10,
+                                               routedExpertCacheMissCount: 11,
+                                               routedExpertEstimatedBytes: 12,
+                                               expertReadCount: 13,
+                                               expertReadNanos: 14,
+                                               expertReadMaxNanos: 15),
                                            generatedTokenIDs: [11, 22, 33]),
             diagnosticsEnabled: true)
         let channel = try await server.start(port: 0)
@@ -412,6 +418,12 @@ struct HTTPServerTests {
         #expect(prefill["deltanet_mixer_nanos"] as? Int == 8)
         #expect(prefill["full_attention_mixer_nanos"] as? Int == 9)
         #expect(prefill["expert_fetch_nanos"] as? Int == 4)
+        #expect(prefill["routed_expert_cache_hit_count"] as? Int == 10)
+        #expect(prefill["routed_expert_cache_miss_count"] as? Int == 11)
+        #expect(prefill["routed_expert_estimated_bytes"] as? Int == 12)
+        #expect(prefill["expert_read_count"] as? Int == 13)
+        #expect(prefill["expert_read_nanos"] as? Int == 14)
+        #expect(prefill["expert_read_max_nanos"] as? Int == 15)
         #expect(prefill["attributed_wall_nanos"] as? Int == 28)
         #expect(object["turbo_fieldfare_token_ids"] as? [Int] == [11, 22, 33])
 
