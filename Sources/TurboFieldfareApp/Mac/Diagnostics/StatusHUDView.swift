@@ -21,7 +21,11 @@ struct StatusHUDView: View {
             if showsMetrics {
                 HUDMetricView(value: rateText, label: "tok/s", animated: !model.isRunning)
                 HUDMetricView(value: tokensText, label: "tokens", animated: !model.isRunning)
-                HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
+                HStack(spacing: 2) {
+                    HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
+                        .help(memoryHelp)
+                    InfoPopoverButton(subject: "Memory", text: memoryHelp, arrowEdge: .bottom)
+                }
             }
         }
         .frame(height: 30)
@@ -49,8 +53,18 @@ struct StatusHUDView: View {
         return "\u{2014}"
     }
 
+    /// `phys_footprint`: what this process is charged. Measured, not assumed —
+    /// the model and image tower weights are memory-mapped and read by the GPU,
+    /// and no per-process counter attributes them: 1,144 MB of tower retained
+    /// moves the footprint by 5 MB. Those bytes are page cache, owned by the
+    /// kernel and reclaimable, so the popover explains them in words and the
+    /// diagnostics section carries their measured row.
     private var memoryText: String {
         MetricFormat.memory(model.currentProcessMemoryBytes)
+    }
+
+    private var memoryHelp: String {
+        MemoryFootprintExplanation.text(chargedBytes: model.currentProcessMemoryBytes)
     }
 
     private var showsMetrics: Bool {

@@ -5,6 +5,9 @@ public enum AppModelLoadPhase: Equatable, Sendable {
     case tokenizer
     case verifyingWeights
     case preparingRunner
+    /// Keep Ready maps the whole image tower during the load rather than on the
+    /// first image, so the load has a phase for it.
+    case mappingImageTower
 
     public var label: String {
         switch self {
@@ -12,6 +15,7 @@ public enum AppModelLoadPhase: Equatable, Sendable {
         case .tokenizer: return "Loading tokenizer"
         case .verifyingWeights: return "Verifying weights"
         case .preparingRunner: return "Preparing runner"
+        case .mappingImageTower: return "Mapping image tower"
         }
     }
 }

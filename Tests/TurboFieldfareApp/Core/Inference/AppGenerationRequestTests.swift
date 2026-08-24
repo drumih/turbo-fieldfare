@@ -91,4 +91,44 @@ import Testing
             try request.validate()
         }
     }
+    @Test func duplicateAndMalformedImageDescriptorsAreRejected() {
+        let id = UUID()
+        let attachment = AppImageAttachment(
+            id: id,
+            fileURL: URL(fileURLWithPath: "/tmp/image.png"),
+            displayName: "image.png",
+            encodedBytes: 4,
+            sha256: String(repeating: "a", count: 64))
+        #expect(throws: AppInferenceError.self) {
+            try AppGenerationRequest(
+                modelDirectory: existingDirectory,
+                prompt: "",
+                imageAttachments: [attachment, attachment]).validate()
+        }
+        let malformed = AppImageAttachment(
+            fileURL: URL(fileURLWithPath: "/tmp/image.png"),
+            displayName: "image.png",
+            encodedBytes: 4,
+            sha256: "not-a-digest")
+        #expect(throws: AppInferenceError.self) {
+            try AppGenerationRequest(
+                modelDirectory: existingDirectory,
+                prompt: "",
+                imageAttachments: [malformed]).validate()
+        }
+    }
+
+    @Test func imageOnlyRequestIsValid() throws {
+        let attachment = AppImageAttachment(
+            fileURL: URL(fileURLWithPath: "/tmp/image.png"),
+            displayName: "image.png",
+            encodedBytes: 4,
+            sha256: String(repeating: "a", count: 64))
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "",
+            imageAttachments: [attachment])
+        try request.validate()
+    }
+
 }

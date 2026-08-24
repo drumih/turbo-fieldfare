@@ -35,7 +35,7 @@ import Testing
         #expect(runtime.headPath == .logits)
     }
 
-    @Test(arguments: [32, 64, 128])
+    @Test(arguments: [32, 64, 128, 256])
     func productionPrefillSupportsPublicChunkSizes(_ chunkTokens: Int) {
         let runtime = RuntimeConfiguration(prefillChunkTokens: chunkTokens)
         #expect(runtime.prefillConfig.mode == .chunked)

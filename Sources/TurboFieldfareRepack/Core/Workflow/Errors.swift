@@ -1,5 +1,14 @@
 import Foundation
 
+/// Who a refused lock is waiting on. The pack's use lease is *shared*, so a
+/// blocked mutation is as likely to be waiting on a loaded model as on another
+/// install, and saying "another installer" sent users hunting for a process
+/// that does not exist.
+public enum RepackBusyHolder: Sendable, Equatable {
+    case installer
+    case installerOrLoadedModel
+}
+
 public enum RepackError: Error, CustomStringConvertible {
     case fileOpenFailed(path: String, errno: Int32)
     case fileStatFailed(path: String, errno: Int32)
@@ -10,7 +19,7 @@ public enum RepackError: Error, CustomStringConvertible {
     case renameFailed(from: String, to: String, errno: Int32)
     case fsyncFailed(path: String, errno: Int32)
     case mkdirFailed(path: String, errno: Int32)
-    case installBusy(path: String)
+    case installBusy(path: String, holder: RepackBusyHolder = .installer)
     case installPathUnsafe(path: String, detail: String)
     case installStateMissing(path: String)
     case installStateCorrupt(path: String, detail: String)
@@ -62,8 +71,15 @@ public enum RepackError: Error, CustomStringConvertible {
         case .renameFailed(let a, let b, let e):return "rename(\(a) -> \(b)) failed: errno \(e)"
         case .fsyncFailed(let p, let e):        return "fsync(\(p)) failed: errno \(e)"
         case .mkdirFailed(let p, let e):        return "mkdir(\(p)) failed: errno \(e)"
-        case .installBusy(let p):
-            return "another installer holds \(p)"
+        case .installBusy(let p, let holder):
+            switch holder {
+            case .installer:
+                return "another installer holds \(p)"
+            case .installerOrLoadedModel:
+                return "\(p) is in use: another installer or a loaded model "
+                    + "holds this pack; unload the model or wait for the "
+                    + "install to finish"
+            }
         case .installPathUnsafe(let p, let d):
             return "unsafe installer path \(p): \(d)"
         case .installStateMissing(let p):

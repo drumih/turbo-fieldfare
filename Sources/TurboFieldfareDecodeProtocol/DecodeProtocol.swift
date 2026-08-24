@@ -7,19 +7,39 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: String
     public var modelVerification: String
+    public var visionResidencyPolicy: String?
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: String = "lfu",
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: String = "off",
-                modelVerification: String = "full-sha256") {
+                modelVerification: String = "full-sha256",
+                visionResidencyPolicy: String? = nil) {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
         self.prefillChunkTokens = prefillChunkTokens
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
+        self.visionResidencyPolicy = visionResidencyPolicy
+    }
+}
+
+public struct DecodeImageAttachment: Codable, Sendable, Equatable {
+    public var id: UUID
+    public var path: String
+    public var displayName: String
+    public var encodedBytes: Int
+    public var sha256: String
+
+    public init(id: UUID, path: String, displayName: String,
+                encodedBytes: Int, sha256: String) {
+        self.id = id
+        self.path = path
+        self.displayName = displayName
+        self.encodedBytes = encodedBytes
+        self.sha256 = sha256
     }
 }
 
@@ -44,21 +64,35 @@ public struct DecodeLoadRequest: Codable, Sendable {
 
 public struct DecodeGenerationRequest: Codable, Sendable {
     public var prompt: String
+    public var imageAttachments: [DecodeImageAttachment]?
     public var maxNewTokens: Int
     public var maxContextTokens: Int
     public var temperature: Float
+    /// Carried explicitly, and optional because nil means "no cut". Leaving
+    /// them off the wire did not fall back to the sender's settings: the
+    /// service rebuilt the request from its own initializer defaults, so
+    /// turning Top-K off, or setting any value other than 64 / 0.95, was
+    /// silently ignored on the only client the app ships with.
+    public var topK: Int?
+    public var topP: Float?
     public var repetitionPenalty: Float
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
 
-    public init(prompt: String, maxNewTokens: Int, maxContextTokens: Int,
-                temperature: Float, repetitionPenalty: Float = 1,
+    public init(prompt: String,
+                imageAttachments: [DecodeImageAttachment]? = nil,
+                maxNewTokens: Int, maxContextTokens: Int,
+                temperature: Float, topK: Int? = nil, topP: Float? = nil,
+                repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
                 generationID: UUID = UUID()) {
         self.prompt = prompt
+        self.imageAttachments = imageAttachments
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
         self.temperature = temperature
+        self.topK = topK
+        self.topP = topP
         self.repetitionPenalty = repetitionPenalty
         self.runtimeOptions = runtimeOptions
         self.generationID = generationID
@@ -78,6 +112,9 @@ public enum DecodeServiceEventKind: String, Codable, Sendable {
     case ready
     case prefill
     case snapshot
+    /// Carries a live memory reading while image encoding or another silent
+    /// phase has not produced progress or tokens yet.
+    case memory
     case finished
     case cancelled
     case failed
@@ -151,6 +188,9 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public var error: String?
     public var currentMemoryBytes: UInt64?
     public var peakMemoryBytes: UInt64?
+    /// Bytes of image tower the inference process holds mapped, or nil when
+    /// it has no vision runtime.
+    public var visionTowerMappedBytes: UInt64?
     public var prefill: DecodePrefillDiagnostics?
     public var runner: DecodeRunnerDiagnostics?
 
@@ -163,6 +203,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
                 decodeSeconds: Double = 0, tokensPerSecond: Double = 0,
                 stopReason: String? = nil, error: String? = nil,
                 currentMemoryBytes: UInt64? = nil, peakMemoryBytes: UInt64? = nil,
+                visionTowerMappedBytes: UInt64? = nil,
                 prefill: DecodePrefillDiagnostics? = nil,
                 runner: DecodeRunnerDiagnostics? = nil) {
         self.kind = kind
@@ -181,6 +222,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.error = error
         self.currentMemoryBytes = currentMemoryBytes
         self.peakMemoryBytes = peakMemoryBytes
+        self.visionTowerMappedBytes = visionTowerMappedBytes
         self.prefill = prefill
         self.runner = runner
     }

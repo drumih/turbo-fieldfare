@@ -1,6 +1,11 @@
 import Foundation
 import Metal
 
+enum PrefillAttentionLayerKind: Sendable, Equatable {
+    case full
+    case slidingWindow
+}
+
 struct PrefillAttentionParams: Sendable, Equatable {
     var startPosition: UInt32
     var queryCount: UInt32
@@ -13,6 +18,8 @@ struct PrefillAttentionParams: Sendable, Equatable {
     var qTokenStrideElements: UInt32
     var oTokenStrideElements: UInt32
     var scale: Float
+    var bidirectionalBlockStart: UInt32
+    var bidirectionalBlockEnd: UInt32
 
     init(startPosition: UInt32,
                 queryCount: UInt32,
@@ -24,7 +31,9 @@ struct PrefillAttentionParams: Sendable, Equatable {
                 kvTokenStrideElements: UInt32,
                 qTokenStrideElements: UInt32,
                 oTokenStrideElements: UInt32,
-                scale: Float) {
+                scale: Float,
+                bidirectionalBlockStart: UInt32 = 0,
+                bidirectionalBlockEnd: UInt32 = 0) {
         self.startPosition = startPosition
         self.queryCount = queryCount
         self.headDim = headDim
@@ -36,6 +45,8 @@ struct PrefillAttentionParams: Sendable, Equatable {
         self.qTokenStrideElements = qTokenStrideElements
         self.oTokenStrideElements = oTokenStrideElements
         self.scale = scale
+        self.bidirectionalBlockStart = bidirectionalBlockStart
+        self.bidirectionalBlockEnd = bidirectionalBlockEnd
     }
 }
 
@@ -52,11 +63,13 @@ final class PrefillAttention {
 
     private let context: MetalContext
     private let psoCausalTiled: MTLComputePipelineState
+    private let psoParamsSmoke: MTLComputePipelineState
     private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
 
     init(context: MetalContext) throws {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")
+        self.psoParamsSmoke = try context.pipeline("prefill_attention_params_smoke")
         self.psoFullTensorOps2DValidityV2 = context.device.supportsFamily(.apple10)
             ? try? context.pipeline("attention_prefill_full_tensorops_2d_validity_v2")
             : nil
@@ -69,9 +82,18 @@ final class PrefillAttention {
                              out: MTLBuffer, outOffset: Int = 0,
                              params: PrefillAttentionParams,
                              kvRingCapacity: UInt32 = 0,
+                             layerKind: PrefillAttentionLayerKind = .full,
                              path: RuntimePrefillAttentionPath = .causalTiled,
                              watchdogProtectionEnabled: Bool = true) {
-        validate(params)
+        var effectiveParams = params
+        // Only sliding-window layers make an image block bidirectional;
+        // full-attention layers stay causal. Zeroed here as well as at the
+        // call site so a caller cannot widen visibility by mistake.
+        if layerKind == .full {
+            effectiveParams.bidirectionalBlockStart = 0
+            effectiveParams.bidirectionalBlockEnd = 0
+        }
+        validate(effectiveParams)
 
         let requestsTensorOps = path == .fullTensorOps2DPreferred
             || path == .fullTensorOps2DValidityV2
@@ -80,10 +102,10 @@ final class PrefillAttention {
         // shape for sliding attention must add a full-visibility check here.
         let tensorOpsShape = requestsTensorOps
             && kvRingCapacity == 0
-            && params.headDim == 512
-            && params.numQHeads == 16
-            && params.numKVHeads == 2
-            && params.scale == 1.0
+            && effectiveParams.headDim == 512
+            && effectiveParams.numQHeads == 16
+            && effectiveParams.numKVHeads == 2
+            && effectiveParams.scale == 1.0
         let tensorOpsPipeline = tensorOpsShape ? psoFullTensorOps2DValidityV2 : nil
         let useTensorOps = tensorOpsPipeline != nil
         let pipeline: MTLComputePipelineState
@@ -97,7 +119,7 @@ final class PrefillAttention {
             // fixtures must use 512/16/2 to prove that TensorOps ran.
             pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
         }
-        let headDim = Int(params.headDim)
+        let headDim = Int(effectiveParams.headDim)
         let threadWidth = max(1, pipeline.threadExecutionWidth)
         let threadCount = useTensorOps
             ? 128
@@ -105,23 +127,24 @@ final class PrefillAttention {
         precondition(threadCount <= pipeline.maxTotalThreadsPerThreadgroup,
                      "tiled prefill attention requires headDim <= maxTotalThreadsPerThreadgroup")
 
-        let fullAttentionShape = kvRingCapacity == 0
-            && params.headDim == 512
-            && params.numQHeads == 16
-            && params.numKVHeads == 2
-        let spans = Self.querySpans(queryCount: Int(params.queryCount),
-                                    kvValidCount: Int(params.kvValidCount),
+        let fullAttentionShape = layerKind == .full
+            && kvRingCapacity == 0
+            && effectiveParams.headDim == 512
+            && effectiveParams.numQHeads == 16
+            && effectiveParams.numKVHeads == 2
+        let spans = Self.querySpans(queryCount: Int(effectiveParams.queryCount),
+                                    kvValidCount: Int(effectiveParams.kvValidCount),
                                     fullAttentionShape: fullAttentionShape,
                                     useTensorOps: useTensorOps,
                                     watchdogProtectionEnabled: watchdogProtectionEnabled)
         for span in spans {
             guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
-            enc.label = "prefill.attention queries=\(span.lowerBound)..<\(span.upperBound) kv=\(params.kvValidCount)"
+            enc.label = "prefill.attention queries=\(span.lowerBound)..<\(span.upperBound) kv=\(effectiveParams.kvValidCount)"
             enc.setComputePipelineState(pipeline)
             enc.setBuffer(
                 q,
                 offset: qOffset
-                    + span.lowerBound * Int(params.qTokenStrideElements)
+                    + span.lowerBound * Int(effectiveParams.qTokenStrideElements)
                     * MemoryLayout<Float16>.stride,
                 index: 0)
             enc.setBuffer(k, offset: kOffset, index: 1)
@@ -129,10 +152,10 @@ final class PrefillAttention {
             enc.setBuffer(
                 out,
                 offset: outOffset
-                    + span.lowerBound * Int(params.oTokenStrideElements)
+                    + span.lowerBound * Int(effectiveParams.oTokenStrideElements)
                     * MemoryLayout<Float16>.stride,
                 index: 3)
-            var batchParams = params
+            var batchParams = effectiveParams
             batchParams.startPosition += UInt32(span.lowerBound)
             batchParams.queryCount = UInt32(span.count)
             enc.setBytes(
@@ -141,10 +164,10 @@ final class PrefillAttention {
                 index: 4)
             let groups = useTensorOps
                 ? MTLSize(width: span.count,
-                          height: Int(params.numQHeads) / 8,
+                          height: Int(effectiveParams.numQHeads) / 8,
                           depth: 1)
                 : MTLSize(width: span.count,
-                          height: Int(params.numQHeads),
+                          height: Int(effectiveParams.numQHeads),
                           depth: 1)
             enc.dispatchThreadgroups(
                 groups,
@@ -193,11 +216,32 @@ final class PrefillAttention {
                      "KV token stride is too small")
         precondition(params.startPosition + params.queryCount <= params.kvValidCount,
                      "kvValidCount must include all in-flight query rows")
+        precondition(params.bidirectionalBlockStart <= params.bidirectionalBlockEnd,
+                     "bidirectional block range is invalid")
+        precondition(params.bidirectionalBlockEnd <= params.kvValidCount,
+                     "bidirectional block exceeds valid KV rows")
     }
 
 
     private func roundUp(_ value: Int, toMultipleOf multiple: Int) -> Int {
         ((value + multiple - 1) / multiple) * multiple
+    }
+
+
+    /// Reads every field back through the MSL struct. `PrefillAttentionParams`
+    /// is mirrored by hand in `prefill.metal`, and a field added on one side
+    /// only shifts every later field silently.
+    func encodeParamsSmoke(commandBuffer: MTLCommandBuffer,
+                           params: PrefillAttentionParams,
+                           out: MTLBuffer) {
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+        enc.setComputePipelineState(psoParamsSmoke)
+        var p = params
+        enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 0)
+        enc.setBuffer(out, offset: 0, index: 1)
+        enc.dispatchThreads(MTLSize(width: 13, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: 13, height: 1, depth: 1))
+        enc.endEncoding()
     }
 
     private func causalTiledPipeline(kvRingCapacity: UInt32) -> MTLComputePipelineState {

@@ -57,6 +57,11 @@ final class GenerationTaskRegistry: Sendable {
 /// load lifecycle so the resident weights stay warm across generations.
 public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Sendable {
     private let session: RealInferenceSession
+    /// Bytes of image tower held mapped, readable without awaiting the session.
+    public var currentVisionTowerBytes: UInt64? {
+        session.towerBytes.withLock { $0 }
+    }
+
     private let memorySampler: AppMemorySampler
     private let generationTasks = GenerationTaskRegistry()
 
@@ -156,6 +161,22 @@ actor RealInferenceSession {
     private var tokenizerDirectoryCache = TokenizerDirectoryCache()
     private var runner: RealForwardRunner?
     private var scratch: RawCompletionScratch?
+    private var model: Model?
+
+    /// Bytes of image tower held mapped right now, published outside the actor
+    /// so a reader does not have to await it mid-decode.
+    nonisolated let towerBytes = Mutex<UInt64?>(nil)
+
+    private var visionRuntime: VisionRuntime? {
+        didSet { publishTowerBytes() }
+    }
+    private var visionRuntimeError: Error?
+
+    /// Called after anything that maps or releases tower regions.
+    private func publishTowerBytes() {
+        let value = visionRuntime.map { UInt64($0.retainedWeightBytes) }
+        towerBytes.withLock { $0 = value }
+    }
 
     func ensureLoaded(key: SessionLoadKey,
                       onState: @Sendable (AppModelLoadState) -> Void) async throws {
@@ -163,7 +184,10 @@ actor RealInferenceSession {
 
         runner = nil
         scratch = nil
+        model = nil
         loadedKey = nil
+        visionRuntime = nil
+        visionRuntimeError = nil
 
         let start = Date()
         do {
@@ -212,9 +236,34 @@ actor RealInferenceSession {
                                                          vocab: loadedModel.config.vocabSize)
             try Task.checkCancellation()
 
+            let loadedVisionRuntime: VisionRuntime?
+            let loadedVisionRuntimeError: Error?
+            do {
+                let runtime = try VisionRuntime.open(
+                    textModelURL: key.directory,
+                    context: context)
+                // Keep Ready maps the tower during the load rather than on the
+                // first image, so the wait is where the user asked for it.
+                if key.options.visionResidencyPolicy == .keepReady {
+                    onState(.loading(.mappingImageTower))
+                    try runtime.prewarmWeightRegions()
+                }
+                loadedVisionRuntime = runtime
+                loadedVisionRuntimeError = nil
+            } catch {
+                // A missing or invalid pack only means images are unavailable;
+                // the reason travels to the first image turn.
+                loadedVisionRuntime = nil
+                loadedVisionRuntimeError = error
+            }
+            try Task.checkCancellation()
+
             runner = loadedRunner
             scratch = loadedScratch
+            model = loadedModel
             loadedKey = key
+            visionRuntime = loadedVisionRuntime
+            visionRuntimeError = loadedVisionRuntimeError
             onState(.ready(modelDirectory: key.directory,
                            loadSeconds: Date().timeIntervalSince(start)))
         } catch is CancellationError {
@@ -253,6 +302,9 @@ actor RealInferenceSession {
     }
 
     func unload() {
+        visionRuntime = nil
+        visionRuntimeError = nil
+        model = nil
         runner = nil
         scratch = nil
         tokenizer = nil
@@ -263,7 +315,14 @@ actor RealInferenceSession {
     func run(request: AppGenerationRequest,
              memorySampler: AppMemorySampler,
              continuation: AsyncThrowingStream<AppInferenceEvent, Error>.Continuation) async {
-        let prefillConfig = request.runtimeOptions.prefillConfig
+        var prefillConfig = request.runtimeOptions.prefillConfig
+        // Image spans only run under chunked prefill, and the app's prefill toggle
+        // can select `.off`. Coerce rather than fail after the encodes: whether
+        // images work is not a performance preference.
+        if !request.imageAttachments.isEmpty,
+           let coerced = prefillConfig.coercedForImagePrompt() {
+            prefillConfig = coerced
+        }
         let progress = ProgressState()
         do {
             try request.validate()
@@ -283,10 +342,50 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
 
-            let renderedPrompt = try tokenizer.applyChatTemplate([
-                GFTokenizer.Message(role: .user, content: request.prompt)
-            ])
-            let promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
+            let promptIds: [Int32]
+            let multimodalInput: MultimodalPrefillInput?
+            if request.imageAttachments.isEmpty {
+                let renderedPrompt = try tokenizer.applyChatTemplate([
+                    GFTokenizer.Message(role: .user, content: request.prompt)
+                ])
+                promptIds = tokenizer.encode(renderedPrompt, addBOS: false)
+                multimodalInput = nil
+            } else {
+                guard let visionRuntime, let model else {
+                    throw AppInferenceError.invalidRequest(
+                        "Image support is unavailable: "
+                            + (visionRuntimeError.map(String.init(describing:))
+                                ?? "the image companion pack is not installed"))
+                }
+                var features: [UUID: VisionFeatures] = [:]
+                features.reserveCapacity(request.imageAttachments.count)
+                for attachment in request.imageAttachments {
+                    try Task.checkCancellation()
+                    // The file may have changed between selection and send.
+                    let actualDigest = try Sha256Verifier.hashFile(
+                        at: attachment.fileURL, chunkBytes: 256 * 1_024)
+                    guard actualDigest == attachment.sha256 else {
+                        throw AppInferenceError.invalidRequest(
+                            "Image \(attachment.displayName) changed after selection.")
+                    }
+                    defer { publishTowerBytes() }
+                    features[attachment.id] = try visionRuntime.encodeImage(
+                        at: attachment.fileURL,
+                        languageModel: model,
+                        residencyPolicy: request.runtimeOptions.visionResidencyPolicy,
+                        checkCancellation: { try Task.checkCancellation() })
+                }
+                var content = request.imageAttachments.map {
+                    MultimodalContentPart.image(id: $0.id)
+                }
+                if !request.prompt.isEmpty { content.append(.text(request.prompt)) }
+                let input = try MultimodalPromptRenderer.render(
+                    messages: [MultimodalMessage(role: .user, content: content)],
+                    featuresByID: features,
+                    tokenizer: tokenizer)
+                promptIds = input.effectiveTokenIDs
+                multimodalInput = input
+            }
             progress.promptTokenCount = promptIds.count
             guard promptIds.count < runner.maxContext else {
                 throw AppInferenceError.contextOverflow(prompt: promptIds.count,
@@ -306,6 +405,7 @@ actor RealInferenceSession {
 
             let result = try await runRawCompletion(
                 producer: runner, tokenizer: tokenizer, promptIds: promptIds,
+                multimodalInput: multimodalInput,
                 config: config, context: ctx, scratch: scratch,
                 prefillConfig: prefillConfig) { event in
                 switch event {
@@ -418,6 +518,7 @@ actor RealInferenceSession {
             decodeSeconds: decodeSeconds,
             tokensPerSecond: decodeSeconds > 0 ? Double(generated) / decodeSeconds : 0,
             peakMemoryBytes: memorySampler.peakBytes,
+            visionTowerMappedBytes: visionRuntime.map { UInt64($0.retainedWeightBytes) },
             runtimeOptions: request.runtimeOptions,
             prefill: prefill,
             runner: runnerDiagnostics(progress: progress, generated: generated))
@@ -452,6 +553,7 @@ actor RealInferenceSession {
         case .endOfTurn: return .endOfTurn
         case .maxTokens: return .maxTokens
         case .stopString: return .stopString
+        case .cancelled: return .cancelled
         case .toolCalls: return .toolCalls
         }
     }

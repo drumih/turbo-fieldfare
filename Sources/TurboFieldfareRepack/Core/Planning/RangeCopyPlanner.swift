@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfareFormat
 
 public struct RangeCopy: Sendable, Equatable {
     public let shardID: String
@@ -44,6 +45,49 @@ public struct RangeCopyPlan: Sendable {
 }
 
 public enum RangeCopyPlanner {
+    static func plan(
+        visionPackPlan: VisionPackPlan,
+        outputDirectory: String,
+        rangeChunkBytes: Int,
+        textManifestSha256: String
+    ) throws -> RangeCopyPlan {
+        let weightsPath = (outputDirectory as NSString)
+            .appendingPathComponent(GTurboVisionFormatV1.weightsFile)
+        let copies = visionPackPlan.entries.map { entry in
+            RangeCopy(
+                shardID: entry.source.shardPath,
+                sourceOffset: entry.source.absoluteOffset,
+                size: entry.source.sizeBytes,
+                destinationPath: weightsPath,
+                destinationOffset: entry.fileOffset)
+        }
+        try validateDestinationIntervals(copies, outputRoot: outputDirectory)
+        let coalesced = try coalesce(copies: copies, rangeChunkBytes: rangeChunkBytes)
+        let expectedOutputs = [RemoteExpectedOutput(
+            relativePath: GTurboVisionFormatV1.weightsFile,
+            size: visionPackPlan.weightsFileSize)]
+        // A separate domain so a vision plan can never share a fingerprint with
+        // a text plan that happens to coalesce to the same ranges.
+        let fingerprint = try canonicalFingerprint(
+            domain: "TurboFieldfare.RemoteVisionInstallPlan.v1",
+            copies: coalesced,
+            outputRoot: outputDirectory,
+            rangeChunkBytes: rangeChunkBytes,
+            layoutMode: "vision-execution-order",
+            layoutOrderSha256: textManifestSha256,
+            residentIndexSha256: "",
+            expectedOutputs: expectedOutputs)
+        let downloaded = coalesced.reduce(UInt64(0)) { $0 + $1.size }
+        return RangeCopyPlan(
+            scalarCopies: copies,
+            coalescedCopies: coalesced,
+            remoteBytesToDownload: downloaded,
+            remoteGapBytesDownloaded: downloaded - visionPackPlan.sourcePayloadBytes,
+            canonicalFingerprint: fingerprint,
+            residentIndexSha256: "",
+            expectedOutputs: expectedOutputs)
+    }
+
     static func plan(repackPlan: RepackPlan,
                      rangeChunkBytes: Int,
                      layoutMode: String = "identity",
@@ -239,6 +283,7 @@ public enum RangeCopyPlanner {
     }
 
     static func canonicalFingerprint(
+        domain: String = "TurboFieldfare.RemoteInstallPlan.v1",
         copies: [CoalescedRangeCopy],
         outputRoot: String,
         rangeChunkBytes: Int,
@@ -247,7 +292,7 @@ public enum RangeCopyPlanner {
         residentIndexSha256: String,
         expectedOutputs: [RemoteExpectedOutput]
     ) throws -> String {
-        var writer = FingerprintWriter(domain: "TurboFieldfare.RemoteInstallPlan.v1")
+        var writer = FingerprintWriter(domain: domain)
         writer.append(UInt64(GTurboJSON.versionMajor))
         writer.append(UInt64(GTurboJSON.versionMinor))
         writer.append(UInt64(rangeChunkBytes))

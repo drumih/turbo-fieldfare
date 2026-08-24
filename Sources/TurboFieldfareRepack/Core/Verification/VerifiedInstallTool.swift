@@ -192,7 +192,13 @@ public enum VerifiedInstallTool {
 
         var unexpected: [String] = []
         for rel in try access.relativeEntries(maxDepth: scanDepth) {
-            if rel == ".DS_Store" { continue }
+            // Every path component, not just a literal top-level `.DS_Store`:
+            // a directory that went through Finder, SMB or an archive comes back
+            // with AppleDouble `._x` files, `.icloud` placeholders and a Spotlight
+            // index, none of which make a cryptographically valid install invalid.
+            if rel.split(separator: "/").contains(where: {
+                GTurboVisionFormatV1.isSidecarEntry(String($0))
+            }) { continue }
             if rel == "tokenizer" || rel.hasPrefix("tokenizer/") { continue }
             if !allowed.contains(rel) {
                 unexpected.append(rel)

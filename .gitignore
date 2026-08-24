@@ -41,7 +41,7 @@ Model/
 # Logs / scratch
 *.log
 benchmark-results/
-scratch/
+/scratch
 tmp/
 
 # Python

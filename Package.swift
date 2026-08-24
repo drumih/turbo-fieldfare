@@ -127,7 +127,8 @@ let package = Package(
                 "TurboFieldfareCLICore",
                 .product(name: "Hub", package: "swift-transformers"),
             ],
-            path: "Tests/TurboFieldfare/Core"
+            path: "Tests/TurboFieldfare/Core",
+            resources: [.copy("Runtime/Vision/Fixtures/images")]
         ),
         .testTarget(
             name: "TurboFieldfareRepackTests",

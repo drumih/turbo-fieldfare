@@ -130,7 +130,7 @@ internal enum PrefillProjectionDispatchPolicy {
     }
 }
 
-public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
+public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
     private struct LayerSharedExpertProjections {
         let gate: SharedExpertInt8Proj
         let up: SharedExpertInt8Proj
@@ -250,7 +250,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                      maxContext: maxContext,
                                      fp16RingEnabled: useFP16Ring,
                                      slidingWindow: cfg.slidingWindow,
-                                     maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
+                                     maxPrefillChunkTokens: max(
+                                        PrefillRuntimeConfig.maxChunkTokens,
+                                        VisionConfig().maximumPooledTokens))
 
         self.embedInt4 = try EmbedLookupInt4(context: context)
         self.rms       = try RMSNorm(context: context)
@@ -519,7 +521,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         let spans = PrefillChunkPlanner.spans(tokenCount: tokens.count,
                                               startPosition: startPosition,
                                               config: config)
-        for (spanIndex, span) in spans.enumerated() {
+        try await PrefillSpanIteration.forEachSpan(spans) { spanIndex, span in
             let lower = tokens.index(tokens.startIndex, offsetBy: span.tokenOffset)
             let upper = tokens.index(lower, offsetBy: span.tokenCount)
             try await executePrefillChunk(
@@ -540,9 +542,102 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                              seed: .logitsWritten)
     }
 
+
+    public func prefillMultimodal(input: MultimodalPrefillInput,
+                                  startPosition: Int,
+                                  outputMode: PrefillOutputMode,
+                                  config: PrefillRuntimeConfig,
+                                  into logits: MTLBuffer,
+                                  onProgress: (Int) -> Void) async throws -> PrefillResult {
+        try prefillChunkState.requireClean(operation: "prefillMultimodal")
+        // The same property `coercedForImagePrompt()` repairs, so the guard and
+        // the coercion cannot drift apart.
+        guard config.servesImagePrompt else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill requires the complete chunked prefill path")
+        }
+        let tokens = input.embeddingTokenIDs
+        guard startPosition >= 0,
+              startPosition + tokens.count <= maxContext else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill range exceeds maxContext \(maxContext)")
+        }
+        let kvPosition = kv?.position ?? 0
+        guard kvPosition == startPosition else {
+            throw PrefillError.chunkedUnsupported(
+                "multimodal prefill cursor \(kvPosition) != startPosition \(startPosition)")
+        }
+        guard !tokens.isEmpty else {
+            return PrefillResult(newPosition: startPosition, seed: .logitsWritten)
+        }
+
+        // The planner applies the same clamp the scratch layout does. Cutting at
+        // the raw `config.chunkTokens` let a caller size a 280-token scratch and
+        // then hand it a larger chunk, which died on the guard.
+        let textChunkTokens = min(config.chunkTokens, PrefillRuntimeConfig.maxChunkTokens)
+        let work = PrefillChunkPlanner.multimodalWork(
+            tokenCount: tokens.count,
+            imageRanges: input.imageSpans.map(\.tokenRange),
+            chunkTokens: config.chunkTokens)
+        let imageBuffers = input.imageSpans.map(\.features.buffer)
+
+        // One layout for the whole turn, sized for the largest item in it.
+        // Keying the single-slot cache on each item's exact chunk size made a
+        // text-image-text prompt free and reallocate the entire chunk scratch at
+        // every boundary, twice per image span, every turn.
+        let pooledTokens = VisionConfig().maximumPooledTokens
+        let hasImages = work.contains(where: \.isImage)
+        let layoutTokens = hasImages
+            ? max(config.chunkTokens, pooledTokens)
+            : config.chunkTokens
+        let layoutLimit = hasImages
+            ? max(PrefillRuntimeConfig.maxChunkTokens, pooledTokens)
+            : PrefillRuntimeConfig.maxChunkTokens
+        let scratch = try ensurePrefillScratch(
+            config: config.replacingChunkTokens(layoutTokens),
+            chunkTokenLimit: layoutLimit)
+
+        var completed = 0
+        for (index, item) in work.enumerated() {
+            try Task.checkCancellation()
+            let isImage = item.isImage
+            let imageFeatures = item.imageIndex.map { imageBuffers[$0] }
+            // Every item executes under the chunk size it was planned at.
+            let chunkConfig = config.replacingChunkTokens(
+                isImage ? item.range.count : textChunkTokens)
+            let lower = tokens.index(tokens.startIndex, offsetBy: item.range.lowerBound)
+            let upper = tokens.index(tokens.startIndex, offsetBy: item.range.upperBound)
+            try await executePrefillChunk(
+                tokens: tokens[lower..<upper],
+                startPosition: startPosition + item.range.lowerBound,
+                outputMode: outputMode,
+                logits: logits,
+                scratch: scratch,
+                config: chunkConfig,
+                writeFinalHead: index == work.count - 1,
+                embeddingOverride: imageFeatures,
+                bidirectionalBlock: isImage
+                    ? (startPosition + item.range.lowerBound)..<(startPosition + item.range.upperBound)
+                    : nil)
+            completed += item.range.count
+            onProgress(completed)
+        }
+        if outputMode == .greedyIfAvailable, useFusedGreedyHead {
+            return PrefillResult(newPosition: startPosition + tokens.count,
+                                 seed: .greedyToken(lastGreedyToken))
+        }
+        return PrefillResult(newPosition: startPosition + tokens.count,
+                             seed: .logitsWritten)
+    }
+
     @discardableResult
-    private func ensurePrefillScratch(config: PrefillRuntimeConfig) throws -> PrefillChunkScratchBuffers {
-        let layout = PrefillChunkScratchLayout(config: cfg, runtime: config)
+    private func ensurePrefillScratch(
+        config: PrefillRuntimeConfig,
+        chunkTokenLimit: Int = PrefillRuntimeConfig.maxChunkTokens
+    ) throws -> PrefillChunkScratchBuffers {
+        let layout = PrefillChunkScratchLayout(config: cfg,
+                                               chunkTokens: config.chunkTokens,
+                                               chunkTokenLimit: chunkTokenLimit)
         if let scratch = prefillScratch, scratch.layout == layout {
             return scratch
         }
@@ -557,7 +652,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                      logits: MTLBuffer,
                                      scratch: PrefillChunkScratchBuffers,
                                      config: PrefillRuntimeConfig,
-                                     writeFinalHead: Bool) async throws {
+                                     writeFinalHead: Bool,
+                                     embeddingOverride: MTLBuffer? = nil,
+                                     bidirectionalBlock: Range<Int>? = nil) async throws {
         guard !tokens.isEmpty else { return }
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires FP16 KV")
@@ -649,7 +746,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
             if tokenCount >= 32,
                family == .q || family == .kv || family == .o,
                let candidate = prefillMPPAffineInt4 {
-                let path = candidate.encode(
+                let metadata = candidate.encode(
                     commandBuffer: commandBuffer,
                     weights: weights.buffer,
                     weightsOffset: Int(weights.offset),
@@ -662,7 +759,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     m: tokenCount,
                     n: rows,
                     k: columns)
-                if path == .affineThreadgroupF16 {
+                if metadata.path == .affineThreadgroupF16 {
                     return
                 }
             }
@@ -765,18 +862,36 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         prefillChunkState.markDirty(startPosition: startPosition, tokenCount: tokens.count)
 
         var cb = try makeDiagnosticPrefillCommandBuffer()
-        prefillEmbed.encode(commandBuffer: cb,
-                            table: emb.buffer,
-                            tableOffset: Int(emb.offset),
-                            scales: emb.buffer,
-                            scalesOffset: Int(emb.scaleOffset),
-                            biases: emb.buffer,
-                            biasesOffset: Int(emb.biasOffset),
-                            tokens: tokenBuffer,
-                            out: scratch.hidden,
-                            t: UInt32(t),
-                            d: UInt32(D),
-                            outScale: sqrtHidden)
+        if let embeddingOverride {
+            // The override spans the whole chunk — the planner emits image spans
+            // as standalone chunks — so the INT4 gather it would cover is
+            // skipped rather than encoded and fully overwritten.
+            let bytes = t * D * MemoryLayout<Float16>.stride
+            guard embeddingOverride.length >= bytes,
+                  let blit = cb.makeBlitCommandEncoder() else {
+                throw VisionRuntimeError.invalidInput(
+                    "projected image feature buffer is too small")
+            }
+            blit.copy(from: embeddingOverride,
+                      sourceOffset: 0,
+                      to: scratch.hidden,
+                      destinationOffset: 0,
+                      size: bytes)
+            blit.endEncoding()
+        } else {
+            prefillEmbed.encode(commandBuffer: cb,
+                                table: emb.buffer,
+                                tableOffset: Int(emb.offset),
+                                scales: emb.buffer,
+                                scalesOffset: Int(emb.scaleOffset),
+                                biases: emb.buffer,
+                                biasesOffset: Int(emb.biasOffset),
+                                tokens: tokenBuffer,
+                                out: scratch.hidden,
+                                t: UInt32(t),
+                                d: UInt32(D),
+                                outScale: sqrtHidden)
+        }
 
         for L in 0..<cfg.numLayers {
             model.beginOpeningRoutedExpertStreamer(layer: L)
@@ -870,7 +985,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                     kvTokenStrideElements: UInt32(kvDim),
                     qTokenStrideElements: UInt32(qDim),
                     oTokenStrideElements: UInt32(qDim),
-                    scale: 1.0)
+                    scale: 1.0,
+                    bidirectionalBlockStart: UInt32(
+                        isFull ? 0 : bidirectionalBlock?.lowerBound ?? 0),
+                    bidirectionalBlockEnd: UInt32(
+                        isFull ? 0 : bidirectionalBlock?.upperBound ?? 0))
             var usedSeparateAttentionBuffers = false
             if let kv {
                 let keyBuffer = kv.keyBuffer(layer: L, validTokenCount: startPosition + t)
@@ -909,6 +1028,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                             outOffset: span.lowerBound * qDim * MemoryLayout<Float16>.stride,
                             params: batchParams,
                             kvRingCapacity: activeRingCapacity,
+                            layerKind: .full,
                             path: prefillAttentionPath,
                             watchdogProtectionEnabled: true)
                         attentionCB.label = "prefill start=\(startPosition) count=\(t) layer=\(L) phase=attention queries=\(span.lowerBound)..<\(span.upperBound)"
@@ -924,6 +1044,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
                                                   out: scratch.attentionOutput,
                                                   params: params,
                                                   kvRingCapacity: activeRingCapacity,
+                                                  layerKind: isFull ? .full : .slidingWindow,
                                                   path: prefillAttentionPath,
                                                   watchdogProtectionEnabled:
                                                     prefillWatchdogProtectionEnabled)

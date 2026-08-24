@@ -81,6 +81,7 @@ extension GenerationConfig {
 public func runRawCompletion(producer: any LogitProducer,
                              tokenizer: GFTokenizer,
                              promptIds: [Int32],
+                             multimodalInput: MultimodalPrefillInput? = nil,
                              config: GenerationConfig,
                              context: MetalContext,
                              scratch: RawCompletionScratch,
@@ -114,6 +115,22 @@ public func runRawCompletion(producer: any LogitProducer,
         }
         cachedPromptTokens = count
     }
+    if let multimodalInput {
+        // Under resume the multimodal input is the tail that still has to be
+        // prefilled, so it must match the prompt suffix rather than the whole
+        // prompt. `prefillMultimodal` already prefills from `startPosition`.
+        guard multimodalInput.effectiveTokenIDs
+            == Array(promptIds.dropFirst(cachedPromptTokens)) else {
+            throw GeneratorError.invalidContinuation(
+                "multimodal effective token IDs do not match the prompt")
+        }
+    }
+    // Image spans are served only by the chunked prefill path, and a prefill
+    // config that cannot serve them is a performance setting, not a decision to
+    // drop the images.
+    let prefillConfig = multimodalInput == nil
+        ? prefillConfig
+        : (prefillConfig.coercedForImagePrompt() ?? prefillConfig)
     let computedPrefillTokens = promptIds.count - cachedPromptTokens
 
     var detok = GFDetokenizer(tokenizer: tokenizer,
@@ -138,8 +155,41 @@ public func runRawCompletion(producer: any LogitProducer,
     var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
     let prefillTokens = promptIds[cachedPromptTokens...]
-    switch prefillConfig.mode {
-    case .chunked where producer is any ChunkedPrefillRunner:
+    switch (multimodalInput, prefillConfig.mode) {
+    case (.some(let input), .chunked) where producer is any MultimodalPrefillRunner:
+        let multimodal = producer as! any MultimodalPrefillRunner
+        let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
+        let result = try await multimodal.prefillMultimodal(
+            input: input,
+            startPosition: position,
+            outputMode: mode,
+            config: prefillConfig,
+            into: scratch.logits
+        ) { done in
+            // The suffix-local count plus what the KV already holds. Without the
+            // offset a 300-token image turn on a 5,000-token KV showed 1 of 5,300.
+            onProgress(.prefill(done: cachedPromptTokens + done,
+                                total: promptIds.count))
+        }
+        if mode == .logits, result.seed != .logitsWritten {
+            throw PrefillError.unsupportedPrefillSeed(
+                "RawCompletion multimodal prefill requested logits but producer returned \(result.seed)")
+        }
+        if case .greedyToken = result.seed, !config.isPureGreedy {
+            throw PrefillError.unsupportedPrefillSeed(
+                "RawCompletion multimodal prefill returned a greedy token for a sampling config")
+        }
+        position = result.newPosition
+        prefillSeed = result.seed
+        // Only the suffix: under resume the cached prefix is already in history,
+        // and appending the whole prompt would duplicate it.
+        history.append(contentsOf: prefillTokens)
+    case (.some, _):
+        // The coercion above leaves an image prompt in chunked mode, so the only
+        // way here is a producer that cannot run image spans at all.
+        throw PrefillError.chunkedUnsupported(
+            "multimodal prefill requires a MultimodalPrefillRunner-backed runtime")
+    case (.none, .chunked) where producer is any ChunkedPrefillRunner:
         let chunked = producer as! any ChunkedPrefillRunner
         let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
         let result = try await chunked.prefillChunked(tokens: prefillTokens,
@@ -160,10 +210,10 @@ public func runRawCompletion(producer: any LogitProducer,
         position = result.newPosition
         prefillSeed = result.seed
         history.append(contentsOf: prefillTokens)
-    case .chunked:
+    case (.none, .chunked):
         throw PrefillError.chunkedUnsupported(
             PrefillError.chunkedRequiresChunkedRunnerReason)
-    case .off:
+    case (.none, .off):
         for t in prefillTokens {
             try Task.checkCancellation()
             try await producer.produce(token: t, position: position, into: scratch.logits)
@@ -218,12 +268,17 @@ public func runRawCompletion(producer: any LogitProducer,
         let visible = stopMatcher.push(delta)
         onProgress(.token(index: generated - 1, id: tokenID, delta: visible))
 
-        let hitStopString = stopMatcher.isStopped || shouldStop()
+        // Cancellation is not a stop-string match: reporting it as one made a
+        // user pressing Stop indistinguishable from a configured stop string,
+        // and `stopStringFiltered` is computed from `isStopped` rather than the
+        // reason, so the two disagreed about the same run.
+        let hitStopString = stopMatcher.isStopped
+        let cancelled = !hitStopString && shouldStop()
         let hitMax = generated >= config.maxNewTokens
-        if hitStopString || hitMax {
+        if hitStopString || cancelled || hitMax {
             let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
-            reason = hitStopString ? .stopString : .maxTokens
+            reason = hitStopString ? .stopString : (cancelled ? .cancelled : .maxTokens)
             break
         }
 

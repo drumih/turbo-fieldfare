@@ -722,4 +722,43 @@ extension Model {
         }
     }
 
+
+    /// Releases routed-expert streamers and their slot scratch before vision
+    /// encoding, so the tower's bounded scratch does not stack on top of the
+    /// expert cache on an 8 GB machine.
+    ///
+    /// The caller must serialize this transition against forward execution.
+    public func prepareExpertResidencyForVision(
+        _ policy: VisionResidencyPolicy,
+        gpuDrainNanoseconds: UInt64 = 0
+    ) -> VisionExpertResidencyTransition {
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        return streamersQueue.sync {
+            let releasedLayerCount = streamersBox.streamers.compactMap { $0 }.count
+            let releasedBytes = streamersBox.streamers.compactMap { $0 }.reduce(UInt64(0)) {
+                $0 + $1.diagnosticSlotScratchBytes
+            }
+            if policy == .onDemand {
+                var released = streamersBox.streamers
+                streamersBox.streamers = Array(
+                    repeating: nil, count: packedExpertsLayout.numLayers)
+                // `layerVerified` deliberately survives the release. Clearing it
+                // would make every image turn from the second on re-verify all
+                // 30 packed expert files, ~12.9 GB, inside this queue.
+                released.removeAll()
+            }
+            let remaining = streamersBox.streamers.compactMap { $0 }
+            return VisionExpertResidencyTransition(
+                policy: policy,
+                gpuDrainNanoseconds: gpuDrainNanoseconds,
+                releasedLayerCount: policy == .onDemand ? releasedLayerCount : 0,
+                releasedSlotScratchBytes: policy == .onDemand ? releasedBytes : 0,
+                remainingOpenLayerCount: remaining.count,
+                remainingSlotScratchBytes: remaining.reduce(UInt64(0)) {
+                    $0 + $1.diagnosticSlotScratchBytes
+                },
+                wallNanoseconds: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start)
+        }
+    }
+
 }

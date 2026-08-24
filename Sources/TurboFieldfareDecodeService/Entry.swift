@@ -1,7 +1,19 @@
 import Darwin
+import TurboFieldfare
 import Foundation
 import TurboFieldfareAppCore
 import TurboFieldfareDecodeProtocol
+
+enum DecodeServiceError: Error, CustomStringConvertible {
+    case attachmentOutsideStore(path: String)
+
+    var description: String {
+        switch self {
+        case .attachmentOutsideStore(let path):
+            "image attachment is not a staged attachment: \(path)"
+        }
+    }
+}
 
 @main enum TurboFieldfareDecodeServiceMain {
     static func main() async {
@@ -23,6 +35,7 @@ import TurboFieldfareDecodeProtocol
             if let launchLabel { retireLaunchJob(launchLabel) }
         }
 
+        DecodeUnixSocket.ignoreSIGPIPEProcessWide()
         let client = RealInferenceClient()
         let commands = DecodeCommandQueue()
         let input = Thread {
@@ -74,7 +87,15 @@ import TurboFieldfareDecodeProtocol
                         error: "model is not loaded"), to: handles.output)
                     continue
                 }
-                guard request.runtimeOptions == loadedOptions else {
+                // Prefill is chosen per request, not at load, so it must not be
+                // part of this comparison: toggling it and pressing Generate was
+                // refused as a mismatched session.
+                var comparable = request.runtimeOptions
+                comparable.prefillEnabled = loadedOptions?.prefillEnabled
+                    ?? comparable.prefillEnabled
+                comparable.prefillChunkTokens = loadedOptions?.prefillChunkTokens
+                    ?? comparable.prefillChunkTokens
+                guard comparable == loadedOptions else {
                     try? write(DecodeServiceEvent(
                         kind: .failed, generationID: request.generationID,
                         error: "generation runtime options do not match the loaded session"),
@@ -82,7 +103,9 @@ import TurboFieldfareDecodeProtocol
                     continue
                 }
 
-                let outbox = DecodeServiceOutbox(generationID: request.generationID)
+                let outbox = DecodeServiceOutbox(
+                    generationID: request.generationID,
+                    towerBytes: { client.currentVisionTowerBytes })
                 let writerFinished = DispatchSemaphore(value: 0)
                 let writer = Thread {
                     defer { writerFinished.signal() }
@@ -96,12 +119,32 @@ import TurboFieldfareDecodeProtocol
                 writer.start()
 
                 do {
+                    // The trust boundary: these paths arrive over a socket, and
+                    // this process opens and hashes whatever they name. Without
+                    // this, a peer could use the service to report on any file
+                    // the user can read.
+                    if let outside = (request.imageAttachments ?? []).first(where: {
+                        !AppImageAttachmentStore.contains(URL(fileURLWithPath: $0.path))
+                    }) {
+                        throw DecodeServiceError.attachmentOutsideStore(
+                            path: outside.path)
+                    }
                     let options = try appRuntimeOptions(request.runtimeOptions)
                     let generation = AppGenerationRequest(
                         modelDirectory: modelDirectory, prompt: request.prompt,
+                        imageAttachments: (request.imageAttachments ?? []).map {
+                            AppImageAttachment(
+                                id: $0.id,
+                                fileURL: URL(fileURLWithPath: $0.path),
+                                displayName: $0.displayName,
+                                encodedBytes: $0.encodedBytes,
+                                sha256: $0.sha256)
+                        },
                         maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
+                        topK: request.topK,
+                        topP: request.topP,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: options)
                     for try await event in client.generate(generation) {
@@ -163,13 +206,22 @@ import TurboFieldfareDecodeProtocol
             throw AppInferenceError.invalidRequest(
                 "unknown model verification \(options.modelVerification)")
         }
+        // An unknown policy is a request for behaviour that does not exist;
+        // absent means the shipped default.
+        guard let visionResidencyPolicy = VisionResidencyPolicy(
+            rawValue: options.visionResidencyPolicy ?? VisionResidencyPolicy.onDemand.rawValue)
+        else {
+            throw AppInferenceError.invalidRequest(
+                "unknown vision residency policy \(options.visionResidencyPolicy ?? "")")
+        }
         let resolved = AppRuntimeOptions(
             expertCacheSlots: options.expertCacheSlots,
             expertCachePolicy: cachePolicy,
             prefillEnabled: options.prefillEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: rdadvisePolicy,
-            modelVerification: modelVerification)
+            modelVerification: modelVerification,
+            visionResidencyPolicy: visionResidencyPolicy)
         try resolved.validate()
         return resolved
     }

@@ -21,7 +21,10 @@ import TurboFieldfare
 
     @Test func everyPublicChoiceMapsToRuntime() throws {
         for slots in AppRuntimeOptions.allowedSlotCounts {
-            let runtime = try AppRuntimeOptions(expertCacheSlots: slots)
+            let prefillEnabled =
+                slots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+            let runtime = try AppRuntimeOptions(expertCacheSlots: slots,
+                                               prefillEnabled: prefillEnabled)
                 .resolvedRuntimeConfiguration(forceLogitsHead: false)
             #expect(runtime.expertCacheSlots == slots)
         }
@@ -98,4 +101,19 @@ import TurboFieldfare
             maxContextTokens: 4096,
             options: value) == baseline)
     }
+    /// Refused at selection, not inside the first prefill chunk - which is
+    /// after the model load and, on an image turn, after every attachment has
+    /// already been encoded on the GPU.
+    @Test func slotsBelowTheChunkedPrefillMinimumRequirePrefillOff() {
+        let minimum = RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        for slots in AppRuntimeOptions.allowedSlotCounts where slots < minimum {
+            #expect(throws: AppInferenceError.self) {
+                try AppRuntimeOptions(expertCacheSlots: slots, prefillEnabled: true).validate()
+            }
+            #expect(throws: Never.self) {
+                try AppRuntimeOptions(expertCacheSlots: slots, prefillEnabled: false).validate()
+            }
+        }
+    }
+
 }
