@@ -1,0 +1,647 @@
+\begin{cases} x & \text{if } x \geq 0 \\ -x & \text{if } x < 0 \end{cases}
+\begin{aligned} a &= b \\ c &= d \end{aligned}
+\begin{align*} a &= b \\ c &= d \end{align*}
+\begin{equation} a = b \end{equation}
+\operatorname{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}
+\mathbb{R}^n \to \mathcal{L}
+\hat{y} = \mathbf{W}^\top \mathbf{x} + \mathbf{b}
+a \; b \: c \! d \quad e \qquad f
+\dfrac{1}{2} \tfrac{1}{2}
+\text{rate} = 5\%
+\boxed{x}
+x \in \{1, 2\} \land y \lor z \neg w \implies q \iff r
+\nabla \cdot \vec{E} = \frac{\rho}{\varepsilon_0}
+\underbrace{a+b}_{\text{sum}} \overbrace{c}^{d}
+\lim_{x \to \infty} \frac{1}{x} = 0
+\int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}
+\begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix} \begin{bmatrix} a \\ b \end{bmatrix}
+\mathrm{d}x \, \mathit{v}
+\cancel{x}
+\textbf{bold} \textit{it}
+\frac{\partial f}{\partial x} \approx \Delta
+\mathcal{O}(n \log n)
+\sigma(z) = \frac{1}{1 + e^{-z}}
+x \ge 0,\ y \le 1
+\left\{ a \right\}
+\left. \frac{a}{b} \right|_{x=0}
+\binom{n}{k} \sqrt[3]{x}
+\ldots \cdots \vdots \ddots
+\hbar \ell \Re \Im \aleph
+\stackrel{?}{=}
+\overline{AB} \underline{x} \vec{v} \dot{x} \ddot{x} \tilde{n} \bar{x}
+\color{red}{x} \textcolor{blue}{y}
+\mathbf{A}^{-1}\mathbf{A}=\mathbf{I}
+\text{if } x > 0 \text{ then } y
+\sum\limits_{i=1}^n \prod\nolimits_{j} x_{ij}
+\substack{a \\ b}
+e^{i\pi}+1=0
+\begin{array}{cc} 1 & 2 \\ 3 & 4 \end{array}
+\begin{vmatrix} a & b \\ c & d \end{vmatrix}
+\mathsf{sans} \mathtt{mono} \mathfrak{F}
+\quad
+\qquad
+\,
+\:
+\;
+\!
+\ 
+\hspace{1em}
+\phantom{x}
+\wedge
+\vee
+\lnot
+\neg
+\land
+\lor
+\Rightarrow
+\Leftrightarrow
+\implies
+\iff
+\to
+\mapsto
+\rightarrow
+\leftarrow
+\longrightarrow
+\overset{a}{b}
+\underset{a}{b}
+\stackrel{a}{b}
+\mathrm{x}
+\operatorname{x}
+\operatorname*{x}
+\fbox{x}
+\boxed{x}
+\mbox{x}
+\not=
+\neq
+\ne
+\leq
+\geq
+\ll
+\gg
+\%
+\#
+\&
+\_
+\{
+\}
+\|
+\langle x \rangle
+\lfloor x \rfloor
+\lceil x \rceil
+\in
+\notin
+\subset
+\subseteq
+\cup
+\cap
+\emptyset
+\varnothing
+\forall
+\exists
+\therefore
+\because
+\circ
+\star
+\oplus
+\otimes
+\times
+\div
+\pm
+\mp
+\sim
+\simeq
+\approx
+\equiv
+\propto
+\degree
+^\circ
+\prime
+x'
+x''
+\colon
+\max
+\min
+\log
+\ln
+\exp
+\sin
+\cos
+\tan
+\det
+\dim
+\gcd
+\Pr
+\sup
+\inf
+\arg
+\arg\max
+\argmax
+a \mod b
+a \pmod{b}
+a \bmod b
+{a \over b}
+{n \choose k}
+{a \atop b}
+\rm x
+\bf x
+\it x
+\displaystyle x
+\textstyle x
+\scriptstyle x
+\small x
+\large x
+\left| x \right|
+\left\| x \right\|
+\left\langle x \right\rangle
+\left\lfloor x \right\rfloor
+\left. x \right|
+\left( x \middle| y \right)
+\bigl( x \bigr)
+\Bigl( x \Bigr)
+\big( x \big)
+\Big( x \Big)
+\bigg( x \bigg)
+\Bigg( x \Bigg)
+\cdots
+\dots
+\dotsc
+\ldots
+\vdots
+x \tag{1}
+\label{eq}
+x \nonumber
+a \\[6pt] b
+\newline
+\begin{split} a &= b \\ &= c \end{split}
+\begin{gather} a \\ b \end{gather}
+\begin{gather*} a \\ b \end{gather*}
+\begin{align} a &= b \end{align}
+\begin{alignat}{2} a &= b \end{alignat}
+\begin{smallmatrix} a & b \end{smallmatrix}
+\begin{Bmatrix} a & b \end{Bmatrix}
+\begin{Vmatrix} a & b \end{Vmatrix}
+\begin{matrix} a & b \end{matrix}
+\begin{array}{c} a \end{array}
+\begin{array}{|c|c|} \hline a & b \\ \hline \end{array}
+\begin{equation*} a \end{equation*}
+\begin{eqnarray} a &=& b \end{eqnarray}
+\begin{cases} a & b \\ c & d \end{cases}
+\begin{rcases} a \end{rcases}
+\text{\textbf{x}}
+\textbf{x}
+\textit{x}
+\textsf{x}
+\texttt{x}
+\textrm{x}
+\mathbf{x}
+\boldsymbol{x}
+\bm{x}
+\pmb{x}
+\mathbb{R}
+\mathcal{L}
+\mathfrak{g}
+\mathscr{L}
+\mathsf{x}
+\mathtt{x}
+\mathit{x}
+\mathnormal{x}
+\hat{x}
+\widehat{xy}
+\tilde{x}
+\widetilde{xy}
+\bar{x}
+\overline{xy}
+\underline{x}
+\vec{x}
+\overrightarrow{AB}
+\overleftarrow{AB}
+\dot{x}
+\ddot{x}
+\acute{x}
+\grave{x}
+\check{x}
+\breve{x}
+\underbrace{x}
+\overbrace{x}
+\underbrace{x}_{y}
+\cancel{x}
+\sout{x}
+\xcancel{x}
+\dfrac{a}{b}
+\tfrac{a}{b}
+\frac{a}{b}
+\cfrac{a}{b}
+\binom{n}{k}
+\dbinom{n}{k}
+\tbinom{n}{k}
+\sqrt{x}
+\sqrt[n]{x}
+\sum
+\prod
+\coprod
+\int
+\iint
+\iiint
+\oint
+\bigcup
+\bigcap
+\bigoplus
+\lim
+\limsup
+\liminf
+\partial
+\nabla
+\infty
+\hbar
+\ell
+\Re
+\Im
+\aleph
+\epsilon
+\varepsilon
+\phi
+\varphi
+\theta
+\vartheta
+\Gamma
+\Delta
+\Omega
+\mu
+\sigma
+\Sigma
+\alpha
+\beta
+\gamma
+\lambda
+\pi
+\tau
+\omega
+\xi
+\zeta
+\eta
+\kappa
+\rho
+\varrho
+\upsilon
+\chi
+\psi
+\nu
+\iota
+\digamma
+π
+×
+≤
+→
+−
+α
+∞
+∑
+√2
+½
+…
+ℝ
+é
+中
+\ce{H2O}
+\si{m}
+\num{1e3}
+\unicode{x263A}
+\href{x}{y}
+\url{x}
+\includegraphics{x}
+\mathstrut
+\strut
+\vphantom{x}
+\hphantom{x}
+\smash{x}
+\raisebox{1pt}{x}
+\kern1pt
+\mkern1mu
+\mskip1mu
+\hskip1pt
+\vspace{1pt}
+\,\!
+\;\;
+\ang{90}
+\textdegree
+\%
+100\%
+\$
+\mathrel{\smash{=}}
+\mathbin{+}
+\mathop{x}
+\mathord{x}
+\mathpunct{,}
+\mathopen{(}
+\mathclose{)}
+\color{red} x
+\color{#ff0000} x
+\textcolor{red}{x}
+\colorbox{red}{x}
+\fcolorbox{red}{blue}{x}
+\rule{1pt}{1pt}
+\def\x{y}
+\newcommand{\x}{y}
+\text{a b}
+\text{a \$ b}
+\text{if}~x
+a~b
+\mathbin{\text{and}}
+\not\in
+\not\subset
+\surd
+\top
+\bot
+\vdash
+\models
+\perp
+\parallel
+\angle
+\triangle
+\square
+\Box
+\blacksquare
+\diamond
+\bullet
+\cdot
+\ast
+\dagger
+\ddagger
+\S
+\P
+\copyright
+\pounds
+\euro
+\checkmark
+\maltese
+\smile
+\frown
+\flat
+\sharp
+\natural
+\clubsuit
+\heartsuit
+\spadesuit
+\diamondsuit
+\hookrightarrow
+\leftrightarrow
+\Longrightarrow
+\xrightarrow{f}
+\xleftarrow{f}
+\uparrow
+\downarrow
+\Uparrow
+\nearrow
+\searrow
+\rightharpoonup
+\leadsto
+\lvert x \rvert
+\lVert x \rVert
+\left\lvert x \right\rvert
+\abs{x}
+\norm{x}
+\set{x}
+\ifmmode x \fi
+\lbrace x \rbrace
+\lbrack x \rbrack
+\backslash
+\setminus
+\smallsetminus
+\triangleq
+\coloneqq
+\eqqcolon
+:=
+\defeq
+\leqslant
+\geqslant
+\lesssim
+\gtrsim
+\prec
+\succ
+\preceq
+\succeq
+\subsetneq
+\supset
+\supseteq
+\sqsubseteq
+\sqcup
+\sqcap
+\uplus
+\amalg
+\wr
+\bowtie
+\Join
+\ltimes
+\rtimes
+\ominus
+\odot
+\oslash
+\bigodot
+\bigotimes
+\bigsqcup
+\biguplus
+\bigvee
+\bigwedge
+\varlimsup
+\varinjlim
+\ker
+\deg
+\hom
+\lg
+\sec
+\csc
+\cot
+\arcsin
+\arccos
+\arctan
+\sinh
+\cosh
+\tanh
+\coth
+\operatorname{ReLU}(x)
+\mathrm{ReLU}(x)
+\text{ReLU}(x)
+\mathrm{softmax}
+\mathrm{argmax}_x
+\operatorname*{argmax}_x
+\underset{x}{\operatorname{argmax}}
+\underset{x}{\mathrm{argmax}}
+\underset{x}{\arg\max}
+\DeclareMathOperator{\x}{y}
+\mathrm{d}
+\partial_x f
+f'(x)
+f^{(n)}(x)
+x_{i,j}
+x_{ij}^{2}
+10^{-3}
+1{,}000
+1\,000
+\$5
+5\%
+\#1
+a\&b
+x_1, x_2, \ldots, x_n
+(x_1, \dots, x_n)
+\{x_i\}_{i=1}^n
+\left\{x_i\right\}_{i=1}^n
+\sum_{i=1}^{n}
+\sum_{\substack{i \\ j}}
+\sum_{i \in S}
+\prod_{k=1}^K
+\int_a^b
+\int\limits_a^b
+\lim_{n\to\infty}
+\max_{x}
+\min_{x}
+\sup_{x}
+\sup\limits_{x}
+e^{i\theta}
+\exp(x)
+\log_2 n
+\ln(x)
+\sqrt{a^2+b^2}
+\frac{1}{2}
+\frac12
+\frac{\partial L}{\partial w}
+\nabla_\theta J(\theta)
+\theta \leftarrow \theta - \eta \nabla_\theta J
+\mathbb{E}[X]
+\mathbb{E}_{x \sim p}[f(x)]
+\mathrm{Var}(X)
+\operatorname{Var}(X)
+P(A \mid B)
+P(A | B)
+\Pr[A]
+\mathcal{N}(\mu, \sigma^2)
+\sim
+x \sim \mathcal{N}(0,1)
+\|x\|_2
+\|x\|_\infty
+\langle x, y \rangle
+x^\top y
+x^T y
+x^{\mathsf{T}} y
+A^{-1}
+A^\dagger
+A^*
+\det(A)
+\mathrm{tr}(A)
+\operatorname{tr}(A)
+\mathrm{rank}(A)
+\mathbf{I}_n
+\mathbf{0}
+\vec{0}
+\hat{\beta}
+\tilde{\theta}
+\bar{x}
+\dot{q}
+\mathbf{x}^{(i)}
+x^{(i)}
+y^{(i)}
+h_\theta(x)
+J(\theta) = \frac{1}{2m}\sum_{i=1}^m (h_\theta(x^{(i)}) - y^{(i)})^2
+O(n^2)
+\Theta(n)
+\Omega(n \log n)
+o(1)
+\mathcal{O}(1)
+\text{softmax}(z)_i = \frac{e^{z_i}}{\sum_{j} e^{z_j}}
+\text{Attention}(Q,K,V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+\mathrm{Attention}(Q,K,V)
+\operatorname{Attention}(Q,K,V)
+\frac{d}{dx}
+\frac{\mathrm{d}y}{\mathrm{d}x}
+\frac{dy}{dx}
+\ddot{x} + \omega^2 x = 0
+F = ma
+E = mc^2
+\vec{F} = m\vec{a}
+\mathbf{F} = m\mathbf{a}
+\nabla \times \mathbf{B}
+\oint_C \mathbf{E}\cdot d\mathbf{l}
+\iint_S
+\mathrm{d}^3x
+\hbar\omega
+\psi(x,t)
+\langle \psi | \phi \rangle
+|\psi\rangle
+\langle\psi|
+\hat{H}|\psi\rangle = E|\psi\rangle
+\ket{\psi}
+\bra{\psi}
+\braket{\psi|\phi}
+\vec{r} = (x, y, z)
+\|\vec{r}\|
+\mathbf{r}
+\boldsymbol{\mu}
+\boldsymbol{\Sigma}
+\Sigma^{-1}
+\mu_i
+\sigma_{ij}
+\rho_{XY}
+\chi^2
+\alpha = 0.05
+p < 0.05
+H_0: \mu = 0
+H_a: \mu \neq 0
+\bar{X} \pm z_{\alpha/2}\frac{\sigma}{\sqrt{n}}
+t = \frac{\bar{x} - \mu}{s/\sqrt{n}}
+\binom{n}{k} p^k (1-p)^{n-k}
+\frac{\lambda^k e^{-\lambda}}{k!}
+n!
+(n-1)!
+\Gamma(n) = (n-1)!
+\zeta(s) = \sum_{n=1}^\infty \frac{1}{n^s}
+\forall \epsilon > 0\, \exists \delta > 0
+\exists! x
+A \subseteq B \iff \forall x (x \in A \Rightarrow x \in B)
+\neg p \lor q
+p \land q
+p \to q
+p \leftrightarrow q
+\top
+\bot
+\mathbb{Z}_n
+\mathbb{Z}/n\mathbb{Z}
+a \equiv b \pmod{n}
+a \equiv b \ (\mathrm{mod}\ n)
+\gcd(a,b)
+\operatorname{lcm}(a,b)
+\lfloor x \rfloor
+\lceil x \rceil
+|x|
+\left|x\right|
+\|x\|
+x \bmod 2
+\text{mod}
+\texttt{mod}
+\mathtt{0x1F}
+\mathrm{0x1F}
+2^{32}
+2^{32}-1
+\log_2(n)
+\lg n
+n \log n
+\Theta(n \lg n)
+T(n) = 2T(n/2) + O(n)
+T(n) = 2T\left(\frac{n}{2}\right) + \Theta(n)
+f(n) = \begin{cases} 1 & n = 0 \\ n f(n-1) & n > 0 \end{cases}
+\begin{cases} x, & x \ge 0 \\ -x, & x < 0 \end{cases}
+\begin{cases} x & \text{if } x \ge 0, \\ -x & \text{otherwise.} \end{cases}
+\left\{ \begin{array}{ll} x & x \ge 0 \\ -x & x < 0 \end{array} \right.
+\left\{\begin{aligned} a &= b \\ c &= d \end{aligned}\right.
+\begin{aligned} a &= b \\ &= c \\ &= d \end{aligned}
+\begin{aligned} a &= b & c &= d \end{aligned}
+\begin{aligned} a &= b \\[4pt] c &= d \end{aligned}
+\begin{aligned} a &= b \\ \\ c &= d \end{aligned}
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}^{-1} = \frac{1}{ad-bc}\begin{pmatrix} d & -b \\ -c & a \end{pmatrix}
+\begin{bmatrix} 1 & 0 \\ 0 & 1 \end{bmatrix}
+\begin{pmatrix} x_1 \\ x_2 \\ \vdots \\ x_n \end{pmatrix}
+\begin{pmatrix} a_{11} & \cdots & a_{1n} \\ \vdots & \ddots & \vdots \\ a_{m1} & \cdots & a_{mn} \end{pmatrix}
+\begin{vmatrix} a & b \\ c & d \end{vmatrix} = ad - bc
+\det\begin{pmatrix} a & b \\ c & d \end{pmatrix}
+\begin{matrix} a & b \\ c & d \end{matrix}
+\left[\begin{matrix} a & b \\ c & d \end{matrix}\right]
+\left(\begin{matrix} a & b \\ c & d \end{matrix}\right)
+\left[ \begin{array}{cc|c} 1 & 2 & 3 \\ 4 & 5 & 6 \end{array} \right]

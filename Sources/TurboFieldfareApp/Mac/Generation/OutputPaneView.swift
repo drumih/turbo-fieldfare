@@ -595,8 +595,17 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             updatePrefillAnimationTimer()
 
             guard update.mutation != .none else { return }
+            // A rewritten stretch is different text, so a selection that
+            // reached into it is dropped back to the boundary rather than
+            // kept at its old length over characters it never covered.
+            let adjusted = update.replaced.map {
+                InstructionTranscriptDocumentController.adjustedRanges(
+                    selection,
+                    replacing: $0.previous,
+                    newLength: $0.length)
+            } ?? selection
             let restored = InstructionTranscriptDocumentController.clampedRanges(
-                selection,
+                adjusted,
                 toLength: storage.length)
             if restored.isEmpty {
                 textView.setSelectedRange(NSRange(location: storage.length, length: 0))
@@ -717,7 +726,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
 
-        let textView = NSTextView()
+        let textView = TranscriptTextView()
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
