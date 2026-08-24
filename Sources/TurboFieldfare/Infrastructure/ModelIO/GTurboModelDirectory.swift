@@ -108,4 +108,42 @@ package final class GTurboModelDirectory {
         }
         return ModelError.posixFailed(call: "openat(\(relativePath))", errno: errno)
     }
+
+    package func basenames() throws -> Set<String> {
+        let duplicate = fcntl(rootFD, F_DUPFD_CLOEXEC, 0)
+        guard duplicate >= 0 else {
+            throw ModelError.posixFailed(call: "fcntl(F_DUPFD_CLOEXEC, model root)", errno: errno)
+        }
+        guard let directory = fdopendir(duplicate) else {
+            let savedErrno = errno
+            close(duplicate)
+            throw ModelError.posixFailed(call: "fdopendir(model root)", errno: savedErrno)
+        }
+        defer { closedir(directory) }
+        var names = Set<String>()
+        // The duplicate shares its offset with the retained descriptor, and the
+        // previous enumeration consumed it, so without this a second call
+        // returns nothing and a valid directory reads as having no entries.
+        rewinddir(directory)
+        // Cleared immediately before each `readdir`, not once before the loop:
+        // POSIX only promises `errno` is meaningful after a failure, and both
+        // `rewinddir` and the allocation inside the loop may set it on success.
+        // A stray value made an intact directory throw, which the vision pack
+        // reader turns into "image support is unavailable".
+        errno = 0
+        while let entry = readdir(directory) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+                    String(cString: $0)
+                }
+            }
+            if name != "." && name != ".." { names.insert(name) }
+            errno = 0
+        }
+        guard errno == 0 else {
+            throw ModelError.posixFailed(call: "readdir(model root)", errno: errno)
+        }
+        return names
+    }
+
 }

@@ -94,7 +94,9 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(!model.hasStaleLoadedRuntime)
-        model.maxContextTokens = AppContextLengthOption.eightK.tokens
+        // Away from the default, which is 8K: setting the value it already has
+        // would prove nothing.
+        model.maxContextTokens = AppContextLengthOption.sixteenK.tokens
         #expect(model.hasStaleLoadedRuntime)
     }
 

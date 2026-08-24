@@ -14,9 +14,11 @@ public enum AppModelInstallState: Equatable, Sendable {
     )
     case hashingOutput(String)
     case finalizing
+    case activating
     case cancelling
     case discarding
     case cancelled
+    case readyToActivate(URL)
     case recoverable(String)
     case installed(modelDirectory: URL)
     case failed(String)
@@ -24,19 +26,24 @@ public enum AppModelInstallState: Equatable, Sendable {
     public var isInstalling: Bool {
         switch self {
         case .checking, .downloadingMetadata, .planning, .reservingOutput,
-             .copyingPayload, .hashingOutput, .finalizing, .cancelling, .discarding:
+             .copyingPayload, .hashingOutput, .finalizing, .activating,
+             .cancelling, .discarding:
             return true
-        case .idle, .cancelled, .recoverable, .installed, .failed:
+        case .idle, .cancelled, .readyToActivate, .recoverable, .installed, .failed:
             return false
         }
     }
 
     public var canCancel: Bool {
         switch self {
+        // `.activating` is cancellable because the only long phase in it is the
+        // hash of the companion weights, which happens before anything is
+        // renamed: abandoning it leaves the prepared pack exactly as it was.
         case .checking, .downloadingMetadata, .planning, .reservingOutput,
-             .copyingPayload, .hashingOutput, .finalizing:
+             .copyingPayload, .hashingOutput, .finalizing, .activating:
             return true
-        case .idle, .cancelling, .discarding, .cancelled, .recoverable, .installed, .failed:
+        case .idle, .cancelling, .discarding, .cancelled, .readyToActivate,
+             .recoverable, .installed, .failed:
             return false
         }
     }
@@ -54,5 +61,6 @@ public enum AppModelInstallEvent: Equatable, Sendable {
     )
     case hashingOutput(String)
     case finalizing
+    case readyToActivate(URL)
     case installed(URL)
 }

@@ -66,3 +66,12 @@ protocol ChunkedPrefillRunner: LogitProducer {
                         into logits: MTLBuffer,
                         onProgress: (Int) -> Void) async throws -> PrefillResult
 }
+
+protocol MultimodalPrefillRunner: LogitProducer {
+    func prefillMultimodal(input: MultimodalPrefillInput,
+                           startPosition: Int,
+                           outputMode: PrefillOutputMode,
+                           config: PrefillRuntimeConfig,
+                           into logits: MTLBuffer,
+                           onProgress: (Int) -> Void) async throws -> PrefillResult
+}

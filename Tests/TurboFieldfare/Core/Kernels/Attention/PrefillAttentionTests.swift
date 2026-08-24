@@ -20,6 +20,7 @@ import TurboFieldfareValidationSupport
         var kvValid: Int
         var window: Int
         var scale: Float
+        var bidirectionalBlock: Range<Int>?
     }
 
     @Test func prefillAttentionMatchesCPUReferenceFullAndSWA() throws {
@@ -230,6 +231,78 @@ import TurboFieldfareValidationSupport
                        window: window, scale: 1.0)
     }
 
+    @Test func prefillAttentionParamsLayoutMatchesMSL() throws {
+        #expect(MemoryLayout<PrefillAttentionParams>.size == 52)
+        #expect(MemoryLayout<PrefillAttentionParams>.stride == 52)
+
+        let params = PrefillAttentionParams(startPosition: 3,
+                                            queryCount: 5,
+                                            headDim: 7,
+                                            numQHeads: 11,
+                                            numKVHeads: 1,
+                                            kvValidCount: 17,
+                                            slidingWindow: 19,
+                                            kvTokenStrideElements: 23,
+                                            qTokenStrideElements: 29,
+                                            oTokenStrideElements: 31,
+                                            scale: 1.25,
+                                            bidirectionalBlockStart: 37,
+                                            bidirectionalBlockEnd: 41)
+        let ctx = try MetalContext()
+        let prefill = try PrefillAttention(context: ctx)
+        guard let out = ctx.device.makeBuffer(length: 13 * MemoryLayout<UInt32>.size,
+                                              options: .storageModeShared) else {
+            Issue.record("alloc failed")
+            return
+        }
+
+        let cb = ctx.queue.makeCommandBuffer()!
+        prefill.encodeParamsSmoke(commandBuffer: cb, params: params, out: out)
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        let ptr = out.contents().bindMemory(to: UInt32.self, capacity: 11)
+        let fields = (0..<13).map { ptr[$0] }
+        #expect(fields[0] == params.startPosition)
+        #expect(fields[1] == params.queryCount)
+        #expect(fields[2] == params.headDim)
+        #expect(fields[3] == params.numQHeads)
+        #expect(fields[4] == params.numKVHeads)
+        #expect(fields[5] == params.kvValidCount)
+        #expect(fields[6] == params.slidingWindow)
+        #expect(fields[7] == params.kvTokenStrideElements)
+        #expect(fields[8] == params.qTokenStrideElements)
+        #expect(fields[9] == params.oTokenStrideElements)
+        #expect(fields[10] == params.scale.bitPattern)
+        #expect(fields[11] == params.bidirectionalBlockStart)
+        #expect(fields[12] == params.bidirectionalBlockEnd)
+    }
+
+    @Test func slidingAttentionMakesImageBlockBidirectionalWithinWindow() throws {
+        var fixture = Self.makeFixture(start: 4, chunk: 6, window: 5, seed: 0xA621)
+        fixture.bidirectionalBlock = 5..<9
+
+        let actual = try Self.runKernel(fixture)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(actual, reference)
+        let rel = RelError.compute(actual: actual, reference: reference)
+        #expect(maxAbs <= 2e-2, "image block maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "image block rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
+    @Test func fullAttentionRemainsCausalForImageBlock() throws {
+        var fixture = Self.makeFixture(start: 4, chunk: 6, window: 0, seed: 0xA622)
+        fixture.bidirectionalBlock = 5..<9
+
+        let actual = try Self.runKernel(fixture)
+        fixture.bidirectionalBlock = nil
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(actual, reference)
+        let rel = RelError.compute(actual: actual, reference: reference)
+        #expect(maxAbs <= 2e-2, "full image mask maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "full image mask rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
     private static func runAndCompare(_ fixture: Fixture, label: String) throws {
         let actual = try Self.runKernel(fixture)
         let reference = Self.reference(fixture)
@@ -274,7 +347,9 @@ import TurboFieldfareValidationSupport
             kvTokenStrideElements: UInt32(fixture.kvStride),
             qTokenStrideElements: UInt32(fixture.qStride),
             oTokenStrideElements: UInt32(fixture.oStride),
-            scale: fixture.scale)
+            scale: fixture.scale,
+            bidirectionalBlockStart: UInt32(fixture.bidirectionalBlock?.lowerBound ?? 0),
+            bidirectionalBlockEnd: UInt32(fixture.bidirectionalBlock?.upperBound ?? 0))
 
         let cb = ctx.queue.makeCommandBuffer()!
         prefill.encodeCausal(commandBuffer: cb,
@@ -288,6 +363,7 @@ import TurboFieldfareValidationSupport
                              outOffset: oPrefix * MemoryLayout<Float16>.size,
                              params: params,
                              kvRingCapacity: kvRingCapacity,
+                             layerKind: fixture.window == 0 ? .full : .slidingWindow,
                              path: path)
         cb.commit()
         cb.waitUntilCompleted()
@@ -318,7 +394,10 @@ import TurboFieldfareValidationSupport
             } else {
                 first = max(0, absQ + 1 - fixture.window)
             }
-            let last = min(fixture.kvValid, absQ + 1)
+            let isBidirectional = fixture.bidirectionalBlock?.contains(absQ) == true
+            let last = min(
+                fixture.kvValid,
+                isBidirectional ? fixture.bidirectionalBlock!.upperBound : absQ + 1)
             for qh in 0..<fixture.qHeads {
                 let kvh = qh / qPerKV
                 var scores: [Float] = []

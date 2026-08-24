@@ -18,6 +18,27 @@ import Testing
         try GenerationConfig(temperature: 0, topK: nil, topP: 0.95).validate()
     }
 
+    /// `validate()` checked temperature for finiteness from the start and never
+    /// checked the penalty beside it, so `--repetition-penalty inf` parsed, passed
+    /// validation, reached the kernel and quietly degraded the output rather than
+    /// being refused: a prompt that counts to eight broke into another language
+    /// mid-count and then apologised for itself. Every CLI float guard without an
+    /// upper bound admits infinity, which is how it got that far.
+    @Test func generationConfigRejectsAPenaltyThatCannotBeApplied() throws {
+        #expect(throws: GeneratorError.self) {
+            try GenerationConfig(temperature: 0, repetitionPenalty: .infinity).validate()
+        }
+        #expect(throws: GeneratorError.self) {
+            try GenerationConfig(temperature: 0, repetitionPenalty: 0).validate()
+        }
+        #expect(throws: GeneratorError.self) {
+            try GenerationConfig(temperature: 0, repetitionPenalty: .nan).validate()
+        }
+        // The default, and an ordinary setting, both stay valid.
+        try GenerationConfig(temperature: 0).validate()
+        try GenerationConfig(temperature: 0, repetitionPenalty: 1.1).validate()
+    }
+
     private final class Rig {
         let context: MetalContext
         let current: Sample

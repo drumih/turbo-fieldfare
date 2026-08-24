@@ -34,6 +34,40 @@ struct OpenAIValidationTests {
         #expect(ids.count <= 16_384 - 4_096)
     }
 
+    @Test func capturedDshInitialRequestValidatesAndRenders() async throws {
+        // DeepSeek Harness 0.1.1-rc.1's `workflow` tool declares its `args`
+        // parameter as a bare object node with `additionalProperties` — the
+        // shape that crashed template rendering with "upper filter requires
+        // string" (PR 138). Rendering here is the regression: the fixture
+        // must survive the full validate + render path.
+        let request = try fixture("dsh-0.1.1-rc.1-initial.json")
+        let validated = try OpenAIRequestValidator.validate(
+            request, modelID: "gemma-4-26b-a4b-it")
+        #expect(validated.stream)
+        #expect(validated.includeUsage)
+        #expect(validated.tools.count == 25)
+        let workflow = try #require(validated.tools.first { $0.name == "workflow" })
+        let args = workflow.parameters.objectValue?["properties"]?
+            .objectValue?["args"]?.objectValue
+        #expect(args?["properties"] == .object([:]))
+        let tokenizer = try await GFTokenizer.load()
+        _ = try tokenizer.encodeToolChat(
+            messages: validated.messages, tools: validated.tools)
+    }
+
+    @Test func capturedDshToolResultValidatesAndRenders() async throws {
+        let request = try fixture("dsh-0.1.1-rc.1-tool-result.json")
+        let validated = try OpenAIRequestValidator.validate(
+            request, modelID: "gemma-4-26b-a4b-it")
+        #expect(validated.messages.count == 5)
+        let call = try #require(
+            validated.messages.first { !$0.toolCalls.isEmpty }?.toolCalls.first)
+        #expect(call.id == "call_0123456789abcdef01234567")
+        let tokenizer = try await GFTokenizer.load()
+        _ = try tokenizer.encodeToolChat(
+            messages: validated.messages, tools: validated.tools)
+    }
+
     @Test func requiredToolChoiceIsRejected() throws {
         let data = Data(#"""
         {"model":"m","messages":[{"role":"user","content":"x"}],"tool_choice":"required"}
@@ -349,6 +383,89 @@ struct OpenAIValidationTests {
         #expect(item?["oneOf"] == nil)
     }
 
+    @Test func bareObjectNodesWithSiblingKeywordsRender() async throws {
+        // Regression: the chat template routes an object node without
+        // `properties` through its filter_keys branch, which iterates the
+        // node's own keys as property schemas; preserved keywords such as
+        // `additionalProperties`, `default`, or `title` then hit
+        // `value['type'] | upper` on a non-string and rendering fails with
+        // Jinja runtime("upper filter requires string") — the 500 reported by
+        // a DeepSeek Harness user in PR 138. Without the injected empty
+        // `properties` mapping, encodeToolChat throws here.
+        let data = Data(#"""
+        {
+          "model":"m",
+          "messages":[{"role":"user","content":"go"}],
+          "tools":[{
+            "type":"function",
+            "function":{
+              "name":"probe",
+              "parameters":{
+                "type":"object",
+                "properties":{
+                  "closed":{"type":"object","additionalProperties":false},
+                  "annotated":{"type":"object","default":{},"title":"Config"},
+                  "bare":{"type":"object"}
+                }
+              }
+            }
+          }]
+        }
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = tokenizer.decode(
+            try tokenizer.encodeToolChat(
+                messages: validated.messages,
+                tools: validated.tools),
+            skipSpecialTokens: false)
+        // All three nodes render through the same branch a bare object node
+        // already used, so the output shape stays `properties:{}` (the
+        // detokenized text carries token-boundary spaces).
+        #expect(rendered.contains("closed:{ properties:{ },type:"))
+        #expect(rendered.contains("annotated:{ properties:{ },type:"))
+        #expect(rendered.contains("bare:{ properties:{ },type:"))
+    }
+
+    @Test func adaptedObjectNodesAlwaysCarryProperties() throws {
+        // Invariant: no adapted object node reaches the template without a
+        // `properties` mapping, so the template's key-iterating fallback
+        // branch is unreachable for adapter output.
+        let schemas = [
+            #"{"type":"object","properties":{"v":{"type":"object","additionalProperties":true}}}"#,
+            #"{"type":"object","properties":{"v":{"type":"array","items":{"type":"object","default":{"a":1}}}}}"#,
+            #"{"type":"object","properties":{"v":{"anyOf":[{"type":"object","examples":{"a":1}},{"type":"null"}]}}}"#,
+            #"{"type":"object","properties":{"v":{"type":"object","properties":{"w":{"type":"object"}}}}}"#,
+        ]
+        for encoded in schemas {
+            let schema = try JSONDecoder().decode(JSONValue.self, from: Data(encoded.utf8))
+            let adapted = try GemmaToolSchema.adapted(schema, toolName: "probe")
+            try assertObjectNodesCarryProperties(adapted, path: "parameters")
+            let again = try GemmaToolSchema.adapted(adapted, toolName: "probe")
+            #expect(again == adapted)
+        }
+    }
+
+    private func assertObjectNodesCarryProperties(
+        _ schema: JSONValue, path: String
+    ) throws {
+        guard case .object(let object) = schema else { return }
+        if object["type"] == .string("object") {
+            let properties = object["properties"]
+            #expect(properties?.objectValue != nil,
+                    "object node at \(path) lacks a properties mapping")
+        }
+        if case .object(let definitions)? = object["properties"] {
+            for (key, value) in definitions {
+                try assertObjectNodesCarryProperties(value, path: "\(path).properties.\(key)")
+            }
+        }
+        if let items = object["items"] {
+            try assertObjectNodesCarryProperties(items, path: "\(path).items")
+        }
+    }
+
     @Test func unsupportedToolSchemaUnionsFailClosed() throws {
         let schemas = [
             #"{"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"object"}]}}}"#,
@@ -657,7 +774,7 @@ struct ServerArgumentTests {
         ["--expert-cache-slots", "12"],
         ["--expert-cache-policy", "mru"],
         ["--prefill", "maybe"],
-        ["--prefill-chunk-tokens", "256"],
+        ["--prefill-chunk-tokens", "512"],
         ["--rdadvise", "eager"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
@@ -665,4 +782,109 @@ struct ServerArgumentTests {
             try ServerArguments.parse(["--model", "model.gturbo"] + flag)
         }
     }
+    @Test func imageDataURLPreservesOrderedMultimodalParts() throws {
+        let dataURL = "data:image/png;base64,iVBORw0KGgo="
+        let data = Data(#"""
+        {"model":"m","messages":[{"role":"user","content":[
+          {"type":"text","text":"before"},
+          {"type":"image_url","image_url":{"url":"\#(dataURL)","detail":"auto"}},
+          {"type":"text","text":"after"}
+        ]}]}
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let message = try #require(validated.multimodalMessages?.first)
+        #expect(message.content.count == 3)
+        #expect(validated.imageFiles.count == 1)
+        guard case .text("before") = message.content[0],
+              case .image = message.content[1],
+              case .text("after") = message.content[2] else {
+            Issue.record("content part order changed")
+            return
+        }
+    }
+
+    @Test func imageIdentitiesAlignWithMessagesAndPreserveOrder() throws {
+        let a = "data:image/png;base64,iVBORw0KGgo="
+        let b = "data:image/png;base64,iVBORw0KGgoAAAA="
+        let json = #"""
+        {"model":"m","messages":[
+          {"role":"user","content":[
+            {"type":"image_url","image_url":{"url":"\#(a)"}},
+            {"type":"image_url","image_url":{"url":"\#(b)"}},
+            {"type":"text","text":"compare"}]},
+          {"role":"assistant","content":"ok"},
+          {"role":"user","content":"and now"}
+        ]}
+        """#
+        let request = try JSONDecoder().decode(
+            OpenAIChatRequest.self, from: Data(json.utf8))
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.imageIdentities.count == validated.messages.count)
+        #expect(validated.imageIdentities[0].count == 2)
+        #expect(validated.imageIdentities[1].isEmpty)
+        #expect(validated.imageIdentities[2].isEmpty)
+        #expect(validated.imageIdentities[0][0] != validated.imageIdentities[0][1])
+
+        // The same bytes must hash the same across separate requests, which is
+        // what lets a later turn recognise an earlier image.
+        let again = try OpenAIRequestValidator.validate(
+            try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(json.utf8)),
+            modelID: "m")
+        #expect(again.imageIdentities == validated.imageIdentities)
+        #expect(again.imageFiles.keys.sorted(by: { $0.uuidString < $1.uuidString })
+                != validated.imageFiles.keys.sorted(by: { $0.uuidString < $1.uuidString }))
+    }
+
+    @Test func imageValidationRejectsUnsupportedRoleDetailAndScheme() throws {
+        for content in [
+            #"{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}"#,
+            #"{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo=","detail":"high"}}]}"#,
+            #"{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]}"#,
+        ] {
+            let data = Data("{\"model\":\"m\",\"messages\":[\(content)]}".utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            #expect(throws: ServerRequestError.self) {
+                try OpenAIRequestValidator.validate(request, modelID: "m")
+            }
+        }
+    }
+
+    @Test func manyImagesValidateAndKeepPositionalIdentity() throws {
+        func conversation(imagesPerTurn: Int, turns: Int) throws -> OpenAIChatRequest {
+            var messages: [String] = []
+            var seed = 0
+            for turn in 0..<turns {
+                var parts: [String] = []
+                for _ in 0..<imagesPerTurn {
+                    seed += 1
+                    let payload = String(repeating: "A", count: 4 * seed)
+                    parts.append(
+                        #"{"type":"image_url","image_url":{"url":"data:image/png;base64,\#(payload)"}}"#)
+                }
+                parts.append(#"{"type":"text","text":"turn \#(turn)"}"#)
+                messages.append("{\"role\":\"user\",\"content\":[\(parts.joined(separator: ","))]}")
+                messages.append("{\"role\":\"assistant\",\"content\":\"ok \(turn)\"}")
+            }
+            messages.removeLast()
+            let json = "{\"model\":\"m\",\"messages\":[\(messages.joined(separator: ","))]}"
+            return try JSONDecoder().decode(
+                OpenAIChatRequest.self, from: Data(json.utf8))
+        }
+
+        // Ten images across ten turns, each identified positionally.
+        let spread = try OpenAIRequestValidator.validate(
+            conversation(imagesPerTurn: 1, turns: 10), modelID: "m")
+        #expect(spread.imageFiles.count == 10)
+        #expect(spread.imageIdentities.count == spread.messages.count)
+        #expect(spread.imageIdentities.filter { !$0.isEmpty }.count == 10)
+
+        // And many in a single message.
+        let dense = try OpenAIRequestValidator.validate(
+            conversation(imagesPerTurn: 8, turns: 1), modelID: "m")
+        #expect(dense.imageFiles.count == 8)
+        #expect(dense.imageIdentities[0].count == 8)
+        #expect(Set(dense.imageIdentities[0]).count == 8)
+    }
+
 }

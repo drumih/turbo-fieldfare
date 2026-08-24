@@ -1,7 +1,7 @@
 # Optimizing a 14.3 GB model for an 8 GB machine
 
 TurboFieldfare runs Gemma 4 26B-A4B on an 8 GB Apple Silicon machine. Its
-text-only installation, without the vision tower, is about 14.3 GB. The model
+text installation, without the optional image pack, is about 14.3 GB. The model
 was never going to fit politely in memory.
 
 Instead, the runtime keeps 1.35 GB of common model weights available to Metal

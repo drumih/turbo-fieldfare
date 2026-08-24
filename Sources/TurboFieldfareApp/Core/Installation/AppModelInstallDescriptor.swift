@@ -42,6 +42,16 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         installedBytes: 14_291_921_884,
         rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
         reserveBytes: 1_073_741_824)
+
+    public static let visionCompanion = AppModelInstallDescriptor(
+        displayName: "Gemma 4 Image Support",
+        repoID: "mlx-community/gemma-4-26b-a4b-it-4bit",
+        revision: "0d77464eeb233a2da68ebf9d7dc4edaac7db956d",
+        sourceIndexSHA256: "bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13",
+        approximateDownloadBytes: 1_539_478_890,
+        installedBytes: 1_144_373_248 + 4_194_304,
+        rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
+        reserveBytes: 1_073_741_824)
 }
 
 public struct AppModelInstallRequirement: Equatable, Sendable {

@@ -30,6 +30,11 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
     public var livePrefillDone: Int
     public var livePrefillTotal: Int
     public var lastStopReason: AppStopReason?
+    /// `canLoadModel` and its siblings refuse while a companion operation runs,
+    /// so the snapshot has to carry it: without it this resolved to
+    /// "Installed · Not loaded" with a `.load` action, and the banner rendered a
+    /// fully enabled button that did nothing for the whole transfer.
+    public var isVisionCompanionOperationInProgress: Bool
 
     public init(requiresInstallation: Bool,
                 installState: AppModelInstallState,
@@ -41,7 +46,8 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
                 generationPhase: AppGenerationPhase,
                 livePrefillDone: Int = 0,
                 livePrefillTotal: Int = 0,
-                lastStopReason: AppStopReason? = nil) {
+                lastStopReason: AppStopReason? = nil,
+                isVisionCompanionOperationInProgress: Bool = false) {
         self.requiresInstallation = requiresInstallation
         self.installState = installState
         self.installReadiness = installReadiness
@@ -53,6 +59,7 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
         self.livePrefillDone = livePrefillDone
         self.livePrefillTotal = livePrefillTotal
         self.lastStopReason = lastStopReason
+        self.isVisionCompanionOperationInProgress = isVisionCompanionOperationInProgress
     }
 }
 
@@ -134,6 +141,13 @@ public struct AppPresentationState: Equatable, Sendable {
             return Self(label: "Model required")
         }
 
+        // Every model action is refused for the duration, so offering one here
+        // would be offering a button that does nothing.
+        if snapshot.isVisionCompanionOperationInProgress {
+            return Self(label: "Preparing image support",
+                        severity: .active, showsActivity: true)
+        }
+
         switch snapshot.loadState {
         case .loading(let phase):
             return Self(label: phase.label, severity: .active, showsActivity: true,
@@ -192,9 +206,10 @@ public struct AppPresentationState: Equatable, Sendable {
         case .copyingPayload: return "Downloading model"
         case .hashingOutput(let file): return "Verifying \(file)"
         case .finalizing: return "Finalizing installation"
+        case .activating: return "Activating image support"
         case .cancelling: return "Cancelling installation"
         case .discarding: return "Discarding download"
-        case .idle, .cancelled, .recoverable, .installed, .failed:
+        case .idle, .cancelled, .readyToActivate, .recoverable, .installed, .failed:
             return "Model required"
         }
     }

@@ -14,11 +14,16 @@ public struct ServerArguments: Equatable, Sendable {
     public let prefillChunkTokens: Int
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let diagnosticsEnabled: Bool
+    public let visionPack: String?
+    public let visionResidency: VisionResidencyPolicy
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
       --model <dir>              Required model directory.
+    --vision-pack <dir>        Vision companion pack (default beside text model).
+    --vision-residency <on-demand|keep-ready>
+                       Routed-expert residency during vision (default on-demand).
       --port <1...65535>         Loopback port (default 8080).
       --model-id <id>            API model identifier (default gemma-4-26b-a4b-it).
       --max-context <tokens>     4096, 8192, 16384, 32768, or 65536 (default 16384).
@@ -73,6 +78,8 @@ public struct ServerArguments: Equatable, Sendable {
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
         var expertCacheSlots = 24
+        var visionPack: String?
+        var visionResidency: VisionResidencyPolicy = .onDemand
         var expertCachePolicy = RuntimeExpertCachePolicy.lfu
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
@@ -122,6 +129,14 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--vision-pack":
+                visionPack = value
+            case "--vision-residency":
+                guard let parsed = VisionResidencyPolicy(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--vision-residency must be on-demand or keep-ready")
+                }
+                visionResidency = parsed
             case "--expert-cache-slots":
                 guard let parsed = Int(value),
                       RuntimeConfiguration.allowedExpertCacheSlots.contains(parsed) else {
@@ -167,7 +182,9 @@ public struct ServerArguments: Equatable, Sendable {
                                prefillPolicy: prefillPolicy,
                                prefillChunkTokens: prefillChunkTokens,
                                rdadvisePolicy: rdadvisePolicy,
-                               diagnosticsEnabled: diagnosticsEnabled)
+                               diagnosticsEnabled: diagnosticsEnabled,
+                               visionPack: visionPack,
+                               visionResidency: visionResidency)
     }
 }
 

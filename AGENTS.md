@@ -62,3 +62,24 @@ is the runtime KV format. The HUD shows generation rate, token count, and
 decode-service memory; Last run also shows time to first token and I/O. Build
 the app with its sibling `TurboFieldfareDecodeService`; it never loads a second
 in-process model. See [README](README.md) and [Runtime controls](docs/RUNTIME_CONTROLS.md).
+
+## Images
+
+Image support is an optional `<name>.vision.gturbo` companion pack that sits
+beside the text model. Without it the text runtime behaves exactly as before.
+
+```bash
+swift run -c release TurboFieldfareRepack \
+  --vision-output scratch/gemma4.vision.gturbo \
+  --text-model scratch/gemma4.gturbo
+```
+
+The model-free suites cover preprocessing, the tower kernels, the companion
+format, the installer transaction, prompt rendering, and the server ingress.
+Cases that need a real installed pack skip themselves when
+`scratch/gemma4.gturbo` and its companion are missing, so a checkout without a
+model still runs green.
+
+Keep the image path fail-closed. If the pack is missing or invalid, say image
+support is unavailable. Never accept an image and then answer as though it had
+not been sent.
