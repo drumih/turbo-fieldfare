@@ -370,4 +370,47 @@ import Testing
                 "a persisted keep-ready came back through the model path change")
     }
 
+    @Test func serverPortAndQueueLimitRoundTrip() throws {
+        let initial = MacAppSettings(serverPort: 9090, serverQueueLimit: 8)
+        let decoded = try JSONDecoder().decode(
+            MacAppSettings.self,
+            from: JSONEncoder().encode(initial))
+
+        #expect(decoded == initial)
+    }
+
+    @Test func serverPortAndQueueLimitDefaultWhenAbsentFromAnOlderFile() throws {
+        let data = Data("""
+        {
+          "version": 2,
+          "contextTokens": 8192,
+          "expertCacheSlots": 16,
+          "temperature": 0.2,
+          "topKEnabled": true,
+          "topK": 64,
+          "topPEnabled": true,
+          "topP": 0.95,
+          "prefillEnabled": true
+        }
+        """.utf8)
+
+        let settings = try JSONDecoder().decode(MacAppSettings.self, from: data)
+
+        #expect(settings.serverPort == 8080)
+        #expect(settings.serverQueueLimit == 4)
+    }
+
+    @MainActor
+    @Test func serverPortPersistsImmediately() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let model = AppModel(modelDirectory: modelDirectory, settingsPersistenceEnabled: true)
+
+        model.setServerPort(9090)
+
+        let saved = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: modelDirectory)
+        #expect(saved.serverPort == 9090)
+    }
+
 }
