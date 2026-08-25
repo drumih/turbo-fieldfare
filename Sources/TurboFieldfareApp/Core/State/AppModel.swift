@@ -901,7 +901,12 @@ public final class AppModel {
 
     public func stopServer() {
         guard canStopServer else { return }
-        if case .starting = serverState { serverStopRequestedDuringStart = true }
+        // Unconditional, not just set-when-true: `.running` can still arrive
+        // and be applied while `.stopping` (the buffered SIGTERM from a stop
+        // requested during `.starting` only takes effect once the model
+        // finishes loading), so a second stop from that `.running` flash
+        // must not inherit the first stop's "waiting on load" flag.
+        serverStopRequestedDuringStart = serverState == .starting
         serverState = .stopping
         serverController.stop()
     }

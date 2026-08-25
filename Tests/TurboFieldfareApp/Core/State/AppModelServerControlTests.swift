@@ -201,6 +201,32 @@ import TurboFieldfare
     }
 
     @MainActor
+    @Test func isServerStoppingDuringStartClearsAfterARunningFlashDuringTheBufferedSignal() async throws {
+        // The scenario the flag exists for: SIGTERM sent during `.starting`
+        // is buffered by the server until its model load finishes, so a
+        // `.running` can still be applied while `serverState` is
+        // `.stopping`. A second stop after that flash must not inherit the
+        // first stop's "waiting on load" flag — the model has since loaded.
+        let directory = try makeCompleteModelInstall("server-control-stopping-flash")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = MockServerController()
+        let model = AppModel(modelDirectory: directory,
+                             client: MockLifecycleInferenceClient(),
+                             serverController: controller)
+
+        model.startServer()
+        model.stopServer()
+        #expect(model.isServerStoppingDuringStart)
+
+        controller.emit(.running(port: 8080))
+        try await waitUntil(deadline: 5) { model.serverState == .running(port: 8080) }
+
+        model.stopServer()
+        #expect(!model.isServerStoppingDuringStart,
+                "a stop from .running inherited the earlier stop's stale flag")
+    }
+
+    @MainActor
     @Test func aLateRunningCallbackAfterAFailureIsIgnored() async throws {
         let directory = try makeCompleteModelInstall("server-control-late-running")
         defer { try? FileManager.default.removeItem(at: directory) }
