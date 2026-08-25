@@ -11,7 +11,10 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
     @MainActor static var model: AppModel?
 
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { Self.model?.releaseAllAttachments() }
+        MainActor.assumeIsolated {
+            Self.model?.releaseAllAttachments()
+            Self.model?.stopServerForTermination()
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
