@@ -13,6 +13,7 @@ public enum RepackError: Error, CustomStringConvertible {
     case fileOpenFailed(path: String, errno: Int32)
     case fileStatFailed(path: String, errno: Int32)
     case ftruncateFailed(path: String, errno: Int32)
+    case preallocateFailed(path: String, errno: Int32)
     case pwriteShort(path: String, expected: Int, wrote: Int, errno: Int32)
     case preadShort(path: String, expected: Int, got: Int, errno: Int32)
     case mmapFailed(path: String, errno: Int32)
@@ -63,6 +64,7 @@ public enum RepackError: Error, CustomStringConvertible {
         case .fileOpenFailed(let p, let e):     return "open(\(p)) failed: errno \(e)"
         case .fileStatFailed(let p, let e):     return "fstat(\(p)) failed: errno \(e)"
         case .ftruncateFailed(let p, let e):    return "ftruncate(\(p)) failed: errno \(e)"
+        case .preallocateFailed(let p, let e):  return "preallocate(\(p)) failed: errno \(e)"
         case .pwriteShort(let p, let exp, let got, let e):
             return "pwrite(\(p)) short: expected \(exp), wrote \(got), errno \(e)"
         case .preadShort(let p, let exp, let got, let e):

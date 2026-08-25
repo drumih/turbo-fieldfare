@@ -109,7 +109,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [CACHE-06](summaries/03-expert-cache-prediction-and-layout.md#cache-06) — Markov prefetch | Flat/negative; later row collapsed and was not correctness-safe. | Rejected. |
 | [CACHE-07](summaries/03-expert-cache-prediction-and-layout.md#cache-07) — Offset read order | First win failed to repeat. | Rejected. |
 | [CACHE-08](summaries/03-expert-cache-prediction-and-layout.md#cache-08) — Packed layout | Natural text +3.61%; near-4K decode -16.1% and prefill worse. | Rejected. |
-| [CACHE-09](summaries/03-expert-cache-prediction-and-layout.md#cache-09) — APFS preallocation | Fragmentation observed; candidate not built. | Unexecuted hypothesis. |
+| [CACHE-09](summaries/03-expert-cache-prediction-and-layout.md#cache-09) — APFS preallocation | Repeated cold 4K gains of 5.27% and 6.70%; median warm gain 4.21%; identity and resources passed. | Production for new text-model packs. |
 
 ### RDADVISE
 
@@ -215,7 +215,6 @@ These boundaries are not failed performance work:
 - Weights below INT4 were cancelled by the quality floor.
 - Draft-model speculative decoding did not reach a complete runtime candidate.
 - Production routing was never cache-conditional.
-- Fresh APFS preallocation remains unexecuted.
 - The iPhone port is deferred; these are Mac measurements.
 
 ## How these summaries were prepared

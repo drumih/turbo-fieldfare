@@ -404,7 +404,7 @@ public final class RemoteStreamingRepacker {
         for layer in plan.layers where layer.expertsPerLayer > 0 {
             try Task.checkCancellation()
             let descriptor = try Posix.openCreateRW(layer.path)
-            try Posix.ftruncate(descriptor, path: layer.path, size: layer.fileSize)
+            try Posix.preallocate(descriptor, path: layer.path, size: layer.fileSize)
             try Posix.fsync(descriptor, path: layer.path)
             close(descriptor)
         }

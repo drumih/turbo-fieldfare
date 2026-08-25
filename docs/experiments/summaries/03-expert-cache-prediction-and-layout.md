@@ -16,7 +16,7 @@ capacity and memory cost.
 | Uniform 16-slot LFU | Production |
 | 24/32 slots | Conditional +memory experiments |
 | Predictor, Markov, read sorting, and single-trace layout | Rejected |
-| Fresh preallocated expert artifact | Unexecuted hypothesis |
+| Fresh preallocated text-model artifact | Production for new packs |
 
 ## Cache policy and capacity
 
@@ -147,15 +147,21 @@ capacity and memory cost.
 
 - **Hypothesis:** A freshly preallocated expert artifact might reduce file
   fragmentation.
-- **Variants tested:** Existing-file extent inspection only.
-- **Evidence:** The files were fragmented, but no clean preallocated artifact
-  received an end-to-end gate.
-- **What changed the conclusion:** No runtime
-  conclusion was reached.
-- **Final disposition:** Unexecuted hypothesis.
-- **Lesson:**
-  A plausible filesystem mechanism is neither a win nor a rejection until the
-  artifact is built and measured.
+- **Variants tested:** The existing verified Qwen3.6 artifact and a byte-identical
+  copy written into freshly preallocated resident and routed-expert files.
+- **Evidence:** Two interleaved baseline/candidate pairs improved cold 4K TTFT
+  by 5.27% and 6.70%. Median cold TTFT improved from 81.346 to 76.476 seconds
+  (5.99%); median warm-divergent TTFT improved from 74.833 to 71.679 seconds
+  (4.21%). The output hash stayed identical, all 47 artifact files verified,
+  and both resource gates passed.
+- **What changed the conclusion:** The clean artifact produced a repeated
+  same-host cold-path win above the 5% retention threshold.
+- **Final disposition:** Production for newly repacked text-model resident and
+  routed-expert files. The measured speed claim is scoped to Qwen3.6 on the
+  base-M5 host; existing artifacts remain compatible.
+- **Lesson:** Physical allocation can reduce demand-read cost without changing
+  artifact bytes, but storage-policy wins still require repeated end-to-end
+  gates.
 
 [Previous: Decode, MoE, INT4, and router](02-decode-moe-int4-and-router.md) |
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |

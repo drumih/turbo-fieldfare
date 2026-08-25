@@ -15,7 +15,7 @@ enum ResidentWriter {
         try Posix.mkdirP(((plan.path as NSString).deletingLastPathComponent))
         let fd = try Posix.openCreateRW(plan.path)
         defer { close(fd) }
-        try Posix.ftruncate(fd, path: plan.path, size: plan.totalSize)
+        try Posix.preallocate(fd, path: plan.path, size: plan.totalSize)
 
         // 2. Write the binary index page: header + entries + string table.
         try writeIndex(plan: plan, fd: fd, audit: audit)
@@ -53,7 +53,7 @@ enum ResidentWriter {
         try Posix.mkdirP(((plan.path as NSString).deletingLastPathComponent))
         let fd = try Posix.openCreateRW(plan.path)
         do {
-            try Posix.ftruncate(fd, path: plan.path, size: plan.totalSize)
+            try Posix.preallocate(fd, path: plan.path, size: plan.totalSize)
             try writeIndex(plan: plan, fd: fd, audit: audit)
             return fd
         } catch {

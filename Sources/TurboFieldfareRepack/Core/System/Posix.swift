@@ -58,6 +58,25 @@ public enum Posix {
         }
     }
 
+    public static func preallocate(_ fd: Int32, path: String, size: UInt64) throws {
+        let checkedSize = try checkedOffT(size, path: path, operation: "preallocate")
+        if checkedSize > 0 {
+            var store = fstore_t(
+                fst_flags: UInt32(F_ALLOCATECONTIG),
+                fst_posmode: Int32(F_PEOFPOSMODE),
+                fst_offset: 0,
+                fst_length: checkedSize,
+                fst_bytesalloc: 0)
+            if fcntl(fd, F_PREALLOCATE, &store) != 0 {
+                store.fst_flags = UInt32(F_ALLOCATEALL)
+                if fcntl(fd, F_PREALLOCATE, &store) != 0 {
+                    throw RepackError.preallocateFailed(path: path, errno: errno)
+                }
+            }
+        }
+        try ftruncate(fd, path: path, size: size)
+    }
+
     public static func pwriteAll(fd: Int32, path: String,
                                  buf: UnsafeRawPointer, count: Int,
                                  offset: UInt64) throws {
