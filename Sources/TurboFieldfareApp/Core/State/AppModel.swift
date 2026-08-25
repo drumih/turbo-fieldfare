@@ -45,6 +45,9 @@ public final class AppModel {
     public private(set) var loadModelOnLaunch: Bool = false
     /// Whether launching the app should load the model straight away. Off by
     /// default, because loading takes minutes and holds gigabytes.
+    public var serverState: AppServerState = .stopped
+    public var serverPort: Int = 8080
+    public var serverQueueLimit: Int = 4
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -94,6 +97,8 @@ public final class AppModel {
     private let client: any AppInferenceClient
     private let installer: any AppModelInstallerClient
     private let visionInstaller: any AppVisionPackInstallerClient
+    private let serverController: any AppServerController
+    private var serverGeneration: UInt64 = 0
     private var runTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
@@ -130,6 +135,7 @@ public final class AppModel {
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 visionInstaller: any AppVisionPackInstallerClient = RepackVisionPackInstallerClient(),
+                serverController: any AppServerController = ProcessServerController(),
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 attachmentStore: AppImageAttachmentStore = AppImageAttachmentStore(),
                 visionRuntimeSupported: Bool = true,
@@ -161,11 +167,14 @@ public final class AppModel {
         self.showPromptExamples = settings.showPromptExamples
         self.sentPromptBehavior = settings.sentPromptBehavior
         self.loadModelOnLaunch = settings.loadModelOnLaunch
+        self.serverPort = settings.serverPort
+        self.serverQueueLimit = settings.serverQueueLimit
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
         self.client = client
         self.installer = installer
         self.visionInstaller = visionInstaller
+        self.serverController = serverController
         self.memorySampler = memorySampler
         self.attachmentStore = attachmentStore
         self.isVisionRuntimeSupported = visionRuntimeSupported
@@ -206,6 +215,30 @@ public final class AppModel {
     public var canUnloadModel: Bool {
         isModelInstalled && !isRunning && !isVisionCompanionOperationInProgress
             && loadState.isReady
+    }
+
+    public var canStartServer: Bool {
+        guard isModelInstalled, !isInstallingModel, !isVisionCompanionOperationInProgress else {
+            return false
+        }
+        switch serverState {
+        case .stopped, .failed: return true
+        case .starting, .running, .stopping: return false
+        }
+    }
+
+    public var canStopServer: Bool {
+        switch serverState {
+        case .starting, .running: return true
+        case .stopped, .stopping, .failed: return false
+        }
+    }
+
+    public var canEditServerSettings: Bool {
+        switch serverState {
+        case .stopped, .failed: return true
+        case .starting, .running, .stopping: return false
+        }
     }
 
     public var isModelInstalled: Bool { installationStatus == .complete }
@@ -842,6 +875,61 @@ public final class AppModel {
         }
     }
 
+    public func startServer() {
+        guard canStartServer else { return }
+        serverGeneration &+= 1
+        let generation = serverGeneration
+        serverState = .starting
+        let arguments = AppServerArguments.build(
+            modelPath: modelPathText,
+            maxContextTokens: maxContextTokens,
+            runtimeOptions: runtimeOptions,
+            visionPackPath: serverVisionPackPath,
+            port: serverPort,
+            queueLimit: serverQueueLimit)
+        serverController.start(arguments: arguments) { [weak self] state in
+            Task { @MainActor in
+                self?.applyServerState(state, generation: generation)
+            }
+        }
+    }
+
+    public func stopServer() {
+        guard canStopServer else { return }
+        serverState = .stopping
+        serverController.stop()
+    }
+
+    /// Called from `applicationWillTerminate`. Sends the stop signal without
+    /// waiting for the graceful shutdown the app is about to stop observing.
+    public func stopServerForTermination() {
+        switch serverState {
+        case .starting, .running: serverController.stop()
+        case .stopped, .stopping, .failed: break
+        }
+    }
+
+    public func setServerPort(_ port: Int) {
+        guard serverPort != port else { return }
+        serverPort = port
+        persistSettings()
+    }
+
+    public func setServerQueueLimit(_ limit: Int) {
+        guard serverQueueLimit != limit else { return }
+        serverQueueLimit = limit
+        persistSettings()
+    }
+
+    private var serverVisionPackPath: String? {
+        guard isVisionPackInstalled,
+              let companion = try? VisionPackLocation.companionURL(
+                forTextModel: URL(fileURLWithPath: modelPathText)) else {
+            return nil
+        }
+        return companion.path
+    }
+
     public func installModel() {
         guard !isRunning, !loadState.isLoading, !isInstallingModel,
               requiresModelInstallation else {
@@ -1476,6 +1564,8 @@ public final class AppModel {
         showPromptExamples = settings.showPromptExamples
         sentPromptBehavior = settings.sentPromptBehavior
         loadModelOnLaunch = settings.loadModelOnLaunch
+        serverPort = settings.serverPort
+        serverQueueLimit = settings.serverQueueLimit
     }
 
     private func persistSettings() {
@@ -1494,7 +1584,9 @@ public final class AppModel {
             sentPromptBehavior: sentPromptBehavior,
             visionResidencyPolicy: runtimeOptions.visionResidencyPolicy,
             rdadvisePolicy: runtimeOptions.rdadvisePolicy,
-            loadModelOnLaunch: loadModelOnLaunch)
+            loadModelOnLaunch: loadModelOnLaunch,
+            serverPort: serverPort,
+            serverQueueLimit: serverQueueLimit)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         try? MacAppSettingsFileStore.save(
             settings,
@@ -1523,6 +1615,14 @@ public final class AppModel {
 
     func applyLoadState(_ state: AppModelLoadState) {
         applyLoadState(state, generation: loadGeneration)
+    }
+
+    /// Ignores a callback from a start this model has since moved past — a
+    /// stop, a crash, or a newer start already replaced the generation the
+    /// callback was registered under.
+    func applyServerState(_ state: AppServerState, generation: UInt64) {
+        guard generation == serverGeneration else { return }
+        serverState = state
     }
 
     /// `sequence` orders the phases a load emits. It is 0 for states this model
