@@ -103,7 +103,7 @@ final class Sampler {
     init(context: MetalContext, vocab: Int = 262_144,
                 logitSoftcap: Float = 30.0) throws {
         let useTiledSoftmax = ProcessInfo.processInfo.environment[
-            "TURBO_TILED_SOFTMAX"] == "1"
+            "TURBO_TILED_SOFTMAX"] != "0"
         self.softcap = try LogitSoftcapSoftmax(
             context: context, useTiled: useTiledSoftmax)
         self.sampleKernel = try Sample(context: context)

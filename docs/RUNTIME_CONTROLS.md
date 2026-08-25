@@ -30,6 +30,10 @@ same names and values. Their defaults agree except for `--max-context`, which
 the server defaults to 16,384 rather than 8,192. The server resolves them before it loads the
 model, so an unsupported combination fails immediately with the usage text.
 
+Sampled generation uses the tiled softcap and softmax path by default. Set
+`TURBO_TILED_SOFTMAX=0` before starting the process to select the reference
+single-threadgroup path for rollback or comparison.
+
 | Control | Mac values | CLI and server flag | Production default | Effect |
 | --- | --- | --- | --- | --- |
 | Expert-cache slots | 8, 16, 24, 32 | `--expert-cache-slots` | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. Chunked prefill requires at least 16 slots. |
