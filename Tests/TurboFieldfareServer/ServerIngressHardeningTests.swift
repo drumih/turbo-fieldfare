@@ -332,6 +332,20 @@ private actor EchoBackend: ServerInferenceBackend {
         #expect(await server.acceptedConnectionCount == cap)
         try await server.shutdown()
     }
+
+    /// Pins the listen backlog to the connection cap. With a backlog of 16
+    /// under a cap of 128, a burst of connects overflowed the listen queue;
+    /// macOS 27 answers that with RST, so `connectionsBeyondTheCapAreClosed`
+    /// failed there with ECONNRESET on connect (issue #151), while macOS 26
+    /// only stalls the burst and the race stays invisible.
+    @Test func listenBacklogCoversTheConnectionCap() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model", queueLimit: 1, backend: EchoBackend())
+        let channel = try await server.start(port: 0)
+        let backlog = try await channel.getOption(ChannelOptions.backlog)
+        #expect(backlog >= Int32(TurboFieldfareHTTPServer.maximumConnections))
+        try await server.shutdown()
+    }
 }
 
 /// The sweep is what reclaims staging directories left by a process that died
