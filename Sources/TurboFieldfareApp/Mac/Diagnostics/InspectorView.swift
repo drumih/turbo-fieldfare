@@ -375,7 +375,7 @@ struct InspectorView: View {
                     .multilineTextAlignment(.trailing)
                     .disabled(!model.canEditServerSettings)
             }
-            if model.loadState.isReady && model.canStartServer {
+            if model.loadState.isReady && (model.canStartServer || model.serverState == .starting) {
                 Text("The app's model is also loaded — running both uses memory for two copies.")
                     .font(.caption)
                     .foregroundStyle(.orange)
@@ -388,7 +388,6 @@ struct InspectorView: View {
                     .disabled(!model.canStartServer)
             }
         }
-        .disabled(model.isInstallingModel || model.isVisionCompanionOperationInProgress)
     }
 
     private var serverStateLabel: String {
@@ -396,7 +395,10 @@ struct InspectorView: View {
         case .stopped: return "Stopped"
         case .starting: return "Starting…"
         case .running(let port): return "Running · http://127.0.0.1:\(port)"
-        case .stopping: return "Stopping…"
+        case .stopping:
+            return model.isServerStoppingDuringStart
+                ? "Stopping… (waiting for the model to finish loading)"
+                : "Stopping…"
         case .failed(let message): return "Error: \(message)"
         }
     }

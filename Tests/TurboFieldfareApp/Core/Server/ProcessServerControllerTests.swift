@@ -39,6 +39,22 @@ struct ProcessServerControllerTests {
 
         #expect(states.containsFailure())
     }
+
+    @Test func parsesThePortFromARealReadyLine() {
+        let line = "TurboFieldfareServer ready at http://127.0.0.1:8080 model=gemma-4-26b-a4b-it context=16384 prompt_cache=single-prefix vision=missing vision_residency=on-demand"
+        #expect(ProcessServerController.port(fromReadyOutput: line) == 8080)
+    }
+
+    @Test func parsesThePortWhenTheReadyLineArrivesAcrossTwoReads() {
+        let first = "TurboFieldfareServer read"
+        let second = "y at http://127.0.0.1:9090 model=gemma-4-26b-a4b-it"
+        #expect(ProcessServerController.port(fromReadyOutput: first) == nil)
+        #expect(ProcessServerController.port(fromReadyOutput: first + second) == 9090)
+    }
+
+    @Test func returnsNilForOutputWithNoReadyLine() {
+        #expect(ProcessServerController.port(fromReadyOutput: "some unrelated log line\n") == nil)
+    }
 }
 
 private final class StateCollector: @unchecked Sendable {

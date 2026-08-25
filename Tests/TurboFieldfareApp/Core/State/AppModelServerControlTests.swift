@@ -162,13 +162,42 @@ import TurboFieldfare
 
     @MainActor
     @Test func stopServerForTerminationDoesNothingWhenAlreadyStopped() {
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).gturbo")
         let controller = MockServerController()
-        let model = AppModel(client: MockLifecycleInferenceClient(),
+        let model = AppModel(modelDirectory: missingDirectory,
+                             client: MockLifecycleInferenceClient(),
                              serverController: controller)
 
         model.stopServerForTermination()
 
         #expect(controller.stopCallCount == 0)
+    }
+
+    @MainActor
+    @Test func isServerStoppingDuringStartOnlyTrueWhenStopWasRequestedWhileStarting() async throws {
+        let directory = try makeCompleteModelInstall("server-control-stopping-during-start")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = MockServerController()
+        let model = AppModel(modelDirectory: directory,
+                             client: MockLifecycleInferenceClient(),
+                             serverController: controller)
+
+        model.startServer()
+        model.stopServer()
+
+        #expect(model.isServerStoppingDuringStart)
+
+        controller.emit(.stopped)
+        try await waitUntil(deadline: 5) { model.serverState == .stopped }
+
+        // A normal stop from `.running` must not carry the flag.
+        model.startServer()
+        controller.emit(.running(port: 8080))
+        try await waitUntil(deadline: 5) { model.serverState == .running(port: 8080) }
+        model.stopServer()
+
+        #expect(!model.isServerStoppingDuringStart)
     }
 
     @MainActor
@@ -199,7 +228,10 @@ import TurboFieldfare
 
     @MainActor
     @Test func setServerPortRejectsOutOfRangeValues() {
-        let model = AppModel(client: MockLifecycleInferenceClient(),
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).gturbo")
+        let model = AppModel(modelDirectory: missingDirectory,
+                             client: MockLifecycleInferenceClient(),
                              serverController: MockServerController())
         let defaultPort = model.serverPort
 
@@ -212,7 +244,10 @@ import TurboFieldfare
 
     @MainActor
     @Test func setServerQueueLimitRejectsOutOfRangeValues() {
-        let model = AppModel(client: MockLifecycleInferenceClient(),
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).gturbo")
+        let model = AppModel(modelDirectory: missingDirectory,
+                             client: MockLifecycleInferenceClient(),
                              serverController: MockServerController())
         let defaultQueueLimit = model.serverQueueLimit
 

@@ -56,12 +56,27 @@ public final class ProcessServerController: AppServerController, @unchecked Send
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            stderrBuffer.withLock { $0.append(data) }
+            stderrBuffer.withLock { buffer in
+                buffer.append(data)
+                // Routine per-request log lines go to stderr for the life of
+                // the process (see ServerLog.swift); an unbounded buffer
+                // would grow with server traffic and, on a crash, become the
+                // entire `.failed(message:)` payload rendered in the
+                // sidebar. Only the tail diagnoses a crash — the head is
+                // noise by then.
+                let cap = 8_192
+                if buffer.count > cap {
+                    buffer.removeFirst(buffer.count - cap)
+                }
+            }
         }
 
-        process.terminationHandler = { finished in
+        process.terminationHandler = { [weak self] finished in
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
+            self?.lock.lock()
+            self?.process = nil
+            self?.lock.unlock()
             if finished.terminationStatus == 0 {
                 onStateChange(.stopped)
                 return
@@ -95,7 +110,7 @@ public final class ProcessServerController: AppServerController, @unchecked Send
         process?.terminate()
     }
 
-    private static func port(fromReadyOutput text: String) -> Int? {
+    static func port(fromReadyOutput text: String) -> Int? {
         guard let readyRange = text.range(of: "TurboFieldfareServer ready") else { return nil }
         let tail = text[readyRange.lowerBound...]
         guard let markerRange = tail.range(of: "http://127.0.0.1:") else { return nil }
@@ -105,7 +120,10 @@ public final class ProcessServerController: AppServerController, @unchecked Send
 
     private static func errorMessage(stderr: String, status: Int32) -> String {
         guard !stderr.isEmpty else { return "server exited with status \(status)" }
-        return stderr.hasPrefix("error: ") ? String(stderr.dropFirst(7)) : stderr
+        let message = stderr.hasPrefix("error: ") ? String(stderr.dropFirst(7)) : stderr
+        let cap = 4_096
+        guard message.count > cap else { return message }
+        return "…" + message.suffix(cap)
     }
 
     public static func defaultExecutableURL() -> URL {

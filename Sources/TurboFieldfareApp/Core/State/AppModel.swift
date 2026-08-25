@@ -47,8 +47,8 @@ public final class AppModel {
     public private(set) var loadModelOnLaunch: Bool = false
     /// The Server section's start/stop state and its two settings.
     public var serverState: AppServerState = .stopped
-    public var serverPort: Int = 8080
-    public var serverQueueLimit: Int = 4
+    public private(set) var serverPort: Int = 8080
+    public private(set) var serverQueueLimit: Int = 4
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -101,6 +101,7 @@ public final class AppModel {
     private let serverController: any AppServerController
     private var serverGeneration: UInt64 = 0
     private var serverReachedTerminalState = false
+    private var serverStopRequestedDuringStart = false
     private var runTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
@@ -881,6 +882,7 @@ public final class AppModel {
         guard canStartServer else { return }
         serverGeneration &+= 1
         serverReachedTerminalState = false
+        serverStopRequestedDuringStart = false
         let generation = serverGeneration
         serverState = .starting
         let arguments = AppServerArguments.build(
@@ -899,8 +901,18 @@ public final class AppModel {
 
     public func stopServer() {
         guard canStopServer else { return }
+        if case .starting = serverState { serverStopRequestedDuringStart = true }
         serverState = .stopping
         serverController.stop()
+    }
+
+    /// Whether the current `.stopping` state is waiting out a `.starting`
+    /// server: `SIGTERM` is buffered by the server until the model finishes
+    /// loading (see `ServerTerminationSignals`), so a stop requested during
+    /// `.starting` can leave the UI showing "Stopping…" for the rest of the
+    /// multi-minute load with no visible reason why.
+    public var isServerStoppingDuringStart: Bool {
+        serverState == .stopping && serverStopRequestedDuringStart
     }
 
     /// Called from `applicationWillTerminate`. Sends the stop signal without
