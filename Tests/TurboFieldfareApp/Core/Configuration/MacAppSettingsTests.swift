@@ -277,22 +277,27 @@ import Testing
 
     /// Phase D item 15. The newer-version branch says "Every key decodes with
     /// `decodeIfPresent`, so it reads cleanly", and that is false: nine keys use
-    /// a hard `decode`. So a version-3 file whose schema moved any of those nine
+    /// a hard `decode`. So a version-4 file whose schema moved any of those nine
     /// throws inside `JSONDecoder().decode` *before* the version guard is
     /// reached, and lands in the `catch` that deletes the file - destroying a
     /// newer build's settings, which is the exact outcome that branch exists to
     /// prevent. A version bump that cannot change the schema protects nothing.
+    ///
+    /// The fixture version stays one past `MacAppSettings.currentVersion`
+    /// (currently 3, after the server-settings v3 migration) rather than a
+    /// literal `3`, so this test keeps simulating an unknown future schema
+    /// instead of accidentally describing this build's own.
     @Test func aNewerSettingsFileSurvivesAKeyThisBuildDoesNotKnow() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: modelDirectory)
 
-        // A plausible version 3: `topP` became `topProbability`. Everything else
-        // this build knows is still present and still valid.
+        // A plausible next version: `topP` became `topProbability`. Everything
+        // else this build knows is still present and still valid.
         let newer = """
         {
-          "version": 3,
+          "version": \(MacAppSettings.currentVersion + 1),
           "contextTokens": 8192,
           "expertCacheSlots": 16,
           "temperature": 0.2,
