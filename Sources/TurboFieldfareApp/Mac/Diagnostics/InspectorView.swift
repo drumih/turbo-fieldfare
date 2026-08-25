@@ -19,6 +19,7 @@ struct InspectorView: View {
             memorySection
             generationSection
             runtimeSection
+            serverSection
             RunnerDiagnosticsSection(diagnostics: model.diagnostics)
         }
         .formStyle(.grouped)
@@ -350,6 +351,70 @@ struct InspectorView: View {
         }
         .disabled(model.isRunning || model.loadState.isLoading
             || model.isVisionCompanionOperationInProgress)
+    }
+
+    private var serverSection: some View {
+        Section("Server") {
+            LabeledContent("State") {
+                Text(serverStateLabel)
+                    .font(.caption)
+                    .foregroundStyle(serverStateColor)
+            }
+            LabeledContent("Port") {
+                TextField("Port", value: serverPortBinding, format: .number.grouping(.never))
+                    .labelsHidden()
+                    .frame(width: 80)
+                    .multilineTextAlignment(.trailing)
+                    .disabled(!model.canEditServerSettings)
+            }
+            LabeledContent("Queue limit") {
+                TextField("Queue limit", value: serverQueueLimitBinding,
+                          format: .number.grouping(.never))
+                    .labelsHidden()
+                    .frame(width: 80)
+                    .multilineTextAlignment(.trailing)
+                    .disabled(!model.canEditServerSettings)
+            }
+            if model.loadState.isReady && model.canStartServer {
+                Text("The app's model is also loaded — running both uses memory for two copies.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            if model.canStopServer {
+                Button("Stop Server", role: .destructive, action: model.stopServer)
+            } else {
+                Button("Start Server", action: model.startServer)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canStartServer)
+            }
+        }
+        .disabled(model.isInstallingModel || model.isVisionCompanionOperationInProgress)
+    }
+
+    private var serverStateLabel: String {
+        switch model.serverState {
+        case .stopped: return "Stopped"
+        case .starting: return "Starting…"
+        case .running(let port): return "Running · http://127.0.0.1:\(port)"
+        case .stopping: return "Stopping…"
+        case .failed(let message): return "Error: \(message)"
+        }
+    }
+
+    private var serverStateColor: Color {
+        switch model.serverState {
+        case .failed: return .red
+        case .running: return .green
+        case .stopped, .starting, .stopping: return .secondary
+        }
+    }
+
+    private var serverPortBinding: Binding<Int> {
+        Binding(get: { model.serverPort }, set: { model.setServerPort($0) })
+    }
+
+    private var serverQueueLimitBinding: Binding<Int> {
+        Binding(get: { model.serverQueueLimit }, set: { model.setServerQueueLimit($0) })
     }
 
 }
