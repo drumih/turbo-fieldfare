@@ -387,7 +387,10 @@ import Testing
         let elapsed = ContinuousClock().measure {
             #expect(MathSpanDetector.spans(in: source).isEmpty)
         }
-        #expect(elapsed < .milliseconds(100), "180 KB inline scan took \(elapsed)")
+        // Generous on purpose, and it has to hold on a shared CI runner as well
+        // as a fast laptop: what it catches is the quadratic shape, not a few
+        // milliseconds. The defect it exists for took 16.1 s.
+        #expect(elapsed < .seconds(1), "180 KB inline scan took \(elapsed)")
     }
 
     /// `isEscaped` counted the backslashes before every candidate, so a run of
@@ -401,7 +404,10 @@ import Testing
             #expect(Self.sources(even) == ["$x$"])
             #expect(Self.sources(odd).isEmpty)
         }
-        #expect(elapsed < .milliseconds(100), "80 KB of backslashes took \(elapsed)")
+        // Same bound and the same reason as the inline scan above: the defect
+        // this exists for took 86.5 s, so a second still leaves 86x of margin
+        // while tolerating a runner that is not a fast laptop.
+        #expect(elapsed < .seconds(1), "80 KB of backslashes took \(elapsed)")
     }
 
     /// A model that emits the sentinel characters itself must not be able to
