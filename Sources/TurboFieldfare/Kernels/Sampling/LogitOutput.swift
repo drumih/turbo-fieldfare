@@ -6,15 +6,45 @@ import Metal
 ///   z'[i] = softcap * tanh(z[i] / softcap)
 ///   p[i]  = exp(z'[i] - max_j z'[j]) / sum_j exp(z'[j] - max_j z'[j])
 ///
-/// One threadgroup, single online-softmax pass (Milakov & Gimelshein). FP16
-/// storage in and out, FP32 accumulation. The softcap value lives in the
-/// kernel signature instead of being hardcoded so that downstream callers
-/// (and tests) can disable it by passing a very large number.
+/// The reference path uses one threadgroup; the opt-in tiled path computes
+/// per-tile statistics, merges them, then normalizes in parallel. Both use
+/// FP16 storage and FP32 accumulation. The softcap value lives in the kernel
+/// signature so callers and tests can disable it with a very large number.
 final class LogitSoftcapSoftmax {
-    private let pso: MTLComputePipelineState
+    private static let tileSize = 1024
+    private static let maxVocabulary = 262_144
 
-    init(context: MetalContext) throws {
-        self.pso = try context.pipeline("logit_softcap_softmax")
+    private let referencePSO: MTLComputePipelineState
+    private let tilePSO: MTLComputePipelineState
+    private let reducePSO: MTLComputePipelineState
+    private let normalizePSO: MTLComputePipelineState
+    private let tileMaxima: MTLBuffer
+    private let tileSums: MTLBuffer
+    private let globalStatistics: MTLBuffer
+    private let useTiled: Bool
+
+    init(context: MetalContext, useTiled: Bool = false) throws {
+        self.referencePSO = try context.pipeline("logit_softcap_softmax")
+        self.tilePSO = try context.pipeline("logit_softcap_softmax_tile")
+        self.reducePSO = try context.pipeline("logit_softcap_softmax_reduce")
+        self.normalizePSO = try context.pipeline("logit_softcap_softmax_normalize")
+        let maxTiles = Self.maxVocabulary / Self.tileSize
+        guard let tileMaxima = context.device.makeBuffer(
+                  length: maxTiles * MemoryLayout<Float>.stride,
+                  options: .storageModePrivate),
+              let tileSums = context.device.makeBuffer(
+                  length: maxTiles * MemoryLayout<Float>.stride,
+                  options: .storageModePrivate),
+              let globalStatistics = context.device.makeBuffer(
+                  length: 2 * MemoryLayout<Float>.stride,
+                  options: .storageModePrivate)
+        else {
+            throw MetalError.noDevice
+        }
+        self.tileMaxima = tileMaxima
+        self.tileSums = tileSums
+        self.globalStatistics = globalStatistics
+        self.useTiled = useTiled
     }
 
     /// Encodes the kernel onto `commandBuffer`. `logits` and `probs` are FP16
@@ -24,8 +54,66 @@ final class LogitSoftcapSoftmax {
                        probs: MTLBuffer,
                        v: UInt32,
                        softcap: Float = 30.0) {
+        guard useTiled, v > 0, v <= UInt32(Self.maxVocabulary) else {
+            encodeReference(commandBuffer: commandBuffer, logits: logits,
+                            probs: probs, v: v, softcap: softcap)
+            return
+        }
+
+        let tileCount = (Int(v) + Self.tileSize - 1) / Self.tileSize
+        let threads = MTLSize(width: 256, height: 1, depth: 1)
+        if let enc = commandBuffer.makeComputeCommandEncoder() {
+            enc.setComputePipelineState(tilePSO)
+            enc.setBuffer(logits, offset: 0, index: 0)
+            enc.setBuffer(tileMaxima, offset: 0, index: 1)
+            enc.setBuffer(tileSums, offset: 0, index: 2)
+            var vVar = v
+            var softcapVar = softcap
+            enc.setBytes(&vVar, length: MemoryLayout<UInt32>.size, index: 3)
+            enc.setBytes(&softcapVar, length: MemoryLayout<Float>.size, index: 4)
+            enc.dispatchThreadgroups(
+                MTLSize(width: tileCount, height: 1, depth: 1),
+                threadsPerThreadgroup: threads)
+            enc.endEncoding()
+        }
+
+        if let enc = commandBuffer.makeComputeCommandEncoder() {
+            enc.setComputePipelineState(reducePSO)
+            enc.setBuffer(tileMaxima, offset: 0, index: 0)
+            enc.setBuffer(tileSums, offset: 0, index: 1)
+            enc.setBuffer(globalStatistics, offset: 0, index: 2)
+            var tileCountVar = UInt32(tileCount)
+            enc.setBytes(&tileCountVar,
+                         length: MemoryLayout<UInt32>.size, index: 3)
+            enc.dispatchThreadgroups(
+                MTLSize(width: 1, height: 1, depth: 1),
+                threadsPerThreadgroup: threads)
+            enc.endEncoding()
+        }
+
+        if let enc = commandBuffer.makeComputeCommandEncoder() {
+            enc.setComputePipelineState(normalizePSO)
+            enc.setBuffer(logits, offset: 0, index: 0)
+            enc.setBuffer(probs, offset: 0, index: 1)
+            enc.setBuffer(globalStatistics, offset: 0, index: 2)
+            var vVar = v
+            var softcapVar = softcap
+            enc.setBytes(&vVar, length: MemoryLayout<UInt32>.size, index: 3)
+            enc.setBytes(&softcapVar, length: MemoryLayout<Float>.size, index: 4)
+            enc.dispatchThreads(
+                MTLSize(width: Int(v), height: 1, depth: 1),
+                threadsPerThreadgroup: threads)
+            enc.endEncoding()
+        }
+    }
+
+    private func encodeReference(commandBuffer: MTLCommandBuffer,
+                                 logits: MTLBuffer,
+                                 probs: MTLBuffer,
+                                 v: UInt32,
+                                 softcap: Float) {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
-        enc.setComputePipelineState(pso)
+        enc.setComputePipelineState(referencePSO)
         enc.setBuffer(logits, offset: 0, index: 0)
         enc.setBuffer(probs,  offset: 0, index: 1)
         var vVar       = v
@@ -33,7 +121,8 @@ final class LogitSoftcapSoftmax {
         enc.setBytes(&vVar,       length: MemoryLayout<UInt32>.size, index: 2)
         enc.setBytes(&softcapVar, length: MemoryLayout<Float>.size,  index: 3)
 
-        let threadsPerGroup = min(Int(pso.maxTotalThreadsPerThreadgroup), 256)
+        let threadsPerGroup = min(
+            Int(referencePSO.maxTotalThreadsPerThreadgroup), 256)
         let gridSize = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         let tgSize   = MTLSize(width: threadsPerGroup, height: 1, depth: 1)
         enc.dispatchThreads(gridSize, threadsPerThreadgroup: tgSize)

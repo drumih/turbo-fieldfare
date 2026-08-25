@@ -13,9 +13,13 @@ import TurboFieldfareValidationSupport
 
     private static let softcap: Float = 30.0
 
-    private static func runKernel(logitsFp16: [Float16], v: Int, softcap: Float) throws -> [Float] {
+    private static func runKernel(logitsFp16: [Float16],
+                                  v: Int,
+                                  softcap: Float,
+                                  useTiled: Bool = true) throws -> [Float] {
         let ctx = try MetalContext()
-        let kernel = try LogitSoftcapSoftmax(context: ctx)
+        let kernel = try LogitSoftcapSoftmax(
+            context: ctx, useTiled: useTiled)
 
         guard let inBuf = Fp16Buffer.make(ctx.device, halves: logitsFp16),
               let outBuf = Fp16Buffer.make(ctx.device, count: v),
@@ -32,24 +36,26 @@ import TurboFieldfareValidationSupport
     }
 
     @Test func randomLogits_matchesReference() throws {
-        let v = 2048
-        var rng = SeedTree(0x131).key("softcap-softmax-random")
-        let logitsFp32 = (0..<v).map { _ in rng.uniform(-50.0, 50.0) }
-        let logitsFp16 = logitsFp32.map { Float16($0) }
+        for v in [257, 1_024, 1_025, 2_048, 262_144] {
+            var rng = SeedTree(0x131).key("softcap-softmax-random-\(v)")
+            let logitsFp32 = (0..<v).map { _ in
+                rng.uniform(-50.0, 50.0)
+            }
+            let logitsFp16 = logitsFp32.map { Float16($0) }
 
-        let gpu = try Self.runKernel(logitsFp16: logitsFp16, v: v, softcap: Self.softcap)
-        let cpu = LogitSoftcapSoftmaxRef.apply(
-            x: logitsFp16.map { Float($0) }, softcap: Self.softcap
-        )
+            let gpu = try Self.runKernel(
+                logitsFp16: logitsFp16, v: v, softcap: Self.softcap)
+            let cpu = LogitSoftcapSoftmaxRef.apply(
+                x: logitsFp16.map { Float($0) }, softcap: Self.softcap)
 
-        // Probabilities at the extreme tail are near FP16 subnormal; use the
-        // bounded-relative form so we don't blow up on c~0.
-        let rel = RelError.boundedRel(actual: gpu, reference: cpu, absFloor: 1e-4)
-        #expect(rel < Tolerance.fp16Reduction, "rel=\(rel)")
+            let rel = RelError.boundedRel(
+                actual: gpu, reference: cpu, absFloor: 1e-4)
+            #expect(rel < Tolerance.fp16Reduction, "v=\(v), rel=\(rel)")
 
-        // Probability axioms.
-        let sum = gpu.reduce(0, +)
-        #expect(abs(sum - 1.0) < Tolerance.fp16Reduction, "sum=\(sum)")
+            let sum = gpu.reduce(0, +)
+            #expect(abs(sum - 1.0) < Tolerance.fp16Reduction,
+                    "v=\(v), sum=\(sum)")
+        }
     }
 
     /// All logits identical → uniform 1/V distribution.
@@ -83,5 +89,29 @@ import TurboFieldfareValidationSupport
         let c = cpu[42]
         #expect(c < 0.5, "softcap reference should not saturate: c=\(c)")
         #expect(abs(g - c) / c < Tolerance.fp16Reduction, "g=\(g) c=\(c)")
+    }
+
+    @Test func extremeLogits_matchReferenceKernel() throws {
+        let logits: [Float16] = [
+            -.infinity, -1_000, -30, 0, 30, 1_000, .infinity,
+        ]
+        let tiled = try Self.runKernel(
+            logitsFp16: logits, v: logits.count, softcap: Self.softcap)
+        let reference = try Self.runKernel(
+            logitsFp16: logits, v: logits.count, softcap: Self.softcap,
+            useTiled: false)
+        #expect(tiled == reference)
+    }
+
+    @Test func effectivelyDisabledSoftcap_matchesCPUReference() throws {
+        let softcap: Float = 1_000_000
+        let logits: [Float16] = [-50, -7, 0, 3, 12, 50]
+        let tiled = try Self.runKernel(
+            logitsFp16: logits, v: logits.count, softcap: softcap)
+        let cpu = LogitSoftcapSoftmaxRef.apply(
+            x: logits.map { Float($0) }, softcap: softcap)
+        let rel = RelError.boundedRel(
+            actual: tiled, reference: cpu, absFloor: 1e-4)
+        #expect(rel < Tolerance.fp16Reduction, "rel=\(rel)")
     }
 }
