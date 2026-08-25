@@ -42,9 +42,10 @@ public final class AppModel {
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
     public private(set) var sentPromptBehavior: AppSentPromptBehavior = .keep
-    public private(set) var loadModelOnLaunch: Bool = false
     /// Whether launching the app should load the model straight away. Off by
     /// default, because loading takes minutes and holds gigabytes.
+    public private(set) var loadModelOnLaunch: Bool = false
+    /// The Server section's start/stop state and its two settings.
     public var serverState: AppServerState = .stopped
     public var serverPort: Int = 8080
     public var serverQueueLimit: Int = 4
@@ -99,6 +100,7 @@ public final class AppModel {
     private let visionInstaller: any AppVisionPackInstallerClient
     private let serverController: any AppServerController
     private var serverGeneration: UInt64 = 0
+    private var serverReachedTerminalState = false
     private var runTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
@@ -878,6 +880,7 @@ public final class AppModel {
     public func startServer() {
         guard canStartServer else { return }
         serverGeneration &+= 1
+        serverReachedTerminalState = false
         let generation = serverGeneration
         serverState = .starting
         let arguments = AppServerArguments.build(
@@ -910,13 +913,13 @@ public final class AppModel {
     }
 
     public func setServerPort(_ port: Int) {
-        guard serverPort != port else { return }
+        guard (1...65_535).contains(port), serverPort != port else { return }
         serverPort = port
         persistSettings()
     }
 
     public func setServerQueueLimit(_ limit: Int) {
-        guard serverQueueLimit != limit else { return }
+        guard limit > 0, serverQueueLimit != limit else { return }
         serverQueueLimit = limit
         persistSettings()
     }
@@ -1618,10 +1621,22 @@ public final class AppModel {
     }
 
     /// Ignores a callback from a start this model has since moved past — a
-    /// stop, a crash, or a newer start already replaced the generation the
-    /// callback was registered under.
+    /// newer start already replaced the generation the callback was
+    /// registered under. Also ignores any callback that arrives after a
+    /// terminal outcome (`.stopped`/`.failed`) has already been recorded for
+    /// the current generation, including a `.running` that arrives after a
+    /// `.failed`/`.stopped` — `ProcessServerController` reports `.running`
+    /// from its stdout-pipe readability handler and `.stopped`/`.failed` from
+    /// `Process.terminationHandler`, two independent, unsynchronized callback
+    /// paths with no ordering guarantee between them, so a `.running` racing
+    /// in after a terminal state must not resurrect it.
     func applyServerState(_ state: AppServerState, generation: UInt64) {
         guard generation == serverGeneration else { return }
+        guard !serverReachedTerminalState else { return }
+        switch state {
+        case .stopped, .failed: serverReachedTerminalState = true
+        case .starting, .running, .stopping: break
+        }
         serverState = state
     }
 

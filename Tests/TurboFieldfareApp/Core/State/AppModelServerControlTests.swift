@@ -96,6 +96,7 @@ import TurboFieldfare
 
         #expect(model.canStopServer)
         #expect(!model.canStartServer)
+        #expect(!model.canEditServerSettings)
     }
 
     @MainActor
@@ -118,6 +119,7 @@ import TurboFieldfare
         controller.emit(.stopped)
         try await waitUntil(deadline: 5) { model.serverState == .stopped }
         #expect(model.canStartServer)
+        #expect(model.canEditServerSettings)
     }
 
     @MainActor
@@ -170,11 +172,63 @@ import TurboFieldfare
     }
 
     @MainActor
+    @Test func aLateRunningCallbackAfterAFailureIsIgnored() async throws {
+        let directory = try makeCompleteModelInstall("server-control-late-running")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = MockServerController()
+        let model = AppModel(modelDirectory: directory,
+                             client: MockLifecycleInferenceClient(),
+                             serverController: controller)
+
+        model.startServer()
+        controller.emit(.running(port: 8080))
+        try await waitUntil(deadline: 5) { model.serverState == .running(port: 8080) }
+
+        controller.emit(.failed(message: "crashed"))
+        try await waitUntil(deadline: 5) {
+            model.serverState == .failed(message: "crashed")
+        }
+
+        // A late `.running` racing in after the terminal `.failed` (the two
+        // are reported through independent, unsynchronized callback paths in
+        // `ProcessServerController`) must not resurrect the dead process.
+        controller.emit(.running(port: 9999))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(model.serverState == .failed(message: "crashed"))
+    }
+
+    @MainActor
+    @Test func setServerPortRejectsOutOfRangeValues() {
+        let model = AppModel(client: MockLifecycleInferenceClient(),
+                             serverController: MockServerController())
+        let defaultPort = model.serverPort
+
+        model.setServerPort(0)
+        #expect(model.serverPort == defaultPort)
+
+        model.setServerPort(70_000)
+        #expect(model.serverPort == defaultPort)
+    }
+
+    @MainActor
+    @Test func setServerQueueLimitRejectsOutOfRangeValues() {
+        let model = AppModel(client: MockLifecycleInferenceClient(),
+                             serverController: MockServerController())
+        let defaultQueueLimit = model.serverQueueLimit
+
+        model.setServerQueueLimit(0)
+        #expect(model.serverQueueLimit == defaultQueueLimit)
+    }
+
+    @MainActor
     private func waitUntil(deadline seconds: TimeInterval,
                            _ condition: @MainActor () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(seconds)
         while !condition(), Date() < deadline {
             try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        if !condition() {
+            Issue.record("timed out waiting for condition")
         }
     }
 }
