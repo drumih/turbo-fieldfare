@@ -6,10 +6,17 @@ import TurboFieldfare
 @Suite struct AppModelServerControlTests {
     @MainActor
     @Test func startServerDisabledWithoutInstalledModel() {
-        let model = AppModel(client: MockLifecycleInferenceClient(),
+        // The directory must be absent *at construction*, not patched in
+        // afterward: `installationStatus` is computed once in `init` from
+        // whatever directory is passed there, so on a machine with a real
+        // model at `AppModelLocation.defaultURL()` (the default this
+        // initializer would otherwise fall back to), reassigning
+        // `modelPathText` post-init leaves `isModelInstalled` stuck `true`.
+        let missingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).gturbo")
+        let model = AppModel(modelDirectory: missingDirectory,
+                             client: MockLifecycleInferenceClient(),
                              serverController: MockServerController())
-        model.modelPathText = FileManager.default.temporaryDirectory
-            .appendingPathComponent("missing.gturbo").path
 
         #expect(!model.canStartServer)
         model.startServer()
