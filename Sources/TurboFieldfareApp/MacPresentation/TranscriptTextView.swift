@@ -22,16 +22,91 @@ public enum TranscriptPlainText {
         }
         return text
     }
+
+    /// The same projection kept as an attributed string: each typeset equation
+    /// becomes its LaTeX carrying the run's own attributes, and every other
+    /// attachment — an image in the prompt strip — is left where it is.
+    ///
+    /// Every rich flavour is serialised from this copy. AppKit rasterises an
+    /// attachment that has no file wrapper, so Cmd-C on a fifty-equation answer
+    /// wrote a 12.3 MB RTFD of fifty TIFFs and logged a hundred
+    /// `CGImageDestinationFinalize` lines, while the RTF flavour, which cannot
+    /// carry attachments at all, dropped every equation on the floor.
+    public static func replacingMath(in attributed: NSAttributedString) -> NSAttributedString {
+        let replaced = NSMutableAttributedString()
+        attributed.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: attributed.length),
+            options: []) { value, range, _ in
+            guard let attachment = value as? MathAttachment else {
+                replaced.append(attributed.attributedSubstring(from: range))
+                return
+            }
+            var attributes = attributed.attributes(at: range.location, effectiveRange: nil)
+            attributes.removeValue(forKey: .attachment)
+            replaced.append(NSAttributedString(
+                string: attachment.latexSource,
+                attributes: attributes))
+        }
+        return replaced
+    }
 }
 
 /// The transcript view.
 ///
-/// `NSTextView` builds the plain pasteboard flavour from the character stream,
-/// so a reader who selects part of an answer and pastes it anywhere plain gets
-/// U+FFFC for every equation. The Copy buttons elsewhere in the app write the
+/// `NSTextView` builds every pasteboard flavour from the character stream and
+/// the attachments in it, so a reader who selected part of an answer got U+FFFC
+/// for each equation in plain text, nothing at all in RTF, and a rasterised
+/// TIFF per equation in RTFD. The Copy buttons elsewhere in the app write the
 /// raw response and are unaffected; this is the selection path, which has no
 /// source string to fall back on.
+///
+/// Every route out of a selection — Cmd-C, a drag, a Services provider — goes
+/// through `writeSelection`, so they cannot drift apart.
 public final class TranscriptTextView: NSTextView {
+    public override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        selectedAttributedText() == nil ? [] : [.rtfd, .rtf, .string]
+    }
+
+    public override func writeSelection(
+        to pasteboard: NSPasteboard,
+        types: [NSPasteboard.PasteboardType]
+    ) -> Bool {
+        guard let selection = selectedAttributedText() else { return false }
+        let flattened = TranscriptPlainText.replacingMath(in: selection)
+        let range = NSRange(location: 0, length: flattened.length)
+        var wrote = false
+        for type in types {
+            switch type {
+            case .rtfd:
+                guard let data = flattened.rtfd(from: range, documentAttributes: [:]) else {
+                    continue
+                }
+                pasteboard.setData(data, forType: .rtfd)
+                wrote = true
+            case .rtf:
+                guard let data = flattened.rtf(from: range, documentAttributes: [:]) else {
+                    continue
+                }
+                pasteboard.setData(data, forType: .rtf)
+                wrote = true
+            case .string:
+                pasteboard.setString(flattened.string, forType: .string)
+                wrote = true
+            default:
+                continue
+            }
+        }
+        return wrote
+    }
+
+    public override func writeSelection(
+        to pasteboard: NSPasteboard,
+        type: NSPasteboard.PasteboardType
+    ) -> Bool {
+        writeSelection(to: pasteboard, types: [type])
+    }
+
     public override func copy(_ sender: Any?) {
         copySelection(to: .general)
     }
@@ -39,22 +114,11 @@ public final class TranscriptTextView: NSTextView {
     /// The pasteboard is a parameter so the behaviour can be measured without
     /// writing to the reader's clipboard.
     func copySelection(to pasteboard: NSPasteboard) {
-        guard let selection = selectedAttributedText() else { return }
-        let range = NSRange(location: 0, length: selection.length)
-        // The rich flavours still come from AppKit's own serialisers, so an
-        // image in the prompt strip survives a copy the way it did before.
-        let rtfd = selection.rtfd(from: range, documentAttributes: [:])
-        let rtf = selection.rtf(from: range, documentAttributes: [:])
-        var types: [NSPasteboard.PasteboardType] = []
-        if rtfd != nil { types.append(.rtfd) }
-        if rtf != nil { types.append(.rtf) }
-        types.append(.string)
-
+        let types = writablePasteboardTypes
+        guard !types.isEmpty else { return }
         pasteboard.clearContents()
         pasteboard.declareTypes(types, owner: nil)
-        if let rtfd { pasteboard.setData(rtfd, forType: .rtfd) }
-        if let rtf { pasteboard.setData(rtf, forType: .rtf) }
-        pasteboard.setString(TranscriptPlainText.string(of: selection), forType: .string)
+        _ = writeSelection(to: pasteboard, types: types)
     }
 
     private func selectedAttributedText() -> NSAttributedString? {

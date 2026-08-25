@@ -164,7 +164,78 @@ enum MathCommandNormalizer {
         "ℤ": #"\mathbb{Z}"#,
         "ℚ": #"\mathbb{Q}"#,
         "ℂ": #"\mathbb{C}"#,
+        // The pinned build drops every one of these without an error, so an
+        // answer that used them typeset with the operator simply missing.
+        "%": "\\%",
+        "#": "\\#",
+        "$": "\\$",
+        "°": #"^{\circ}"#,
+        "¬": #"\neg"#,
+        "∨": #"\lor"#,
+        "∧": #"\land"#,
+        "∘": #"\circ"#,
+        "⊕": #"\oplus"#,
+        "⊗": #"\otimes"#,
+        "≪": #"\ll"#,
+        "≫": #"\gg"#,
+        "⟨": #"\langle"#,
+        "⟩": #"\rangle"#,
+        "⌊": #"\lfloor"#,
+        "⌋": #"\rfloor"#,
+        "⌈": #"\lceil"#,
+        "⌉": #"\rceil"#,
+        "ℓ": #"\ell"#,
+        "ℏ": #"\hbar"#,
+        "ℵ": #"\aleph"#,
+        "ℜ": #"\Re"#,
+        "ℑ": #"\Im"#,
+        "∮": #"\oint"#,
+        "∬": #"\iint"#,
+        "⋯": #"\cdots"#,
+        "⋮": #"\vdots"#,
+        "⋱": #"\ddots"#,
+        "↦": #"\mapsto"#,
+        "↑": #"\uparrow"#,
+        "↓": #"\downarrow"#,
+        "∖": #"\setminus"#,
+        "∣": #"\mid"#,
+        "∥": #"\parallel"#,
+        "⊥": #"\perp"#,
+        "⊤": #"\top"#,
+        "≅": #"\cong"#,
+        "≃": #"\simeq"#,
+        "⊃": #"\supset"#,
+        "⊇": #"\supseteq"#,
+        // U+2206 and U+00B5 and U+03F1 are the look-alikes of characters the
+        // table already carries, and the build treats them as different.
+        "∆": #"\Delta"#,
+        "µ": #"\mu"#,
+        "ϱ": #"\rho"#,
+        "□": #"\square"#,
+        "∴": "\\text{\u{2234}}",
+        "∵": "\\text{\u{2235}}",
     ]
+
+    /// Spacing the build drops. These are not in `symbols` because a lone
+    /// space produces a zero-size image, which the conformer rejects: they are
+    /// pinned in context instead.
+    static let spacing: [Character: String] = [
+        "~": #"\ "#,
+        "\u{00A0}": #"\ "#,
+        "\u{2002}": #"\ "#,
+        "\u{2003}": #"\ "#,
+        "\u{2009}": #"\,"#,
+    ]
+
+    /// Invisible characters a model pastes in from formatted text. They mean
+    /// nothing in an equation and the build drops them anyway. A zero-width
+    /// joiner or non-joiner is not here: Unicode grapheme breaking keeps those
+    /// inside the character before them, so they never arrive on their own and
+    /// the build draws the grapheme they made.
+    static let removed: Set<Character> = ["\u{200B}", "\u{FEFF}"]
+
+    /// Prime marks, and how many primes each one is.
+    static let primes: [Character: Int] = ["\u{2032}": 1, "\u{2019}": 1, "\u{2033}": 2, "\u{2034}": 3]
 
     /// Environments the pinned typesetter rejects, mapped onto the closest one
     /// it renders. `aligned` is the workhorse: it accepts `&` and `\\` rows,
@@ -201,7 +272,12 @@ enum MathCommandNormalizer {
         var index = 0
         while index < chars.count {
             guard chars[index] == "\\", index + 1 < chars.count else {
-                index = appendSymbol(chars, at: index, out: &out)
+                index = appendLiteral(
+                    chars,
+                    at: index,
+                    depth: depth,
+                    overflowed: &overflowed,
+                    out: &out)
                 continue
             }
             let command = name(chars, after: index)
@@ -226,6 +302,103 @@ enum MathCommandNormalizer {
                 out: &out)
         }
         return out
+    }
+
+    private static func appendLiteral(
+        _ chars: [Character],
+        at index: Int,
+        depth: Int,
+        overflowed: inout Bool,
+        out: inout String
+    ) -> Int {
+        let character = chars[index]
+        if removed.contains(character) { return index + 1 }
+        if let space = spacing[character] {
+            out += space
+            return index + 1
+        }
+        if primes[character] != nil {
+            var count = 0
+            var cursor = index
+            while cursor < chars.count, let width = primes[chars[cursor]] {
+                count += width
+                cursor += 1
+            }
+            out += "^{" + String(repeating: #"\prime"#, count: count) + "}"
+            return cursor
+        }
+        if character == "\u{221A}" {
+            return appendRadical(
+                chars,
+                at: index,
+                depth: depth,
+                overflowed: &overflowed,
+                out: &out)
+        }
+        return appendSymbol(chars, at: index, out: &out)
+    }
+
+    /// `\u{221A}` is a character, not a command: the build has no atom for it,
+    /// so `\u{221A}2` typeset pixel-identical to `2`. What follows it is the
+    /// radicand — a group, a parenthesised expression, a run of digits, one
+    /// letter, or one command.
+    private static func appendRadical(
+        _ chars: [Character],
+        at index: Int,
+        depth: Int,
+        overflowed: inout Bool,
+        out: inout String
+    ) -> Int {
+        var cursor = index + 1
+        while cursor < chars.count, chars[cursor] == " " { cursor += 1 }
+        guard cursor < chars.count else {
+            out += #"\sqrt{}"#
+            return cursor
+        }
+        if chars[cursor] == "{", let group = arguments(chars, from: cursor, count: 1) {
+            out += #"\sqrt{"# + rewrite(group.values[0], depth: depth + 1, overflowed: &overflowed) + "}"
+            return group.end
+        }
+        if chars[cursor] == "(", let close = closingParenthesis(chars, from: cursor) {
+            let inner = Array(chars[(cursor + 1)..<close])
+            out += #"\sqrt{"# + rewrite(inner, depth: depth + 1, overflowed: &overflowed) + "}"
+            return close + 1
+        }
+        if chars[cursor].isNumber {
+            var end = cursor
+            while end < chars.count, chars[end].isNumber || chars[end] == "." { end += 1 }
+            out += #"\sqrt{"# + String(chars[cursor..<end]) + "}"
+            return end
+        }
+        if chars[cursor].isLetter {
+            out += #"\sqrt{"# + String(chars[cursor]) + "}"
+            return cursor + 1
+        }
+        if chars[cursor] == "\\" {
+            let command = name(chars, after: cursor)
+            out += #"\sqrt{"# + String(chars[cursor..<command.end]) + "}"
+            return command.end
+        }
+        out += #"\sqrt{}"#
+        return cursor
+    }
+
+    private static func closingParenthesis(_ chars: [Character], from start: Int) -> Int? {
+        var depth = 0
+        var index = start
+        while index < chars.count {
+            if chars[index] == "\\" {
+                index += 2
+                continue
+            }
+            if chars[index] == "(" { depth += 1 }
+            if chars[index] == ")" {
+                depth -= 1
+                if depth == 0 { return index }
+            }
+            index += 1
+        }
+        return nil
     }
 
     private static func appendSymbol(

@@ -25,6 +25,60 @@ public final class InstructionTranscriptDocumentController {
             self.previous = previous
             self.length = length
         }
+
+        /// The part of `previous` that actually changed.
+        ///
+        /// A tail re-render rewrites the same sentence with a few characters
+        /// added, and reporting the whole tail as replaced collapsed every
+        /// selection inside it — including one over text that had not moved.
+        /// Trimming the common prefix and suffix leaves only what differs;
+        /// nil when the two are the same text.
+        public static func differing(
+            previous: NSRange,
+            old: NSString,
+            new: NSString
+        ) -> ReplacedRange? {
+            let shorter = min(old.length, new.length)
+            var prefix = 0
+            while prefix < shorter, old.character(at: prefix) == new.character(at: prefix) {
+                prefix += 1
+            }
+            guard prefix < old.length || prefix < new.length else { return nil }
+            var suffix = 0
+            while suffix < shorter - prefix,
+                  old.character(at: old.length - 1 - suffix)
+                    == new.character(at: new.length - 1 - suffix) {
+                suffix += 1
+            }
+
+            // Neither boundary may land inside a composed character sequence,
+            // or the replacement writes half a character.
+            var start = prefix
+            if start > 0, start < old.length {
+                start = min(start, old.rangeOfComposedCharacterSequence(at: start).location)
+            }
+            if start > 0, start < new.length {
+                start = min(start, new.rangeOfComposedCharacterSequence(at: start).location)
+            }
+            var oldEnd = max(start, old.length - suffix)
+            var newEnd = max(start, new.length - suffix)
+            if oldEnd > start, oldEnd < old.length {
+                let sequence = old.rangeOfComposedCharacterSequence(at: oldEnd)
+                if sequence.location < oldEnd { oldEnd = sequence.upperBound }
+            }
+            if newEnd > start, newEnd < new.length {
+                let sequence = new.rangeOfComposedCharacterSequence(at: newEnd)
+                if sequence.location < newEnd { newEnd = sequence.upperBound }
+            }
+            // The two ends move together or the suffixes they leave behind
+            // stop matching.
+            let kept = min(old.length - oldEnd, new.length - newEnd)
+            return ReplacedRange(
+                previous: NSRange(
+                    location: previous.location + start,
+                    length: old.length - kept - start),
+                length: new.length - kept - start)
+        }
     }
 
     public struct UpdateResult {
@@ -97,8 +151,15 @@ public final class InstructionTranscriptDocumentController {
         newLength: Int
     ) -> [NSRange] {
         let end = replaced.location + newLength
+        let delta = newLength - replaced.length
         return ranges.map { range in
-            guard range.location + range.length > replaced.location else { return range }
+            guard range.upperBound > replaced.location else { return range }
+            // Below the rewrite the characters are the same ones, just moved.
+            // Collapsing them too dropped a selection over a heading the
+            // finalize pass never touched.
+            guard range.location < replaced.upperBound else {
+                return NSRange(location: range.location + delta, length: range.length)
+            }
             guard range.location < replaced.location else {
                 return NSRange(location: min(range.location, end), length: 0)
             }
@@ -197,6 +258,10 @@ public final class InstructionTranscriptDocumentController {
 
         var mutation: Mutation = .none
         var replaced: ReplacedRange?
+        // In progressive mode a terminal response is closed block by block, so
+        // the tick that carries it is an ordinary extension. The raw mode is
+        // replaced wholesale below and has nothing to gain from writing the
+        // delta first.
         if needsRebuild
             || storage.length == 0
                 && (!prompt.isEmpty || promptPrefix.length > 0
@@ -206,16 +271,18 @@ public final class InstructionTranscriptDocumentController {
                 prompt: prompt,
                 promptPrefix: promptPrefix,
                 response: response,
-                showsPrefillPlaceholder: displaysPrefillPlaceholder)
+                showsPrefillPlaceholder: displaysPrefillPlaceholder,
+                closingTail: isTerminal)
             mutation = .rebuilt
-        } else if let delta = appendedDelta, !isTerminal {
-            // A terminal response is replaced wholesale below, so there is
-            // nothing to gain from writing the delta first.
+        } else if let delta = appendedDelta {
             if progressiveRendering {
-                let update = extendProgressiveRender(storage: storage, response: response)
+                let update = extendProgressiveRender(
+                    storage: storage,
+                    response: response,
+                    closingTail: isTerminal)
                 mutation = update.mutation
                 replaced = update.replaced
-            } else {
+            } else if !isTerminal {
                 mutation = appendRaw(delta, to: storage)
             }
         }
@@ -226,12 +293,23 @@ public final class InstructionTranscriptDocumentController {
         self.showsPrefillPlaceholder = displaysPrefillPlaceholder
 
         if isTerminal && (!isFinalized || responseChanged) {
-            let rendered = renderer.render(response, typesetsMath: true).attributedString
-            replaced = ReplacedRange(previous: assistantRange, length: rendered.length)
-            storage.replaceCharacters(in: assistantRange, with: rendered)
-            assistantRange.length = rendered.length
-            // The whole answer is one render again; there is no open block.
-            progressive.reset()
+            if progressiveRendering {
+                // Finalize closes the open block and leaves everything above it
+                // exactly as it was drawn. Re-rendering the whole answer put it
+                // back through message-wide gates the streaming pass applies
+                // per block — an unclosed fence anywhere, a table in a list, a
+                // block-level HTML tag — so an answer that streamed styled
+                // flipped to raw source the moment it finished.
+                if let update = closeTail(storage: storage, response: response) {
+                    replaced = update
+                }
+            } else {
+                let rendered = renderer.render(response, typesetsMath: true).attributedString
+                replaced = ReplacedRange(previous: assistantRange, length: rendered.length)
+                storage.replaceCharacters(in: assistantRange, with: rendered)
+                assistantRange.length = rendered.length
+                progressive.reset()
+            }
             isFinalized = true
             mutation = .finalized
         } else if !isTerminal {
@@ -277,7 +355,8 @@ public final class InstructionTranscriptDocumentController {
         prompt: String,
         promptPrefix: NSAttributedString,
         response: String,
-        showsPrefillPlaceholder: Bool
+        showsPrefillPlaceholder: Bool,
+        closingTail: Bool
     ) {
         let document = NSMutableAttributedString()
         if !prompt.isEmpty || promptPrefix.length > 0 {
@@ -306,7 +385,7 @@ public final class InstructionTranscriptDocumentController {
             attributes: Self.assistantLabelAttributes()))
         assistantRange = NSRange(location: document.length, length: 0)
         let assistant = progressiveRendering
-            ? progressiveRender(response)
+            ? progressiveRender(response, closingTail: closingTail)
             : NSAttributedString(string: response, attributes: Self.responseAttributes())
         document.append(assistant)
         assistantRange.length = assistant.length
@@ -329,7 +408,14 @@ public final class InstructionTranscriptDocumentController {
 
     /// What the transcript shows while an answer is still arriving: every
     /// completed block already styled, and the block being written re-rendered
-    /// from an auto-closed copy of itself.
+    /// from an auto-closed copy of itself. Finalize closes that last block the
+    /// same way, so nothing above it is ever looked at twice.
+    ///
+    /// The cost of rendering block by block is that a block cannot see the
+    /// rest of the answer: a `[label][ref]` whose definition sits in a later
+    /// block keeps its brackets. Resolving it per tick is the quadratic shape
+    /// the timing gate forbids, and resolving it only at finalize would
+    /// reintroduce the flip this pass removed.
     private struct ProgressiveState {
         var split = ResponseBlockSplitter.Split()
         /// Completed blocks that are already drawn.
@@ -381,12 +467,18 @@ public final class InstructionTranscriptDocumentController {
     private struct CodeBodyFilter {
         let indent: Int
         private var pendingCarriageReturn = false
-        private var columnsToDrop: Int
+        /// Columns of the current line consumed while the opening fence's own
+        /// indentation comes off. A tab is four columns wide, so one that
+        /// reaches past the fence's indent keeps the columns it owns beyond
+        /// it: dropping the whole tab lost the listing's indentation until the
+        /// answer finalized and the markdown pass drew it properly.
+        private var column = 0
+        private var stripping: Bool
         private(set) var endsWithNewline = true
 
         init(indent: Int) {
             self.indent = indent
-            columnsToDrop = indent
+            stripping = indent > 0
         }
 
         /// Scalars, not characters: Swift reads CRLF as one `Character`, so a
@@ -402,7 +494,7 @@ public final class InstructionTranscriptDocumentController {
                         continue
                     }
                     output.append("\n")
-                    columnsToDrop = indent
+                    startLine()
                     endsWithNewline = true
                     continue
                 }
@@ -410,27 +502,42 @@ public final class InstructionTranscriptDocumentController {
                 if scalar == "\r" {
                     pendingCarriageReturn = true
                     output.append("\n")
-                    columnsToDrop = indent
+                    startLine()
                     endsWithNewline = true
                     continue
                 }
-                if columnsToDrop > 0, scalar == " " {
-                    columnsToDrop -= 1
+                if stripping, scalar == " " {
+                    column += 1
+                    stripping = column < indent
                     continue
                 }
-                if columnsToDrop > 0, scalar == "\t" {
-                    columnsToDrop = max(0, columnsToDrop - 4)
+                if stripping, scalar == "\t" {
+                    let reached = column + 4 - column % 4
+                    column = reached
+                    stripping = false
+                    if reached > indent {
+                        for _ in 0..<(reached - indent) { output.append(" ") }
+                        endsWithNewline = false
+                    }
                     continue
                 }
-                columnsToDrop = 0
+                stripping = false
                 endsWithNewline = false
                 output.append(scalar)
             }
             return String(output)
         }
+
+        private mutating func startLine() {
+            column = 0
+            stripping = indent > 0
+        }
     }
 
-    private func progressiveRender(_ response: String) -> NSAttributedString {
+    private func progressiveRender(
+        _ response: String,
+        closingTail: Bool
+    ) -> NSAttributedString {
         progressive.reset()
         let split = ResponseBlockSplitter.split(response)
         progressive.split = split
@@ -452,7 +559,16 @@ public final class InstructionTranscriptDocumentController {
         if let open = split.open {
             content.append(separator(trailingNewlines: trailing, isFirst: content.length == 0))
             progressive.prefixLength = content.length
-            content.append(renderTail(open, of: response))
+            if closingTail {
+                // A terminal rebuild draws the last block finished. Rendering it
+                // as a tail and then re-rendering the whole answer cost N+2
+                // passes over an answer that was already on screen.
+                progressive.tailStart = open.start
+                progressive.fence = nil
+                content.append(renderedBlock(open, of: response))
+            } else {
+                content.append(renderTail(open, of: response))
+            }
         } else {
             progressive.prefixLength = content.length
         }
@@ -466,12 +582,14 @@ public final class InstructionTranscriptDocumentController {
 
     private func extendProgressiveRender(
         storage: NSMutableAttributedString,
-        response: String
+        response: String,
+        closingTail: Bool
     ) -> ProgressiveUpdate {
         let split = ResponseBlockSplitter.split(response, resuming: progressive.split)
         progressive.split = split
 
-        if split.completed.count == progressive.renderedBlocks,
+        if !closingTail,
+           split.completed.count == progressive.renderedBlocks,
            let open = split.open,
            open.start == progressive.tailStart,
            let fence = open.fence,
@@ -482,6 +600,9 @@ public final class InstructionTranscriptDocumentController {
 
         var replacedTail = false
         let drawnTail = tailRange
+        let drawnTailText = (storage.string as NSString).substring(with: NSRange(
+            location: min(drawnTail.location, storage.length),
+            length: min(drawnTail.length, max(0, storage.length - drawnTail.location)))) as NSString
         if progressive.tailStart != nil {
             if let promoted = split.completed[safe: progressive.renderedBlocks],
                promoted.start == progressive.tailStart,
@@ -517,7 +638,13 @@ public final class InstructionTranscriptDocumentController {
                 trailingNewlines: trailing,
                 isFirst: assistantRange.length == 0 && addition.length == 0))
             progressive.prefixLength = assistantRange.length + addition.length
-            addition.append(renderTail(open, of: response))
+            if closingTail {
+                progressive.tailStart = open.start
+                progressive.fence = nil
+                addition.append(renderedBlock(open, of: response))
+            } else {
+                addition.append(renderTail(open, of: response))
+            }
         } else {
             progressive.prefixLength = assistantRange.length + addition.length
         }
@@ -534,7 +661,27 @@ public final class InstructionTranscriptDocumentController {
         guard replacedTail else { return ProgressiveUpdate(mutation: .appended) }
         return ProgressiveUpdate(
             mutation: .tailReplaced,
-            replaced: ReplacedRange(previous: drawnTail, length: addition.length))
+            replaced: ReplacedRange.differing(
+                previous: drawnTail,
+                old: drawnTailText,
+                new: addition.string as NSString)
+                ?? ReplacedRange(previous: drawnTail, length: addition.length))
+    }
+
+    /// Closes the block that was still being written, in place.
+    ///
+    /// The blocks above it are the ones already drawn: nothing above the open
+    /// block is looked at again, so a message-wide gate cannot turn a styled
+    /// answer back into raw source at the moment it finishes.
+    private func closeTail(
+        storage: NSMutableAttributedString,
+        response: String
+    ) -> ReplacedRange? {
+        let update = extendProgressiveRender(
+            storage: storage,
+            response: response,
+            closingTail: true)
+        return update.replaced
     }
 
     /// Appends one completed block and remembers how many newlines it left
@@ -551,9 +698,15 @@ public final class InstructionTranscriptDocumentController {
         // A block that draws nothing — an empty fence — takes no separator
         // with it either, or the gap around it is written twice.
         guard rendered.length > 0 else { return }
-        content.append(separator(trailingNewlines: trailing, isFirst: isFirst))
+        let separator = self.separator(trailingNewlines: trailing, isFirst: isFirst)
+        content.append(separator)
         content.append(rendered)
-        trailing = Self.trailingNewlines(rendered.string, seed: trailing)
+        // The separator's own newlines count too. Seeding with the previous
+        // block's count instead left a fence whose body is one blank line with
+        // an extra paragraph gap under it that the whole render does not have.
+        trailing = min(2, Self.trailingNewlines(
+            rendered.string,
+            seed: trailing + separator.length))
     }
 
     private func separator(trailingNewlines: Int, isFirst: Bool) -> NSAttributedString {
@@ -592,10 +745,10 @@ public final class InstructionTranscriptDocumentController {
     ) -> NSAttributedString {
         progressive.tailStart = block.start
         if let fence = block.fence {
-            let attributes = progressive.fence?.bodyStart == fence.bodyStart
-                ? progressive.fence?.attributes ?? renderer.streamingCodeAttributes()
-                : renderer.streamingCodeAttributes()
-            let drawn = code(fence, of: response, attributes: attributes)
+            let drawn = code(
+                fence,
+                of: response,
+                attributes: renderer.streamingCodeAttributes())
             progressive.fence = drawn.state
             return drawn.text
         }
@@ -640,11 +793,16 @@ public final class InstructionTranscriptDocumentController {
             let redrawn = code(fence, of: response, attributes: drawn.attributes)
             progressive.fence = redrawn.state
             let previous = tailRange
+            let before = (storage.string as NSString).substring(with: previous) as NSString
             storage.replaceCharacters(in: previous, with: redrawn.text)
             assistantRange.length = progressive.prefixLength + redrawn.text.length
             return ProgressiveUpdate(
                 mutation: .tailReplaced,
-                replaced: ReplacedRange(previous: previous, length: redrawn.text.length))
+                replaced: ReplacedRange.differing(
+                    previous: previous,
+                    old: before,
+                    new: redrawn.text.string as NSString)
+                    ?? ReplacedRange(previous: previous, length: redrawn.text.length))
         }
         let raw = ResponseBlockSplitter.text(drawn.bodyEnd..<fence.bodyEnd, in: response)
         guard !raw.isEmpty else { return ProgressiveUpdate(mutation: .none) }

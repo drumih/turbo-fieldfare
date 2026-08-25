@@ -14,29 +14,19 @@ import Testing
             environment: ["TURBO_FIELDFARE_PROGRESSIVE_RENDER": progressive ? "1" : "0"])
     }
 
-    /// Each block rendered on its own and joined the way the whole-document
-    /// walk joins them. This is what the transcript shows while an answer
-    /// streams; the finalize render is what it shows afterwards, and the two
-    /// have to agree.
-    static func concatenation(_ source: String) -> NSAttributedString {
-        let renderer = ResponseMarkdownRenderer()
-        let joined = NSMutableAttributedString()
-        var trailing = 0
-        for block in ResponseBlockSplitter.split(source).blocks {
-            if joined.length > 0 {
-                joined.append(renderer.blockSeparator(trailingNewlines: trailing))
-            }
-            let rendered = renderer.render(
-                ResponseBlockSplitter.text(block.utf8Range, in: source)).attributedString
-            joined.append(rendered)
-            var newlines = 0
-            for character in rendered.string.reversed() {
-                guard character == "\n" else { break }
-                newlines += 1
-            }
-            trailing = newlines == rendered.length ? newlines + trailing : newlines
-        }
-        return joined
+    /// What the transcript shows when an answer finishes: a fresh controller
+    /// handed the whole answer as terminal. Finalize closes the open block in
+    /// place and never re-renders the message, so this is the reference every
+    /// other path is measured against.
+    static func finalized(_ source: String) -> NSAttributedString {
+        let storage = NSMutableAttributedString()
+        let controller = controller()
+        _ = controller.synchronize(
+            storage: storage,
+            prompt: "Explain this",
+            response: source,
+            isTerminal: true)
+        return assistant(storage, controller)
     }
 
     static func stream(
@@ -106,6 +96,21 @@ import Testing
             at: controller.assistantRange.location + code.location,
             effectiveRange: nil) as? NSParagraphStyle
         #expect(style?.textBlocks.count == 1)
+
+        // Finishing there is what a cancel is. The whole-message render falls
+        // back to raw source for an unclosed fence, so the listing used to
+        // lose its box and show its markers the moment the reader stopped it.
+        controller.synchronize(
+            storage: storage, prompt: "Explain this", response: source, isTerminal: true)
+        let finalized = Self.assistant(storage, controller).string
+        #expect(!finalized.contains("```"))
+        #expect(finalized.contains("kernel void reduce"))
+        let finalStyle = storage.attribute(
+            .paragraphStyle,
+            at: controller.assistantRange.location
+                + (finalized as NSString).range(of: "kernel void reduce").location,
+            effectiveRange: nil) as? NSParagraphStyle
+        #expect(finalStyle?.textBlocks.count == 1)
     }
 
     @Test func mathInTheOpenBlockStaysAsSourceAndTypesetsWhenTheBlockCloses() {
@@ -187,6 +192,27 @@ import Testing
         #expect(renderer.completedSources == [])
     }
 
+    /// The closer the tail adds has to carry the container's prefix. Written
+    /// flush left it lands outside the quote, so the quote's own fence is
+    /// still open when the renderer looks: the whole tail falls back to raw
+    /// source and the listing keeps its markers on screen.
+    @Test(arguments: [
+        "> Run this:\n> ```bash\n> brew install x\n> ```\n\nDone.",
+        "1. Install:\n\n   ```bash\n   brew install x\n   ```\n\nDone.",
+    ])
+    func aFenceInsideAContainerNeverShowsItsMarkersWhileStreaming(_ source: String) {
+        let storage = NSMutableAttributedString()
+        let controller = Self.controller()
+        var seen = ""
+        for character in source {
+            seen.append(character)
+            controller.synchronize(
+                storage: storage, prompt: "Ask", response: seen, isTerminal: false)
+            #expect(!storage.string.contains("```"), "markers shown at \(seen.debugDescription)")
+        }
+        #expect(Self.assistant(storage, controller).string.contains("brew install x"))
+    }
+
     /// Block renders are memoised so a rebuild mid-answer does not re-render
     /// the whole transcript. The memo is keyed by position as well as text:
     /// handing two identical tables the same render would hand them the same
@@ -208,45 +234,33 @@ import Testing
 
     // MARK: - Equality with the finalize render
 
-    /// Legitimate differences between one render of the whole answer and the
-    /// concatenation of its blocks. Both are pinned rather than tolerated.
-    enum ConcatenationDifference {
-        /// A whole-answer render whose fence count is odd falls back to raw
-        /// source, which echoes the answer's own trailing newline. No block
-        /// contains that newline, because a block ends at its last content
-        /// byte.
-        case rawFallbackKeepsTheTrailingNewline
-    }
-
-    static let concatenationDifferences: [String: ConcatenationDifference] = [
-        "unclosed-fence": .rawFallbackKeepsTheTrailingNewline,
-    ]
-
-    /// The finalize render is the source of truth, so the progressive one has
-    /// to reach the same document. The exceptions are the runs where math
-    /// centring extends over the newline that separates two blocks: a whole
-    /// render centres the paragraph the equation sits in, terminator included,
-    /// while a block render ends before it. The frames prove the two draw the
-    /// same pixels.
+    /// The whole-document render stays the oracle: the per-block finalize has
+    /// to reach the same document for every answer whose blocks the message
+    /// pass agrees about. The exceptions are pinned rather than tolerated —
+    /// they are the difference this pass exists to make.
     @Test(arguments: TranscriptCorpus.fixtures)
-    func blockConcatenationMatchesTheFinalizeRender(_ fixture: String) throws {
+    func perBlockFinalizeMatchesTheWholeDocumentRender(_ fixture: String) throws {
         let source = try TranscriptCorpus.source(fixture)
-        let final = ResponseMarkdownRenderer().render(source).attributedString
-        let joined = Self.concatenation(source)
-        let finalDigest = AttributedStringDigest(final)
-        let joinedDigest = AttributedStringDigest(joined)
+        let result = ResponseMarkdownRenderer().render(source)
+        let drawn = Self.finalized(source)
 
-        switch Self.concatenationDifferences[fixture] {
-        case .rawFallbackKeepsTheTrailingNewline:
-            #expect(finalDigest.text == joinedDigest.text + "\n")
+        if TranscriptCorpus.wholeRenderFallbacks.contains(fixture) {
+            // One block trips a message-wide gate and takes the whole answer
+            // to raw source with it. Per block, only that block is raw.
+            #expect(result.usedFallback)
+            #expect(result.attributedString.string == source)
+            #expect(drawn.string != source, "\(fixture) finalized wholly raw")
             return
-        case nil:
-            #expect(finalDigest.text == joinedDigest.text)
         }
+        if TranscriptCorpus.perBlockLimitations.contains(fixture) { return }
 
-        guard finalDigest != joinedDigest else { return }
+        let finalDigest = AttributedStringDigest(result.attributedString)
+        let drawnDigest = AttributedStringDigest(drawn)
+        #expect(finalDigest.text == drawnDigest.text, "\(fixture) finalized different text")
+        guard finalDigest != drawnDigest else { return }
+
         let expectedRuns = finalDigest.perCharacter
-        let actualRuns = joinedDigest.perCharacter
+        let actualRuns = drawnDigest.perCharacter
         try #require(expectedRuns.count == actualRuns.count)
         for (left, right) in zip(expectedRuns, actualRuns) where left != right {
             #expect(
@@ -261,8 +275,8 @@ import Testing
                 "\(fixture) differs in more than the alignment of a separator")
         }
         for dark in [false, true] {
-            let expected = try TranscriptFrameRenderer.image(final, dark: dark)
-            let actual = try TranscriptFrameRenderer.image(joined, dark: dark)
+            let expected = try TranscriptFrameRenderer.image(result.attributedString, dark: dark)
+            let actual = try TranscriptFrameRenderer.image(drawn, dark: dark)
             #expect(
                 Self.png(expected) == Self.png(actual),
                 "\(fixture) draws differently in \(dark ? "dark" : "light")")
@@ -274,33 +288,57 @@ import Testing
             .representation(using: .png, properties: [:])
     }
 
-    /// What the controller actually draws while streaming, against the same
-    /// concatenation. This is the pass that covers the fenced-block fast path
-    /// and the promotion of a finished tail into the completed prefix.
+    /// What the controller actually draws while streaming, finished the way a
+    /// real answer finishes. A reader who watched it arrive and a reader who
+    /// opened it afterwards have to be looking at the same document, with no
+    /// exceptions at all.
     @Test(arguments: TranscriptCorpus.fixtures)
-    func streamedDocumentMatchesTheBlockConcatenation(_ fixture: String) throws {
+    func streamedThenFinalizedMatchesAFreshTerminalRebuild(_ fixture: String) throws {
         let source = try TranscriptCorpus.source(fixture)
         let (controller, storage) = Self.stream(source, step: 8)
-        // One more tick with the blank line that closes the last block, so the
-        // whole answer is drawn the way completed blocks are drawn.
         controller.synchronize(
             storage: storage,
             prompt: "Explain this",
-            response: source + "\n\n",
-            isTerminal: false)
+            response: source,
+            isTerminal: true)
 
-        let drawn = AttributedStringDigest(Self.assistant(storage, controller))
-        let joined = AttributedStringDigest(Self.concatenation(source))
-        if fixture == "unclosed-fence" {
-            // The blank-line tick lands inside the still-open fence, and the
-            // progressive render shows that fence as code where a whole-answer
-            // render falls back to raw source. Cancelling mid-fence is the
-            // shape this behaviour exists for.
-            #expect(drawn.text.hasSuffix("out[tid] = in[tid] * 2.0f;\n\n\n"))
-            #expect(!drawn.text.contains("```"))
-            return
+        #expect(AttributedStringDigest(Self.assistant(storage, controller))
+            == AttributedStringDigest(Self.finalized(source)),
+            "\(fixture) streamed into a different document")
+    }
+
+    /// An image thumbnail landing mid-answer rebuilds the whole document. What
+    /// it finalizes to must not depend on that having happened.
+    @Test func aRebuildMidStreamStillFinalizesToTheSameDocument() throws {
+        let source = try TranscriptCorpus.source("gemma-derivation-table")
+        let storage = NSMutableAttributedString()
+        let controller = Self.controller()
+        var seen = ""
+        var index = source.startIndex
+        while index < source.endIndex {
+            let next = source.index(index, offsetBy: 8, limitedBy: source.endIndex)
+                ?? source.endIndex
+            seen.append(contentsOf: source[index..<next])
+            index = next
+            let halfway = seen.count > source.count / 2
+            controller.synchronize(
+                storage: storage,
+                prompt: "Explain this",
+                response: seen,
+                isTerminal: false,
+                promptPrefix: halfway ? NSAttributedString(string: "[image]") : NSAttributedString(),
+                promptPrefixIdentifier: halfway ? "image-1" : "")
         }
-        #expect(drawn == joined, "\(fixture) streamed into a different document")
+        controller.synchronize(
+            storage: storage,
+            prompt: "Explain this",
+            response: source,
+            isTerminal: true,
+            promptPrefix: NSAttributedString(string: "[image]"),
+            promptPrefixIdentifier: "image-1")
+
+        #expect(AttributedStringDigest(Self.assistant(storage, controller))
+            == AttributedStringDigest(Self.finalized(source)))
     }
 
     /// The streamed render draws a fenced body from the raw bytes, so a
@@ -342,6 +380,43 @@ import Testing
         #expect(!streamed.contains("```"))
         #expect(rebuilt == streamed)
         #expect(finalized == streamed)
+    }
+
+    /// The separator count carried the previous block's trailing newlines only
+    /// when the new block was newlines all the way down, so a fence whose body
+    /// is one blank line left an extra paragraph gap behind it that the whole
+    /// render does not have.
+    @Test func aFenceWhoseBodyIsOneBlankLineKeepsOneGapOnEveryPath() {
+        let source = "Intro.\n\n```\n\n```\n\nAfter."
+        let whole = ResponseMarkdownRenderer().render(source).attributedString.string
+        #expect(whole == "Intro.\n\n\nAfter.")
+
+        let (streamedController, streamedStorage) = Self.stream(source, step: 3)
+        #expect(Self.assistant(streamedStorage, streamedController).string == whole)
+
+        let rebuiltStorage = NSMutableAttributedString()
+        let rebuiltController = Self.controller()
+        _ = rebuiltController.synchronize(
+            storage: rebuiltStorage, prompt: "Ask", response: source, isTerminal: false)
+        #expect(Self.assistant(rebuiltStorage, rebuiltController).string == whole)
+
+        let finalStorage = NSMutableAttributedString()
+        let finalController = Self.controller()
+        _ = finalController.synchronize(
+            storage: finalStorage, prompt: "Ask", response: source, isTerminal: true)
+        #expect(Self.assistant(finalStorage, finalController).string == whole)
+    }
+
+    /// A tab is four columns wide, so stripping a one-space fence indent off it
+    /// leaves three. The filter dropped the whole tab instead and the streamed
+    /// listing lost its indentation until the answer finalized.
+    @Test func aTabWiderThanTheFenceIndentKeepsTheColumnsItOwns() {
+        let source = " ```\n\tfoo\n ```"
+        let whole = ResponseMarkdownRenderer().render(source).attributedString.string
+        #expect(whole == "   foo\n")
+
+        let (controller, storage) = Self.stream(source, step: 2)
+        #expect(Self.assistant(storage, controller).string.contains("   foo"))
     }
 
     /// A rebuild mid-answer draws the completed blocks with the separators the
@@ -407,19 +482,79 @@ import Testing
 
     // MARK: - Finalize and resume
 
-    @Test func finalizeReplacesTheProgressiveDocumentWithOneRender() {
+    /// Finalize closes the block that was still being written and leaves the
+    /// blocks above it exactly as they were drawn.
+    @Test func finalizeClosesTheOpenBlockAndLeavesTheRestInPlace() {
+        let renderer = RecordingBlockRenderer()
         let storage = NSMutableAttributedString()
-        let controller = Self.controller()
+        let controller = Self.controller(renderer: renderer)
         let answer = "# Title\n\nA **bold** claim."
         _ = controller.synchronize(
             storage: storage, prompt: "Ask", response: answer, isTerminal: false)
+        let drawnPrefix = controller.tailRange.location
         let final = controller.synchronize(
             storage: storage, prompt: "Ask", response: answer, isTerminal: true)
 
         #expect(final.mutation == .finalized)
         #expect(controller.isFinalized)
         #expect(storage.string == "You\nAsk\n\nAnswer\nTitle\n\nA bold claim.")
-        #expect(controller.tailRange == controller.assistantRange)
+        // Only the open block was rewritten; the heading above it did not move.
+        #expect(final.replaced?.previous.location ?? 0 >= drawnPrefix)
+        // The heading is rendered once, as a completed block, and never again.
+        #expect(renderer.completedSources.filter { $0 == "# Title" }.count == 1)
+    }
+
+    /// A terminal rebuild used to render every block once as a block and then
+    /// the whole answer once more, so a finished answer cost N+2 passes.
+    @Test func aTerminalRebuildRendersEachBlockOnceAndNeverTheTail() {
+        let renderer = RecordingBlockRenderer()
+        let storage = NSMutableAttributedString()
+        let controller = Self.controller(renderer: renderer)
+        _ = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "A.\n\nB.\n\nC.", isTerminal: true)
+
+        #expect(renderer.completedSources == ["A.", "B.", "C."])
+        #expect(renderer.tailSources.isEmpty)
+    }
+
+    /// An image thumbnail landing after the answer is finished rebuilds the
+    /// document from blocks that are all in the memo already.
+    @Test func aLatePromptPrefixOnAFinishedTurnRendersNothingNew() {
+        let renderer = RecordingBlockRenderer()
+        let storage = NSMutableAttributedString()
+        let controller = Self.controller(renderer: renderer)
+        let answer = "A.\n\nB.\n\nC."
+        _ = controller.synchronize(
+            storage: storage, prompt: "Ask", response: answer, isTerminal: true)
+        let before = renderer.calls.count
+
+        let rebuilt = controller.synchronize(
+            storage: storage,
+            prompt: "Ask",
+            response: answer,
+            isTerminal: true,
+            promptPrefix: NSAttributedString(string: "[image]"),
+            promptPrefixIdentifier: "image-1")
+
+        #expect(rebuilt.mutation == .finalized)
+        #expect(renderer.calls.count == before)
+        #expect(storage.string.hasSuffix("A.\n\nB.\n\nC."))
+    }
+
+    /// A terminal response that extends a finalized one is extended, not
+    /// rebuilt: the blocks already drawn are not rendered again.
+    @Test func aFinalizedAnswerThatGrowsIsExtendedNotRebuilt() {
+        let renderer = RecordingBlockRenderer()
+        let storage = NSMutableAttributedString()
+        let controller = Self.controller(renderer: renderer)
+        _ = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "One.\n\nTwo is open", isTerminal: true)
+        let grown = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "One.\n\nTwo is open now", isTerminal: true)
+
+        #expect(grown.mutation == .finalized)
+        #expect(renderer.completedSources.filter { $0 == "One." }.count == 1)
+        #expect(Self.assistant(storage, controller).string == "One.\n\nTwo is open now")
     }
 
     @Test func resumingAfterFinalizeGoesBackToTheProgressiveDocument() {

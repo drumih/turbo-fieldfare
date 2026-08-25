@@ -28,6 +28,13 @@ import Testing
         #expect(TailAutoClose.close(closed) == closed)
     }
 
+    /// Counting the marker run alone made "```bash```" an unclosed fence, so
+    /// the tail grew a closing line and the sentence turned into a code box.
+    @Test func aBacktickInfoStringIsNotAnOpenFence() {
+        let tail = "```bash``` is the fence syn"
+        #expect(TailAutoClose.close(tail) == tail)
+    }
+
     @Test func closedFenceIsLeftAlone() {
         let closed = "```swift\nlet a = 1\n```"
         #expect(TailAutoClose.close(closed) == closed)
@@ -38,6 +45,25 @@ import Testing
     @Test func markersInsideAFenceAreNeverBalanced() {
         let tail = "```bash\necho \"**\" `date` $$\ngrep -o 'a"
         #expect(TailAutoClose.close(tail) == tail + "\n```")
+    }
+
+    /// The closer was written flush left whatever container the fence was
+    /// opened in, so the parser read it as prose after the item and the
+    /// listing kept its markers on screen while it streamed.
+    @Test(arguments: [
+        ("1. Install:\n    ```bash\n    brew install x", "\n    ```"),
+        ("> ```bash\n> brew install x", "\n> ```"),
+        ("> 1. Install:\n>    ```bash\n>    brew install x", "\n>    ```"),
+        ("- Install:\n  ~~~text\n  body", "\n  ~~~"),
+    ])
+    func aFenceInsideAContainerIsClosedInsideIt(_ probe: (String, String)) {
+        #expect(TailAutoClose.close(probe.0) == probe.0 + probe.1,
+                "\(probe.0.debugDescription)")
+    }
+
+    @Test func aClosedFenceInsideAnItemIsLeftAlone() {
+        let closed = "1. Install:\n    ```bash\n    brew install x\n    ```"
+        #expect(TailAutoClose.close(closed) == closed)
     }
 
     // MARK: - Inline code
@@ -138,6 +164,67 @@ import Testing
         #expect(TailAutoClose.close("$$a * b * c") == "$$a * b * c$$")
     }
 
+    /// The tail keeps its math as source, so nothing masked it and every `_`
+    /// in a subscript and `*` in an equation read as an emphasis marker.
+    @Test(arguments: [
+        ("The value $x_{1}$ is small", "The value $x_{1}$ is small"),
+        ("The value $x_{1", "The value $x_{1"),
+        (#"where $\alpha*\beta"#, #"where $\alpha*\beta"#),
+        // Currency is not an equation, so the emphasis after it is still live.
+        ("costs $20 and *very goo", "costs $20 and *very goo*"),
+    ])
+    func mathOnTheTailIsNotEmphasis(_ probe: (String, String)) {
+        #expect(TailAutoClose.close(probe.0) == probe.1, "\(probe.0.debugDescription)")
+    }
+
+    @Test func displayMathOnTheTailIsNotEmphasisForASourceKeepingCaller() {
+        let tail = "$$\n\\sum_{i=1}^n x_i"
+        #expect(TailAutoClose.close(tail, typesetsMath: false) == tail)
+    }
+
+    /// CommonMark flanking, with the deviations arithmetic prose needs: a `*`
+    /// between word characters is multiplication, and `*=` is an operator.
+    @Test(arguments: [
+        ("Multiply 2*3 to get", "Multiply 2*3 to get"),
+        ("Multiply 2*3 to get *nine", "Multiply 2*3 to get *nine*"),
+        ("The exponent x**2 stays", "The exponent x**2 stays"),
+        ("a *= 2", "a *= 2"),
+        ("**Note:** value_1 and *bo", "**Note:** value_1 and *bo*"),
+        ("(*paren", "(*paren*"),
+    ])
+    func emphasisFollowsTheFlankingRule(_ probe: (String, String)) {
+        #expect(TailAutoClose.close(probe.0) == probe.1, "\(probe.0.debugDescription)")
+    }
+
+    /// Every marker on a line re-read the line from its start, so an 8 KB
+    /// paragraph cost 164 ms a tick. Per-line state is carried instead.
+    @Test func closingCostIsLinearInTheLine() {
+        func line(_ bytes: Int) -> String {
+            let unit = "word *emph* and more text. "
+            return String(repeating: unit, count: bytes / unit.utf8.count) + "trailing *ope"
+        }
+        let small = line(2_048)
+        let large = line(8_192)
+        let clock = ContinuousClock()
+        func cost(_ text: String) -> Double {
+            let elapsed = clock.measure {
+                for _ in 0..<5 { _ = TailAutoClose.close(text) }
+            }
+            return Double(elapsed.components.seconds)
+                + Double(elapsed.components.attoseconds) * 1e-18
+        }
+        _ = cost(small)
+        let smallCost = cost(small)
+        let largeCost = cost(large)
+        let ratio = largeCost / smallCost
+        print(String(
+            format: "TAIL-CLOSE 2KB=%.2fms 8KB=%.2fms ratio=%.2f",
+            smallCost * 1e3 / 5,
+            largeCost * 1e3 / 5,
+            ratio))
+        #expect(ratio < 8, "four times the line cost \(ratio) times as much")
+    }
+
     // MARK: - Trailing fragments
 
     @Test func incompleteTagIsStripped() {
@@ -178,13 +265,20 @@ import Testing
     }
 
     /// A finished answer must survive the pass untouched: whatever the model
-    /// closed itself is the text the finalize render will see.
+    /// closed itself is the text the finalize render will see. The
+    /// source-keeping call is the one the tail render makes and holds for every
+    /// fixture; the typesetting call completes an unclosed `$$`, which is what
+    /// it is for, so a fixture whose block ends inside one is pinned through
+    /// the source-keeping call alone.
     @Test(arguments: TranscriptCorpus.fixtures)
     func closedCorpusBlocksAreUnchanged(_ fixture: String) throws {
         let source = try TranscriptCorpus.source(fixture)
         let split = ResponseBlockSplitter.split(source)
         for block in split.completed {
             let text = ResponseBlockSplitter.text(block.utf8Range, in: source)
+            #expect(TailAutoClose.close(text, typesetsMath: false) == text,
+                    "\(fixture) rewrote a completed block")
+            guard !TranscriptCorpus.unclosedDisplayBlocks.contains(fixture) else { continue }
             #expect(TailAutoClose.close(text) == text, "\(fixture) rewrote a completed block")
         }
     }

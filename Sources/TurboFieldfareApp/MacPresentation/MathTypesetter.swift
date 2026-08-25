@@ -44,15 +44,12 @@ public final class MathAttachment: NSTextAttachment {
         super.init(data: nil, ofType: nil)
     }
 
-    public required init?(coder: NSCoder) {
-        latexSource = coder.decodeObject(of: NSString.self, forKey: "latexSource") as String? ?? ""
-        super.init(coder: coder)
-    }
-
-    public override func encode(with coder: NSCoder) {
-        super.encode(with: coder)
-        coder.encode(latexSource as NSString, forKey: "latexSource")
-    }
+    /// Nothing archives the transcript. The pasteboard flavours write the
+    /// LaTeX itself rather than the attachment, so an archived one could only
+    /// come back as an object-replacement character where an equation was —
+    /// which is the failure the attachment exists to prevent. Decoding refuses
+    /// instead of returning a source-less attachment.
+    public required init?(coder: NSCoder) { nil }
 }
 
 @MainActor
@@ -92,7 +89,7 @@ public struct SwiftMathTypesetter: MathTypesetting {
             image: Self.tinted(mask.image, size: mask.size, tint: tint),
             ascent: mask.ascent,
             descent: mask.descent)
-        cache.store(render, for: key)
+        cache.store(render, cost: mask.bytes, for: key)
         return render
     }
 
@@ -101,6 +98,9 @@ public struct SwiftMathTypesetter: MathTypesetting {
         let size: CGSize
         let ascent: CGFloat
         let descent: CGFloat
+        /// What the tinted image retains: the drawing handler clips to this
+        /// bitmap, so the mask is the memory the cache is spending.
+        let bytes: Int
     }
 
     private static func mask(
@@ -108,6 +108,20 @@ public struct SwiftMathTypesetter: MathTypesetting {
         fontSize: CGFloat,
         mode: MathRenderMode
     ) -> Mask? {
+        // The builder skips a character it has no atom for and reports nothing,
+        // so an equation can come back looking finished with an operator
+        // missing from it. Refusing here restores the span's own source, which
+        // the reader can at least see.
+        if let dropped = PinnedMathCoverage.firstDroppedCharacter(in: latex) {
+            let code = dropped.unicodeScalars
+                .map { String(format: "%04X", $0.value) }
+                .joined(separator: "+")
+            log.error("""
+                math typeset refused: pinned build drops U+\(code, privacy: .public) \
+                length=\(latex.count, privacy: .public)
+                """)
+            return nil
+        }
         var image = MathImage(
             latex: latex,
             fontSize: fontSize,
@@ -181,7 +195,8 @@ public struct SwiftMathTypesetter: MathTypesetting {
             image: mask,
             size: size,
             ascent: layout.ascent,
-            descent: layout.descent)
+            descent: layout.descent,
+            bytes: rep.bytesPerRow * rep.pixelsHigh)
     }
 
     private static func tinted(
@@ -216,22 +231,35 @@ public final class MathRenderCache {
         let mode: MathRenderMode
     }
 
-    /// Bounded so a long session cannot grow it without limit. Equations are
-    /// cheap to typeset again, so dropping the whole table beats tracking
-    /// per-entry age.
-    private static let capacity = 512
-
+    /// Bounded by what the images cost rather than by how many there are. A
+    /// display equation's 3x mask runs to hundreds of kilobytes and an inline
+    /// one to tens, so a count limit is either far too small for a page of
+    /// prose or far too large for a page of derivations. 16 MiB is roughly a
+    /// hundred display equations at 13 pt, or a thousand inline ones.
+    private let byteLimit: Int
     private var entries: [Key: MathRender] = [:]
+    private var bytes = 0
 
-    public init() {}
+    public init(byteLimit: Int = 16 << 20) {
+        self.byteLimit = byteLimit
+    }
 
     var count: Int { entries.count }
+    var byteCount: Int { bytes }
 
     func value(for key: Key) -> MathRender? { entries[key] }
 
-    func store(_ render: MathRender, for key: Key) {
-        if entries.count >= Self.capacity { entries.removeAll(keepingCapacity: true) }
-        entries[key] = render
+    func store(_ render: MathRender, cost: Int, for key: Key) {
+        // One equation bigger than the whole budget is not worth emptying the
+        // table for; it is typeset again if it comes back.
+        guard cost <= byteLimit else { return }
+        if bytes + cost > byteLimit {
+            // Equations are cheap to typeset again, so dropping the table beats
+            // tracking per-entry age.
+            entries.removeAll(keepingCapacity: true)
+            bytes = 0
+        }
+        if entries.updateValue(render, forKey: key) == nil { bytes += cost }
     }
 }
 

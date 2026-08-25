@@ -36,7 +36,7 @@ import Testing
 
     // MARK: - Selection copy
 
-    @Test func copyingASelectionWritesTheLatexRatherThanThePlaceholder() {
+    @Test func copyingASelectionWritesTheLatexRatherThanThePlaceholder() throws {
         let rendered = ResponseMarkdownRenderer().render(Self.answer).attributedString
         let view = Self.view(rendered)
         view.setSelectedRange(NSRange(location: 0, length: rendered.length))
@@ -47,8 +47,119 @@ import Testing
         let copied = board.string(forType: .string)
         #expect(copied == "The relation is $E = mc^2$ and it holds.")
         #expect(copied?.contains("\u{FFFC}") == false)
-        // The rich flavour is still AppKit's, so styling and images survive.
-        #expect(board.data(forType: .rtf) != nil)
+        // The rich flavours carry the LaTeX too. RTF cannot hold an attachment
+        // at all, so it used to lose every equation; RTFD held one rasterised
+        // TIFF each.
+        for type in [NSPasteboard.PasteboardType.rtf, .rtfd] {
+            let data = try #require(board.data(forType: type))
+            let decoded = try #require(NSAttributedString(
+                rtfd: data, documentAttributes: nil)
+                ?? NSAttributedString(rtf: data, documentAttributes: nil))
+            #expect(decoded.string.contains("$E = mc^2$"), "\(type.rawValue)")
+            #expect(!decoded.string.contains("\u{FFFC}"), "\(type.rawValue)")
+        }
+    }
+
+    /// Cmd-C on the fifty-equation answer wrote a 12.3 MB RTFD of fifty TIFFs
+    /// and logged a hundred `CGImageDestinationFinalize` lines, because AppKit
+    /// rasterises an attachment that has no file wrapper.
+    @Test func copyingAnAnswerFullOfEquationsWritesTextNotImages() throws {
+        let source = try TranscriptCorpus.source("fifty-equations")
+        let rendered = ResponseMarkdownRenderer().render(source).attributedString
+        let attachments = TranscriptRenderCorpusTests.attachments(in: rendered)
+        #expect(attachments.count == 50)
+
+        let view = Self.view(rendered)
+        view.setSelectedRange(NSRange(location: 0, length: rendered.length))
+        let board = Self.pasteboard("fifty")
+        view.copySelection(to: board)
+
+        let rtfd = try #require(board.data(forType: .rtfd))
+        #expect(rtfd.count < 200_000, "RTFD is \(rtfd.count) bytes")
+        let text = try #require(String(data: rtfd, encoding: .isoLatin1))
+        #expect(!text.contains("NeXTGraphic"))
+        // Nothing was serialised as an attachment, which is what stopped AppKit
+        // asking each one for a file wrapper and rasterising it. Reading
+        // `fileWrapper` back here would create the wrapper this is about.
+        let decoded = try #require(NSAttributedString(rtfd: rtfd, documentAttributes: nil))
+        var kept = 0
+        decoded.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: decoded.length),
+            options: []) { value, _, _ in
+            if value != nil { kept += 1 }
+        }
+        #expect(kept == 0)
+        #expect(decoded.string.contains("\\frac"))
+    }
+
+    /// A drag and a Services provider go out through `writeSelection` too, so
+    /// they cannot drift from what Cmd-C writes.
+    @Test func dragAndServicesWriteTheSameBytesAsCopy() throws {
+        let rendered = ResponseMarkdownRenderer().render(Self.answer).attributedString
+        let view = Self.view(rendered)
+        view.setSelectedRange(NSRange(location: 0, length: rendered.length))
+
+        let copied = Self.pasteboard("copy-route")
+        view.copySelection(to: copied)
+
+        let dragged = Self.pasteboard("drag-route")
+        let types = view.writablePasteboardTypes
+        #expect(types == [.rtfd, .rtf, .string])
+        dragged.declareTypes(types, owner: nil)
+        #expect(view.writeSelection(to: dragged, types: types))
+
+        let service = Self.pasteboard("service-route")
+        service.declareTypes([.string], owner: nil)
+        #expect(view.writeSelection(to: service, type: .string))
+
+        for type in types {
+            #expect(copied.data(forType: type) == dragged.data(forType: type),
+                    "\(type.rawValue)")
+        }
+        #expect(service.string(forType: .string) == copied.string(forType: .string))
+    }
+
+    /// An image in the prompt strip is not a math attachment and still travels
+    /// in the rich flavour the way it did before.
+    @Test func aPromptImageStillTravelsInTheRichFlavour() throws {
+        let image = NSImage(size: NSSize(width: 8, height: 8))
+        image.lockFocus()
+        NSColor.red.setFill()
+        NSBezierPath.fill(NSRect(x: 0, y: 0, width: 8, height: 8))
+        image.unlockFocus()
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        let document = NSMutableAttributedString(attachment: attachment)
+        document.append(ResponseMarkdownRenderer().render(Self.answer).attributedString)
+
+        let view = Self.view(document)
+        view.setSelectedRange(NSRange(location: 0, length: document.length))
+        let board = Self.pasteboard("prompt-image")
+        view.copySelection(to: board)
+
+        let rtfd = try #require(board.data(forType: .rtfd))
+        let decoded = try #require(NSAttributedString(rtfd: rtfd, documentAttributes: nil))
+        var kept = 0
+        decoded.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: decoded.length),
+            options: []) { value, _, _ in
+            if value != nil { kept += 1 }
+        }
+        #expect(kept == 1)
+        #expect(decoded.string.contains("$E = mc^2$"))
+    }
+
+    /// Nothing archives the transcript, so the attachment refuses to be
+    /// decoded rather than coming back without the source it exists to carry.
+    @Test func aMathAttachmentRefusesToBeDecoded() throws {
+        let attachment = MathAttachment(latexSource: "E = mc^2")
+        let archived = try NSKeyedArchiver.archivedData(
+            withRootObject: attachment, requiringSecureCoding: false)
+        let decoded = try? NSKeyedUnarchiver.unarchivedObject(
+            ofClass: MathAttachment.self, from: archived)
+        #expect(decoded == nil)
     }
 
     @Test func copyingPartOfALineKeepsOnlyThatPart() {

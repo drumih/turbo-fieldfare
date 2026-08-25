@@ -75,6 +75,43 @@ import Testing
         #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
     }
 
+    /// The scan walked past a `$` it had already refused as a closer, so the
+    /// currency before an equation and the equation itself became one span and
+    /// the whole sentence typeset as prose. A `$` after whitespace cannot
+    /// close anything; it is where the next candidate starts.
+    @Test(arguments: [
+        ("It costs $5 (or $10 for two). The formula $E=mc^2$ applies.", ["$E=mc^2$"]),
+        ("the $n$th term is $a_n$", ["$a_n$"]),
+        ("Costs $20 and $30 each; $x$ is the count", ["$x$"]),
+        ("Refunds under $5 today; anything over $100 needs review.", []),
+        ("| Basic | $20 | $200 |", []),
+        // The candidate is abandoned at the second opener rather than swallowing
+        // the space between them.
+        ("$a $b$", ["$b$"]),
+        // A `$<digit>` candidate that spans whitespace is currency unless its
+        // content reads as math.
+        ("I paid $20 for the $50 item$", []),
+        (#"The result is $5 \times 10^3$ exactly."#, [#"$5 \times 10^3$"#]),
+    ])
+    func aWhitespacePrecededDollarStartsTheNextCandidate(_ probe: (String, [String])) {
+        #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
+    }
+
+    /// `isLetter` and `isNumber` are Unicode-wide, so a Han or Cyrillic
+    /// character beside a delimiter read as a word character and the equation
+    /// stayed raw. The adjacency rules exist for shell and URL text, which is
+    /// ASCII; the `/` rule is unchanged.
+    @Test(arguments: [
+        ("\u{8D28}\u{91CF}\u{4E3A}$m$\u{7684}\u{7269}\u{4F53}", ["$m$"]),
+        ("\u{044D}\u{043D}\u{0435}\u{0440}\u{0433}\u{0438}\u{044F}$E$\u{0440}\u{0430}\u{0432}\u{043D}\u{0430}", ["$E$"]),
+        ("\u{516C}\u{5F0F}$E = mc^2$\u{6210}\u{7ACB}\u{3002}", ["$E = mc^2$"]),
+        (#"\u{534A}\u{5F84}$r$\u{FF0C}\u{9762}\u{79EF}$A = \pi r^2$\u{3002}"#, ["$r$", #"$A = \pi r^2$"#]),
+        ("caf\u{E9}$x$", ["$x$"]),
+    ])
+    func adjacencyRulesOnlyCountASCIIWordCharacters(_ probe: (String, [String])) {
+        #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
+    }
+
     // MARK: - Display
 
     @Test func findsSingleLineAndMultilineDisplaySpans() {
@@ -109,6 +146,37 @@ import Testing
             == "\n\n\u{E000}0\u{E001}\n\n\n\n\n\u{E000}1\u{E001}\n\n")
     }
 
+    /// A `$$` was an opener anywhere, and an unclosed one shielded the rest of
+    /// the answer as raw source unless a blank line happened to follow. Three
+    /// or more dollars are never an opener, and only a line-start opener whose
+    /// content reads as TeX earns the shield.
+    @Test(arguments: [
+        ("It costs $$$ a lot.\n**Bold** line\n# Heading", []),
+        ("Rated $$ on the price scale.\n- item", []),
+        ("See \\[ in the note.\n# Heading", []),
+        ("$$$x$$$", []),
+        ("a $$$ b $$ c $$", ["$$ c $$"]),
+        // Line start is necessary but not sufficient: the content has to look
+        // like an equation the model was cut off in the middle of.
+        ("Text\n\n$$x = 1", []),
+        ("Text\n\n$$x = \\frac{1", ["$$x = \\frac{1"]),
+        ("- Step:\n  $$\\frac{a}{b}", ["$$\\frac{a}{b}"]),
+    ])
+    func onlyALineStartOpenerWithTeXContentProtectsTheRest(_ probe: (String, [String])) {
+        #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
+    }
+
+    /// A blank line is the display block's hard boundary in both directions:
+    /// nothing past one can close an opener, and an opener nothing closes
+    /// protects only as far as the boundary.
+    @Test func aDisplayBlockNeverCrossesABlankLine() {
+        let source = "Intro.\n\n$$\n\\frac{a}{b}\n\nc = d\n$$\n\nAfter $x$"
+        let spans = MathSpanDetector.spans(in: source)
+        #expect(spans.map(\.source) == ["$$\n\\frac{a}{b}", "$x$"])
+        #expect(spans.first?.isLiteralProtect == true)
+        #expect(spans.last?.isLiteralProtect == false)
+    }
+
     // MARK: - Backslash forms
 
     @Test(arguments: [
@@ -132,6 +200,21 @@ import Testing
         // `aligned` is an inline environment, not a block one: Gemma emits it
         // inside a single-dollar span and KaTeX does not auto-render it.
         #expect(Self.sources("\\begin{aligned}\na\n\\end{aligned}").isEmpty)
+    }
+
+    /// `\[ ... \]` was math wherever it appeared, so an escaped bracket pair in
+    /// prose became an equation and the words inside it disappeared into a
+    /// failed typeset. It is math when the content reads as math, or when the
+    /// pair owns its line.
+    @Test(arguments: [
+        (#"the array \[1, 2, 3\] holds"#, []),
+        (#"\[1, 2, 3\]"#, [#"\[1, 2, 3\]"#]),
+        (#"\[ x \]"#, [#"\[ x \]"#]),
+        (#"Set \[optional\] flag"#, []),
+        (#"Note \[x = 1\] inline"#, [#"\[x = 1\]"#]),
+    ])
+    func bracketDelimitersNeedMathContentOrTheirOwnLine(_ probe: (String, [String])) {
+        #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
     }
 
     // MARK: - Code protection
@@ -171,6 +254,37 @@ import Testing
     @Test func fourSpaceListContinuationIsNotCode() {
         let source = "- item\n\n    continues with $a$ inside\n"
         #expect(Self.sources(source) == ["$a$"])
+    }
+
+    /// The mask opened a fence on "```bash```" and hid every dollar below it,
+    /// so an answer that names the fence syntax lost all of its math.
+    @Test func aBacktickInfoStringDoesNotOpenACodeFence() {
+        #expect(Self.sources("```bash``` is the fence syntax for $x$ here.") == ["$x$"])
+        #expect(Self.sources("```bash```\n\n$$y$$") == ["$$y$$"])
+    }
+
+    /// The mask read every fence at column zero, so a listing indented into a
+    /// nested item was never a fence and its shell variables typeset as
+    /// equations. It also read `- - -` as a bullet, which kept a list open
+    /// across the rule and stopped the indented block under it being code.
+    @Test(arguments: [
+        // A fence two levels in: only the span outside it survives. Tilde
+        // fences, so the backtick-span mask cannot cover for the block mask.
+        (
+            "1. Outer\n    - Inner\n        ~~~bash\n        cost $a$ here\n        ~~~\n    - Next $x$",
+            ["$x$"]
+        ),
+        ("- item\n    ~~~\n    $a$\n    ~~~\n- next $b$", ["$b$"]),
+        // An indented block after a heading is code; the heading is a leaf
+        // block, so there is no paragraph for it to be a continuation of.
+        ("# Title\n    let x = $a$\n\nAfter $b$", ["$b$"]),
+        ("- - -\n\n    $a$ code", []),
+        // A deep indent that continues the item's own paragraph is lazy
+        // continuation, not code.
+        ("- item\n        lazy $a$", ["$a$"]),
+    ])
+    func theCodeMaskFollowsContainerIndentation(_ probe: (String, [String])) {
+        #expect(Self.sources(probe.0) == probe.1, "\(probe.0.debugDescription)")
     }
 
     @Test func mathImmediatelyAfterACodeRegionIsStillFound() {
@@ -274,6 +388,20 @@ import Testing
             #expect(MathSpanDetector.spans(in: source).isEmpty)
         }
         #expect(elapsed < .milliseconds(100), "180 KB inline scan took \(elapsed)")
+    }
+
+    /// `isEscaped` counted the backslashes before every candidate, so a run of
+    /// them cost one backward walk per character: 80 KB measured 0.98 s, and
+    /// the open block is rescanned on every streaming tick. The parity is a
+    /// mask built once per message instead.
+    @Test func escapeScanningStaysLinearOnALongBackslashRun() {
+        let even = String(repeating: #"\"#, count: 80_000) + "$x$"
+        let odd = String(repeating: #"\"#, count: 80_001) + "$x$"
+        let elapsed = ContinuousClock().measure {
+            #expect(Self.sources(even) == ["$x$"])
+            #expect(Self.sources(odd).isEmpty)
+        }
+        #expect(elapsed < .milliseconds(100), "80 KB of backslashes took \(elapsed)")
     }
 
     /// A model that emits the sentinel characters itself must not be able to

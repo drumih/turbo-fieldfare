@@ -39,7 +39,8 @@ import Testing
 
         let linkRange = (text as NSString).range(of: "link")
         #expect(result.attributedString.attribute(.link, at: linkRange.location,
-                                                  effectiveRange: nil) == nil)
+                                                  effectiveRange: nil) as? URL
+            == URL(string: "https://example.com"))
         let linkColor = result.attributedString.attribute(
             .foregroundColor, at: linkRange.location, effectiveRange: nil) as? NSColor
         #expect(linkColor?.isEqual(NSColor.linkColor) == true)
@@ -66,6 +67,29 @@ import Testing
 
         #expect(result.usedFallback)
         #expect(result.attributedString.string == source)
+    }
+
+    /// The gate counted "```" delimiters, so one in the middle of a sentence
+    /// was an odd count and the whole answer — heading, table and all — was
+    /// shown as raw source. Only a line that is a fence line opens a block.
+    @Test func aMidLineBacktickRunNoLongerForcesRawText() {
+        let source = "# Title\n\nA mid-line ``` in a sentence.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |"
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(!result.attributedString.string.contains("# Title"))
+        #expect(result.attributedString.string.contains("A mid-line ``` in a sentence."))
+    }
+
+    /// A backtick fence's info string may not contain a backtick, so this is a
+    /// closed code span and the answer after it is not inside a code block.
+    @Test func aBacktickInfoStringIsACodeSpanNotAnOpenFence() {
+        let source = "```bash``` is the fence syntax.\n\n# Heading\n\nDone."
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string
+            == "bash is the fence syntax.\n\nHeading\n\nDone.")
     }
 
     @Test func blockLevelHTMLStaysReadableAsRawText() {
@@ -259,12 +283,104 @@ import Testing
         #expect(text == "Look remote here")
         let range = (text as NSString).range(of: "remote")
         #expect(result.attributedString.attribute(.link, at: range.location,
-                                                  effectiveRange: nil) == nil)
+                                                  effectiveRange: nil) as? URL
+            == URL(string: "https://example.com/image.png"))
         #expect(result.attributedString.attribute(.attachment, at: range.location,
                                                   effectiveRange: nil) == nil)
         let color = try #require(result.attributedString.attribute(
             .foregroundColor, at: range.location, effectiveRange: nil) as? NSColor)
         #expect(color.isEqual(NSColor.linkColor))
+    }
+
+    /// An image whose alt text is empty produced an empty run, so the picture
+    /// left nothing at all on screen where the reader expected something.
+    @Test func anImageWithNoAltTextShowsItsDestination() {
+        let result = ResponseMarkdownRenderer().render("Look ![](https://example.com/a.png) here")
+        let text = result.attributedString.string
+
+        #expect(text == "Look https://example.com/a.png here")
+        #expect(!text.unicodeScalars.contains { $0.value == 0xFFFC })
+        let range = (text as NSString).range(of: "https://example.com/a.png")
+        #expect(result.attributedString.attribute(
+            .attachment, at: range.location, effectiveRange: nil) == nil)
+        #expect(result.attributedString.attribute(
+            .link, at: range.location, effectiveRange: nil) != nil)
+    }
+
+    /// The destination reaches the text view as a real `.link`, so anything but
+    /// a scheme this transcript is willing to open has to be plain text.
+    @Test(arguments: [
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,<b>x</b>",
+    ])
+    func aLinkWithADisallowedSchemeRendersAsPlainText(_ destination: String) throws {
+        let result = ResponseMarkdownRenderer().render("Click [here](\(destination)) now")
+        let text = result.attributedString.string
+        let range = (text as NSString).range(of: "here")
+
+        #expect(!result.usedFallback)
+        #expect(text == "Click here now")
+        #expect(result.attributedString.attribute(
+            .link, at: range.location, effectiveRange: nil) == nil)
+        let color = try #require(result.attributedString.attribute(
+            .foregroundColor, at: range.location, effectiveRange: nil) as? NSColor)
+        #expect(!color.isEqual(NSColor.linkColor))
+    }
+
+    @Test func aLinkInsideATableCellKeepsItsDestinationAndItsCell() throws {
+        let source = "| Name | Where |\n| --- | --- |\n| Docs | [site](https://example.com) |"
+        let result = ResponseMarkdownRenderer().render(source)
+        let text = result.attributedString.string as NSString
+        let range = text.range(of: "site")
+
+        #expect(result.attributedString.attribute(
+            .link, at: range.location, effectiveRange: nil) as? URL
+            == URL(string: "https://example.com"))
+        let style = try #require(result.attributedString.attribute(
+            .paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)
+        #expect(style.textBlocks.first is NSTextTableBlock)
+    }
+
+    /// `<b then c>` is a valid CommonMark open tag with two bare attributes, so
+    /// the run was dropped and everything after it went bold. Requiring every
+    /// attribute to carry a value is what separates markup from prose.
+    @Test(arguments: [
+        ("if a<b then c>d holds", "if a<b then c>d holds"),
+        ("<b/>x", "<b/>x"),
+        ("</b y>x", "</b y>x"),
+        ("<b =\"v\">x", "<b =\"v\">x"),
+        ("<B>x</B> y", "x y"),
+        ("<b><i>x</i></b> y", "x y"),
+    ])
+    func onlyCompleteTagsAreTreatedAsMarkup(_ probe: (String, String)) {
+        let result = ResponseMarkdownRenderer().render(probe.0)
+        #expect(result.attributedString.string == probe.1, "\(probe.0.debugDescription)")
+    }
+
+    @Test func proseThatParsesAsATagIsNeverStyled() throws {
+        let source = "if a<b then c>d holds for every d"
+        let result = ResponseMarkdownRenderer().render(source)
+        let text = result.attributedString.string as NSString
+        let font = try #require(result.attributedString.attribute(
+            .font, at: text.range(of: "holds").location, effectiveRange: nil) as? NSFont)
+        #expect(!font.fontDescriptor.symbolicTraits.contains(.bold))
+    }
+
+    @Test func anAttributeWithAValueStillApplies() throws {
+        let result = ResponseMarkdownRenderer().render(
+            "a<code class=\"x\">mono</code> b<sup id='n'>up</sup>")
+        let text = result.attributedString.string
+        #expect(text == "amono bup")
+
+        let mono = try #require(result.attributedString.attribute(
+            .font, at: (text as NSString).range(of: "mono").location,
+            effectiveRange: nil) as? NSFont)
+        #expect(mono.fontDescriptor.symbolicTraits.contains(.monoSpace))
+        #expect(result.attributedString.attribute(
+            .baselineOffset,
+            at: (text as NSString).range(of: "up").location,
+            effectiveRange: nil) as? CGFloat ?? 0 > 0)
     }
 
     /// Marker and ordinal come from the innermost list, not the outermost.
@@ -368,6 +484,68 @@ import Testing
         #expect(header.width(for: .padding, edge: .minX) == 6)
         #expect(header.width(for: .border, edge: .minX) == 1)
         #expect(header.borderColor(for: .minX)?.isEqual(NSColor.separatorColor) == true)
+    }
+
+    /// Foundation emits no run for an empty cell, and none at all for the
+    /// cells a short row never wrote, so no text block was created for those
+    /// positions and TextKit laid every body row out with the wrong column
+    /// count. The grid has to be complete before anything is drawn.
+    static let raggedTable = """
+        | Feature | Basic | Pro |
+        | --- | --- | --- |
+        | Price | $20 |  |
+        | SSO |  | yes |
+        | Notes | short |
+        """
+
+    @Test func aTableWithEmptyAndMissingCellsStillDrawsAFullGrid() throws {
+        let result = ResponseMarkdownRenderer().render(Self.raggedTable)
+        let text = result.attributedString.string
+
+        #expect(!result.usedFallback)
+        #expect(text == "Feature\nBasic\nPro\nPrice\n$20\n\nSSO\n\nyes\nNotes\nshort\n\n")
+
+        var blocks: [NSTextTableBlock] = []
+        result.attributedString.enumerateAttribute(
+            .paragraphStyle,
+            in: NSRange(location: 0, length: result.attributedString.length),
+            options: []) { value, _, _ in
+            guard let block = (value as? NSParagraphStyle)?.textBlocks
+                .first as? NSTextTableBlock else {
+                return
+            }
+            if blocks.last !== block { blocks.append(block) }
+        }
+        #expect(blocks.count == 12)
+        #expect(blocks.map { ($0.startingRow, $0.startingColumn) }.map { "\($0.0),\($0.1)" }
+            == ["0,0", "0,1", "0,2", "1,0", "1,1", "1,2", "2,0", "2,1", "2,2", "3,0", "3,1", "3,2"])
+        #expect(Set(blocks.map { ObjectIdentifier($0.table) }).count == 1)
+        #expect(blocks[0].table.numberOfColumns == 3)
+        // The filler keeps its row's identity: a header fill, a body cell not.
+        #expect(blocks[2].backgroundColor?.isEqual(NSColor.quaternarySystemFill) == true)
+        #expect(blocks[5].backgroundColor == nil)
+    }
+
+    @Test func anEmptyHeaderCellKeepsTheHeaderFill() throws {
+        let source = "| A |  | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |"
+        let result = ResponseMarkdownRenderer().render(source)
+
+        #expect(result.attributedString.string == "A\n\nC\n1\n2\n3\n")
+        let text = result.attributedString.string as NSString
+        // The empty header cell is the newline between "A" and "C".
+        let style = try #require(result.attributedString.attribute(
+            .paragraphStyle,
+            at: text.range(of: "A\n\nC").location + 2,
+            effectiveRange: nil) as? NSParagraphStyle)
+        let block = try #require(style.textBlocks.first as? NSTextTableBlock)
+        #expect(block.startingRow == 0)
+        #expect(block.startingColumn == 1)
+        #expect(block.backgroundColor?.isEqual(NSColor.quaternarySystemFill) == true)
+    }
+
+    @Test func theRaggedTablePlainTextKeepsEveryCellBoundary() {
+        #expect(ResponseMarkdownRenderer().plainText(Self.raggedTable)
+            == "Feature\nBasic\nPro\nPrice\n$20\n\nSSO\n\nyes\nNotes\nshort\n\n")
     }
 
     @Test func tableHeaderCellsAreSemiboldAndBodyCellsAreNot() throws {
@@ -676,6 +854,37 @@ import Testing
         #expect(typesetter.calls.isEmpty)
     }
 
+    /// The shield turned an ordinary sentence into raw source for the rest of
+    /// the answer: the heading, the bold run and the list below it all showed
+    /// their markers.
+    @Test(arguments: [
+        "It costs $$$ a lot.\n**Bold** line\n# Heading",
+        "Rated $$ on the price scale.\n- item one\n- item two",
+        "See \\[ in the note.\n# Heading",
+    ])
+    func aStrayDisplayOpenerInProseLeavesTheAnswerStyled(_ source: String) {
+        let typesetter = FakeMathTypesetter()
+        let result = ResponseMarkdownRenderer(typesetter: typesetter).render(source)
+        let text = result.attributedString.string
+
+        #expect(!result.usedFallback, "\(source.debugDescription)")
+        #expect(!text.contains("**"), "\(source.debugDescription)")
+        #expect(!text.contains("# Heading"), "\(source.debugDescription)")
+        #expect(typesetter.calls.isEmpty)
+    }
+
+    /// The bracket pair carried prose into the typesetter, which failed, and
+    /// the words came back as raw source with their backslashes.
+    @Test func anEscapedBracketPairInProseRendersAsBrackets() {
+        let typesetter = FakeMathTypesetter()
+        let result = ResponseMarkdownRenderer(typesetter: typesetter)
+            .render(#"the array \[1, 2, 3\] holds three values"#)
+
+        #expect(!result.usedFallback)
+        #expect(result.attributedString.string == "the array [1, 2, 3] holds three values")
+        #expect(typesetter.calls.isEmpty)
+    }
+
     /// Two lone backticks paragraphs apart used to pair into one code span
     /// across everything between them. The equation in the middle typeset
     /// while the answer streamed, because each paragraph was rendered on its
@@ -918,7 +1127,11 @@ import Testing
             response: partial,
             isTerminal: true)
         #expect(first.mutation == .finalized)
-        #expect(storage.string.hasSuffix(partial))
+        // The unclosed fence is drawn as code, not shown as raw source: the
+        // per-block finalize never puts the answer through the message-wide
+        // gate that the whole-document render applies.
+        #expect(storage.string.hasSuffix("kernel void matmul() {}\n"))
+        #expect(!storage.string.contains("```"))
 
         let updated = controller.synchronize(
             storage: storage,
@@ -993,11 +1206,69 @@ import Testing
             NSRange(location: 2, length: 4),
             // Entirely inside the rewrite: collapsed where it began.
             NSRange(location: 10, length: 0),
-            // Past the end of the new text: pinned to that end.
-            NSRange(location: 11, length: 0),
+            // Below the rewrite: the same characters, moved by the delta.
+            // Collapsing these too dropped a selection over text that had not
+            // changed at all.
+            NSRange(location: 15, length: 3),
             // A caret at the boundary is not inside the rewrite.
             NSRange(location: 6, length: 0),
         ])
+    }
+
+    /// A tail re-render rewrites the same sentence with a few characters
+    /// added. Reporting the whole tail as replaced collapsed every selection
+    /// inside it, including one over text that had not moved.
+    @Test(arguments: [
+        // old, new, expected offset into `previous`, expected old length, new length
+        ("abc", "abcd", 3, 0, 1),
+        ("abcd", "abc", 3, 1, 0),
+        ("hello world", "hello brave world", 6, 0, 6),
+        ("same", "same", -1, 0, 0),
+        // A surrogate pair and a composed sequence may not be split.
+        ("a\u{1F600}b", "a\u{1F600}c", 3, 1, 1),
+        ("cafe\u{301} x", "cafe\u{301} y", 6, 1, 1),
+    ])
+    func differingTrimsWhatBothSidesShare(_ probe: (String, String, Int, Int, Int)) {
+        let replaced = InstructionTranscriptDocumentController.ReplacedRange.differing(
+            previous: NSRange(location: 10, length: (probe.0 as NSString).length),
+            old: probe.0 as NSString,
+            new: probe.1 as NSString)
+        guard probe.2 >= 0 else {
+            #expect(replaced == nil, "\(probe.0.debugDescription)")
+            return
+        }
+        #expect(replaced?.previous == NSRange(location: 10 + probe.2, length: probe.3),
+                "\(probe.0.debugDescription)")
+        #expect(replaced?.length == probe.4, "\(probe.0.debugDescription)")
+    }
+
+    /// The whole point of trimming: a selection over a completed block above
+    /// the open one keeps its exact indices through a streaming tick and
+    /// through finalize.
+    @Test func aSelectionOverACompletedBlockSurvivesATickAndFinalize() {
+        let storage = NSMutableAttributedString()
+        let controller = InstructionTranscriptDocumentController(environment: [:])
+        _ = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "# Title\n\nBody sta", isTerminal: false)
+        let heading = (storage.string as NSString).range(of: "Title")
+        let selection = [heading]
+
+        let tick = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "# Title\n\nBody star", isTerminal: false)
+        let afterTick = InstructionTranscriptDocumentController.adjustedRanges(
+            selection,
+            replacing: try! #require(tick.replaced).previous,
+            newLength: try! #require(tick.replaced).length)
+        #expect(afterTick == selection)
+        #expect((storage.string as NSString).substring(with: afterTick[0]) == "Title")
+
+        let final = controller.synchronize(
+            storage: storage, prompt: "Ask", response: "# Title\n\nBody star", isTerminal: true)
+        let afterFinalize = final.replaced.map {
+            InstructionTranscriptDocumentController.adjustedRanges(
+                afterTick, replacing: $0.previous, newLength: $0.length)
+        } ?? afterTick
+        #expect((storage.string as NSString).substring(with: afterFinalize[0]) == "Title")
     }
 
     /// The coordinator can only adjust a selection if the controller says what
@@ -1013,8 +1284,11 @@ import Testing
         let update = controller.synchronize(
             storage: storage, prompt: "Ask", response: "Done.\n\nabc", isTerminal: false)
         #expect(update.mutation == .tailReplaced)
-        #expect(update.replaced?.previous == before)
-        #expect(update.replaced?.length == controller.tailRange.length)
+        // Only the character that arrived: the "ab" above it is the same text
+        // at the same indices, so a selection over it is not disturbed.
+        #expect(update.replaced?.previous
+            == NSRange(location: before.upperBound, length: 0))
+        #expect(update.replaced?.length == 1)
 
         // An append that rewrites nothing reports nothing.
         let appended = controller.synchronize(

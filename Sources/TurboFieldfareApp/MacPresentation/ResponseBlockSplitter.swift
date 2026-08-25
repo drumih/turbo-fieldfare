@@ -16,6 +16,14 @@ import Foundation
 /// interrupt a paragraph, so a parser handed the two together reads the
 /// listing as code where this scanner would have read prose.
 ///
+/// One thing a block cannot carry is a reference to something outside it. A
+/// `[label][ref]` whose `[ref]: url` definition sits in a later block renders
+/// with its brackets showing, because the block that uses the label is parsed
+/// on its own. Resolving it would mean scanning the whole response on every
+/// tick, which is the shape the streaming timing gate exists to catch, and
+/// doing it only at finalize would put the flip back that the per-block
+/// finalize removed. The target models emit reference links rarely.
+///
 /// Boundaries are UTF-8 offsets and the scan is resumable so a tick costs the
 /// bytes that arrived, not the bytes that are there: re-scanning a 10 KB fenced
 /// block on each of the ~1,200 ticks it takes to stream is the quadratic shape
@@ -76,6 +84,16 @@ enum ResponseBlockSplitter {
         var fenceBodyStart = 0
         var fenceBodyEnd = 0
         var fenceClosed = false
+        /// Content column of the outermost item a list block is inside. A
+        /// fence at or past it is the item's own listing; one before it ends
+        /// the list.
+        var listContentColumn = 0
+        /// A fence opened inside a list item. The block stays a list — the
+        /// whole thing goes through the markdown pass — but until the fence
+        /// closes its lines are code, so no blank line inside it commits the
+        /// block and no line inside it opens anything.
+        var innerFenceMarker: UInt8 = 0
+        var innerFenceLength = 0
     }
 
     struct Split: Equatable {
@@ -163,10 +181,8 @@ enum ResponseBlockSplitter {
         let content = contentRange(bytes, line)
 
         if var current = state.current, current.kind == .fencedCode, !current.fenceClosed {
-            if let marker = fenceRun(bytes, content),
-               marker.marker == current.fenceMarker,
-               marker.length >= current.fenceLength,
-               marker.isBare {
+            if let run = FenceLine.run(bytes, in: content),
+               run.closes(marker: current.fenceMarker, length: current.fenceLength) {
                 current.fenceClosed = true
                 current.fenceBodyEnd = line.lowerBound
                 current.contentEnd = content.upperBound
@@ -183,6 +199,33 @@ enum ResponseBlockSplitter {
             current.fenceBodyEnd = lineEnd
             state.current = current
             return
+        }
+
+        if var current = state.current, current.innerFenceMarker != 0 {
+            let indent = indentWidth(bytes, content)
+            let blank = isBlank(bytes, content)
+            // An unclosed fence inside an item cannot hold the rest of the
+            // answer: a line indented before the item's content column has
+            // left the item, and the fence with it.
+            if blank || indent >= current.listContentColumn {
+                if let run = FenceLine.run(
+                    bytes,
+                    in: content,
+                    containerIndent: current.listContentColumn),
+                   run.closes(
+                    marker: current.innerFenceMarker,
+                    length: current.innerFenceLength) {
+                    current.innerFenceMarker = 0
+                    current.innerFenceLength = 0
+                }
+                if !blank { current.contentEnd = content.upperBound }
+                state.current = current
+                state.pendingBlank = false
+                return
+            }
+            current.innerFenceMarker = 0
+            current.innerFenceLength = 0
+            state.current = current
         }
 
         guard !isBlank(bytes, content) else {
@@ -222,14 +265,34 @@ enum ResponseBlockSplitter {
             state.pendingBlank = false
         }
 
+        if current.kind == .list {
+            // A nested item is inside the item above it; a sibling or an outer
+            // one is the item the block's fences are measured against now.
+            if let item = ContainerPrefix.listItem(bytes, in: content),
+               item.markerIndent < current.listContentColumn {
+                current.listContentColumn = item.contentColumn
+            }
+            if terminated, let run = FenceLine.run(
+                bytes,
+                in: content,
+                containerIndent: current.listContentColumn) {
+                current.innerFenceMarker = run.marker
+                current.innerFenceLength = run.length
+                current.contentEnd = content.upperBound
+                state.current = current
+                return
+            }
+        }
+
         // The one boundary a blank line does not draw. A fence interrupts a
         // paragraph in CommonMark, and absorbing it instead hands the rest of
         // the listing to the prose block: the blank line inside the code then
         // commits it, and the lines below open an indented-code block that
-        // swallows the closing fence and the sentence after it. A list keeps
-        // its own fences, which sit inside its items.
-        if terminated, current.kind != .list, current.kind != .indentedCode,
-           fenceRun(bytes, content) != nil {
+        // swallows the closing fence and the sentence after it. A list is
+        // interrupted the same way once the fence is left of its content
+        // column, which is where the item's own listing would have started.
+        if terminated, current.kind != .indentedCode,
+           FenceLine.run(bytes, in: content) != nil {
             completed.append(block(from: current))
             state.current = opening(bytes, content: content, lineEnd: lineEnd, indent: indent)
             return
@@ -249,12 +312,15 @@ enum ResponseBlockSplitter {
             start: content.lowerBound,
             contentEnd: content.upperBound,
             kind: kind(bytes, content: content, indent: indent))
-        if current.kind == .fencedCode, let fence = fenceRun(bytes, content) {
+        if current.kind == .fencedCode, let fence = FenceLine.run(bytes, in: content) {
             current.fenceMarker = fence.marker
             current.fenceLength = fence.length
             current.fenceIndent = fence.indent
             current.fenceBodyStart = lineEnd
             current.fenceBodyEnd = lineEnd
+        }
+        if current.kind == .list, let item = ContainerPrefix.listItem(bytes, in: content) {
+            current.listContentColumn = item.contentColumn
         }
         return current
     }
@@ -285,7 +351,7 @@ enum ResponseBlockSplitter {
         indent: Int
     ) -> Kind {
         if indent >= 4 { return .indentedCode }
-        if fenceRun(bytes, content) != nil { return .fencedCode }
+        if FenceLine.run(bytes, in: content) != nil { return .fencedCode }
         let start = firstNonSpace(bytes, content)
         guard start < content.upperBound else { return .paragraph }
         if isThematicBreak(bytes, content) { return .thematicBreak }
@@ -311,7 +377,7 @@ enum ResponseBlockSplitter {
         default:
             break
         }
-        if isListItem(bytes, content) { return .list }
+        if ContainerPrefix.listItem(bytes, in: content) != nil { return .list }
         return .paragraph
     }
 
@@ -323,38 +389,12 @@ enum ResponseBlockSplitter {
     ) -> Bool {
         switch kind {
         case .list:
-            return indent >= 2 || isListItem(bytes, content)
+            return indent >= 2 || ContainerPrefix.listItem(bytes, in: content) != nil
         case .indentedCode:
             return indent >= 4
         default:
             return false
         }
-    }
-
-    private static func isListItem(
-        _ bytes: UnsafeBufferPointer<UInt8>,
-        _ content: Range<Int>
-    ) -> Bool {
-        var index = firstNonSpace(bytes, content)
-        guard index < content.upperBound else { return false }
-        let first = bytes[index]
-        if first == UInt8(ascii: "-") || first == UInt8(ascii: "*")
-            || first == UInt8(ascii: "+") {
-            let next = index + 1
-            return next >= content.upperBound || isSpace(bytes[next])
-        }
-        var digits = 0
-        while index < content.upperBound, bytes[index] >= UInt8(ascii: "0"),
-              bytes[index] <= UInt8(ascii: "9") {
-            digits += 1
-            index += 1
-        }
-        guard digits > 0, digits <= 9, index < content.upperBound else { return false }
-        guard bytes[index] == UInt8(ascii: ".") || bytes[index] == UInt8(ascii: ")") else {
-            return false
-        }
-        let next = index + 1
-        return next >= content.upperBound || isSpace(bytes[next])
     }
 
     private static func isThematicBreak(
@@ -379,35 +419,6 @@ enum ResponseBlockSplitter {
             index += 1
         }
         return count >= 3
-    }
-
-    /// Fence marker on a line, if it has one. `isBare` distinguishes a closing
-    /// fence (nothing but the marker) from an opening one with an info string.
-    private static func fenceRun(
-        _ bytes: UnsafeBufferPointer<UInt8>,
-        _ content: Range<Int>
-    ) -> (marker: UInt8, length: Int, indent: Int, isBare: Bool)? {
-        let indent = indentWidth(bytes, content)
-        guard indent <= 3 else { return nil }
-        var index = firstNonSpace(bytes, content)
-        guard index < content.upperBound else { return nil }
-        let marker = bytes[index]
-        guard marker == UInt8(ascii: "`") || marker == UInt8(ascii: "~") else { return nil }
-        var length = 0
-        while index < content.upperBound, bytes[index] == marker {
-            length += 1
-            index += 1
-        }
-        guard length >= 3 else { return nil }
-        var bare = true
-        while index < content.upperBound {
-            if !isSpace(bytes[index]) {
-                bare = false
-                break
-            }
-            index += 1
-        }
-        return (marker, length, indent, bare)
     }
 
     // MARK: - Bytes

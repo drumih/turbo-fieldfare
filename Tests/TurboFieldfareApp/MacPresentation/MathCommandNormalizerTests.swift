@@ -12,6 +12,11 @@ import Testing
 /// 453 raw / 506 normalized; the Unicode symbol table brings the normalized
 /// figure back to 517, and the one that stays out is a CJK word character with
 /// no command to map onto.
+///
+/// The raw figure then moved again, from 453 to 450, when the conformer began
+/// refusing what the pinned build drops without an error. `\u{221A}2`, `a~b`
+/// and `\text{if}~x` had been counted as passing because an image came back;
+/// the character they name was missing from it.
 enum MathCoverageFixture {
     static let commandSweepCount = 607
 
@@ -122,6 +127,26 @@ enum MathRewriteCases {
         MathRewriteCase(
             input: #"\begin{rcases} a \\ b \end{rcases}"#,
             output: #"\begin{cases} a \\ b \end{cases}"#),
+        // The radical is a character, not a command: the build had no atom for
+        // it, so it drew nothing and the equation looked complete without it.
+        MathRewriteCase(input: "\u{221A}2", output: #"\sqrt{2}"#),
+        MathRewriteCase(input: "\u{221A}16.5", output: #"\sqrt{16.5}"#),
+        MathRewriteCase(input: "\u{221A}x", output: #"\sqrt{x}"#),
+        MathRewriteCase(input: "\u{221A}{x+1}", output: #"\sqrt{x+1}"#),
+        MathRewriteCase(input: "\u{221A}(a+b)", output: #"\sqrt{a+b}"#),
+        MathRewriteCase(input: "\u{221A}\\alpha", output: #"\sqrt{\alpha}"#),
+        MathRewriteCase(input: "f\u{2032}(x)", output: #"f^{\prime}(x)"#),
+        MathRewriteCase(input: "f\u{2033}(x)", output: #"f^{\prime\prime}(x)"#),
+        MathRewriteCase(input: "f\u{2032}\u{2032}(x)", output: #"f^{\prime\prime}(x)"#),
+        MathRewriteCase(input: "90\u{00B0}", output: #"90^{\circ}"#),
+        MathRewriteCase(input: "50%", output: #"50\%"#),
+        MathRewriteCase(input: "a~b", output: #"a\ b"#),
+        MathRewriteCase(input: "a\u{00A0}b", output: #"a\ b"#),
+        MathRewriteCase(input: "a\u{2009}b", output: #"a\,b"#),
+        MathRewriteCase(input: "x\u{200B}y", output: "xy"),
+        MathRewriteCase(input: "\u{00AC}p \u{2228} q", output: #"\neg p \lor q"#),
+        MathRewriteCase(input: "x \u{226A} y", output: #"x \ll y"#),
+        MathRewriteCase(input: "\u{2308}x\u{2309}", output: #"\lceil x\rceil"#),
     ]
 }
 
@@ -200,6 +225,21 @@ enum MathRewriteCases {
         #expect(MathCoverageFixture.sweep.count > MathCoverageFixture.commandSweepCount)
     }
 
+    /// Spacing has no replacement that typesets on its own — a lone space is a
+    /// zero-size image, which the conformer refuses — so it is pinned in
+    /// context instead of through the symbol-table row test.
+    @Test func everySpacingRuleReplacesADroppedCharacterWithAnAcceptedCommand() {
+        for (character, command) in MathCommandNormalizer.spacing {
+            #expect(!Self.typesets("a\(character)b"), "a\(character)b already typesets")
+            #expect(MathCommandNormalizer.normalize("a\(character)b") == "a\(command)b")
+            #expect(Self.typesets("a\(command)b"), "\(command) does not typeset")
+        }
+        for character in MathCommandNormalizer.removed {
+            #expect(!Self.typesets("a\(character)b"))
+            #expect(MathCommandNormalizer.normalize("a\(character)b") == "ab")
+        }
+    }
+
     /// The sweep's fourteen Unicode entries were stored double-encoded, so what
     /// the fixture actually measured was a run of Latin letters: twelve of them
     /// passed for the wrong reason. Rewritten as the characters they were meant
@@ -216,13 +256,17 @@ enum MathRewriteCases {
                 "\(character.debugDescription)")
     }
 
-    /// The two entries in that group the pinned revision draws on its own, so
-    /// by this project's rule they get no rewrite. A lone radical is the
-    /// degenerate case and stays a failure.
-    @Test func theUnicodeEntriesThePinnedRevisionAlreadyDrawsKeepTheirNotation() {
-        #expect(Self.typesets("\u{221A}2"))
+    /// `\u{221A}2` looked like an entry the pinned revision already drew, and
+    /// it is not: the build has no atom for the radical and skipped it, so the
+    /// image was `2` and nothing said so. The accented letter is drawn for
+    /// real, through the table `atom(forCharacter:)` consults first.
+    @Test func theRadicalOnlyLookedLikeSomethingThePinnedRevisionDrew() {
+        #expect(!Self.typesets("\u{221A}2"))
+        #expect(MathCommandNormalizer.normalize("\u{221A}2") == #"\sqrt{2}"#)
+        #expect(Self.typesets(MathCommandNormalizer.normalize("\u{221A}2")))
+
         #expect(Self.typesets("\u{00E9}"))
-        #expect(MathCommandNormalizer.normalize("\u{221A}2") == "\u{221A}2")
+        #expect(MathCommandNormalizer.normalize("\u{00E9}") == "\u{00E9}")
         // A CJK word character is not mathematical notation and has no command
         // to map onto; it stays in the expected-failure list.
         #expect(!Self.typesets("\u{4E2D}"))
@@ -268,7 +312,10 @@ enum MathRewriteCases {
         let normalized = commands.count { Self.typesets(MathCommandNormalizer.normalize($0)) }
         print("MATH-SWEEP commands=\(commands.count) raw=\(raw) normalized=\(normalized)")
         #expect(normalized > raw)
-        #expect(raw == 453)
+        // Three entries left the raw column when the conformer started refusing
+        // what the build silently drops: the radical and the two tilde spaces.
+        // The rewrites below carry all three, so the normalized figure holds.
+        #expect(raw == 450)
         #expect(normalized == 517)
     }
 }

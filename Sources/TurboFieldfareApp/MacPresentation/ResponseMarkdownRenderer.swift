@@ -49,6 +49,15 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
             }
         }
 
+        /// A header row reads as a header from its weight, not only from its
+        /// fill, which is barely visible in dark mode.
+        var isHeaderCell: Bool {
+            switch self {
+            case .tableCell(let cell): cell.isHeader
+            default: false
+            }
+        }
+
         var tableIdentity: Int? {
             switch self {
             case .tableCell(let cell): cell.table
@@ -105,14 +114,19 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                     failurePolicy: .returnPartiallyParsedIfPossible))
             guard !containsUnsupportedBlock(in: parsed) else { return fallback(source) }
 
-            let items: [Item] = parsed.runs.map { run in
-                Item(
-                    text: String(parsed[run.range].characters),
+            let items = Self.completingTables(parsed.runs.map { run in
+                let text = String(parsed[run.range].characters)
+                return Item(
+                    // An image is its alt text, or its destination when the
+                    // model wrote none: the parser hands back a bare
+                    // object-replacement character, which draws as nothing at
+                    // all where the reader expected a picture.
+                    text: Self.imageText(text, url: run.imageURL) ?? text,
                     inlineIntent: run.inlinePresentationIntent,
-                    link: run.link,
-                    imageURL: run.imageURL,
+                    link: Self.openable(run.link),
+                    imageURL: Self.openable(run.imageURL),
                     block: block(for: run.presentationIntent))
-            }
+            })
 
             let output = NSMutableAttributedString()
             let decoration = BlockDecoration()
@@ -311,9 +325,21 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         output.addAttribute(.paragraphStyle, value: style, range: range)
     }
 
+    /// True when the answer ends inside a fenced block the model never closed.
+    /// Counting ```` ``` ```` delimiters instead read a single mid-line run as
+    /// an unclosed fence and sent a whole styled answer — heading, table and
+    /// all — to raw source.
     private func requiresRawFallback(_ source: String) -> Bool {
-        let fenceCount = source.components(separatedBy: "```").count - 1
-        return !fenceCount.isMultiple(of: 2)
+        var open: FenceLine.Run?
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            guard let run = FenceLine.run(line) else { continue }
+            guard let current = open else {
+                open = run
+                continue
+            }
+            if run.closes(marker: current.marker, length: current.length) { open = nil }
+        }
+        return open != nil
     }
 
     private func containsUnsupportedBlock(in parsed: AttributedString) -> Bool {
@@ -351,18 +377,18 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
     private static func promotingBoldHeadings(_ source: String) -> String {
         let lines = source.split(separator: "\n", omittingEmptySubsequences: false)
         var segments: [(lines: [Substring], isCode: Bool)] = []
-        var fence: (marker: Character, length: Int)?
+        var fence: FenceLine.Run?
         for line in lines {
-            let run = fenceRun(line)
+            let run = FenceLine.run(line)
             let isCode: Bool
             if let open = fence {
                 isCode = true
-                if let run, run.marker == open.marker, run.length >= open.length, run.isBare {
+                if let run, run.closes(marker: open.marker, length: open.length) {
                     fence = nil
                 }
             } else if let run {
                 isCode = true
-                fence = (run.marker, run.length)
+                fence = run
             } else {
                 isCode = false
             }
@@ -380,25 +406,6 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                 with: "$1\n\n",
                 options: .regularExpression)
         }.joined(separator: "\n")
-    }
-
-    private static func fenceRun(
-        _ line: Substring
-    ) -> (marker: Character, length: Int, isBare: Bool)? {
-        var characters = line
-        var indent = 0
-        while let first = characters.first, first == " " || first == "\t" {
-            indent += first == "\t" ? 4 : 1
-            characters = characters.dropFirst()
-        }
-        guard indent <= 3, let marker = characters.first,
-              marker == "`" || marker == "~" else {
-            return nil
-        }
-        let run = characters.prefix { $0 == marker }
-        guard run.count >= 3 else { return nil }
-        let rest = characters.dropFirst(run.count)
-        return (marker, run.count, rest.allSatisfy { $0 == " " || $0 == "\t" || $0 == "\r" })
     }
 
     private func block(for intent: PresentationIntent?) -> Block {
@@ -447,7 +454,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                 identity: leaf.identity,
                 kind: .tableCell(TableCell(
                     table: tableIdentity,
-                    columns: max(tableColumns.count, tableColumn + 1),
+                    columns: tableColumns.count,
                     row: tableRow,
                     column: tableColumn,
                     isHeader: isHeaderRow,
@@ -562,14 +569,9 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                 decoration: decoration)
             return
         }
+        var cellStyle: NSParagraphStyle?
         if case .tableCell(let cell) = block.kind {
-            appendTableCell(
-                items,
-                cell: cell,
-                block: block,
-                to: output,
-                decoration: decoration)
-            return
+            cellStyle = tableCellStyle(cell, decoration: decoration)
         }
 
         var texts = items.map(\.text)
@@ -590,18 +592,30 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         var html = InlineHTMLState()
         for (item, text) in zip(items, texts) {
             if item.inlineIntent?.contains(.inlineHTML) == true {
-                appendInlineHTML(text, state: &html, block: block, to: output)
+                appendInlineHTML(
+                    text,
+                    state: &html,
+                    block: block,
+                    paragraphStyle: cellStyle,
+                    to: output)
                 continue
             }
             guard !text.isEmpty else { continue }
-            output.append(NSAttributedString(
-                string: text,
-                attributes: attributes(
-                    inlineIntent: item.inlineIntent,
-                    link: item.link ?? item.imageURL,
-                    html: html.style,
-                    block: block)))
+            var values = attributes(
+                inlineIntent: item.inlineIntent,
+                link: item.link ?? item.imageURL,
+                html: html.style,
+                block: block)
+            if let cellStyle { values[.paragraphStyle] = cellStyle }
+            output.append(NSAttributedString(string: text, attributes: values))
         }
+        // A markdown cell is one paragraph terminated by a newline, so math
+        // sentinels, inline HTML, and wrapping all behave as they do elsewhere.
+        // An empty cell is that terminator and nothing else.
+        guard let cellStyle else { return }
+        var terminator = attributes(block: block)
+        terminator[.paragraphStyle] = cellStyle
+        output.append(NSAttributedString(string: "\n", attributes: terminator))
     }
 
     /// Inline HTML runs carry the tag text itself. A recognised tag becomes an
@@ -615,21 +629,21 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         paragraphStyle: NSParagraphStyle? = nil,
         to output: NSMutableAttributedString
     ) {
-        if let token = Self.tagToken(text) {
-            if token.name == "br" && !token.isClosing {
-                var values = attributes(html: state.style, block: block)
-                if let paragraphStyle { values[.paragraphStyle] = paragraphStyle }
-                output.append(NSAttributedString(string: "\u{2028}", attributes: values))
-                return
-            }
-            if let tag = InlineHTMLTag(rawValue: token.name) {
+        if let tokens = Self.tagTokens(text) {
+            for token in tokens {
+                guard let tag = InlineHTMLTag(rawValue: token.name) else {
+                    var values = attributes(html: state.style, block: block)
+                    if let paragraphStyle { values[.paragraphStyle] = paragraphStyle }
+                    output.append(NSAttributedString(string: "\u{2028}", attributes: values))
+                    continue
+                }
                 if token.isClosing {
                     state.close(tag)
                 } else {
                     state.open(tag)
                 }
-                return
             }
+            return
         }
         guard !text.isEmpty else { return }
         var values = attributes(html: state.style, block: block)
@@ -637,15 +651,102 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         output.append(NSAttributedString(string: text, attributes: values))
     }
 
-    /// A markdown cell is one paragraph terminated by a newline, so math
-    /// sentinels, inline HTML, and wrapping all behave as they do elsewhere.
-    private func appendTableCell(
-        _ items: [Item],
-        cell: TableCell,
-        block: Block,
-        to output: NSMutableAttributedString,
+    private struct TableShape {
+        var columns = 0
+        var lastRow = 0
+        /// Taken from the cells that do exist. A table's header row is always
+        /// complete, so every column is covered.
+        var alignments: [Int: NSTextAlignment] = [:]
+    }
+
+    /// Fills in the cells the parser never reported.
+    ///
+    /// Foundation emits no run for an empty cell, and none at all for the
+    /// cells a short row never wrote, so no `NSTextTableBlock` was created for
+    /// those positions: a three-column table came back with blocks at
+    /// (0,0..2), (1,0), (1,1), (2,0), (2,2), (3,0), (3,1) and TextKit laid
+    /// every body row out with the wrong column count. An all-empty last row
+    /// still cannot be recovered — the parser reports nothing for it at all.
+    private static func completingTables(_ items: [Item]) -> [Item] {
+        var shapes: [Int: TableShape] = [:]
+        for item in items {
+            guard case .tableCell(let cell) = item.block.kind else { continue }
+            var shape = shapes[cell.table] ?? TableShape()
+            shape.columns = max(shape.columns, cell.columns, cell.column + 1)
+            shape.lastRow = max(shape.lastRow, cell.row)
+            shape.alignments[cell.column] = cell.alignment
+            shapes[cell.table] = shape
+        }
+        guard !shapes.isEmpty else { return items }
+
+        var completed: [Item] = []
+        completed.reserveCapacity(items.count)
+        var openTable: Int?
+        var cursor = (row: 0, column: 0)
+        var drawn: (row: Int, column: Int)?
+
+        func fill(to target: (row: Int, column: Int)) {
+            guard let table = openTable, let shape = shapes[table] else { return }
+            while cursor.row < target.row
+                || (cursor.row == target.row && cursor.column < target.column) {
+                completed.append(Item(
+                    text: "",
+                    inlineIntent: nil,
+                    link: nil,
+                    imageURL: nil,
+                    block: Block(identity: -1, kind: .tableCell(TableCell(
+                        table: table,
+                        columns: shape.columns,
+                        row: cursor.row,
+                        column: cursor.column,
+                        isHeader: cursor.row == 0,
+                        alignment: shape.alignments[cursor.column] ?? .natural)))))
+                cursor = advanced(cursor, columns: shape.columns)
+            }
+        }
+
+        func closeTable() {
+            guard let table = openTable, let shape = shapes[table] else { return }
+            fill(to: (row: shape.lastRow, column: shape.columns))
+            openTable = nil
+            drawn = nil
+        }
+
+        for item in items {
+            guard case .tableCell(let cell) = item.block.kind else {
+                closeTable()
+                completed.append(item)
+                continue
+            }
+            if openTable != cell.table {
+                closeTable()
+                openTable = cell.table
+                cursor = (row: 0, column: 0)
+            }
+            if drawn?.row != cell.row || drawn?.column != cell.column {
+                fill(to: (row: cell.row, column: cell.column))
+                drawn = (row: cell.row, column: cell.column)
+                cursor = advanced(cursor, columns: shapes[cell.table]?.columns ?? cell.columns)
+            }
+            completed.append(item)
+        }
+        closeTable()
+        return completed
+    }
+
+    private static func advanced(
+        _ position: (row: Int, column: Int),
+        columns: Int
+    ) -> (row: Int, column: Int) {
+        position.column + 1 < max(columns, 1)
+            ? (row: position.row, column: position.column + 1)
+            : (row: position.row + 1, column: 0)
+    }
+
+    private func tableCellStyle(
+        _ cell: TableCell,
         decoration: BlockDecoration
-    ) {
+    ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 3
         style.paragraphSpacing = 0
@@ -656,35 +757,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
             row: cell.row,
             column: cell.column,
             isHeader: cell.isHeader)]
-        var html = InlineHTMLState()
-        for item in items {
-            if item.inlineIntent?.contains(.inlineHTML) == true {
-                appendInlineHTML(
-                    item.text,
-                    state: &html,
-                    block: block,
-                    paragraphStyle: style,
-                    to: output)
-                continue
-            }
-            guard !item.text.isEmpty else { continue }
-            var values = attributes(
-                inlineIntent: item.inlineIntent,
-                link: item.link ?? item.imageURL,
-                html: html.style,
-                block: block)
-            values[.paragraphStyle] = style
-            // A header row reads as a header from its weight, not only from
-            // its fill, which is barely visible in dark mode.
-            if cell.isHeader, let font = values[.font] as? NSFont {
-                let descriptor = font.fontDescriptor.withSymbolicTraits(.bold)
-                values[.font] = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
-            }
-            output.append(NSAttributedString(string: item.text, attributes: values))
-        }
-        var terminator = attributes(block: block)
-        terminator[.paragraphStyle] = style
-        output.append(NSAttributedString(string: "\n", attributes: terminator))
+        return style
     }
 
     private func appendCode(
@@ -767,11 +840,31 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         if html.scriptDepth > 0 {
             values[.baselineOffset] = font.pointSize * 0.34 * CGFloat(html.scriptDirection)
         }
-        if link != nil {
+        if let link {
+            values[.link] = link
             values[.foregroundColor] = NSColor.linkColor
             values[.underlineStyle] = NSUnderlineStyle.single.rawValue
         }
         return values
+    }
+
+    private static func imageText(_ text: String, url: URL?) -> String? {
+        guard let url, text.allSatisfy({ $0 == "\u{FFFC}" }) else { return nil }
+        return url.absoluteString
+    }
+
+    /// The destination reaches the text view as a real `.link` now, so a scheme
+    /// this transcript is not willing to open has to arrive as plain text
+    /// instead. `javascript:` and `data:` are the reason; `file:` is the one a
+    /// local model reaches for on its own.
+    private static let openableSchemes: Set<String> = ["http", "https", "mailto"]
+
+    private static func openable(_ url: URL?) -> URL? {
+        guard let url, let scheme = url.scheme?.lowercased(),
+              openableSchemes.contains(scheme) else {
+            return nil
+        }
+        return url
     }
 
     private func baseAttributes() -> [NSAttributedString.Key: Any] {
@@ -788,6 +881,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         html: InlineHTMLStyle
     ) -> NSFont {
         let bold = inlineIntent?.contains(.stronglyEmphasized) == true || html.bold
+            || block.isHeaderCell
         let italic = inlineIntent?.contains(.emphasized) == true || html.italic
         let monospaced = block == .code
             || inlineIntent?.contains(.code) == true
@@ -844,10 +938,9 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
             style.alignment = .center
             style.paragraphSpacingBefore = 8
             style.paragraphSpacing = 8
-        case .tableCell(let cell):
-            style.paragraphSpacing = 0
-            style.alignment = cell.alignment
-        case .paragraph, .code:
+        // A table cell's style comes from `tableCellStyle`, which owns the
+        // text block the cell is drawn in.
+        case .paragraph, .code, .tableCell:
             break
         }
         return style
@@ -914,15 +1007,93 @@ extension ResponseMarkdownRenderer {
         let isClosing: Bool
     }
 
-    fileprivate static func tagToken(_ text: String) -> HTMLTagToken? {
-        var remainder = Substring(text)
-        guard remainder.hasPrefix("<") else { return nil }
-        remainder = remainder.dropFirst()
-        let isClosing = remainder.hasPrefix("/")
-        if isClosing { remainder = remainder.dropFirst() }
-        let name = remainder.prefix { $0.isLetter || $0.isNumber }
-        guard !name.isEmpty else { return nil }
-        return HTMLTagToken(name: name.lowercased(), isClosing: isClosing)
+    /// Tags this renderer can honour. `br` is the void element; the rest map
+    /// onto `InlineHTMLTag`.
+    fileprivate static let handledTags: Set<String> = [
+        "b", "strong", "i", "em", "code", "kbd", "sub", "sup", "br",
+    ]
+
+    /// The whole run read as complete tags, or nil when any of it is the
+    /// reader's own words.
+    ///
+    /// Reading the leading letters alone made `if a<b then c>d` an opening
+    /// `<b>` tag — which it is, to CommonMark, with two bare attributes — so
+    /// the run was dropped and everything after it went bold. Requiring every
+    /// attribute to carry a value is the one tightening that separates markup
+    /// from prose. A sequence is accepted because Foundation coalesces
+    /// adjacent inline-HTML runs into one.
+    fileprivate static func tagTokens(_ text: String) -> [HTMLTagToken]? {
+        var rest = Substring(text)
+        var tokens: [HTMLTagToken] = []
+        while !rest.isEmpty {
+            guard let token = tagToken(&rest) else { return nil }
+            tokens.append(token)
+        }
+        return tokens.isEmpty ? nil : tokens
+    }
+
+    private static func tagToken(_ rest: inout Substring) -> HTMLTagToken? {
+        var scan = rest
+        guard scan.first == "<" else { return nil }
+        scan = scan.dropFirst()
+        let isClosing = scan.first == "/"
+        if isClosing { scan = scan.dropFirst() }
+        let name = scan.prefix { $0.isLetter || $0.isNumber }.lowercased()
+        guard handledTags.contains(name) else { return nil }
+        // A closing `</br>` is not a tag this renderer can honour; the reader
+        // sees what the model wrote.
+        guard !isClosing || name != "br" else { return nil }
+        scan = scan.dropFirst(name.count)
+
+        var selfClosing = false
+        while true {
+            let spaces = scan.prefix(while: isTagSpace)
+            scan = scan.dropFirst(spaces.count)
+            guard let next = scan.first else { return nil }
+            if next == ">" {
+                scan = scan.dropFirst()
+                break
+            }
+            if next == "/" {
+                scan = scan.dropFirst()
+                guard scan.first == ">" else { return nil }
+                scan = scan.dropFirst()
+                selfClosing = true
+                break
+            }
+            guard !isClosing, !spaces.isEmpty, consumeAttribute(&scan) else { return nil }
+        }
+        // `<br/>` is a void element. `<b/>` is a formatting tag that closes
+        // nothing, so it is shown rather than silently dropped.
+        guard !selfClosing || name == "br" else { return nil }
+        rest = scan
+        return HTMLTagToken(name: name, isClosing: isClosing)
+    }
+
+    private static func consumeAttribute(_ scan: inout Substring) -> Bool {
+        let name = scan.prefix {
+            $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == ":"
+        }
+        guard !name.isEmpty else { return false }
+        var rest = scan.dropFirst(name.count).drop(while: isTagSpace)
+        guard rest.first == "=" else { return false }
+        rest = rest.dropFirst().drop(while: isTagSpace)
+        guard let quote = rest.first else { return false }
+        if quote == "\"" || quote == "'" {
+            rest = rest.dropFirst()
+            guard let end = rest.firstIndex(of: quote) else { return false }
+            rest = rest[rest.index(after: end)...]
+        } else {
+            let value = rest.prefix { !isTagSpace($0) && $0 != ">" && $0 != "/" }
+            guard !value.isEmpty else { return false }
+            rest = rest.dropFirst(value.count)
+        }
+        scan = rest
+        return true
+    }
+
+    private static func isTagSpace(_ character: Character) -> Bool {
+        character == " " || character == "\t" || character == "\n" || character == "\r"
     }
 }
 
@@ -992,10 +1163,7 @@ private final class BlockDecoration {
     }
 
     private func table(for identity: Int, columns: Int) -> NSTextTable {
-        if let existing = tables[identity] {
-            existing.numberOfColumns = max(existing.numberOfColumns, columns)
-            return existing
-        }
+        if let existing = tables[identity] { return existing }
         let table = NSTextTable()
         table.numberOfColumns = columns
         table.collapsesBorders = true

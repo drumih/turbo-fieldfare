@@ -86,6 +86,65 @@ import Testing
         #expect(Self.kinds(source) == [.list, .paragraph])
     }
 
+    /// CommonMark forbids a backtick inside a backtick fence's info string,
+    /// so "```bash```" in a sentence is a code span. Reading it as an opener
+    /// put the rest of the answer in a code box while it streamed.
+    @Test func aBacktickInTheInfoStringIsNotAFenceLine() {
+        let source = "```bash``` is the fence syntax.\n\nDone."
+        #expect(Self.texts(source) == ["```bash``` is the fence syntax.", "Done."])
+        #expect(Self.kinds(source) == [.paragraph, .paragraph])
+        // The rule is the backtick fence's alone; a tilde fence takes any info.
+        #expect(Self.kinds("~~~bash`\nbody\n~~~") == [.fencedCode])
+    }
+
+    /// The interrupt rule exempted every list without knowing where the item's
+    /// content starts, so a fence written flush left under a bullet was
+    /// absorbed into the list: the blank line inside the listing then committed
+    /// it and the closing fence and the sentence after it drew as code.
+    @Test func aFenceBeforeTheItemContentColumnInterruptsTheList() {
+        let source = "- Install:\n```bash\nbrew install x\n\nbrew link x\n```\n\nDone.\n"
+        #expect(Self.kinds(source) == [.list, .fencedCode, .paragraph])
+        #expect(Self.texts(source) == [
+            "- Install:",
+            "```bash\nbrew install x\n\nbrew link x\n```",
+            "Done.",
+        ])
+    }
+
+    /// The same listing indented to the item's content column belongs to the
+    /// item, blank line included, and the list stays one block.
+    @Test func aFenceAtTheItemContentColumnStaysInsideTheItem() {
+        let source = "1. Install:\n   ```bash\n   brew install x\n\n   brew link x\n   ```\n\nDone.\n"
+        #expect(Self.kinds(source) == [.list, .paragraph])
+        #expect(Self.texts(source).first?.hasSuffix("   ```") == true)
+    }
+
+    @Test func theItemContentColumnFollowsTheMarkerWidth() {
+        // "10. " is four columns wide, so its listing is indented four.
+        let wide = "10. Install:\n    ```bash\n    brew install x\n    ```\n\nDone.\n"
+        #expect(Self.kinds(wide) == [.list, .paragraph])
+        // Three is inside the marker, so the fence is a block of its own.
+        let narrow = "10. Install:\n   ```bash\n   brew install x\n   ```\n\nDone.\n"
+        #expect(Self.kinds(narrow) == [.list, .fencedCode, .paragraph])
+    }
+
+    /// A nested item does not move the column the outer item's listing is
+    /// measured against; a sibling or an outer one does.
+    @Test func onlyASiblingOrOuterItemReplacesTheContentColumn() {
+        let nested = "- Outer\n  - Inner\n  ```bash\n  x\n  ```\n\nDone.\n"
+        #expect(Self.kinds(nested) == [.list, .paragraph])
+        let sibling = "  - Indented\n- Flush\n```bash\nx\n```\n\nDone.\n"
+        #expect(Self.kinds(sibling) == [.list, .fencedCode, .paragraph])
+    }
+
+    /// An unclosed fence inside an item cannot hold the rest of the answer:
+    /// a non-blank line indented below the column ends the item and the fence.
+    @Test func aLessIndentedLineClosesAnInnerFence() {
+        let source = "1. Install:\n   ```bash\n   brew install x\nDone.\n\nAfter.\n"
+        #expect(Self.kinds(source) == [.list, .paragraph])
+        #expect(Self.texts(source).last == "After.")
+    }
+
     @Test func tableRowsAreOneBlock() {
         let source = "| A | B |\n| :--- | ---: |\n| 1 | 2 |\n\nAfter the table."
         #expect(Self.texts(source) == ["| A | B |\n| :--- | ---: |\n| 1 | 2 |", "After the table."])

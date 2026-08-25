@@ -26,7 +26,8 @@ enum TailAutoClose {
         if let fence = unclosedFence(tail) {
             var closed = tail
             if !closed.hasSuffix("\n") { closed.append("\n") }
-            closed.append(String(repeating: fence.marker, count: fence.length))
+            closed.append(fence.closerPrefix)
+            closed.append(String(repeating: fence.run.character, count: fence.run.length))
             return closed
         }
         var text = strippingIncompleteTag(tail)
@@ -37,45 +38,42 @@ enum TailAutoClose {
 
     // MARK: - Fences
 
-    private struct Fence {
-        let marker: Character
-        let length: Int
+    private struct OpenFence {
+        let run: FenceLine.Run
+        /// Content column of the item the fence was opened in.
+        let containerIndent: Int
+        /// What a closing line needs in front of the marker to be read as this
+        /// fence's closer. Written flush left instead, the parser reads it as
+        /// prose after the item and the listing keeps its markers on screen.
+        let closerPrefix: String
     }
 
     /// The fence a tail ends inside, if any. Nothing inside a fenced block is
     /// markdown, so this case returns before every other rule.
-    private static func unclosedFence(_ text: String) -> Fence? {
-        var open: Fence?
-        for line in text.components(separatedBy: "\n") {
-            guard let run = fenceRun(line) else { continue }
+    private static func unclosedFence(_ text: String) -> OpenFence? {
+        var open: OpenFence?
+        var column = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let quote = ContainerPrefix.strippingQuoteMarkers(line)
             if let current = open {
-                if run.marker == current.marker, run.length >= current.length, run.isBare {
+                if let run = FenceLine.run(quote.rest, containerIndent: current.containerIndent),
+                   run.closes(marker: current.run.marker, length: current.run.length) {
                     open = nil
                 }
                 continue
             }
-            open = Fence(marker: run.marker, length: run.length)
+            if let item = ContainerPrefix.listItem(quote.rest),
+               item.markerIndent < column || column == 0 {
+                column = item.contentColumn
+            }
+            guard let run = FenceLine.run(quote.rest, containerIndent: column) else { continue }
+            open = OpenFence(
+                run: run,
+                containerIndent: column,
+                closerPrefix: String(repeating: "> ", count: quote.depth)
+                    + String(repeating: " ", count: run.indent))
         }
         return open
-    }
-
-    private static func fenceRun(
-        _ line: String
-    ) -> (marker: Character, length: Int, isBare: Bool)? {
-        var characters = Substring(line)
-        var indent = 0
-        while let first = characters.first, first == " " || first == "\t" {
-            indent += first == "\t" ? 4 : 1
-            characters = characters.dropFirst()
-        }
-        guard indent <= 3, let marker = characters.first,
-              marker == "`" || marker == "~" else {
-            return nil
-        }
-        let run = characters.prefix { $0 == marker }
-        guard run.count >= 3 else { return nil }
-        let rest = characters.dropFirst(run.count)
-        return (marker, run.count, rest.allSatisfy { $0 == " " || $0 == "\t" || $0 == "\r" })
     }
 
     // MARK: - Trailing fragments
@@ -148,51 +146,75 @@ enum TailAutoClose {
 
     private struct Opening {
         let marker: Marker
-        let start: String.Index
-        let end: String.Index
+        let start: Int
+        let end: Int
     }
 
     /// Walks the tail once, keeping a stack of what is open. Order matters:
     /// text after an unterminated backtick is code, and text after an
     /// unterminated `$$` is math, so neither can hold live emphasis. Closing
     /// the stack in reverse produces the right nesting.
+    ///
+    /// The walk is over the detector's own units, with its code and equation
+    /// masks: `$x_{1}$` in a sentence is an equation, and the `_` inside it is
+    /// a subscript. Per-line state is carried rather than rescanned — the old
+    /// pass re-read the line from its start for every marker on it, which is
+    /// quadratic in the line and measured 164 ms a tick on an 8 KB paragraph.
     private static func balancingInlineMarkers(
         _ text: String,
         typesetsMath: Bool
     ) -> String {
+        let protection = MathSpanDetector.tailProtection(text)
+        let units = protection.units
         var stack: [Opening] = []
-        var index = text.startIndex
-        var lineStart = text.startIndex
+        var index = 0
+        var lineHasContent = false
+        var lineIsThematicBreak = isThematicBreakLine(units, from: 0)
 
-        while index < text.endIndex {
-            let character = text[index]
+        while index < units.count {
+            let character = units[index]
             if character == "\n" {
-                index = text.index(after: index)
-                lineStart = index
+                index += 1
+                lineHasContent = false
+                lineIsThematicBreak = isThematicBreakLine(units, from: index)
                 continue
             }
-            if character == "\\", case .code? = stack.last?.marker {
-                // A backslash is literal inside code.
-                index = text.index(after: index)
+            let hadContent = lineHasContent
+            if character != " ", character != "\t", character != "\r" {
+                lineHasContent = true
+            }
+            if protection.masked[index] {
+                index += 1
+                continue
+            }
+            // Everything from an unclosed inline opener on is the equation the
+            // model is still writing.
+            if let dollar = protection.openInlineDollar, index >= dollar {
+                index += 1
                 continue
             }
             if character == "\\" {
-                index = text.index(after: index)
-                if index < text.endIndex { index = text.index(after: index) }
+                // A backslash is literal inside code; outside it, it escapes
+                // the character after it.
+                if case .code? = stack.last?.marker {
+                    index += 1
+                } else {
+                    index += min(2, units.count - index)
+                }
                 continue
             }
             if character == "`" {
-                let run = text[index...].prefix { $0 == "`" }
-                let end = text.index(index, offsetBy: run.count)
+                var end = index
+                while end < units.count, units[end] == "`" { end += 1 }
                 if case .code(let length)? = stack.last?.marker {
-                    if run.count == length { stack.removeLast() }
-                } else if end == text.endIndex || !text[end].isWhitespace {
+                    if end - index == length { stack.removeLast() }
+                } else if end >= units.count || !units[end].isWhitespace {
                     // "Press the ` key" is prose: a run followed by whitespace
                     // is not the start of a code span, and closing it would
                     // style the rest of the sentence as code while it is the
                     // open tail. Closers stay unconditional above.
                     stack.append(Opening(
-                        marker: .code(length: run.count),
+                        marker: .code(length: end - index),
                         start: index,
                         end: end))
                 }
@@ -200,45 +222,47 @@ enum TailAutoClose {
                 continue
             }
             if case .code? = stack.last?.marker {
-                index = text.index(after: index)
+                index += 1
                 continue
             }
-            if character == "$", text.index(after: index) < text.endIndex,
-               text[text.index(after: index)] == "$" {
-                let end = text.index(index, offsetBy: 2)
+            if character == "$", index + 1 < units.count, units[index + 1] == "$" {
+                let end = index + 2
                 if case .displayMath? = stack.last?.marker {
                     stack.removeLast()
-                } else if typesetsMath,
-                          isStandaloneDisplayOpener(text, index: index, lineStart: lineStart) {
+                } else if typesetsMath, !hadContent {
+                    // Single `$` is never closed — the ambiguity with currency
+                    // is exactly the bug every surveyed chat UI reports — so
+                    // only a `$$` that starts its own line counts as an opener.
                     stack.append(Opening(marker: .displayMath, start: index, end: end))
                 }
                 index = end
                 continue
             }
             if case .displayMath? = stack.last?.marker {
-                index = text.index(after: index)
+                index += 1
                 continue
             }
             if character == "*" || character == "_" {
                 index = consumeEmphasis(
-                    text,
+                    units,
                     at: index,
-                    lineStart: lineStart,
                     marker: character,
+                    lineHasContent: hadContent,
+                    lineIsThematicBreak: lineIsThematicBreak,
                     stack: &stack)
                 continue
             }
-            index = text.index(after: index)
+            index += 1
         }
 
         // A marker with nothing after it is the model mid-keystroke, not an
         // opener the reader has already seen content for.
-        var cut = text.endIndex
-        while let last = stack.last, last.end == text.endIndex, last.start < cut {
+        var cut = units.count
+        while let last = stack.last, last.end == units.count, last.start < cut {
             cut = last.start
             stack.removeLast()
         }
-        let body = cut == text.endIndex ? text : String(text[text.startIndex..<cut])
+        let body = cut == units.count ? text : String(units[0..<cut])
         guard let innermost = stack.last else { return body }
         var closers = stack.dropLast().reversed().map(\.marker.closer).joined()
         // The first half of a `$$` closer is already on screen; completing it
@@ -251,59 +275,96 @@ enum TailAutoClose {
         return body + closers
     }
 
-    /// Single `$` is never closed — the ambiguity with currency is exactly the
-    /// bug every surveyed chat UI reports — so only a `$$` that starts its own
-    /// line counts as an opener.
-    private static func isStandaloneDisplayOpener(
-        _ text: String,
-        index: String.Index,
-        lineStart: String.Index
-    ) -> Bool {
-        text[lineStart..<index].allSatisfy { $0 == " " || $0 == "\t" || $0 == "\r" }
-    }
-
     private static func consumeEmphasis(
-        _ text: String,
-        at index: String.Index,
-        lineStart: String.Index,
+        _ units: [Character],
+        at index: Int,
         marker: Character,
+        lineHasContent: Bool,
+        lineIsThematicBreak: Bool,
         stack: inout [Opening]
-    ) -> String.Index {
-        let run = text[index...].prefix { $0 == marker }
-        let end = text.index(index, offsetBy: run.count)
+    ) -> Int {
+        var end = index
+        while end < units.count, units[end] == marker { end += 1 }
         // A bullet and a thematic break are block structure; closing them
         // would turn a list into bold text.
-        if isListBullet(text, index: index, lineStart: lineStart, runLength: run.count)
-            || isThematicBreakLine(text, lineStart: lineStart) {
+        if lineIsThematicBreak { return end }
+        if end - index == 1, !lineHasContent,
+           end >= units.count || units[end] == " " || units[end] == "\t" {
             return end
         }
 
-        let before = index == text.startIndex ? nil : text[text.index(before: index)]
-        let after = end == text.endIndex ? nil : text[end]
-        let canOpen = after.map { !$0.isWhitespace } ?? false
-        let canClose = before.map { !$0.isWhitespace } ?? false
-        // `snake_case` is not emphasis: an intraword underscore neither opens
-        // nor closes.
-        if marker == "_", isWord(before), isWord(after) { return end }
+        let before: Character? = index > 0 ? units[index - 1] : nil
+        let after: Character? = end < units.count ? units[end] : nil
+        // CommonMark 0.31 flanking, with two deliberate deviations. A `*`
+        // between word characters is multiplication or a glob, never emphasis,
+        // so `2*3` and `x**2` neither open nor close. And `x *= 2` is an
+        // operator that reads as left-flanking only because `=` is punctuation;
+        // closing it would italicise the rest of the line.
+        if marker == "*", isWord(before), isWord(after) { return end }
+        let beforeWhitespace = before?.isWhitespace ?? true
+        let afterWhitespace = after?.isWhitespace ?? true
+        let beforePunctuation = before.map(isPunctuation) ?? false
+        let afterPunctuation = after.map(isPunctuation) ?? false
+        let leftFlanking = !afterWhitespace
+            && (!afterPunctuation || beforeWhitespace || beforePunctuation)
+        let rightFlanking = !beforeWhitespace
+            && (!beforePunctuation || afterWhitespace || afterPunctuation)
+        var canOpen = leftFlanking && after != "="
+        var canClose = rightFlanking
+        if marker == "_" {
+            // `snake_case` is not emphasis: an intraword underscore neither
+            // opens nor closes.
+            canOpen = leftFlanking && (!rightFlanking || beforePunctuation)
+            canClose = rightFlanking && (!leftFlanking || afterPunctuation)
+        }
 
-        var remaining = run.count
+        var remaining = end - index
         var cursor = index
         while remaining > 0 {
             let width = remaining >= 2 ? 2 : 1
-            let step = text.index(cursor, offsetBy: width)
             let wanted: Marker = width == 2 ? .strong(marker) : .emphasis(marker)
             if canClose, matches(stack.last?.marker, wanted) {
                 stack.removeLast()
-            } else if canOpen || end == text.endIndex {
+            } else if canOpen || end >= units.count {
                 // A run that ends the tail has nothing to emphasise yet. It is
                 // pushed so the trailing-marker rule can drop it instead of
                 // leaving the asterisks on screen.
                 stack.append(Opening(marker: wanted, start: cursor, end: end))
             }
-            cursor = step
+            cursor += width
             remaining -= width
         }
         return end
+    }
+
+    private static func isPunctuation(_ character: Character) -> Bool {
+        character.isPunctuation || character.isSymbol
+    }
+
+    /// Computed once per line, and it stops at the first character that is not
+    /// the rule's own marker.
+    private static func isThematicBreakLine(_ units: [Character], from start: Int) -> Bool {
+        var marker: Character?
+        var count = 0
+        var index = start
+        while index < units.count, units[index] != "\n" {
+            let character = units[index]
+            if character == " " || character == "\t" || character == "\r" {
+                index += 1
+                continue
+            }
+            if let marker {
+                guard character == marker else { return false }
+            } else {
+                guard character == "*" || character == "-" || character == "_" else {
+                    return false
+                }
+                marker = character
+            }
+            count += 1
+            index += 1
+        }
+        return count >= 3
     }
 
     private static func isWord(_ character: Character?) -> Bool {
@@ -317,29 +378,5 @@ enum TailAutoClose {
         case (.emphasis(let a), .emphasis(let b)): a == b
         default: false
         }
-    }
-
-    private static func isListBullet(
-        _ text: String,
-        index: String.Index,
-        lineStart: String.Index,
-        runLength: Int
-    ) -> Bool {
-        guard runLength == 1, text[lineStart..<index].allSatisfy({ $0 == " " || $0 == "\t" })
-        else {
-            return false
-        }
-        let next = text.index(after: index)
-        return next >= text.endIndex || text[next] == " " || text[next] == "\t"
-    }
-
-    private static func isThematicBreakLine(_ text: String, lineStart: String.Index) -> Bool {
-        let line = text[lineStart...].prefix { $0 != "\n" }
-        let trimmed = line.filter { $0 != " " && $0 != "\t" && $0 != "\r" }
-        guard trimmed.count >= 3, let first = trimmed.first,
-              first == "*" || first == "-" || first == "_" else {
-            return false
-        }
-        return trimmed.allSatisfy { $0 == first }
     }
 }

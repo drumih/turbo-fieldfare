@@ -74,14 +74,44 @@ import Testing
         (#"\begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}"#, true),
         (#"\begin{aligned} a &= b \\ c &= d \end{aligned}"#, true),
         (#"\begin{matrix} a & b \end{matrix}"#, true),
-        // Rejected by the pinned revision; the normalizer rewrites these
-        // before the transcript reaches the typesetter, and an unrewritten
-        // one falls back to raw text rather than disappearing.
+        // Rejected by the pinned revision with an error; the normalizer
+        // rewrites these before the transcript reaches the typesetter, and an
+        // unrewritten one falls back to raw text rather than disappearing.
+        // A character with no atom is a different failure: the build drops it
+        // without an error at all, which is what the refusal above catches.
         (#"\begin{align*} a &= b \end{align*}"#, false),
         (#"\begin{array}{cc} 1 & 2 \end{array}"#, false),
     ])
     func environmentCoverageIsPinnedInBothDirections(_ probe: (String, Bool)) {
         #expect((Self.render(probe.0) != nil) == probe.1, "\(probe.0)")
+    }
+
+    /// The pinned build skips a character it has no atom for and reports
+    /// nothing, so these came back as finished-looking images with the
+    /// operator missing: `\u{221A}2` was pixel-identical to `2`. Refusing
+    /// restores the span's own source, which the reader can at least read.
+    @Test(arguments: [
+        "\u{221A}2",
+        "f\u{2032}(x)",
+        "90\u{00B0}",
+        "\u{00AC}p \u{2228} q",
+        "a \u{2218} b",
+        "x \u{226A} y",
+        "a~b",
+        "x\u{200B}y",
+        "50% of it",
+    ])
+    func scalarsThePinnedBuildDropsAreRefusedNotDrawn(_ latex: String) {
+        #expect(Self.render(latex) == nil, "\(latex.debugDescription)")
+    }
+
+    /// The two the plan expected to be refused and the build actually draws.
+    /// `'` is in the accented table, which `atom(forCharacter:)` consults
+    /// before its ASCII rules, and a combining mark joins the letter before it
+    /// into a grapheme that sorts inside the a-z range.
+    @Test(arguments: ["f'(x)", "e\u{301} = 1"])
+    func theTwoLookAlikesThePinnedBuildDoesDraw(_ latex: String) {
+        #expect(Self.render(latex) != nil, "\(latex.debugDescription)")
     }
 
     @Test(arguments: [#"\frac{"#, #"\unknowncmd"#, #"\left( x"#])
@@ -144,6 +174,40 @@ import Testing
         _ = typesetter.render(latex: #"\frac{a}{b}"#, fontSize: 13, tint: .red, mode: .inline)
         _ = typesetter.render(latex: #"\frac{a}{b}"#, fontSize: 13, tint: .labelColor, mode: .display)
         #expect(cache.count == 4)
+        // The bound is what the masks cost, not how many there are: a display
+        // equation's is about ten times an inline one's.
+        #expect(cache.byteCount > 0)
+    }
+
+    /// A count limit is either far too small for a page of prose or far too
+    /// large for a page of derivations, because the two differ by an order of
+    /// magnitude in what they retain.
+    @Test func theRenderCacheIsBoundedByBytesAndDropsWhenItOverflows() throws {
+        let measure = MathRenderCache()
+        let typesetter = SwiftMathTypesetter(cache: measure)
+        _ = try #require(typesetter.render(
+            latex: #"\frac{a}{b}"#, fontSize: 13, tint: .labelColor, mode: .inline))
+        let one = measure.byteCount
+        #expect(one > 0)
+
+        // Room for one entry and not two: storing the second empties the table.
+        let tight = MathRenderCache(byteLimit: one + one / 2)
+        let bounded = SwiftMathTypesetter(cache: tight)
+        _ = bounded.render(latex: #"\frac{a}{b}"#, fontSize: 13, tint: .labelColor, mode: .inline)
+        #expect(tight.count == 1)
+        #expect(tight.byteCount == one)
+        _ = bounded.render(latex: #"\frac{c}{d}"#, fontSize: 13, tint: .labelColor, mode: .inline)
+        #expect(tight.count == 1)
+        #expect(tight.byteCount <= tight.byteCount)
+
+        // An entry bigger than the whole budget is drawn and not kept, rather
+        // than emptying the table for something that cannot fit.
+        let tiny = MathRenderCache(byteLimit: one / 2)
+        let unbounded = SwiftMathTypesetter(cache: tiny)
+        #expect(unbounded.render(
+            latex: #"\frac{a}{b}"#, fontSize: 13, tint: .labelColor, mode: .inline) != nil)
+        #expect(tiny.count == 0)
+        #expect(tiny.byteCount == 0)
     }
 
     /// Measured on the pinned revision: `.text` mode shrinks a fraction (19 pt
