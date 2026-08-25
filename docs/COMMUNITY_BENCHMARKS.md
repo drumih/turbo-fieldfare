@@ -192,6 +192,9 @@ all affect decode speed.
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 61 / 497 | 37.426 tok/s | One submitted run |
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 430 / 721 | 34.194 tok/s | One submitted run |
 | [Matt Skipton](https://github.com/mattskipton) · [issue #97](https://github.com/drumih/turbo-fieldfare/issues/97) | M5 Pro MacBook Pro | 64 GB | Not reported | 3,015 / 610 | 31.485 tok/s | One submitted run |
+| [Ulises](https://github.com/ulises-c) · [issue #149](https://github.com/drumih/turbo-fieldfare/issues/149) | M5 Max MacBook Pro | 36 GB | Internal SSD | 61 / 497 | 43.440 tok/s | One submitted run |
+| [Ulises](https://github.com/ulises-c) · [issue #149](https://github.com/drumih/turbo-fieldfare/issues/149) | M5 Max MacBook Pro | 36 GB | Internal SSD | 430 / 721 | 40.965 tok/s | One submitted run |
+| [Ulises](https://github.com/ulises-c) · [issue #149](https://github.com/drumih/turbo-fieldfare/issues/149) | M5 Max MacBook Pro | 36 GB | Internal SSD | 3,015 / 610 | 37.370 tok/s | One submitted run |
 
 These submissions use the public community prompts and generate until the end
 of the model turn. Compare rows only when the prompt and generated-token counts
