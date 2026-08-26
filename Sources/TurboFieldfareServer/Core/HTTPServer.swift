@@ -56,7 +56,12 @@ public actor TurboFieldfareHTTPServer {
         let attachmentRoot = self.attachmentRoot
         let idleTimeout = self.idleTimeout
         let bootstrap = ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.backlog, value: 16)
+            // The listen queue is sized to the connection cap so a burst of
+            // connects up to the cap waits for the accept loop instead of
+            // overflowing, which macOS 27 answers with RST (issue #151).
+            .serverChannelOption(
+                ChannelOptions.backlog,
+                value: Int32(TurboFieldfareHTTPServer.maximumConnections))
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 childChannels.insert(channel)
