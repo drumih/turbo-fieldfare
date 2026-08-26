@@ -24,7 +24,8 @@ import Testing
         try body()
     }
 
-    @Test func constructingAMetalContextSetsTheWatchdogRelaxation() throws {
+    #if os(macOS)
+    @Test func constructingAMetalContextSetsTheWatchdogRelaxationOnMacOS() throws {
         try Self.withCleanEnvironment {
             #expect(Self.read() == nil)
             _ = try MetalContext()
@@ -39,4 +40,13 @@ import Testing
             #expect(Self.read() == "0")
         }
     }
+    #else
+    @Test func constructingAMetalContextDoesNotSetTheMacOSWatchdogRelaxation() throws {
+        try Self.withCleanEnvironment {
+            #expect(Self.read() == nil)
+            _ = try MetalContext()
+            #expect(Self.read() == nil)
+        }
+    }
+    #endif
 }

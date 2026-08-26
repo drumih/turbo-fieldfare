@@ -5,6 +5,17 @@ import Testing
 @testable import TurboFieldfare
 
 @Suite struct CommandBufferCompletionTests {
+    private static var visionRuntimeSource: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/TurboFieldfare/Runtime/Vision/VisionRuntime.swift")
+    }
+
     private static func nsError(domain: String = "MTLCommandBufferErrorDomain",
                                 code: Int = 1,
                                 description: String,
@@ -126,5 +137,18 @@ import Testing
         } catch let error as MetalError {
             #expect("\(error)".contains("test uncommitted"))
         }
+    }
+
+    /// The shared formatter covers status-only failures only if every vision
+    /// wait routes through it. A direct `buffer.error` check accepts `.error`
+    /// with no error object and can consume incomplete GPU output.
+    @Test func visionRuntimeUsesStatusAwareCommandBufferChecks() throws {
+        let source = try String(contentsOf: Self.visionRuntimeSource, encoding: .utf8)
+        #expect(!source.contains("if let error = entry.buffer.error"))
+        #expect(!source.contains("if let error = commandBuffer.error"))
+        let checkedWaits = source.components(
+            separatedBy: "metalCommandBufferFailureDetail(").count - 1
+        #expect(checkedWaits == 3,
+                "expected all three VisionRuntime waits to preserve status diagnostics")
     }
 }

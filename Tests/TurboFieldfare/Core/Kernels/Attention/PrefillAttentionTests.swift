@@ -216,6 +216,32 @@ import TurboFieldfareValidationSupport
         #expect(preferred == tiled)
     }
 
+    /// TensorOps starts its key loop at zero, so a production-shaped request
+    /// with a clipping window must use the tiled path even when the pipeline is
+    /// available.
+    @Test func preferredTensorOpsPathRejectsAWindowThatActuallyClips() throws {
+        let context = try MetalContext()
+        let attention = try PrefillAttention(context: context)
+        guard attention.tensorOps2DValidityV2Available else { return }
+
+        let fixture = Self.makeFixture(start: 40,
+                                       chunk: 8,
+                                       window: 16,
+                                       seed: 0xA877,
+                                       headDim: 512,
+                                       qHeads: 16,
+                                       kvHeads: 2)
+        let preferred = try Self.runKernel(
+            fixture,
+            path: .fullTensorOps2DPreferred,
+            layerKindOverride: .full)
+        let tiled = try Self.runKernel(fixture,
+                                       path: .causalTiled,
+                                       layerKindOverride: .full)
+
+        #expect(RelError.maxAbsDiff(preferred, tiled) == 0)
+    }
+
     private static func makeFixture(start: Int,
                                     chunk: Int,
                                     window: Int,
@@ -340,7 +366,8 @@ import TurboFieldfareValidationSupport
         _ fixture: Fixture,
         kvRingCapacity: UInt32 = 0,
         path: RuntimePrefillAttentionPath = .causalTiled,
-        simulatingMissingTensorOps: Bool = false
+        simulatingMissingTensorOps: Bool = false,
+        layerKindOverride: PrefillAttentionLayerKind? = nil
     ) throws -> [Float] {
         let ctx = try MetalContext()
         let prefill = try PrefillAttention(
@@ -389,7 +416,8 @@ import TurboFieldfareValidationSupport
                              outOffset: oPrefix * MemoryLayout<Float16>.size,
                              params: params,
                              kvRingCapacity: kvRingCapacity,
-                             layerKind: fixture.window == 0 ? .full : .slidingWindow,
+                             layerKind: layerKindOverride
+                                 ?? (fixture.window == 0 ? .full : .slidingWindow),
                              path: path)
         cb.commit()
         cb.waitUntilCompleted()

@@ -162,7 +162,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [PF-14](summaries/06-prefill.md#pf-14) — QMM TG reuse | Families +3.2-9.7%; current opportunity about 0.41%. | Rejected. |
 | [PF-15](summaries/06-prefill.md#pf-15) — Batched routed MoE | Isolated +30.91%; balanced end to end about +2%. | Reversed rejection; production. |
 | [PF-16](summaries/06-prefill.md#pf-16) — Long endpoint gate | Delta-NLL +0.002588; top-1 16/16; RSS 888.3 MiB. | Production; validation result. |
-| [PF-17](summaries/06-prefill.md#pf-17) — Apple10 TensorOps full attention | Isolated 11.24x at 16K and 11.63x at 64K; 32K end to end 2.404x. | Production on Apple10; tiled fallback elsewhere. |
+| [PF-17](summaries/06-prefill.md#pf-17) — TensorOps full attention | Apple10: isolated 11.24x at 16K and 11.63x at 64K; 32K end to end 2.404x. Apple8 M2: isolated 9.027-9.294x; 6,784-token prefill 1.726x. | Production when the pipeline builds; Apple8 M2 verified; tiled fallback when unavailable or incompatible. |
 
 ### Fusions, head, and orchestration
 

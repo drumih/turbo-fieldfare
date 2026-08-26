@@ -519,8 +519,10 @@ public final class VisionRuntime {
             let started = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             entry.buffer.waitUntilCompleted()
             gpuWaitNanoseconds += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started
-            if let error = entry.buffer.error {
-                throw VisionRuntimeError.commandFailed(String(describing: error))
+            if let detail = metalCommandBufferFailureDetail(label: entry.buffer.label,
+                                                            status: entry.buffer.status,
+                                                            error: entry.buffer.error) {
+                throw VisionRuntimeError.commandFailed(detail)
             }
             gpuNanoseconds += UInt64(
                 max(0, entry.buffer.gpuEndTime - entry.buffer.gpuStartTime)
@@ -844,8 +846,10 @@ public final class VisionRuntime {
         let commandBuffer = try makeCommandBuffer()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw VisionRuntimeError.commandFailed(String(describing: error))
+        if let detail = metalCommandBufferFailureDetail(label: commandBuffer.label,
+                                                        status: commandBuffer.status,
+                                                        error: commandBuffer.error) {
+            throw VisionRuntimeError.commandFailed(detail)
         }
         return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - started
     }
@@ -853,8 +857,10 @@ public final class VisionRuntime {
     private func commitAndMeasure(_ commandBuffer: MTLCommandBuffer) throws -> UInt64 {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        if let error = commandBuffer.error {
-            throw VisionRuntimeError.commandFailed(String(describing: error))
+        if let detail = metalCommandBufferFailureDetail(label: commandBuffer.label,
+                                                        status: commandBuffer.status,
+                                                        error: commandBuffer.error) {
+            throw VisionRuntimeError.commandFailed(detail)
         }
         return UInt64(max(0, commandBuffer.gpuEndTime - commandBuffer.gpuStartTime)
                       * 1_000_000_000)

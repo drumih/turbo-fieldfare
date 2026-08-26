@@ -104,11 +104,13 @@ public final class MetalContext: @unchecked Sendable {
     private let pipelineCacheLock = NSLock()
 
     private static func relaxInteractivityWatchdog() {
+        #if os(macOS)
         // The AGX driver reads this once at first device creation. Long prefill
         // dispatches can otherwise be killed as compositor-impacting on macOS
         // 26. Overwrite 0 preserves an operator's explicit stock-behaviour
         // override. This relaxes the deadline; it does not guarantee survival.
         setenv("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1", 0)
+        #endif
     }
 
     /// Routes every production device creation through the watchdog mitigation

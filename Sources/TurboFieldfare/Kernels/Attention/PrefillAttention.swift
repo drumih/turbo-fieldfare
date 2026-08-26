@@ -107,11 +107,14 @@ final class PrefillAttention {
 
         let requestsTensorOps = path == .fullTensorOps2DPreferred
             || path == .fullTensorOps2DValidityV2
-        // The pinned model uses 512/16/2 only for full attention; its
-        // sliding-window layers use 256/16/8. A future model that reuses this
-        // shape for sliding attention must add a full-visibility check here.
+        // TensorOps starts its key loop at zero and ignores slidingWindow, so
+        // these are visibility guards rather than shape optimizations.
+        let windowNeverClips = effectiveParams.slidingWindow == 0
+            || effectiveParams.slidingWindow >= effectiveParams.kvValidCount
         let tensorOpsShape = requestsTensorOps
+            && layerKind == .full
             && kvRingCapacity == 0
+            && windowNeverClips
             && effectiveParams.headDim == 512
             && effectiveParams.numQHeads == 16
             && effectiveParams.numKVHeads == 2
@@ -123,7 +126,7 @@ final class PrefillAttention {
             pipeline = tensorOpsPipeline
         } else if tensorOpsShape && path == .fullTensorOps2DValidityV2 {
             preconditionFailure(
-                "TensorOps 2D prefill attention requires MSL 4 TensorOps pipeline support")
+                "TensorOps 2D prefill attention pipeline is unavailable on this Metal stack")
         } else {
             // Explicit mode also falls back for incompatible shapes. Benchmark
             // fixtures must use 512/16/2 to prove that TensorOps ran.
