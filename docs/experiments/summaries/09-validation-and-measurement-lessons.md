@@ -201,4 +201,5 @@ the epilogue's share.
 
 [Previous: Sampling, tokenization, and output](08-sampling-tokenization-and-output.md) |
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |
-[Optimization journey](../../OPTIMIZATION_JOURNEY.md)
+[Optimization journey](../../OPTIMIZATION_JOURNEY.md) |
+[Next: Long-context ladder and retrieval](10-long-context.md)

@@ -57,6 +57,10 @@ resident set size; and **NLL** is negative log-likelihood. See
 | Validation methodology | [False rejections, holdouts, thermal state, and benchmark artifacts](summaries/09-validation-and-measurement-lessons.md) | 9 |
 | **Total** | | **103** |
 
+Long-context capacity is tracked separately from the optimization experiments
+above, because it measures a configuration limit rather than a candidate
+change: [Long-context ladder and retrieval](summaries/10-long-context.md).
+
 ## All 103 experiments
 
 ### Model installation and expert I/O

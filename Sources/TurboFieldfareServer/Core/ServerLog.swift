@@ -21,12 +21,30 @@ enum ServerLog {
     static func completed(id: String,
                           duration: Duration,
                           completion: ServerCompletion) {
+        write(completedMessage(id: id, duration: duration, completion: completion))
+    }
+
+    static func completedMessage(id: String,
+                                 duration: Duration,
+                                 completion: ServerCompletion) -> String {
         let usage = completion.usage
-        write("request \(id) completed in \(format(duration)) "
+        let computedPrefillTokens = max(
+            usage.promptTokens - usage.promptTokensDetails.cachedTokens, 0)
+        let prefillTokensPerSecond = completion.prefillSeconds > 0
+            ? Double(computedPrefillTokens) / completion.prefillSeconds
+            : 0
+        let decodeTokensPerSecond = completion.decodeSeconds > 0
+            ? Double(usage.completionTokens) / completion.decodeSeconds
+            : 0
+        return "request \(id) completed in \(format(duration)) "
             + "prompt=\(usage.promptTokens) "
             + "cached=\(usage.promptTokensDetails.cachedTokens) "
             + "completion=\(usage.completionTokens) "
-            + "finish=\(completion.finishReason)")
+            + "pp=\(formatSeconds(completion.prefillSeconds)) "
+            + "pp_tok_s=\(formatRate(prefillTokensPerSecond)) "
+            + "tg=\(formatSeconds(completion.decodeSeconds)) "
+            + "tg_tok_s=\(formatRate(decodeTokensPerSecond)) "
+            + "finish=\(completion.finishReason)"
     }
 
     /// The session is an actor, so generation is serialized: this line always
@@ -81,7 +99,15 @@ enum ServerLog {
     private static func format(_ duration: Duration) -> String {
         let seconds = Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
-        return String(format: "%.3fs", seconds)
+        return formatSeconds(seconds)
+    }
+
+    private static func formatSeconds(_ seconds: Double) -> String {
+        String(format: "%.3fs", seconds)
+    }
+
+    private static func formatRate(_ rate: Double) -> String {
+        String(format: "%.3f", rate)
     }
 
     private static func write(_ message: String) {

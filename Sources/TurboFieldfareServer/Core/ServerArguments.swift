@@ -25,7 +25,9 @@ public struct ServerArguments: Equatable, Sendable {
                                  Routed-expert residency during vision (default on-demand).
       --port <1...65535>         Loopback port (default 8080).
       --model-id <id>            API model identifier (default gemma-4-26b-a4b-it).
-      --max-context <tokens>     4096, 8192, 16384, 32768, or 65536 (default 16384).
+      --max-context <tokens>     4096, 8192, 16384, 32768, 65536, 98304,
+                                 131072, 196608, or 262144 (default 16384).
+                                 Above 65536 requires --prefill on.
       --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                                  Prompt KV reuse mode (default single-prefix).
@@ -40,6 +42,29 @@ public struct ServerArguments: Equatable, Sendable {
                                  (default off).
       --help                     Show this help.
     """
+
+    // Chunked prefill is what keeps a long context affordable: `KVCacheManager`
+    // only caps the sliding-window layers at `slidingWindow + chunkTokens` when
+    // the FP16 ring is enabled, which happens under chunked prefill. With
+    // `--prefill off` every layer instead allocates KV at the full context, so
+    // the same cap costs roughly an order of magnitude more. 64K is the largest
+    // context that was reachable before the Gemma 4 ladder rungs were added, so
+    // this bound rejects only the newly reachable combinations.
+    static let maximumUnchunkedPrefillContext = 65_536
+
+    /// Approximate FP16 KV footprint, in GiB, when every layer is allocated at
+    /// `maxContext` because the sliding-window ring is disabled. Used only to
+    /// make the rejection message concrete.
+    static func unchunkedKVGibibytes(_ maxContext: Int) -> String {
+        let arch = ArchConfig.gemma4_26B_A4B
+        let fullLayers = arch.fullAttentionLayerMask.filter { $0 != 0 }.count
+        let slidingLayers = arch.numLayers - fullLayers
+        let slidingStride = arch.numKVHeads * arch.headDim * 2
+        let fullStride = arch.numFullKVHeads * arch.fullHeadDim * 2
+        let bytes = 2 * maxContext
+            * (slidingLayers * slidingStride + fullLayers * fullStride)
+        return String(format: "%.0f", Double(bytes) / 1_073_741_824)
+    }
 
     // Mirrors the CLI's runtime flags so both binaries accept the same options
     // with the same validation, instead of the server pinning production
@@ -62,6 +87,13 @@ public struct ServerArguments: Equatable, Sendable {
         else {
             throw ServerArgumentError.invalid(
                 "--expert-cache-slots \(expertCacheSlots) requires --prefill off")
+        }
+        guard prefillPolicy == .chunked || maxContext <= Self.maximumUnchunkedPrefillContext else {
+            throw ServerArgumentError.invalid(
+                "--max-context \(maxContext) requires --prefill on; "
+                    + "without chunked prefill every layer allocates KV at the full "
+                    + "context instead of the sliding-window ring, which needs about "
+                    + "\(Self.unchunkedKVGibibytes(maxContext)) GiB of KV alone")
         }
         return RuntimeConfiguration(
             expertCacheSlots: expertCacheSlots,
@@ -110,7 +142,9 @@ public struct ServerArguments: Equatable, Sendable {
                 modelID = value
             case "--max-context":
                 guard let parsed = Int(value),
-                      [4_096, 8_192, 16_384, 32_768, 65_536].contains(parsed) else {
+                      [4_096, 8_192, 16_384, 32_768, 65_536, 98_304, 131_072,
+                       196_608, 262_144]
+                        .contains(parsed) else {
                     throw ServerArgumentError.invalid("--max-context is not supported")
                 }
                 maxContext = parsed

@@ -12,7 +12,7 @@ The Mac app and CLI expose these generation controls:
 | Control | Mac values | CLI flag | Default | Effect |
 | --- | --- | --- | --- | --- |
 | Maximum response | Automatic | `--max-new` | App: remaining context; CLI: 1,024 tokens | The app can use the context space left after formatting the prompt. The CLI uses its explicit or default `--max-new` limit. |
-| Maximum context | 4K, 8K, 16K, 32K, 64K | `--max-context` | CLI and app: 8K; server: 16K | Sets prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. |
+| Maximum context | App: 4K, 8K, 16K, 32K, 64K | `--max-context` | CLI and app: 8K; server: 16K | Sets prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. The server accepts 4K, 8K, 16K, 32K, 64K, 96K, 128K, 192K, or 256K, and requires `--prefill on` above 64K; the CLI accepts any positive integer and is bounded by memory rather than by a list. |
 | Temperature | 0...2 in 0.05 steps | `--temperature` | 0.2 | `0` is greedy; positive values sample. |
 | Top-K | Off or 1...256 | `--top-k` | 64 | Keeps at most K candidates. CLI `0` turns it off. |
 | Top-P | Off or 0.01...1 | `--top-p` | 0.95 | Applies nucleus truncation before Top-K and is effective only while Top-K is enabled. |

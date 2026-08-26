@@ -12,15 +12,21 @@ public struct ServerCompletion: Equatable, Sendable {
     public let toolCalls: [ParsedToolCall]
     public let finishReason: String
     public let usage: OpenAIUsage
+    public let prefillSeconds: Double
+    public let decodeSeconds: Double
 
     public init(content: String,
                 toolCalls: [ParsedToolCall],
                 finishReason: String,
-                usage: OpenAIUsage) {
+                usage: OpenAIUsage,
+                prefillSeconds: Double = 0,
+                decodeSeconds: Double = 0) {
         self.content = content
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
+        self.prefillSeconds = prefillSeconds
+        self.decodeSeconds = decodeSeconds
     }
 }
 
@@ -1083,7 +1089,9 @@ public actor ServerModelSession: ServerInferenceBackend {
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
                                totalTokens: result.prefillTokens + result.newTokens,
-                               cachedTokens: result.cachedPromptTokens))
+                               cachedTokens: result.cachedPromptTokens),
+            prefillSeconds: result.prefillSeconds,
+            decodeSeconds: result.decodeSeconds)
     }
 
     private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {
