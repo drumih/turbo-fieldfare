@@ -277,22 +277,28 @@ import Testing
 
     /// Phase D item 15. The newer-version branch says "Every key decodes with
     /// `decodeIfPresent`, so it reads cleanly", and that is false: nine keys use
-    /// a hard `decode`. So a version-3 file whose schema moved any of those nine
-    /// throws inside `JSONDecoder().decode` *before* the version guard is
-    /// reached, and lands in the `catch` that deletes the file - destroying a
-    /// newer build's settings, which is the exact outcome that branch exists to
-    /// prevent. A version bump that cannot change the schema protects nothing.
+    /// a hard `decode`. So a file at a version newer than this build's schema,
+    /// whose schema moved any of those nine, throws inside `JSONDecoder().decode`
+    /// *before* the version guard is reached, and lands in the `catch` that
+    /// deletes the file - destroying a newer build's settings, which is the
+    /// exact outcome that branch exists to prevent. A version bump that cannot
+    /// change the schema protects nothing.
+    ///
+    /// The fixture version stays one past `MacAppSettings.currentVersion`
+    /// rather than a literal number, so this test keeps simulating a schema one
+    /// version ahead of what this build's `MacAppSettings.currentVersion`
+    /// currently is, instead of accidentally describing this build's own.
     @Test func aNewerSettingsFileSurvivesAKeyThisBuildDoesNotKnow() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: modelDirectory)
 
-        // A plausible version 3: `topP` became `topProbability`. Everything else
-        // this build knows is still present and still valid.
+        // A plausible next version: `topP` became `topProbability`. Everything
+        // else this build knows is still present and still valid.
         let newer = """
         {
-          "version": 3,
+          "version": \(MacAppSettings.currentVersion + 1),
           "contextTokens": 8192,
           "expertCacheSlots": 16,
           "temperature": 0.2,
@@ -368,6 +374,49 @@ import Testing
 
         #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand,
                 "a persisted keep-ready came back through the model path change")
+    }
+
+    @Test func serverPortAndQueueLimitRoundTrip() throws {
+        let initial = MacAppSettings(serverPort: 9090, serverQueueLimit: 8)
+        let decoded = try JSONDecoder().decode(
+            MacAppSettings.self,
+            from: JSONEncoder().encode(initial))
+
+        #expect(decoded == initial)
+    }
+
+    @Test func serverPortAndQueueLimitDefaultWhenAbsentFromAnOlderFile() throws {
+        let data = Data("""
+        {
+          "version": 2,
+          "contextTokens": 8192,
+          "expertCacheSlots": 16,
+          "temperature": 0.2,
+          "topKEnabled": true,
+          "topK": 64,
+          "topPEnabled": true,
+          "topP": 0.95,
+          "prefillEnabled": true
+        }
+        """.utf8)
+
+        let settings = try JSONDecoder().decode(MacAppSettings.self, from: data)
+
+        #expect(settings.serverPort == 8080)
+        #expect(settings.serverQueueLimit == 4)
+    }
+
+    @MainActor
+    @Test func serverPortPersistsImmediately() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let model = AppModel(modelDirectory: modelDirectory, settingsPersistenceEnabled: true)
+
+        model.setServerPort(9090)
+
+        let saved = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: modelDirectory)
+        #expect(saved.serverPort == 9090)
     }
 
 }

@@ -3,7 +3,7 @@ import TurboFieldfare
 
 struct MacAppSettings: Codable, Equatable, Sendable {
     static let fileName = "mac-app-settings.json"
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version: Int = currentVersion
     var contextTokens: Int = AppContextLengthOption.eightK.tokens
@@ -20,6 +20,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var visionResidencyPolicy: VisionResidencyPolicy = .onDemand
     var rdadvisePolicy: AppRDAdvicePolicy = .off
     var loadModelOnLaunch: Bool = false
+    var serverPort: Int = 8080
+    var serverQueueLimit: Int = 4
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -37,6 +39,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case visionResidencyPolicy
         case rdadvisePolicy
         case loadModelOnLaunch
+        case serverPort
+        case serverQueueLimit
     }
 
     init(version: Int = currentVersion,
@@ -53,7 +57,9 @@ struct MacAppSettings: Codable, Equatable, Sendable {
          sentPromptBehavior: AppSentPromptBehavior = .keep,
          visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
          rdadvisePolicy: AppRDAdvicePolicy = .off,
-         loadModelOnLaunch: Bool = false) {
+         loadModelOnLaunch: Bool = false,
+         serverPort: Int = 8080,
+         serverQueueLimit: Int = 4) {
         self.version = version
         self.contextTokens = contextTokens
         self.expertCacheSlots = expertCacheSlots
@@ -69,6 +75,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         self.visionResidencyPolicy = visionResidencyPolicy
         self.rdadvisePolicy = rdadvisePolicy
         self.loadModelOnLaunch = loadModelOnLaunch
+        self.serverPort = serverPort
+        self.serverQueueLimit = serverQueueLimit
     }
 
     init(from decoder: Decoder) throws {
@@ -100,6 +108,12 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         loadModelOnLaunch = try container.decodeIfPresent(
             Bool.self,
             forKey: .loadModelOnLaunch) ?? false
+        serverPort = try container.decodeIfPresent(
+            Int.self,
+            forKey: .serverPort) ?? 8080
+        serverQueueLimit = try container.decodeIfPresent(
+            Int.self,
+            forKey: .serverQueueLimit) ?? 4
     }
 
     func isValid() -> Bool {
@@ -108,6 +122,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
             && temperature.isFinite && (0...2).contains(temperature)
             && (1...256).contains(topK)
             && topP.isFinite && (0.01...1).contains(topP)
+            && (1...65_535).contains(serverPort)
+            && serverQueueLimit > 0
     }
 }
 
