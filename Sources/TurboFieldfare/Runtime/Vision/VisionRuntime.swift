@@ -244,7 +244,7 @@ public final class VisionRuntime {
     }
 
     public static var isSupportedOnDefaultDevice: Bool {
-        guard let device = MTLCreateSystemDefaultDevice() else { return false }
+        guard let device = MetalContext.makeSystemDefaultDevice() else { return false }
         return isSupported(on: device)
     }
 

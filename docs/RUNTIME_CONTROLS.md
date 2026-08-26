@@ -45,6 +45,21 @@ each request and do not require a reload. Each CLI invocation loads a new model
 process, so its selected runtime settings apply immediately. The server fixes
 its runtime settings at startup, so changing one means restarting the process.
 
+### macOS interactivity mitigation
+
+Before the first Metal device is created, TurboFieldfare defaults
+`AGX_RELAX_CDM_CTXSTORE_TIMEOUT` to `1`. This relaxes an AGX context-store
+deadline that can terminate a long prefill dispatch as
+`kIOGPUCommandBufferCallbackErrorImpactingInteractivity` on macOS 26. It is a
+mitigation, not a guarantee: failures have also been reported with the setting
+enabled.
+
+Export `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=0` before launching TurboFieldfare to
+restore stock driver behavior. An explicit environment value is never
+overwritten. If a command buffer still fails, the error includes its prefill
+phase label, Metal status, domain, code, and IOGPU diagnostic token without
+including prompt or generated content.
+
 ## Image controls
 
 Image input needs the companion pack installed beside the text model. Without

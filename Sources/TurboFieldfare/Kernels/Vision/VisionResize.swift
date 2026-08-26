@@ -171,7 +171,7 @@ public final class VisionResize {
 
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let finished = sourceHeight == destinationHeight ? intermediate : output
         let rowBytes = sourceHeight == destinationHeight

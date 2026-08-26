@@ -7,6 +7,7 @@ enum MetalError: Error, CustomStringConvertible {
     case missingShaderResource(String)
     case missingFunction(String)
     case libraryCompileFailed(String)
+    case commandBufferFailed(String)
 
     public var description: String {
         switch self {
@@ -15,14 +16,54 @@ enum MetalError: Error, CustomStringConvertible {
         case .missingShaderResource(let n): return "Shader resource missing: \(n)"
         case .missingFunction(let n):     return "Metal function missing in library: \(n)"
         case .libraryCompileFailed(let s):return "Metal library compile failed: \(s)"
+        case .commandBufferFailed(let s): return "Metal command buffer failed: \(s)"
         }
     }
 }
 
-func checkCommandBufferError(_ error: (any Error)?) throws {
-    if let error {
-        throw error
+func metalCommandBufferStatusName(_ status: MTLCommandBufferStatus) -> String {
+    switch status {
+    case .notEnqueued: return "notEnqueued"
+    case .enqueued:    return "enqueued"
+    case .committed:   return "committed"
+    case .scheduled:   return "scheduled"
+    case .completed:   return "completed"
+    case .error:       return "error"
+    @unknown default:  return "unknown(\(status.rawValue))"
     }
+}
+
+/// Builds the diagnostic for a command buffer that did not complete, or nil
+/// when it did. Status is checked separately because a failed buffer is not
+/// guaranteed to carry an error object.
+func metalCommandBufferFailureDetail(label: String?,
+                                     status: MTLCommandBufferStatus,
+                                     error: (any Error)?) -> String? {
+    if status == .completed && error == nil { return nil }
+
+    var parts = ["label=\(label.map { $0.isEmpty ? "<empty>" : $0 } ?? "<none>")"]
+    parts.append("status=\(metalCommandBufferStatusName(status))")
+    if let error {
+        let nsError = error as NSError
+        parts.append("domain=\(nsError.domain)")
+        parts.append("code=\(nsError.code)")
+        parts.append("description=\(nsError.localizedDescription)")
+        if !nsError.userInfo.isEmpty {
+            parts.append("userInfoKeys=\(nsError.userInfo.keys.sorted().joined(separator: ","))")
+        }
+    } else {
+        parts.append("error=<none>")
+    }
+    return parts.joined(separator: " ")
+}
+
+func checkCommandBufferError(_ commandBuffer: MTLCommandBuffer) throws {
+    guard let detail = metalCommandBufferFailureDetail(label: commandBuffer.label,
+                                                       status: commandBuffer.status,
+                                                       error: commandBuffer.error) else {
+        return
+    }
+    throw MetalError.commandBufferFailed(detail)
 }
 
 public struct MetalFunctionConstant: Hashable, Sendable {
@@ -62,8 +103,23 @@ public final class MetalContext: @unchecked Sendable {
     private var pipelineCache: [PipelineCacheKey: MTLComputePipelineState] = [:]
     private let pipelineCacheLock = NSLock()
 
+    private static func relaxInteractivityWatchdog() {
+        // The AGX driver reads this once at first device creation. Long prefill
+        // dispatches can otherwise be killed as compositor-impacting on macOS
+        // 26. Overwrite 0 preserves an operator's explicit stock-behaviour
+        // override. This relaxes the deadline; it does not guarantee survival.
+        setenv("AGX_RELAX_CDM_CTXSTORE_TIMEOUT", "1", 0)
+    }
+
+    /// Routes every production device creation through the watchdog mitigation
+    /// before the AGX driver's process-wide one-time environment read.
+    public static func makeSystemDefaultDevice() -> MTLDevice? {
+        relaxInteractivityWatchdog()
+        return MTLCreateSystemDefaultDevice()
+    }
+
     public init() throws {
-        guard let dev = MTLCreateSystemDefaultDevice() else { throw MetalError.noDevice }
+        guard let dev = Self.makeSystemDefaultDevice() else { throw MetalError.noDevice }
         guard let q   = dev.makeCommandQueue()           else { throw MetalError.noQueue }
         self.device  = dev
         self.queue   = q

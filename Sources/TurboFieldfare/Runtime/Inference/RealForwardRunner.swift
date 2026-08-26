@@ -861,6 +861,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         guard var cb = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
+        cb.label = "prefill start=\(startPosition) count=\(t) phase=embed"
         if let embeddingOverride {
             // The override spans the whole chunk — the planner emits image spans
             // as standalone chunks — so the INT4 gather it would cover is
@@ -1101,6 +1102,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     guard let sharedCB = ctx.queue.makeCommandBuffer() else {
                         throw ModelError.residentBufferWrapFailed
                     }
+                    sharedCB.label =
+                        "prefill start=\(startPosition) count=\(t) layer=\(L) phase=shared_expert"
                     let sharedProj = sharedExpertProjections[L]
                     try prefillSharedExpert.encodeBlock(commandBuffer: sharedCB,
                                                         x: scratch.denseX,
@@ -1241,6 +1244,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         guard let tileCB = ctx.queue.makeCommandBuffer() else {
                             throw ModelError.residentBufferWrapFailed
                         }
+                        tileCB.label =
+                            "prefill start=\(startPosition) count=\(t) layer=\(L) phase=routed_tile"
                         _ = prefillGroupedMoE.encodeStreamedBatched(
                             commandBuffer: tileCB,
                             hidden: scratch.routedX,
@@ -1300,6 +1305,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         guard let nextCB = ctx.queue.makeCommandBuffer() else {
                             throw ModelError.residentBufferWrapFailed
                         }
+                        nextCB.label =
+                            "prefill start=\(startPosition) count=\(t) layer=\(L + 1) phase=qkv_attention"
                         cb = nextCB
                     }
                     continue
@@ -1311,6 +1318,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             guard let finalCB = ctx.queue.makeCommandBuffer() else {
                 throw ModelError.residentBufferWrapFailed
             }
+            finalCB.label = "prefill start=\(startPosition) count=\(t) phase=final_head"
             if outputMode == .greedyIfAvailable, useFusedGreedyHead {
                 fusionHead.encodeGreedyDecode(
                     commandBuffer: finalCB,
@@ -1395,12 +1403,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 waitUntilCompleted(pending.cb)
             }
             if let sharedCB = pending.sharedCB {
-                try checkCommandBufferError(sharedCB.error)
+                try checkCommandBufferError(sharedCB)
             }
             if let phase1HitCB = pending.phase1HitCB {
-                try checkCommandBufferError(phase1HitCB.error)
+                try checkCommandBufferError(phase1HitCB)
             }
-            try checkCommandBufferError(pending.cb.error)
+            try checkCommandBufferError(pending.cb)
             totalCb2Nanos &+= pending.encodeAndCommitNanos
         }
 
@@ -1595,7 +1603,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 try finishPendingRoutedCommand(pending, waitIfNeeded: false)
                 pendingRoutedCommand = nil
             }
-            try checkCommandBufferError(cb.error)
+            try checkCommandBufferError(cb)
             totalCb1Nanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tCb1Start - waitNanos
 
             // CPU readback to fetch routed-expert blobs from disk.
@@ -1873,7 +1881,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
     private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
         waitUntilCompleted(cb)
-        try checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb)
     }
 
     private nonisolated func waitUntilCompleted(_ cb: MTLCommandBuffer) {

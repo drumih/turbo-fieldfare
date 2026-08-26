@@ -55,7 +55,7 @@ public func run(args: Args,
         let input = try parseInput(args: args)
         var selectedDevice: MTLDevice?
         if input.hasImages {
-            guard let device = MTLCreateSystemDefaultDevice() else {
+            guard let device = MetalContext.makeSystemDefaultDevice() else {
                 return errored(stderr, "no Metal device", 1)
             }
             try VisionRuntime.requireSupportedDevice(device)
@@ -103,7 +103,7 @@ public func run(args: Args,
         // Hoisted above the `auto` estimate, which needs a device to read image
         // geometry. Planning never touches the GPU, but building the plan does
         // need the device the run will use.
-        guard let device = selectedDevice ?? MTLCreateSystemDefaultDevice() else {
+        guard let device = selectedDevice ?? MetalContext.makeSystemDefaultDevice() else {
             return errored(stderr, "no Metal device", 1)
         }
 
