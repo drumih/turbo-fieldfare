@@ -16,7 +16,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var prefillEnabled: Bool = true
     var newlineShortcut: AppNewlineShortcut = .return
     var showPromptExamples: Bool = true
-    var sentPromptBehavior: AppSentPromptBehavior = .keep
     var visionResidencyPolicy: VisionResidencyPolicy = .onDemand
     var rdadvisePolicy: AppRDAdvicePolicy = .off
     var loadModelOnLaunch: Bool = false
@@ -33,7 +32,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case prefillEnabled
         case newlineShortcut
         case showPromptExamples
-        case sentPromptBehavior
         case visionResidencyPolicy
         case rdadvisePolicy
         case loadModelOnLaunch
@@ -50,7 +48,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
          prefillEnabled: Bool = true,
          newlineShortcut: AppNewlineShortcut = .return,
          showPromptExamples: Bool = true,
-         sentPromptBehavior: AppSentPromptBehavior = .keep,
          visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
          rdadvisePolicy: AppRDAdvicePolicy = .off,
          loadModelOnLaunch: Bool = false) {
@@ -65,7 +62,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         self.prefillEnabled = prefillEnabled
         self.newlineShortcut = newlineShortcut
         self.showPromptExamples = showPromptExamples
-        self.sentPromptBehavior = sentPromptBehavior
         self.visionResidencyPolicy = visionResidencyPolicy
         self.rdadvisePolicy = rdadvisePolicy
         self.loadModelOnLaunch = loadModelOnLaunch
@@ -88,9 +84,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         showPromptExamples = try container.decodeIfPresent(
             Bool.self,
             forKey: .showPromptExamples) ?? true
-        sentPromptBehavior = try container.decodeIfPresent(
-            AppSentPromptBehavior.self,
-            forKey: .sentPromptBehavior) ?? .keep
         visionResidencyPolicy = try container.decodeIfPresent(
             VisionResidencyPolicy.self,
             forKey: .visionResidencyPolicy) ?? .onDemand

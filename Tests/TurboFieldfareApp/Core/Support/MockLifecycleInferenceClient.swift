@@ -46,6 +46,8 @@ final class MockLifecycleInferenceClient: AppModelLifecycleClient, @unchecked Se
 
     }
 
+    func resetConversation(epoch _: UUID) async throws {}
+
     func generate(_ request: AppGenerationRequest) -> AsyncThrowingStream<AppInferenceEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {

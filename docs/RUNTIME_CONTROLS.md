@@ -2,8 +2,8 @@
 
 The Mac app, CLI, and local server expose generation and runtime controls. The
 app keeps them in its fixed right settings pane. FP16 is the fixed KV format.
-Generation settings apply to the next request; app load-time settings require a
-reload.
+Generation settings apply to the next turn or request; app load-time settings
+require a reload.
 
 ## Generation controls
 
@@ -11,8 +11,8 @@ The Mac app and CLI expose these generation controls:
 
 | Control | Mac values | CLI flag | Default | Effect |
 | --- | --- | --- | --- | --- |
-| Maximum response | Automatic | `--max-new` | App: remaining context; CLI: 1,024 tokens | The app can use the context space left after formatting the prompt. The CLI uses its explicit or default `--max-new` limit. |
-| Maximum context | 4K, 8K, 16K, 32K, 64K | `--max-context` | CLI and app: 8K; server: 16K | Sets prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. |
+| Maximum response | Automatic | `--max-new` | App: remaining context; CLI: 1,024 tokens | The app can use the context space left after the retained conversation and new turn. The CLI uses its explicit or default `--max-new` limit. |
+| Maximum context | 4K, 8K, 16K, 32K, 64K | `--max-context` | CLI and app: 8K; server: 16K | Sets conversation or prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. |
 | Temperature | 0...2 in 0.05 steps | `--temperature` | 0.2 | `0` is greedy; positive values sample. |
 | Top-K | Off or 1...256 | `--top-k` | 64 | Keeps at most K candidates. CLI `0` turns it off. |
 | Top-P | Off or 0.01...1 | `--top-p` | 0.95 | Applies nucleus truncation before Top-K and is effective only while Top-K is enabled. |
@@ -41,9 +41,11 @@ model, so an unsupported combination fails immediately with the usage text.
 In the app, changing context length, expert-cache slots, or RDADVISE requires a
 reload. Some sampling changes also require a reload because greedy and sampled
 generation use different output-head paths. Prompt-prefill settings apply to
-each request and do not require a reload. Each CLI invocation loads a new model
-process, so its selected runtime settings apply immediately. The server fixes
-its runtime settings at startup, so changing one means restarting the process.
+each turn and do not require a reload. A reload ends the retained KV lineage;
+the app preserves the visible transcript and marks where the model's new
+context begins. Each CLI invocation loads a new model process, so its selected
+runtime settings apply immediately. The server fixes its runtime settings at
+startup, so changing one means restarting the process.
 
 ### macOS interactivity mitigation
 
@@ -95,8 +97,8 @@ name the changed setting.
 ## Read the results
 
 - **Decode rate** measures generated tokens per second after prompt prefill.
-- **Request TTFT** includes prompt prefill and the wait for the first generated
-  token.
+- **Request TTFT** includes prompt or new-turn prefill and the wait for the first
+  generated token.
 - **Peak memory** in Last run is the highest decode-service memory observed
   during the request. The HUD shows the service's current memory instead of the
   much smaller foreground UI process.

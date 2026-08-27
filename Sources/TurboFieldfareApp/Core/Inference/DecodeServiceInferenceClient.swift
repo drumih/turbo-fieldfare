@@ -103,7 +103,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         topP: request.topP,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
-                        generationID: generationID)
+                        generationID: generationID,
+                        conversationEpoch: request.conversationEpoch,
+                        turnIndex: request.turnIndex)
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
                         DecodeServiceCommand.generate(command)))
 
@@ -173,6 +175,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                 event.error ?? "decode service failed")
                             continuation.yield(.failed(error, partial: diagnostics))
                             continuation.finish(throwing: error)
+                        case .lineageLost:
+                            // Carried across as its own case, not flattened into
+                            // `.unknown`: the app has to clear the conversation
+                            // rather than offer a retry that would fail the same
+                            // way every time.
+                            let error = AppInferenceError.conversationLineageLost(
+                                event.error ?? "the conversation's KV no longer matches it")
+                            continuation.yield(.failed(error, partial: diagnostics))
+                            continuation.finish(throwing: error)
                         default:
                             continue
                         }
@@ -186,6 +197,33 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 task.cancel()
                 self?.cancel()
             }
+        }
+    }
+
+    /// Opens `epoch` on the service and waits for it to say so.
+    ///
+    /// Not fire-and-forget: the app numbers the next turn from zero the moment
+    /// this returns, and a turn numbered against a reset the service never
+    /// applied is refused by its gate — which is the safe outcome, but the user
+    /// sees a rejected message instead of a new chat.
+    public func resetConversation(epoch: UUID) async throws {
+        guard let handles = currentHandles() else {
+            // Not "nothing is loaded" — `currentHandles` is nil when the
+            // *connection* is gone. Returning normally let the caller record an
+            // epoch the service had never heard of, and because it then matched
+            // the app's own, the reset was never retried: every later turn was
+            // refused and no recovery path could fire.
+            throw AppInferenceError.unknown(
+                "the decode service connection is gone; the new chat was not opened")
+        }
+        let requestID = UUID()
+        try handles.input.write(contentsOf: DecodeFrameCodec.encode(
+            DecodeServiceCommand.resetConversation(
+                DecodeResetConversationRequest(epoch: epoch, requestID: requestID))))
+        let event = try await handles.responses.next(matching: requestID)
+        guard event.kind == .conversationReset else {
+            throw AppInferenceError.unknown(
+                event.error ?? "decode service refused to start a new conversation")
         }
     }
 
@@ -342,13 +380,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     private static func diagnostics(_ event: DecodeServiceEvent,
                                     options: AppRuntimeOptions) -> AppDiagnostics {
         let stop = AppStopReason(rawValue: event.stopReason ?? "")
-            ?? (event.kind == .cancelled
-                ? .cancelled
-                : event.kind == .failed ? .failed : .maxTokens)
+            ?? (event.kind == .cancelled ? .cancelled
+                : (event.kind == .failed || event.kind == .lineageLost) ? .failed
+                : .maxTokens)
         return AppDiagnostics(
             generatedTokens: event.tokenCount,
             stopReason: stop,
             promptTokenCount: event.promptTokenCount,
+            cachedPromptTokens: event.cachedPromptTokens,
+            conversationTokens: event.conversationTokenCount,
             prefillSeconds: event.prefillSeconds,
             timeToFirstTokenSeconds: event.timeToFirstTokenSeconds,
             decodeSeconds: event.decodeSeconds,

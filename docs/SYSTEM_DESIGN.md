@@ -457,6 +457,15 @@ attention, a 16-slot LFU expert cache, chunked prefill, staged affine MPP
 prefill, and batched routed MoE prefill. File-read advice (`RDADVISE`) is off by
 default.
 
+## App conversations
+
+The Mac app keeps one conversation in memory and reuses its KV cache, so later
+turns prefill only new text and images. An epoch and turn index keep the app and
+decode service in sync. The app rejects turns that exceed the context window
+instead of trimming history. **New Chat** clears the transcript, KV cache, and
+images; reload and unload keep the transcript but start fresh model context.
+Conversations are not saved.
+
 ## Read next
 
 - [Local OpenAI-compatible server](OPENAI_SERVER.md)

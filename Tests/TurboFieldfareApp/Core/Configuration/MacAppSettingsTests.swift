@@ -82,7 +82,7 @@ import Testing
         #expect(!settings.prefillEnabled)
         #expect(settings.newlineShortcut == .return)
         #expect(settings.showPromptExamples)
-        #expect(settings.sentPromptBehavior == .keep)
+        #expect(settings.visionResidencyPolicy == .onDemand)
     }
 
     @Test(arguments: AppNewlineShortcut.allCases)
@@ -104,16 +104,6 @@ import Testing
     @Test(arguments: [true, false])
     func showPromptExamplesRoundTrips(_ show: Bool) throws {
         let initial = MacAppSettings(showPromptExamples: show)
-        let decoded = try JSONDecoder().decode(
-            MacAppSettings.self,
-            from: JSONEncoder().encode(initial))
-
-        #expect(decoded == initial)
-    }
-
-    @Test(arguments: AppSentPromptBehavior.allCases)
-    func sentPromptBehaviorRoundTrips(_ behavior: AppSentPromptBehavior) throws {
-        let initial = MacAppSettings(sentPromptBehavior: behavior)
         let decoded = try JSONDecoder().decode(
             MacAppSettings.self,
             from: JSONEncoder().encode(initial))
@@ -165,8 +155,7 @@ import Testing
             topP: 0.8,
             prefillEnabled: false,
             newlineShortcut: .shiftReturn,
-            showPromptExamples: false,
-            sentPromptBehavior: .clear)
+            showPromptExamples: false)
         try MacAppSettingsFileStore.save(initial, forModelDirectory: modelDirectory)
 
         let model = AppModel(
@@ -182,7 +171,6 @@ import Testing
         #expect(!model.runtimeOptions.prefillEnabled)
         #expect(model.newlineShortcut == .shiftReturn)
         #expect(!model.showPromptExamples)
-        #expect(model.sentPromptBehavior == .clear)
 
         model.temperature = 0.6
         model.runtimeOptions.expertCacheSlots = 32
@@ -201,7 +189,6 @@ import Testing
         #expect(saved.prefillEnabled)
         #expect(saved.newlineShortcut == .shiftReturn)
         #expect(!saved.showPromptExamples)
-        #expect(saved.sentPromptBehavior == .clear)
         model.cancel()
     }
 
@@ -235,22 +222,6 @@ import Testing
         let saved = MacAppSettingsFileStore.loadOrCreate(
             forModelDirectory: modelDirectory)
         #expect(!saved.showPromptExamples)
-    }
-
-    @MainActor
-    @Test func sentPromptBehaviorPersistsImmediately() throws {
-        let root = try makeTemporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
-        let model = AppModel(
-            modelDirectory: modelDirectory,
-            settingsPersistenceEnabled: true)
-
-        model.setSentPromptBehavior(.clear)
-
-        let saved = MacAppSettingsFileStore.loadOrCreate(
-            forModelDirectory: modelDirectory)
-        #expect(saved.sentPromptBehavior == .clear)
     }
 
     @MainActor

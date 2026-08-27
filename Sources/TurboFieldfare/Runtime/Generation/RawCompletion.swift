@@ -28,6 +28,31 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    public let withheldTrailingKVTokens: Int
+
+    public init(prefillTokens: Int,
+                cachedPromptTokens: Int,
+                computedPrefillTokens: Int,
+                prefillSeconds: Double,
+                newTokens: Int,
+                decodeSeconds: Double,
+                reason: StopReason,
+                kvPosition: Int,
+                kvBackedTokenIDs: [Int32],
+                uncommittedBoundaryTokenIDs: [Int32],
+                withheldTrailingKVTokens: Int = 0) {
+        self.prefillTokens = prefillTokens
+        self.cachedPromptTokens = cachedPromptTokens
+        self.computedPrefillTokens = computedPrefillTokens
+        self.prefillSeconds = prefillSeconds
+        self.newTokens = newTokens
+        self.decodeSeconds = decodeSeconds
+        self.reason = reason
+        self.kvPosition = kvPosition
+        self.kvBackedTokenIDs = kvBackedTokenIDs
+        self.uncommittedBoundaryTokenIDs = uncommittedBoundaryTokenIDs
+        self.withheldTrailingKVTokens = withheldTrailingKVTokens
+    }
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -229,6 +254,7 @@ public func runRawCompletion(producer: any LogitProducer,
     var generated = 0
     var reason: StopReason = .maxTokens
     var uncommittedBoundaryTokenIDs: [Int32] = []
+    var trailingInvisibleTokens = 0
 
     while true {
         try Task.checkCancellation()
@@ -276,6 +302,7 @@ public func runRawCompletion(producer: any LogitProducer,
         let cancelled = !hitStopString && shouldStop()
         let hitMax = generated >= config.maxNewTokens
         if hitStopString || cancelled || hitMax {
+            if !visible.isEmpty { trailingInvisibleTokens = 0 }
             let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
             reason = hitStopString ? .stopString : (cancelled ? .cancelled : .maxTokens)
@@ -283,6 +310,7 @@ public func runRawCompletion(producer: any LogitProducer,
         }
 
         history.append(tokenID)
+        trailingInvisibleTokens = visible.isEmpty ? trailingInvisibleTokens + 1 : 0
         try await producer.produce(token: tokenID, position: position, into: scratch.logits)
         position += 1
         uncommittedBoundaryTokenIDs.removeAll(keepingCapacity: true)
@@ -297,7 +325,9 @@ public func runRawCompletion(producer: any LogitProducer,
                            reason: reason,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
-                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
+                           uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+                           withheldTrailingKVTokens: reason == .stopString
+                               ? trailingInvisibleTokens : 0)
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,

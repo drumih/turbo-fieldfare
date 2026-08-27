@@ -29,6 +29,20 @@ public final class AppModel {
     public var isConfirmingVisionPackRemoval = false
     public private(set) var outputPromptText: String = ""
     public private(set) var outputImageAttachments: [AppImageAttachment] = []
+    /// The open chat. The transcript renders it, and its turn order is what the
+    /// decode service's gate checks every turn against.
+    public private(set) var conversation = AppConversation()
+    /// Turns from conversations whose KV no longer exists — a reload or an
+    /// unload took it. They stay on screen because the app deliberately keeps a
+    /// transcript across lifecycle actions, but they are not in the model's
+    /// context any more, and the transcript draws a break to say so. Keeping
+    /// them here rather than in `conversation` is what preserves that type's
+    /// invariant: its turns are exactly the model's context.
+    public private(set) var archivedPairs: [(user: AppChatTurn, assistant: AppChatTurn)] = []
+    /// The epoch the inference side has actually been told to open. Nil after a
+    /// load or unload, both of which rebuild or release the KV; the next turn
+    /// opens the conversation again before it sends anything.
+    private var serviceEpoch: UUID?
     public var outputText: String = ""
     public var runState: RunState = .idle
     public var runtimeOptions = AppRuntimeOptions()
@@ -41,10 +55,9 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
-    public private(set) var sentPromptBehavior: AppSentPromptBehavior = .keep
-    public private(set) var loadModelOnLaunch: Bool = false
     /// Whether launching the app should load the model straight away. Off by
     /// default, because loading takes minutes and holds gigabytes.
+    public private(set) var loadModelOnLaunch: Bool = false
     public var diagnostics: AppDiagnostics?
     public var error: AppInferenceError?
     public var installState: AppModelInstallState = .idle
@@ -159,7 +172,6 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
-        self.sentPromptBehavior = settings.sentPromptBehavior
         self.loadModelOnLaunch = settings.loadModelOnLaunch
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
@@ -378,6 +390,9 @@ public final class AppModel {
         !isRunning && !isAddingImages && isModelAvailable && !loadState.isLoading
             && !isVisionCompanionOperationInProgress
             && !hasStaleLoadedRuntime
+            // A conversation whose KV no longer matches it cannot take another
+            // turn; only New chat clears that.
+            && conversation.canSend
             && (!promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !imageAttachments.isEmpty)
     }
@@ -385,14 +400,62 @@ public final class AppModel {
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
     public var hasOutputTranscript: Bool {
-        !outputPromptText.isEmpty || !outputImageAttachments.isEmpty || !outputText.isEmpty
+        !archivedPairs.isEmpty
+            || !conversation.isEmpty
+            || !outputPromptText.isEmpty || !outputImageAttachments.isEmpty
+            || !outputText.isEmpty
+    }
+
+    public var shouldShowPromptExamples: Bool {
+        showPromptExamples
+            && promptText.isEmpty
+            && !isRunning
+            && !hasOutputTranscript
     }
 
     public var outputResponsePlainText: String {
         generationTranscriptMailbox?.completeText ?? outputText
     }
 
+    /// Completed turns the transcript draws *above* the live one.
+    ///
+    /// The live fields keep holding the last finished turn between runs — that
+    /// is what leaves an answer on screen after it ends — so while nothing is
+    /// decoding the newest pair is drawn live and must not also appear here.
+    /// One property, used by both the transcript and Copy Conversation, so the
+    /// two cannot disagree about which turn is which.
+    public var transcriptHistory: [(user: AppChatTurn, assistant: AppChatTurn)] {
+        let pairs = conversation.completedPairs
+        let live = conversation.hasTurnInFlight ? pairs
+            : (pairs.isEmpty ? pairs : Array(pairs.dropLast()))
+        return archivedPairs + live
+    }
+
+    /// Where the transcript draws "earlier turns are no longer in context",
+    /// counted in pairs from the top. Nil when everything on screen is still in
+    /// the model's context.
+    public var transcriptContextBreak: Int? {
+        archivedPairs.isEmpty ? nil : archivedPairs.count
+    }
+
     public var outputConversationPlainText: String {
+        var history: [String] = []
+        for pair in transcriptHistory {
+            var prompt = pair.user.text
+            if !pair.user.images.isEmpty {
+                let names = pair.user.images.map(\.displayName).joined(separator: ", ")
+                prompt = prompt.isEmpty ? "[images: \(names)]" : "[images: \(names)]\n\(prompt)"
+            }
+            history.append("You:\n\(prompt)")
+            history.append("Answer:\n\(pair.assistant.text)")
+        }
+        let live = liveConversationPlainText
+        if history.isEmpty { return live }
+        if live.isEmpty { return history.joined(separator: "\n\n") }
+        return history.joined(separator: "\n\n") + "\n\n" + live
+    }
+
+    private var liveConversationPlainText: String {
         let response = outputResponsePlainText
         switch (outputPromptText.isEmpty, response.isEmpty) {
         case (true, true):
@@ -485,6 +548,7 @@ public final class AppModel {
         activeRunRuntimeKey = nil
         loadedRuntimeKey = nil
         loadState = .notLoaded
+        endConversationForReleasedKV()
         diagnostics = nil
         error = nil
         phase = .idle
@@ -533,11 +597,6 @@ public final class AppModel {
         persistSettings()
     }
 
-    public func setSentPromptBehavior(_ behavior: AppSentPromptBehavior) {
-        guard sentPromptBehavior != behavior else { return }
-        sentPromptBehavior = behavior
-        persistSettings()
-    }
 
     public func setLoadModelOnLaunch(_ enabled: Bool) {
         guard loadModelOnLaunch != enabled else { return }
@@ -580,9 +639,14 @@ public final class AppModel {
         // The context a run will actually use, which is the loaded session's
         // until it is reloaded. Capping on the pending setting instead let the
         // composer accept images the request then refused.
+        //
+        // The conversation counts against the same window, and the request
+        // reserves it (`AppGenerationRequest.validate`). Reserving only a fixed
+        // 1,024 here meant that past that point the composer kept offering
+        // images Send would refuse — accepted on attach, rejected on the button.
         max(1, VisionImageTokenBudget.capacity(
             maxContext: effectiveMaxContextTokens,
-            reservedTextTokens: Self.reservedPromptTokens))
+            reservedTextTokens: max(Self.reservedPromptTokens, conversation.kvTokens)))
     }
 
     /// The context a generation would run with right now.
@@ -823,8 +887,19 @@ public final class AppModel {
             guard let self, generation == self.unloadGeneration else { return }
             self.loadedRuntimeKey = nil
             self.loadState = .notLoaded
+            endConversationForReleasedKV()
             self.clearUnloadTask(generation: generation)
         }
+    }
+
+    /// Ends the conversation because the KV behind it is gone.
+    ///
+    /// `applyLoadState`'s `.notLoaded` branch does this too, but nothing reaches
+    /// it: every production transition to `.notLoaded` assigns `loadState`
+    /// directly. Calling this from those sites is what actually runs it.
+    private func endConversationForReleasedKV() {
+        serviceEpoch = nil
+        archiveConversationContext()
     }
 
     public func unloadModel() {
@@ -838,6 +913,7 @@ public final class AppModel {
             self.loadedRuntimeKey = nil
             self.liveMemoryBytes = nil
             self.loadState = .notLoaded
+            endConversationForReleasedKV()
             self.clearUnloadTask(generation: generation)
         }
     }
@@ -1376,6 +1452,7 @@ public final class AppModel {
             installTask = nil
             modelPathText = directory.path
             loadState = .notLoaded
+            endConversationForReleasedKV()
             refreshVisionInstallReadiness(at: directory)
         }
     }
@@ -1474,7 +1551,6 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
-        sentPromptBehavior = settings.sentPromptBehavior
         loadModelOnLaunch = settings.loadModelOnLaunch
     }
 
@@ -1491,7 +1567,6 @@ public final class AppModel {
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
             showPromptExamples: showPromptExamples,
-            sentPromptBehavior: sentPromptBehavior,
             visionResidencyPolicy: runtimeOptions.visionResidencyPolicy,
             rdadvisePolicy: runtimeOptions.rdadvisePolicy,
             loadModelOnLaunch: loadModelOnLaunch)
@@ -1555,9 +1630,24 @@ public final class AppModel {
         switch state {
         case .notLoaded:
             loadedRuntimeKey = nil
+            // Unloading released the runner and the KV, so whatever lineage was
+            // open no longer has tokens behind it.
+            serviceEpoch = nil
+            archiveConversationContext()
         case .loading, .cancelling, .unloading:
             break
         case .ready(_, let seconds):
+            // A load builds a new runner and an empty KV. The service ends the
+            // lineage on its side for the same reason; leaving the app's epoch
+            // in place would have the next turn claim to resume onto a cache
+            // that had just been rebuilt.
+            serviceEpoch = nil
+            // And the conversation itself is gone with that KV. Keeping the
+            // turn list would leave the app numbering turns from where it left
+            // off while the service, having just ended the lineage, expects
+            // zero — so the gate would refuse the next turn and every turn
+            // after it, for the rest of the session.
+            archiveConversationContext()
             loadedRuntimeKey = pendingExplicitLoadRuntimeKey
                 ?? activeRunRuntimeKey
                 ?? currentRuntimeKey
@@ -1574,6 +1664,18 @@ public final class AppModel {
 
     /// Releases the transcript's own references to the images it was showing.
     /// They are separate files from the composer's, so nothing else frees them.
+    /// Releases every image the conversation is holding — each turn's, the
+    /// archived turns', and the newest turn's.
+    private func releaseConversationImages() {
+        for pair in archivedPairs {
+            for attachment in pair.user.images { attachmentStore.remove(attachment) }
+        }
+        for turn in conversation.turns {
+            for attachment in turn.images { attachmentStore.remove(attachment) }
+        }
+        releaseTranscriptImages()
+    }
+
     private func releaseTranscriptImages() {
         for attachment in outputImageAttachments { attachmentStore.remove(attachment) }
         outputImageAttachments = []
@@ -1582,7 +1684,7 @@ public final class AppModel {
     /// Deletes every file this session staged. Called when the app is quitting,
     /// which is the only moment they are all certainly unwanted.
     public func releaseAllAttachments() {
-        releaseTranscriptImages()
+        releaseConversationImages()
         for attachment in imageAttachments { attachmentStore.remove(attachment) }
         imageAttachments.removeAll()
         attachmentStore.removeAll()
@@ -1623,26 +1725,90 @@ public final class AppModel {
         return memorySampler.occupiedSample()
     }
 
-    public func clearOutput() {
+    /// Ends the conversation and starts an empty one.
+    ///
+    /// There is no history to recover it from, so the window confirms before
+    /// calling this when the transcript is not empty.
+    public func newChat() {
         guard !isRunning else { return }
+        // Every turn holds its own hard links. Dropping the turn list without
+        // releasing them leaked one staged file per image per turn until quit:
+        // `releaseTranscriptImages` only ever covered the newest turn, which is
+        // why a single-turn test passed.
+        releaseConversationImages()
+        archivedPairs.removeAll()
+        conversation.startNew()
         outputPromptText = ""
         releaseTranscriptImages()
         outputText = ""
         generationTranscriptMailbox?.reset()
         diagnostics = nil
         error = nil
+        // Only the intent is recorded here; the next turn opens the new lineage
+        // on the inference side. Resetting eagerly as well raced that opening
+        // and sent two resets for one new chat, and it buys nothing: the KV
+        // allocation is fixed, so an unsent new chat holds no extra memory.
+        serviceEpoch = nil
+    }
+
+    /// Starts an empty conversation because the KV behind the old one is gone.
+    ///
+    /// Distinct from `newChat()`: the user did not ask for this. The transcript
+    /// stays — lifecycle actions are not supposed to discard it — but its turns
+    /// move to `archivedPairs`, because the model can no longer see them. The
+    /// alternative, letting `conversation` keep counting, desynchronises the app
+    /// from the service's gate, which has just gone back to expecting turn zero;
+    /// the gate would then refuse every turn for the rest of the session.
+    private func archiveConversationContext() {
+        var carried = conversation.completedPairs
+        // The live fields hold the newest finished turn between runs, and it is
+        // already in `completedPairs`; nothing extra to carry.
+        if carried.isEmpty, !outputPromptText.isEmpty {
+            carried = [(user: AppChatTurn(role: .user, text: outputPromptText,
+                                          images: outputImageAttachments),
+                        assistant: AppChatTurn(role: .assistant, text: outputText))]
+        }
+        archivedPairs.append(contentsOf: carried)
+        conversation.startNew()
+        // The archived pairs are what the transcript draws now. Leaving the
+        // live fields holding the newest of them would draw that turn twice,
+        // once as history and once as the turn still on screen.
+        if !carried.isEmpty {
+            outputPromptText = ""
+            outputText = ""
+            outputImageAttachments = []
+            generationTranscriptMailbox?.reset()
+        }
+    }
+
+    /// Opens the conversation on the inference side if it has not been opened
+    /// yet. Called before every turn: a load or an unload ends the lineage
+    /// there without the app being asked, and the next turn has to re-open it
+    /// rather than resume onto a KV that was rebuilt empty.
+    private func openConversationIfNeeded() async throws {
+        guard serviceEpoch != conversation.epoch else { return }
+        guard let lifecycle = client as? AppModelLifecycleClient else { return }
+        try await lifecycle.resetConversation(epoch: conversation.epoch)
+        serviceEpoch = conversation.epoch
     }
 
     public func run() {
         guard canRun else { return }
+        // Reserved before the request is built, so the position the service
+        // will check is the position the transcript shows.
+        guard let ticket = conversation.beginTurn(text: promptText, images: []) else {
+            return
+        }
         var request: AppGenerationRequest
         do {
-            request = try makeRequest()
+            request = try makeRequest(ticket: ticket)
         } catch let appError as AppInferenceError {
+            conversation.abandonTurn()
             error = appError
             return
         } catch {
             let appError = AppInferenceError.unknown("\(error)")
+            conversation.abandonTurn()
             self.error = appError
             return
         }
@@ -1660,6 +1826,7 @@ public final class AppModel {
             }
         } catch {
             for attachment in retained { attachmentStore.remove(attachment) }
+            conversation.abandonTurn()
             imageAttachmentError = String(describing: error)
             self.error = .invalidRequest(
                 "Could not prepare the attached images for this run: \(error)")
@@ -1672,7 +1839,10 @@ public final class AppModel {
         generationTranscriptMailbox?.reset()
         runIdentity &+= 1
         outputPromptText = request.prompt
-        releaseTranscriptImages()
+        // Not released: every turn of a conversation keeps its own images for
+        // as long as the conversation shows them. They are hard links to files
+        // that already exist, so holding them costs no additional bytes.
+        conversation.attachImagesToPendingTurn(retained)
         outputImageAttachments = retained
         outputText = ""
         diagnostics = nil
@@ -1691,21 +1861,22 @@ public final class AppModel {
         sampleLiveMemory()
         phase = .prefill
         runState = .running
-        if sentPromptBehavior == .clear {
-            promptText = ""
-            // Images used to survive a cleared prompt, so the next Run silently
-            // re-attached them to a completely different message. Dropping them
-            // is safe because the request above was repointed at the retained
-            // links: removing these files cannot pull the ground out from under
-            // a run that has not opened its images yet.
-            for attachment in imageAttachments { attachmentStore.remove(attachment) }
-            imageAttachments.removeAll()
-            imageAttachmentError = nil
-        }
+        // A chat composer always clears. Keeping the sent turn in the box means
+        // the next message starts as a copy of the last one, and the images
+        // silently re-attach to a different message. Dropping them is safe
+        // because the request above was repointed at the retained links:
+        // removing these files cannot pull the ground out from under a run that
+        // has not opened its images yet. A refused turn puts both back through
+        // `restoreComposer`.
+        promptText = ""
+        for attachment in imageAttachments { attachmentStore.remove(attachment) }
+        imageAttachments.removeAll()
+        imageAttachmentError = nil
 
         runTask = Task.detached { [weak self, client, request] in
             guard let self else { return }
             do {
+                try await self.openConversationIfNeeded()
                 for try await event in client.generate(request) {
                     await self.apply(event)
                 }
@@ -1723,7 +1894,9 @@ public final class AppModel {
         client.cancel()
     }
 
-    public func makeRequest() throws -> AppGenerationRequest {
+    public func makeRequest(
+        ticket: AppConversation.Ticket? = nil
+    ) throws -> AppGenerationRequest {
         // A run executes against the session that is actually loaded. Sending
         // the current settings instead meant that changing Context, Slots or
         // image residency and pressing Generate — without reloading first —
@@ -1744,7 +1917,18 @@ public final class AppModel {
             repetitionPenalty: 1.0,
             runtimeOptions: effective.options(
                 prefillEnabled: runtimeOptions.prefillEnabled,
-                prefillChunkTokens: runtimeOptions.prefillChunkTokens))
+                prefillChunkTokens: runtimeOptions.prefillChunkTokens),
+            // Carried whether or not a ticket exists: the image budget has to
+            // fit around the conversation even while the composer is only being
+            // validated.
+            // The decode service overrides this from its own gate, but the
+            // in-process client reads it directly — and without it that client
+            // ran every turn through the single-prompt path while the app drew a
+            // growing transcript, so the model saw only the newest message.
+            continuesConversation: ticket != nil,
+            conversationTokens: conversation.kvTokens,
+            conversationEpoch: ticket?.epoch,
+            turnIndex: ticket?.index)
         try request.validate(requireModelDirectory: true)
         return request
     }
@@ -1783,6 +1967,7 @@ public final class AppModel {
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
         self.diagnostics = diagnostics
+        conversation.completeTurn(text: outputText, diagnostics: diagnostics)
         finishTerminalRun()
     }
 
@@ -1792,6 +1977,28 @@ public final class AppModel {
         materializeServiceTranscript()
         self.diagnostics = diagnostics
         error = .cancelled
+        // A `.cancelled` event means the run threw `CancellationError`, and the
+        // conversation rewound the turn: its tokens are not in the KV, and the
+        // service did not count it either. Counting it here put the app one
+        // ahead for the rest of the conversation, so the next turn carried an
+        // index the gate refused — and that refusal reached the user as
+        // "decode service runtime profile changed during generation".
+        //
+        // A stop that lands at a token boundary is a different event: the run
+        // returns normally with `.cancelled` as its *stop reason*, arrives as
+        // `.finished`, and is committed by `finishSuccessfully`.
+        // Not counted. The live fields are not part of `conversation.turns`, so
+        // what stays on screen is the stopped turn as the current one, exactly
+        // as the single-prompt path left it — the next run replaces it, and it
+        // never enters the history the transcript freezes.
+        //
+        // The turn itself is handed back rather than dropped: discarding it lost
+        // the user's message and stranded its retained image links, which the
+        // next run overwrote without releasing — one staged file per image,
+        // until quit.
+        if let abandoned = conversation.abandonTurn() {
+            restoreComposer(from: abandoned)
+        }
         finishTerminalRun()
     }
 
@@ -1804,7 +2011,38 @@ public final class AppModel {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         error = appError
+        let abandoned: AppChatTurn?
+        if case .conversationLineageLost = appError {
+            // The transcript stays readable; nothing further can be sent until
+            // New chat.
+            abandoned = conversation.markLineageLost()
+        } else {
+            // The runtime rewound this turn, so it is in neither the KV nor the
+            // transcript. Give the user their message back instead of making
+            // them retype it.
+            abandoned = conversation.abandonTurn()
+        }
+        if let abandoned {
+            restoreComposer(from: abandoned)
+        }
         finishTerminalRun()
+    }
+
+    /// Puts a turn that never reached the model back in the composer.
+    ///
+    /// The images move with it: they are this turn's retained links, and the
+    /// turn is gone from the transcript, so nothing else refers to them. Losing
+    /// them here would silently drop attachments the user had picked.
+    private func restoreComposer(from turn: AppChatTurn) {
+        if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            promptText = turn.text
+        }
+        if imageAttachments.isEmpty, !turn.images.isEmpty {
+            imageAttachments = turn.images
+        } else {
+            for attachment in turn.images { attachmentStore.remove(attachment) }
+        }
+        outputImageAttachments = []
     }
 
     private func finishStreamFailure(_ appError: AppInferenceError) {

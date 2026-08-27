@@ -67,13 +67,13 @@ struct PromptComposerView: View {
                     "That clipboard content is not an image TurboFieldfare can read.")
             },
             onDropTargeted: { isImageDropTargeted = $0 })
-            .accessibilityLabel("Prompt")
+            .accessibilityLabel("Message")
             .frame(height: editorHeight)
             .overlay(alignment: .topLeading) {
                 if model.promptText.isEmpty {
                     // Matches the NSTextView text origin: 5pt line fragment
                     // padding, no vertical inset.
-                    Text("Prompt")
+                    Text("Message")
                         .font(.body)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
@@ -90,7 +90,7 @@ struct PromptComposerView: View {
     }
 
     private var editorHeight: CGFloat {
-        model.promptText.isEmpty && model.showPromptExamples ? 46 : 84
+        model.shouldShowPromptExamples ? 46 : 84
     }
 
     private var footer: some View {
@@ -219,15 +219,15 @@ struct PromptComposerView: View {
             .help("Clear text and images")
         } else if !model.isRunning && model.hasOutputTranscript {
             Button {
-                model.clearOutput()
+                model.newChat()
             } label: {
-                Label("Clear output", systemImage: "trash")
+                Label("New chat", systemImage: "trash")
                     .labelStyle(.iconOnly)
                     .frame(width: 28, height: 28)
                     .contentShape(Circle())
             }
             .buttonStyle(.borderless)
-            .help("Clear output")
+            .help("Start a new chat")
         }
     }
 }
@@ -265,7 +265,7 @@ private struct PromptTextEditor: NSViewRepresentable {
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 5
         textView.textContainer?.widthTracksTextView = true
-        textView.setAccessibilityLabel("Prompt")
+        textView.setAccessibilityLabel("Message")
         // A promise-only drag — Photos, Mail, most browsers — never reaches
         // `draggingEntered` unless its types are registered here.
         textView.registerForDraggedTypes(

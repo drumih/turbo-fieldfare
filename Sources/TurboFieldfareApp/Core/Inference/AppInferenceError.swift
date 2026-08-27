@@ -10,6 +10,10 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
     case modelNotLoaded
     case reloadRequired
     case cancelled
+    /// The KV no longer matches the conversation it recorded, so no further
+    /// turn can resume onto it. Distinct from every other failure here: those
+    /// leave the conversation usable, this one can only be cleared.
+    case conversationLineageLost(String)
     case unknown(String)
 
     public var description: String { userMessage }
@@ -34,6 +38,8 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
             return "Model settings changed. Reload the model before generating."
         case .cancelled:
             return "Generation cancelled."
+        case .conversationLineageLost(let message):
+            return "This conversation can no longer continue: \(message) Start a new chat."
         case .unknown(let message):
             return message
         }

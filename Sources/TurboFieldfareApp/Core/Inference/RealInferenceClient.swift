@@ -87,6 +87,40 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
         await session.unload()
     }
 
+    /// Drops the KV so the next turn starts a fresh lineage. The model stays
+    /// loaded: this ends a conversation, it does not unload ~1.6 GB.
+    public func resetConversation() async {
+        await session.resetConversation()
+    }
+
+    /// In-process, so there is no stale-epoch window to guard: the caller is
+    /// the only writer. The epoch is accepted and ignored; the decode service
+    /// holds the gate that uses it.
+    public func resetConversation(epoch: UUID) async throws {
+        await session.resetConversation()
+    }
+
+    /// Whether a conversation is still open on the session.
+    ///
+    /// Exists so a test can assert that `unload()` released it. It cannot be
+    /// inferred from the outside, and not releasing it means unload freed
+    /// nothing at all — the conversation holds the model, the runner, the
+    /// scratch and the tower.
+    public var hasOpenConversation: Bool {
+        get async { await session.hasConversation }
+    }
+
+    /// Tokens the open conversation's KV holds, or zero when none is open.
+    public var conversationTokenCount: Int {
+        get async { await session.currentConversationTokens }
+    }
+
+    /// The same figure without awaiting the session, for the decode service's
+    /// writer thread.
+    public var currentConversationTokens: Int {
+        session.conversationTokens.withLock { $0 }
+    }
+
     public func generate(_ request: AppGenerationRequest) -> AsyncThrowingStream<AppInferenceEvent, Error> {
         AsyncThrowingStream { continuation in
             let generationID = UUID()
@@ -111,6 +145,20 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
 
     public func cancel() {
         generationTasks.takeCurrent()?.cancel()
+    }
+
+    /// Ends the turn at the next token boundary and keeps what it produced.
+    ///
+    /// Only decode has token boundaries. A stop during prefill or an image
+    /// encode has nothing to stop at, so it cancels instead and the
+    /// conversation rewinds the turn — otherwise Stop did nothing at all until
+    /// the first token, which on a long prompt is a long time.
+    public func stop() {
+        session.stopRequested.withLock { $0 = true }
+        guard session.decodeBegan.withLock({ $0 }) else {
+            generationTasks.takeCurrent()?.cancel()
+            return
+        }
     }
 
 }
@@ -162,10 +210,29 @@ actor RealInferenceSession {
     private var runner: RealForwardRunner?
     private var scratch: RawCompletionScratch?
     private var model: Model?
-
+    /// The open conversation, when the app is in chat mode. Nil for the
+    /// one-shot path, and dropped by any load, unload, or explicit reset.
+    private var conversation: MultimodalConversation?
     /// Bytes of image tower held mapped right now, published outside the actor
     /// so a reader does not have to await it mid-decode.
     nonisolated let towerBytes = Mutex<UInt64?>(nil)
+    /// Tokens the open conversation's KV holds, published outside the actor for
+    /// the same reason `towerBytes` is: the decode service's writer thread
+    /// stamps it on the turn's terminal event and cannot await this actor
+    /// mid-decode.
+    nonisolated let conversationTokens = Mutex<Int>(0)
+    /// Set by Stop, read by the decode loop at each token boundary.
+    ///
+    /// Cancelling the task instead throws out of `runRawCompletion`'s loop
+    /// before its `shouldStop` is consulted, and the conversation then rewinds
+    /// the whole turn — measured: a stop after 13 tokens left the KV at zero.
+    /// Stopping cooperatively keeps what was produced and lets the next turn
+    /// continue from it.
+    nonisolated let stopRequested = Mutex<Bool>(false)
+    /// Whether the run has reached decode. Before that there are no token
+    /// boundaries to stop at, and half a prefilled prompt is not a turn worth
+    /// keeping — so a stop there has to cancel and let the conversation rewind.
+    nonisolated let decodeBegan = Mutex<Bool>(false)
 
     private var visionRuntime: VisionRuntime? {
         didSet { publishTowerBytes() }
@@ -178,10 +245,38 @@ actor RealInferenceSession {
         towerBytes.withLock { $0 = value }
     }
 
+    /// A reader the decode loop can call from wherever it runs. The `Mutex` is
+    /// a non-copyable stored property, so it is reached through `self` rather
+    /// than captured.
+    private nonisolated func stopFlagReader() -> @Sendable () -> Bool {
+        { [weak self] in self?.stopRequested.withLock { $0 } ?? false }
+    }
+
+    func resetConversation() async {
+        // Same hazard as `unload()`: `runner.reset()` under a live decode either
+        // aborts that turn mid-stream or lets two turns drive one runner.
+        if let conversation { await conversation.invalidate() }
+        conversation = nil
+        runner?.reset()
+        conversationTokens.withLock { $0 = 0 }
+    }
+
+    var hasConversation: Bool { conversation != nil }
+
+    var currentConversationTokens: Int {
+        get async {
+            let count = await conversation?.kvTokenCount ?? 0
+            conversationTokens.withLock { $0 = count }
+            return count
+        }
+    }
+
     func ensureLoaded(key: SessionLoadKey,
                       onState: @Sendable (AppModelLoadState) -> Void) async throws {
         if loadedKey == key, runner != nil { return }
 
+        conversation = nil
+        conversationTokens.withLock { $0 = 0 }
         runner = nil
         scratch = nil
         model = nil
@@ -301,7 +396,15 @@ actor RealInferenceSession {
         min(requested, max(0, maxContext - promptTokenCount))
     }
 
-    func unload() {
+    func unload() async {
+        // Awaited, not just dropped. `MultimodalConversation` holds the model,
+        // runner, scratch and vision runtime as strong `let`s, and a turn in
+        // flight holds its own reference — so nilling this while a decode runs
+        // frees nothing and the next load builds a second set beside the live
+        // one. `invalidate()` is what waits for that decode.
+        if let conversation { await conversation.invalidate() }
+        conversation = nil
+        conversationTokens.withLock { $0 = 0 }
         visionRuntime = nil
         visionRuntimeError = nil
         model = nil
@@ -312,36 +415,20 @@ actor RealInferenceSession {
         loadedKey = nil
     }
 
-    func run(request: AppGenerationRequest,
-             memorySampler: AppMemorySampler,
-             continuation: AsyncThrowingStream<AppInferenceEvent, Error>.Continuation) async {
-        var prefillConfig = request.runtimeOptions.prefillConfig
-        // Image spans only run under chunked prefill, and the app's prefill toggle
-        // can select `.off`. Coerce rather than fail after the encodes: whether
-        // images work is not a performance preference.
-        if !request.imageAttachments.isEmpty,
-           let coerced = prefillConfig.coercedForImagePrompt() {
-            prefillConfig = coerced
-        }
-        let progress = ProgressState()
-        do {
-            try request.validate()
-            let executedPrefillMode: PrefillExecutedMode =
-                prefillConfig.mode == .chunked ? .chunked : .off
-            let prefillDiagnostics = PrefillExecutionDiagnostics(config: prefillConfig,
-                                                                 executedMode: executedPrefillMode,
-                                                                 kvStorageMode: .fp16)
-            let requestKey = SessionLoadKey(
-                directory: request.modelDirectory.standardizedFileURL,
-                maxContext: request.maxContextTokens,
-                options: request.runtimeOptions,
-                forceLogitsHead: Self.forceLogitsHead(for: request))
-            guard let loadedKey else { throw AppInferenceError.modelNotLoaded }
-            guard loadedKey == requestKey else { throw AppInferenceError.reloadRequired }
-            guard let runner, let tokenizer, let ctx, let scratch else {
-                throw AppInferenceError.modelLoadFailed("session lost its loaded state")
-            }
-
+    /// The single-prompt path: reset the KV and prefill the whole rendered
+    /// prompt. Unchanged behaviour, moved out of `run` so the conversational
+    /// path sits beside it rather than inside it.
+    private func runOneShot(
+        request: AppGenerationRequest,
+        runner: RealForwardRunner,
+        tokenizer: GFTokenizer,
+        ctx: MetalContext,
+        scratch: RawCompletionScratch,
+        prefillConfig: PrefillRuntimeConfig,
+        progress: ProgressState,
+        memorySampler: AppMemorySampler,
+        report: @escaping @Sendable (RawDecodeProgress) -> Void
+    ) async throws -> TurnOutcome {
             let promptIds: [Int32]
             let multimodalInput: MultimodalPrefillInput?
             if request.imageAttachments.isEmpty {
@@ -403,14 +490,187 @@ actor RealInferenceSession {
             runner.reset()
             progress.prefillStart = Date()
 
-            let result = try await runRawCompletion(
-                producer: runner, tokenizer: tokenizer, promptIds: promptIds,
-                multimodalInput: multimodalInput,
-                config: config, context: ctx, scratch: scratch,
-                prefillConfig: prefillConfig) { event in
+
+        let result = try await runRawCompletion(
+            producer: runner, tokenizer: tokenizer, promptIds: promptIds,
+            multimodalInput: multimodalInput,
+            config: config, context: ctx, scratch: scratch,
+            prefillConfig: prefillConfig,
+            shouldStop: stopFlagReader(),
+            onProgress: report)
+        return TurnOutcome(
+            reason: result.reason, prefillSeconds: result.prefillSeconds,
+            decodeSeconds: result.decodeSeconds, newTokens: result.newTokens,
+            computedPrefillTokens: result.computedPrefillTokens)
+    }
+
+    /// What both turn paths report back, so the terminal diagnostics do not
+    /// have to know which one ran.
+    struct TurnOutcome {
+        let reason: StopReason
+        let prefillSeconds: Double
+        let decodeSeconds: Double
+        let newTokens: Int
+        /// Nil on the single-prompt path: nothing was retained to reuse.
+        var cachedTokens: Int?
+        var computedPrefillTokens: Int?
+        var conversationTokens: Int?
+    }
+
+    /// The open conversation, or a new one on the same runner.
+    ///
+    /// Built lazily rather than at load: a load that is never followed by a
+    /// conversational turn should not reset the runner, and the residency
+    /// policy belongs to the turn that asks for it.
+    private func conversationForTurn(
+        _ request: AppGenerationRequest
+    ) throws -> MultimodalConversation {
+        if let conversation { return conversation }
+        guard let model, let ctx, let tokenizer, let runner, let scratch else {
+            throw AppInferenceError.modelLoadFailed("session lost its loaded state")
+        }
+        // A conversation starts from an empty KV. The runner may be carrying a
+        // one-shot generation's tokens, and resuming a first turn onto those
+        // would put a prompt the user never sent in front of this one.
+        runner.reset()
+        // The same waiver `TurboFieldfareModelSession` takes, and it holds for
+        // the same reason: `Model` and `VisionRuntime` are not Sendable because
+        // two conversations encoding at once would race the tower's per-encode
+        // scratch. What prevents that here is this session's own invariant —
+        // one conversation, and one generation at a time behind
+        // `GenerationTaskRegistry` and the decode service's serial command loop
+        // — not the type system. Anything that lets two turns run at once has
+        // to make `VisionRuntime` an actor first.
+        nonisolated(unsafe) let sharedModel = model
+        nonisolated(unsafe) let sharedVision = visionRuntime
+        let created = MultimodalConversation(
+            model: sharedModel, context: ctx, tokenizer: tokenizer, runner: runner,
+            scratch: scratch, visionRuntime: sharedVision,
+            visionRuntimeError: visionRuntimeError,
+            visionResidency: request.runtimeOptions.visionResidencyPolicy,
+            maxContext: runner.maxContext)
+        conversation = created
+        return created
+    }
+
+    private func runConversationTurn(
+        request: AppGenerationRequest,
+        prefillConfig: PrefillRuntimeConfig,
+        progress: ProgressState,
+        memorySampler: AppMemorySampler,
+        report: @escaping @Sendable (RawDecodeProgress) -> Void
+    ) async throws -> TurnOutcome {
+        let conversation = try conversationForTurn(request)
+        var parts: [MultimodalContinuationPart] = []
+        var imageURLs: [URL] = []
+        for attachment in request.imageAttachments {
+            try Task.checkCancellation()
+            // Same check the one-shot path makes: the file was hashed when it
+            // was staged, and a file rewritten since then is a different image
+            // than the one the user attached.
+            let actualDigest = try Sha256Verifier.hashFile(
+                at: attachment.fileURL, chunkBytes: 256 * 1_024)
+            guard actualDigest == attachment.sha256 else {
+                throw AppInferenceError.invalidRequest(
+                    "Image \(attachment.displayName) changed after selection.")
+            }
+            parts.append(.image)
+            imageURLs.append(attachment.fileURL)
+        }
+        if !request.prompt.isEmpty { parts.append(.text(request.prompt)) }
+
+        memorySampler.resetPeak()
+        _ = memorySampler.sample()
+        progress.prefillStart = Date()
+        defer { publishTowerBytes() }
+        do {
+            // `maxNewTokens` is clamped inside the conversation against what the
+            // KV has room for, so it is passed through unmodified here.
+            let turn = try await conversation.send(
+                parts: parts, images: imageURLs,
+                config: Self.generationConfig(
+                    for: request, maxNewTokens: request.maxNewTokens),
+                prefillConfig: prefillConfig,
+                checkCancellation: { try Task.checkCancellation() },
+                shouldStop: stopFlagReader(),
+                onProgress: report)
+            progress.promptTokenCount = turn.promptTokens
+            // The conversation's own count. `promptTokens + completionTokens`
+            // is one too many whenever a run stops on max tokens or is
+            // cancelled: that final token is held outside the KV for the next
+            // turn to replay.
+            conversationTokens.withLock { $0 = turn.kvTokens }
+            return TurnOutcome(
+                reason: turn.reason, prefillSeconds: turn.prefillSeconds,
+                decodeSeconds: turn.decodeSeconds, newTokens: turn.completionTokens,
+                cachedTokens: turn.cachedTokens,
+                computedPrefillTokens: turn.computedPrefillTokens,
+                conversationTokens: turn.kvTokens)
+        } catch let error as MultimodalConversationError {
+            // Mapped rather than flattened: a lineage that broke can only be
+            // cleared, an exhausted context is the user's to act on, and an
+            // unavailable image names the pack that failed to open. Reporting
+            // all three as one generic failure is how a chat becomes
+            // undiagnosable.
+            switch error {
+            case .lineageBroken:
+                throw AppInferenceError.conversationLineageLost("\(error)")
+            case .contextExhausted(let prompt, let maxContext):
+                throw AppInferenceError.contextOverflow(
+                    prompt: prompt, maxNew: request.maxNewTokens,
+                    maxContext: maxContext)
+            case .imageUnavailable:
+                throw AppInferenceError.invalidRequest("\(error)")
+            case .closed, .busy, .emptyTurn:
+                throw AppInferenceError.unknown("\(error)")
+            }
+        }
+    }
+
+    func run(request: AppGenerationRequest,
+             memorySampler: AppMemorySampler,
+             continuation: AsyncThrowingStream<AppInferenceEvent, Error>.Continuation) async {
+        // Cleared here, before either branch and before anything a stop could
+        // race. Resetting them inside the conversational branch left the
+        // single-prompt path with a flag nothing ever lowered — after one Stop
+        // every later generation returned exactly one token — and left a stale
+        // `decodeBegan` that swallowed a Stop pressed while the next turn was
+        // still hashing its images.
+        stopRequested.withLock { $0 = false }
+        decodeBegan.withLock { $0 = false }
+        var prefillConfig = request.runtimeOptions.prefillConfig
+        // Image spans only run under chunked prefill, and the app's prefill
+        // toggle can select `.off`. Coerce rather than fail after the encodes:
+        // whether images work is not a performance preference.
+        if !request.imageAttachments.isEmpty,
+           let coerced = prefillConfig.coercedForImagePrompt() {
+            prefillConfig = coerced
+        }
+        let progress = ProgressState()
+        do {
+            try request.validate()
+            let requestKey = SessionLoadKey(
+                directory: request.modelDirectory.standardizedFileURL,
+                maxContext: request.maxContextTokens,
+                options: request.runtimeOptions,
+                forceLogitsHead: Self.forceLogitsHead(for: request))
+            guard let loadedKey else { throw AppInferenceError.modelNotLoaded }
+            guard loadedKey == requestKey else { throw AppInferenceError.reloadRequired }
+            guard let runner, let tokenizer, let ctx, let scratch else {
+                throw AppInferenceError.modelLoadFailed("session lost its loaded state")
+            }
+            let executedPrefillMode: PrefillExecutedMode =
+                prefillConfig.mode == .chunked ? .chunked : .off
+            let prefillDiagnostics = PrefillExecutionDiagnostics(config: prefillConfig,
+                                                                 executedMode: executedPrefillMode,
+                                                                 kvStorageMode: .fp16)
+
+            let report: @Sendable (RawDecodeProgress) -> Void = { event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {
+                        // From here there are token boundaries to stop at.
+                        self.decodeBegan.withLock { $0 = true }
                         progress.decodeStart = Date()
                         progress.countersAtDecodeStart = RunnerCounterSnapshot(runner)
                     }
@@ -431,6 +691,21 @@ actor RealInferenceSession {
                 }
             }
 
+            let outcome: TurnOutcome
+            if request.continuesConversation {
+                outcome = try await runConversationTurn(
+                    request: request, prefillConfig: prefillConfig,
+                    progress: progress, memorySampler: memorySampler,
+                    report: report)
+            } else {
+                outcome = try await runOneShot(
+                    request: request, runner: runner, tokenizer: tokenizer,
+                    ctx: ctx, scratch: scratch, prefillConfig: prefillConfig,
+                    progress: progress, memorySampler: memorySampler,
+                    report: report)
+            }
+            let result = outcome
+
             let diagnostics = makeDiagnostics(request: request,
                                               memorySampler: memorySampler,
                                               progress: progress,
@@ -438,6 +713,9 @@ actor RealInferenceSession {
                                               prefillSeconds: result.prefillSeconds,
                                               decodeSeconds: result.decodeSeconds,
                                               generated: result.newTokens,
+                                              cachedTokens: result.cachedTokens,
+                                              computedPrefillTokens: result.computedPrefillTokens,
+                                              conversationTokens: result.conversationTokens,
                                               prefill: prefillDiagnostics)
             continuation.yield(.finished(diagnostics))
             continuation.finish()
@@ -451,7 +729,8 @@ actor RealInferenceSession {
                                               generated: progress.generated,
                                               prefill: PrefillExecutionDiagnostics(
                                                 config: prefillConfig,
-                                                executedMode: prefillConfig.mode == .chunked ? .chunked : .off,
+                                                executedMode: prefillConfig.mode == .chunked
+                                                    ? PrefillExecutedMode.chunked : .off,
                                                 kvStorageMode: .fp16))
             continuation.yield(.cancelled(diagnostics))
             continuation.finish(throwing: AppInferenceError.cancelled)
@@ -501,6 +780,9 @@ actor RealInferenceSession {
                                  prefillSeconds: Double? = nil,
                                  decodeSeconds: Double,
                                  generated: Int,
+                                 cachedTokens: Int? = nil,
+                                 computedPrefillTokens: Int? = nil,
+                                 conversationTokens: Int? = nil,
                                  prefill: PrefillExecutionDiagnostics? = nil) -> AppDiagnostics {
         _ = memorySampler.sample()
         let ttft: Double?
@@ -513,6 +795,9 @@ actor RealInferenceSession {
             generatedTokens: generated,
             stopReason: stopReason,
             promptTokenCount: progress.promptTokenCount,
+            cachedPromptTokens: cachedTokens,
+            computedPrefillTokens: computedPrefillTokens,
+            conversationTokens: conversationTokens,
             prefillSeconds: prefillSeconds,
             timeToFirstTokenSeconds: ttft,
             decodeSeconds: decodeSeconds,

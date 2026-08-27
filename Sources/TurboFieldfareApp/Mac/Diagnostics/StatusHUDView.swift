@@ -20,7 +20,14 @@ struct StatusHUDView: View {
             Spacer(minLength: 12)
             if showsMetrics {
                 HUDMetricView(value: rateText, label: "tok/s", animated: !model.isRunning)
-                HUDMetricView(value: tokensText, label: "tokens", animated: !model.isRunning)
+                if showsContext {
+                    // No info button beside this one. The memory figure has one
+                    // because `phys_footprint` is genuinely misread; "20/8.2K"
+                    // is not, and the same words are on hover.
+                    HUDMetricView(value: contextText, label: "context",
+                                  animated: !model.isRunning)
+                        .help(contextHelp)
+                }
                 HStack(spacing: 2) {
                     HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
                         .help(memoryHelp)
@@ -41,17 +48,41 @@ struct StatusHUDView: View {
         .gesture(WindowDragGesture())
     }
 
+    /// Shown once a conversation is holding anything. A gauge that reads 0 for
+    /// the whole of a single-prompt session is noise.
+    private var showsContext: Bool {
+        liveContextTokens > 0
+    }
+
+    /// The KV position now, not at the end of the last turn.
+    private var liveContextTokens: Int {
+        guard model.isRunning else { return model.conversation.kvTokens }
+        return ConversationContextPresentation.liveTokens(
+            prefillDone: model.livePrefillDone,
+            prefillTotal: model.livePrefillTotal,
+            generated: model.liveTokenCount,
+            committed: model.conversation.kvTokens)
+    }
+
+    private var contextText: String {
+        ConversationContextPresentation.gauge(
+            kvTokens: liveContextTokens,
+            maxContext: model.effectiveMaxContextTokens)
+    }
+
+    private var contextHelp: String {
+        ConversationContextPresentation.explanation(
+            kvTokens: liveContextTokens,
+            maxContext: model.effectiveMaxContextTokens,
+            cachedTokens: model.diagnostics?.cachedPromptTokens)
+    }
+
     private var rateText: String {
         if model.phase == .decode { return MetricFormat.rate(model.liveTokensPerSecond) }
         if let d = model.diagnostics { return MetricFormat.rate(d.tokensPerSecond) }
         return "\u{2014}"
     }
 
-    private var tokensText: String {
-        if model.isRunning { return "\(model.liveTokenCount)" }
-        if let d = model.diagnostics { return "\(d.generatedTokens)" }
-        return "\u{2014}"
-    }
 
     /// `phys_footprint`: what this process is charged. Measured, not assumed —
     /// the model and image tower weights are memory-mapped and read by the GPU,

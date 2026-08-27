@@ -119,7 +119,6 @@ import TurboFieldfare
         let model = AppModel(modelDirectory: directory, client: client,
                              attachmentStore: store)
         model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
-        model.setSentPromptBehavior(.clear)
         await attach(model, [source])
         #expect(model.imageAttachments.count == 1)
         model.promptText = "describe it"
@@ -138,7 +137,7 @@ import TurboFieldfare
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         // Clearing the transcript is what finally frees them.
-        model.clearOutput()
+        model.newChat()
         #expect(model.outputImageAttachments.isEmpty)
         #expect(stagedFileCount(store) == 0)
     }
@@ -162,7 +161,6 @@ import TurboFieldfare
         let model = AppModel(modelDirectory: directory, client: client,
                              attachmentStore: store)
         model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
-        model.setSentPromptBehavior(.clear)
         await attach(model, [source])
         model.promptText = "describe it"
         model.maxNewTokensOverride = 1
@@ -316,10 +314,8 @@ import TurboFieldfare
                 "the copies that did not fit were left staged and unreferenced")
     }
 
-    /// With the prompt kept, the composer keeps its images too — and clearing
-    /// them must still not disturb the answer already on screen.
     @MainActor
-    @Test func keepingTheSentPromptKeepsItsImagesWithoutSharingFiles() async throws {
+    @Test func sendingMovesImagesFromComposerToTranscriptWithoutSharingFiles() async throws {
         let (root, store) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let source = try writeSource(root, "source.png", "fixture")
@@ -330,7 +326,6 @@ import TurboFieldfare
         let model = AppModel(modelDirectory: directory, client: client,
                              attachmentStore: store)
         model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
-        model.setSentPromptBehavior(.keep)
         await attach(model, [source])
         model.promptText = "describe it"
         model.maxNewTokensOverride = 1
@@ -339,12 +334,44 @@ import TurboFieldfare
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        #expect(model.imageAttachments.count == 1)
+        #expect(model.imageAttachments.isEmpty)
+        #expect(model.outputImageAttachments.count == 1)
         model.clearImages()
         #expect(model.imageAttachments.isEmpty)
         let shown = try #require(model.outputImageAttachments.first)
         #expect(try Data(contentsOf: shown.fileURL) == Data("fixture".utf8),
                 "clearing the composer deleted the transcript's image")
+    }
+
+    @MainActor
+    @Test func newChatReleasesTheImagesOfEveryTurnNotJustTheLast() async throws {
+        let (root, store) = makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try writeSource(root, "first.png", "one")
+        let second = try writeSource(root, "second.png", "two")
+
+        let directory = try makeVisionReadyModelInstall("lifetime-multi-turn")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = AppModel(modelDirectory: directory, client: client,
+                             attachmentStore: store)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
+        model.maxNewTokensOverride = 1
+
+        for source in [first, second] {
+            await attach(model, [source])
+            model.promptText = "describe it"
+            model.run()
+            for _ in 0..<200 where model.isRunning {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
+        }
+        #expect(model.conversation.turns.compactMap { $0.images.first }.count == 2,
+                "the fixture needs two turns each holding an image")
+
+        model.newChat()
+        #expect(stagedFileCount(store) == 0,
+                "New chat left an earlier turn's staged image behind")
     }
 
     /// Quitting is the one moment every staged file is certainly unwanted, and

@@ -383,6 +383,24 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         resetTransientState()
     }
 
+    /// Abandons the newest KV tokens so a stateful conversation can resume at
+    /// an earlier visible boundary.
+    public func rewind(to position: Int) throws {
+        guard let kv else {
+            throw PrefillError.prefillCursorMismatch(
+                "rewind requires an initialized KV cache")
+        }
+        guard position > 0, position <= kv.position,
+              kv.highWaterPosition - position <= kv.maxRewindTokens else {
+            throw PrefillError.prefillCursorMismatch(
+                "cannot rewind KV from \(kv.position) to \(position); "
+                    + "high water \(kv.highWaterPosition), "
+                    + "ring slack \(kv.maxRewindTokens)")
+        }
+        kv.rewind(to: position)
+        resetTransientState()
+    }
+
     public var continuationPosition: Int {
         kv?.position ?? 0
     }

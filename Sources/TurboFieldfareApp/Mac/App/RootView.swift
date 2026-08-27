@@ -91,7 +91,7 @@ struct RootView: View {
     private var conversationChrome: some View {
         VStack(spacing: 10) {
             ErrorBanner(model: model)
-            if model.promptText.isEmpty && model.showPromptExamples && !model.isRunning {
+            if model.shouldShowPromptExamples {
                 PromptExamplesView { preset in
                     model.promptText = preset.prompt
                 }

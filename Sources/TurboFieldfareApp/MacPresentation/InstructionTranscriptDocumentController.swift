@@ -103,6 +103,17 @@ public final class InstructionTranscriptDocumentController {
     public private(set) var isFinalized = false
     public private(set) var showsPrefillPlaceholder = false
     public private(set) var assistantRange = NSRange(location: 0, length: 0)
+    /// Length of the completed turns above the live one. Everything below this
+    /// offset is drawn once and never looked at again — which is the whole
+    /// point: a chat that re-rendered its history on every token would make
+    /// TextKit lay out the entire conversation per tick.
+    public private(set) var frozenLength = 0
+    /// Where each finished turn sits in the document, and the answer it holds.
+    ///
+    /// One floating copy button over a transcript of several turns reads as
+    /// belonging to the first one. Knowing which turn a click landed in is what
+    /// lets the menu offer that turn's answer instead of guessing.
+    private var sealedTurns: [(range: NSRange, answer: String)] = []
     private var prefillPlaceholderRange: NSRange?
     private var prefillDotCount = 0
 
@@ -262,8 +273,11 @@ public final class InstructionTranscriptDocumentController {
         // the tick that carries it is an ordinary extension. The raw mode is
         // replaced wholesale below and has nothing to gain from writing the
         // delta first.
+        // `frozenLength`, not zero: with completed turns above it the live turn
+        // is empty at `storage.length == frozenLength`, and comparing against
+        // zero meant the first tick of turn two never drew its prompt.
         if needsRebuild
-            || storage.length == 0
+            || storage.length == frozenLength
                 && (!prompt.isEmpty || promptPrefix.length > 0
                     || !response.isEmpty || displaysPrefillPlaceholder) {
             rebuild(
@@ -400,8 +414,89 @@ public final class InstructionTranscriptDocumentController {
                 length: placeholder.length)
             document.append(placeholder)
         }
-        storage.setAttributedString(document)
+        // Only the live turn is replaced. `setAttributedString` would take the
+        // completed turns with it, and rebuilding is the common path — every
+        // prompt change and every non-extending response goes through here.
+        if frozenLength == 0 {
+            storage.setAttributedString(document)
+        } else {
+            storage.replaceCharacters(
+                in: NSRange(location: frozenLength,
+                            length: storage.length - frozenLength),
+                with: document)
+            assistantRange.location += frozenLength
+            if prefillPlaceholderRange != nil {
+                prefillPlaceholderRange?.location += frozenLength
+            }
+        }
         isFinalized = false
+    }
+
+    /// Freezes the live turn into the history above it and starts an empty one.
+    ///
+    /// Called when a turn is committed. The drawn turn is left exactly as it
+    /// is: sealing is bookkeeping, not a re-render, so a finished answer never
+    /// changes appearance after the fact.
+    public func sealTurn(storage: NSMutableAttributedString) {
+        guard storage.length > frozenLength else { return }
+        let start = frozenLength
+        let answer = response
+        storage.append(NSAttributedString(
+            string: "\n\n", attributes: Self.promptAttributes()))
+        frozenLength = storage.length
+        sealedTurns.append((
+            range: NSRange(location: start, length: frozenLength - start),
+            answer: answer))
+        prompt = ""
+        promptPrefixIdentifier = ""
+        response = ""
+        isFinalized = false
+        showsPrefillPlaceholder = false
+        assistantRange = NSRange(location: frozenLength, length: 0)
+        prefillPlaceholderRange = nil
+        prefillDotCount = 0
+        progressive.reset()
+    }
+
+    /// The answer of the turn containing `index`, or nil if the index is not in
+    /// a turn that has one. The live turn is included: it is the one a reader is
+    /// most likely to want, and it is not sealed until the next run starts.
+    public func answer(at index: Int) -> String? {
+        for turn in sealedTurns where NSLocationInRange(index, turn.range) {
+            return turn.answer.isEmpty ? nil : turn.answer
+        }
+        guard index >= frozenLength, !response.isEmpty else { return nil }
+        return response
+    }
+
+    /// Marks where the model's context begins.
+    ///
+    /// Everything above this line is on screen but no longer in the KV — a
+    /// reload or an unload took it. Saying so is the difference between a
+    /// transcript the user can trust and one that quietly implies the model
+    /// remembers what it cannot.
+    public func appendContextBreak(storage: NSMutableAttributedString, text: String) {
+        guard storage.length == frozenLength else { return }
+        storage.append(NSAttributedString(
+            string: "\(text)\n\n", attributes: Self.contextBreakAttributes()))
+        frozenLength = storage.length
+        assistantRange = NSRange(location: frozenLength, length: 0)
+    }
+
+    /// Empties the transcript, history included. New chat, not a new turn.
+    public func resetTranscript(storage: NSMutableAttributedString) {
+        storage.setAttributedString(NSAttributedString())
+        frozenLength = 0
+        sealedTurns.removeAll()
+        prompt = ""
+        promptPrefixIdentifier = ""
+        response = ""
+        isFinalized = false
+        showsPrefillPlaceholder = false
+        assistantRange = NSRange(location: 0, length: 0)
+        prefillPlaceholderRange = nil
+        prefillDotCount = 0
+        progressive.reset()
     }
 
     // MARK: - Progressive rendering
@@ -874,6 +969,19 @@ public final class InstructionTranscriptDocumentController {
                 ofSize: NSFont.smallSystemFontSize,
                 weight: .semibold),
             .foregroundColor: color,
+            .paragraphStyle: style,
+        ]
+    }
+
+    private static func contextBreakAttributes() -> [NSAttributedString.Key: Any] {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        style.paragraphSpacingBefore = 8
+        style.paragraphSpacing = 8
+        return [
+            .font: NSFont.systemFont(
+                ofSize: NSFont.smallSystemFontSize, weight: .regular),
+            .foregroundColor: NSColor.tertiaryLabelColor,
             .paragraphStyle: style,
         ]
     }

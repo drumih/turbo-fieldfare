@@ -24,27 +24,6 @@ struct OutputPaneView: View {
                 responseCopyFeedbackID = nil
             }
         }
-        .contextMenu {
-            Button("Copy response") {
-                copyResponse()
-            }
-            .disabled(model.outputResponsePlainText.isEmpty)
-
-            Button("Copy prompt") {
-                copy(model.outputPromptText)
-            }
-            .disabled(model.outputPromptText.isEmpty)
-
-            Button("Copy conversation") {
-                copy(model.outputConversationPlainText)
-            }
-            .disabled(model.outputConversationPlainText.isEmpty)
-
-            Divider()
-
-            Button("Clear") { model.clearOutput() }
-                .disabled(model.isRunning || !model.hasOutputTranscript)
-        }
     }
 
     private var placeholder: some View {
@@ -61,6 +40,12 @@ struct OutputPaneView: View {
 
     private var transcript: some View {
         IncrementalTranscriptView(
+            history: model.transcriptHistory,
+            contextBreak: model.transcriptContextBreak,
+            conversationEpoch: model.conversation.epoch,
+            lastAnswer: model.outputResponsePlainText,
+            conversationPlainText: model.outputConversationPlainText,
+            requestNewChat: model.isRunning ? nil : { model.newChat() },
             prompt: model.outputPromptText,
             images: model.outputImageAttachments,
             output: model.outputText,
@@ -101,20 +86,20 @@ struct OutputPaneView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(responseCopyFeedbackID == nil
-                            ? "Copy response"
+                            ? "Copy last answer"
                             : "Response copied")
         .accessibilityHint("Copies only the generated answer")
         .help(responseCopyFeedbackID == nil
-              ? "Copy response"
+              ? "Copy last answer"
               : "Response copied")
     }
 
     private var emptyPlaceholderContent: some View {
         VStack(spacing: 8) {
             if !needsModelLoad {
-                Text("Choose a predefined example or write your own prompt.")
+                Text("Start a chat, or choose a predefined example.")
                     .font(.headline)
-                Text("Describe the goal, relevant context, and any constraints.")
+                Text("Each message keeps the ones before it in context.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -350,6 +335,14 @@ private struct LoadingModelText: View {
 }
 
 private struct IncrementalTranscriptView: NSViewRepresentable {
+    var history: [(user: AppChatTurn, assistant: AppChatTurn)] = []
+    /// Pairs above this index are on screen but no longer in the model's
+    /// context. Nil when everything drawn is still in the KV.
+    var contextBreak: Int?
+    var conversationEpoch: UUID = UUID()
+    var lastAnswer: String = ""
+    var conversationPlainText: String = ""
+    var requestNewChat: (() -> Void)?
     var prompt: String
     var images: [AppImageAttachment] = []
     var output: String
@@ -388,6 +381,14 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         var isTerminal = false
         var showsPrefillPlaceholder = false
         var runIdentity = 0
+        /// Decides what the transcript owes the conversation; see
+        /// `TranscriptSyncPlanner`.
+        var planner = TranscriptSyncPlanner()
+        /// Supplied by the pane so the transcript's menu can offer the whole
+        /// chat and New chat without reaching back into SwiftUI state.
+        var lastAnswer = ""
+        var conversationPlainText = ""
+        var requestNewChat: (() -> Void)?
         /// Holds the view at the bottom from the moment a run starts until its
         /// answer begins. One scroll is not enough: image thumbnails finish
         /// loading after it and push the content back down, which is exactly
@@ -401,6 +402,16 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         func attach(scrollView: NSScrollView, textView: NSTextView) {
             self.scrollView = scrollView
             self.textView = textView
+            // Right-click inside a turn offers that turn's answer, so a
+            // transcript of several turns has an unambiguous copy affordance
+            // rather than one floating button that reads as the first turn's.
+            guard let transcript = textView as? TranscriptTextView else { return }
+            transcript.answerAtCharacterIndex = { [weak self] index in
+                self?.documentController.answer(at: index)
+            }
+            transcript.lastAnswerText = { [weak self] in self?.lastAnswer ?? "" }
+            transcript.conversationText = { [weak self] in self?.conversationPlainText ?? "" }
+            transcript.startNewChat = { [weak self] in self?.requestNewChat?() }
             guard timer == nil else { return }
             // Auto-follow yields the instant the reader scrolls. Without this,
             // holding the view at the bottom through prefill fought anyone
@@ -423,6 +434,12 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         func synchronize(
+            history: [(user: AppChatTurn, assistant: AppChatTurn)],
+            contextBreak: Int?,
+            conversationEpoch: UUID,
+            lastAnswer: String,
+            conversationPlainText: String,
+            requestNewChat: (() -> Void)?,
             prompt: String,
             images: [AppImageAttachment],
             output: String,
@@ -434,7 +451,15 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             // A new run always goes to the bottom, whatever the reader was
             // looking at: it is the thing they just asked for.
             let startedNewRun = runIdentity != self.runIdentity
+            let firstSynchronize = self.runIdentity == 0 && planner.renderedHistory == 0
             self.runIdentity = runIdentity
+            self.lastAnswer = lastAnswer
+            self.conversationPlainText = conversationPlainText
+            self.requestNewChat = requestNewChat
+            adoptConversation(conversationEpoch, history: history,
+                              contextBreak: contextBreak,
+                              startedNewRun: startedNewRun,
+                              firstSynchronize: firstSynchronize)
             self.mailbox = mailbox
             self.prompt = prompt
             let prefixIdentifier = images.map {
@@ -460,6 +485,81 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             // view that is already at the bottom.
             if !response.isEmpty || isTerminal { follow.end() }
             if startedNewRun || shouldFollowNow() { scrollToBottom() }
+        }
+
+        /// Keeps the drawn document in step with the conversation.
+        ///
+        /// Three cases, and only the middle one happens per turn:
+        /// a new chat clears everything; a new run seals the turn already drawn
+        /// into the history above it; and a coordinator that has drawn nothing
+        /// but finds a conversation already under way redraws that history once.
+        /// Sealing is what keeps the cost per token proportional to the answer
+        /// rather than to the whole conversation.
+        /// Executes the planner's steps. The decisions themselves live in
+        /// `TranscriptSyncPlanner`, where they are testable — three defects hid
+        /// here precisely because nothing could reach them.
+        private func adoptConversation(
+            _ epoch: UUID,
+            history: [(user: AppChatTurn, assistant: AppChatTurn)],
+            contextBreak: Int?,
+            startedNewRun: Bool,
+            firstSynchronize: Bool
+        ) {
+            guard let textView, let storage = textView.textStorage else { return }
+            let steps = planner.plan(TranscriptSyncPlanner.Input(
+                epoch: epoch, historyCount: history.count, contextBreak: contextBreak,
+                startedNewRun: startedNewRun, firstSynchronize: firstSynchronize))
+            guard !steps.isEmpty else { return }
+
+            storage.beginEditing()
+            for step in steps {
+                switch step {
+                case .reset:
+                    documentController.resetTranscript(storage: storage)
+                    promptPrefixIdentifier = ""
+                    promptPrefix = NSAttributedString()
+                    prompt = ""
+                case .sealDrawnTurn:
+                    let before = documentController.frozenLength
+                    documentController.sealTurn(storage: storage)
+                    if documentController.frozenLength == before {
+                        // It froze nothing, so the pair is still owed; consuming
+                        // it would drop a turn that is in the KV from the
+                        // transcript for good.
+                        planner.sealFoundNothingToFreeze(historyCount: history.count)
+                    }
+                case .drawPair(let index):
+                    guard index < history.count else { break }
+                    let pair = history[index]
+                    _ = documentController.synchronize(
+                        storage: storage,
+                        prompt: pair.user.text,
+                        response: pair.assistant.text,
+                        isTerminal: true,
+                        // Cached thumbnails only. A history image whose
+                        // thumbnail has not been decoded yet is dropped rather
+                        // than blocking the redraw; the same degradation the
+                        // live path already accepts.
+                        promptPrefix: Self.makePromptPrefix(pair.user.images),
+                        promptPrefixIdentifier: pair.user.images
+                            .map { "\($0.id.uuidString):\($0.sha256)" }
+                            .joined(separator: ","))
+                    documentController.sealTurn(storage: storage)
+                    prompt = ""
+                    promptPrefixIdentifier = ""
+                case .appendContextBreak:
+                    let before = documentController.frozenLength
+                    documentController.appendContextBreak(
+                        storage: storage,
+                        text: "Earlier turns are no longer in the model's context")
+                    // Only marked when it actually wrote. Latching it on a
+                    // refusal suppressed the break for the rest of the session.
+                    if documentController.frozenLength != before {
+                        planner.markContextBreakDrawn()
+                    }
+                }
+            }
+            storage.endEditing()
         }
 
         func scrollToBottom() {
@@ -748,6 +848,12 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.synchronize(
+            history: history,
+            contextBreak: contextBreak,
+            conversationEpoch: conversationEpoch,
+            lastAnswer: lastAnswer,
+            conversationPlainText: conversationPlainText,
+            requestNewChat: requestNewChat,
             prompt: prompt,
             images: images,
             output: output,
@@ -786,9 +892,9 @@ private struct TranscriptPreview: View {
         Image(systemName: "cube.transparent")
             .font(.title2)
             .foregroundStyle(.quaternary)
-        Text("Choose a predefined example or write your own prompt.")
+        Text("Start a chat, or choose a predefined example.")
             .font(.headline)
-        Text("Describe the goal, relevant context, and any constraints.")
+        Text("Each message keeps the ones before it in context.")
             .foregroundStyle(.secondary)
     }
     .frame(width: 720, height: 420)

@@ -16,7 +16,7 @@ import Testing
         #expect(model.outputResponsePlainText == "lossless output")
         #expect(model.outputConversationPlainText == "Answer:\nlossless output")
 
-        model.clearOutput()
+        model.newChat()
         #expect(client.generationTranscriptMailbox.completeText.isEmpty)
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText.isEmpty)

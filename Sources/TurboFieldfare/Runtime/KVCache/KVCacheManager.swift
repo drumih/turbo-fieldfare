@@ -57,8 +57,10 @@ public final class KVCacheManager {
     private let strides:  [Int]         // bytes per token, per layer
     private let kinds:    [LayerKind]
     private let capacityTokens: [Int]
+    private let slidingWindowTokens: Int
 
     public private(set) var position: Int = 0
+    public private(set) var highWaterPosition: Int = 0
 
     private static let fp16Size = 2
 
@@ -81,6 +83,7 @@ public final class KVCacheManager {
         let swaCapacity = min(maxContext,
                               max(1, fp16RingCapacityOverride
                                   ?? ((slidingWindow ?? config.slidingWindow) + maxPrefillChunkTokens)))
+        self.slidingWindowTokens = slidingWindow ?? config.slidingWindow
 
         var ks: [MTLBuffer] = []
         var vs: [MTLBuffer] = []
@@ -206,6 +209,29 @@ public final class KVCacheManager {
         precondition(count >= 0, "advance count must be non-negative")
         precondition(position + count <= maxContext, "advance would exceed maxContext")
         position += count
+        highWaterPosition = max(highWaterPosition, position)
+    }
+
+    /// Maximum safe rewind before a reused SWA ring slot could become visible.
+    public var maxRewindTokens: Int {
+        guard fp16RingEnabled else { return maxContext }
+        var slack = maxContext
+        for layer in 0..<config.numLayers where kinds[layer] == .swa {
+            let capacity = capacityTokens[layer]
+            guard capacity < maxContext else { continue }
+            slack = min(slack, max(0, capacity - slidingWindowTokens))
+        }
+        return slack
+    }
+
+    /// Abandon the newest rows while keeping the remaining KV lineage intact.
+    public func rewind(to newPosition: Int) {
+        precondition(newPosition >= 0, "rewind target must be non-negative")
+        precondition(newPosition <= position,
+                     "rewind target \(newPosition) is beyond position \(position)")
+        precondition(highWaterPosition - newPosition <= maxRewindTokens,
+                     "rewind to \(newPosition) exceeds ring slack \(maxRewindTokens)")
+        position = newPosition
     }
 
     /// Drop all cached positions and return physical pages to the OS.
@@ -215,6 +241,7 @@ public final class KVCacheManager {
     /// releases resident memory between turns; pages fault back in on next write.
     public func reset() {
         position = 0
+        highWaterPosition = 0
         let pageSize = Int(getpagesize())
         var advised = Set<ObjectIdentifier>()
         for layer in 0..<config.numLayers {

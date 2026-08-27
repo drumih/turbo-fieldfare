@@ -32,6 +32,28 @@ import TurboFieldfareDecodeProtocol
         #expect(event.error == "first")
     }
 
+    @Test func abrokenLineageIsItsOwnTerminalKind() throws {
+        let outbox = DecodeServiceOutbox(generationID: UUID())
+        let event = try firstTerminal(
+            from: outbox,
+            published: .failed(.conversationLineageLost("prefill cursor mismatch"),
+                               partial: nil),
+            finishError: AppInferenceError.cancelled)
+
+        #expect(event.kind == .lineageLost)
+        #expect(event.error?.contains("prefill cursor mismatch") == true)
+        #expect(event.error?.contains("Start a new chat") == true)
+    }
+
+    @Test func anordinaryFailureStaysFailed() throws {
+        let outbox = DecodeServiceOutbox(generationID: UUID())
+        let event = try firstTerminal(
+            from: outbox,
+            published: .failed(.unknown("something else"), partial: nil),
+            finishError: AppInferenceError.cancelled)
+        #expect(event.kind == .failed)
+    }
+
     /// Image encoding produces no progress or tokens, so the outbox must emit
     /// memory-only events during that otherwise silent interval.
     @Test func aSilentGenerationStillReportsMemory() throws {

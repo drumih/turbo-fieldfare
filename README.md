@@ -169,7 +169,8 @@ After installation:
 1. Choose **Load Model**.
 2. Enter a prompt in the composer.
 3. Choose **Generate**, or press <kbd>Command</kbd>+<kbd>Return</kbd>. Use **Settings > Send Message With** to choose Return or Command-Return.
-4. Use the stop button or <kbd>Escape</kbd> to end generation early.
+4. Send another message to continue the conversation, or choose **New Chat** to start over.
+5. Use the stop button or <kbd>Escape</kbd> to end generation early.
 
 The status bar shows generation progress, decode speed, and memory use. Use the
 right pane to configure sampling, context length, expert-cache slots, and
@@ -352,12 +353,13 @@ TurboFieldfare currently includes:
 - Custom Metal kernels for quantized GEMV, attention, MoE, normalization,
   RoPE, sampling, and production fusions
 - SSD-backed routed-expert streaming with a bounded expert cache
-- Chunked single-prompt prefill and token-by-token generation
+- Chunked prefill for one-shot prompts and new conversational turns, followed
+  by token-by-token generation
 - FP16 KV storage with bounded circular storage for 25 sliding-window layers
   and linear storage for 5 full-attention layers
 - Exact split-K/V decode attention with distinct normalized K and V paths
 - A Swift library, streaming installer, command-line interface, loopback
-  OpenAI-compatible server, and native SwiftUI/AppKit Mac app with a one-shot
+  OpenAI-compatible server, and native SwiftUI/AppKit Mac app with a sibling
   local decode service
 - Optional image input from a separately installed companion pack: the vision
   tower runs on bounded scratch, image rows attend in both directions inside

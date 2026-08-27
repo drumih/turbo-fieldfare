@@ -149,12 +149,48 @@ import Metal
         #expect(kv.position == 32)
     }
 
+    @Test func rewindMovesCursorWithinRingSlack() throws {
+        let (_, kv) = try makeManager(maxContext: 4_096, fp16RingEnabled: true)
+        kv.advance(by: 2_000)
+        #expect(kv.maxRewindTokens == 128)
+        kv.rewind(to: 1_990)
+        #expect(kv.position == 1_990)
+    }
+
+    @Test func rewindIsUnboundedForLinearStorage() throws {
+        let (_, kv) = try makeManager(maxContext: 64)
+        kv.advance(by: 50)
+        #expect(kv.maxRewindTokens == 64)
+        kv.rewind(to: 1)
+        #expect(kv.position == 1)
+    }
+
+    @Test func rewindBoundsAgainstHighWaterMarkNotCursor() throws {
+        let (_, kv) = try makeManager(maxContext: 4_096, fp16RingEnabled: true)
+        kv.advance(by: 1_280)
+        kv.rewind(to: 1_160)
+        #expect(kv.highWaterPosition == 1_280)
+        kv.rewind(to: 1_155)
+        #expect(kv.position == 1_155)
+        kv.advance(by: 200)
+        #expect(kv.highWaterPosition == 1_355)
+    }
+
+    @Test func rewindShortSessionRingNeverWrapsSoDepthIsFree() throws {
+        let (_, kv) = try makeManager(maxContext: 16, fp16RingEnabled: true)
+        kv.advance(by: 10)
+        #expect(kv.maxRewindTokens == 16)
+        kv.rewind(to: 2)
+        #expect(kv.position == 2)
+    }
+
     @Test func reset_clearsPosition() throws {
         let (_, kv) = try makeManager(maxContext: 128)
         for _ in 0..<100 { kv.advance() }
         #expect(kv.position == 100)
         kv.reset()
         #expect(kv.position == 0)
+        #expect(kv.highWaterPosition == 0)
         // Cursor reusable after reset.
         kv.advance()
         #expect(kv.position == 1)

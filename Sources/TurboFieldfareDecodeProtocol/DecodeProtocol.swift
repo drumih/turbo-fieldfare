@@ -63,6 +63,9 @@ public struct DecodeLoadRequest: Codable, Sendable {
 }
 
 public struct DecodeGenerationRequest: Codable, Sendable {
+    /// One user turn, never a rendered transcript. In conversation mode the
+    /// service appends exactly this onto the retained KV; re-rendering history
+    /// here would destabilise the token prefix the cache is built on.
     public var prompt: String
     public var imageAttachments: [DecodeImageAttachment]?
     public var maxNewTokens: Int
@@ -78,6 +81,19 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var repetitionPenalty: Float
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
+    /// The conversation this turn belongs to, or nil for the one-shot path that
+    /// resets the KV before prefilling.
+    ///
+    /// Checked before the model is touched. A generate carrying a stale epoch
+    /// is a turn composed against a conversation the user has since replaced,
+    /// and appending it to the new lineage would put a message the user never
+    /// sent into the model's context.
+    public var conversationEpoch: UUID?
+    /// Position of this turn within `conversationEpoch`, zero-based. The
+    /// service rejects a turn that does not match the number of turns it has
+    /// committed, so a dropped or duplicated turn is a refusal rather than a
+    /// silently reordered conversation.
+    public var turnIndex: Int?
 
     public init(prompt: String,
                 imageAttachments: [DecodeImageAttachment]? = nil,
@@ -85,7 +101,11 @@ public struct DecodeGenerationRequest: Codable, Sendable {
                 temperature: Float, topK: Int? = nil, topP: Float? = nil,
                 repetitionPenalty: Float = 1,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
-                generationID: UUID = UUID()) {
+                generationID: UUID = UUID(),
+                conversationEpoch: UUID? = nil,
+                turnIndex: Int? = nil) {
+        self.conversationEpoch = conversationEpoch
+        self.turnIndex = turnIndex
         self.prompt = prompt
         self.imageAttachments = imageAttachments
         self.maxNewTokens = maxNewTokens
@@ -99,9 +119,22 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     }
 }
 
+/// Starts a new conversation lineage: the KV is dropped and `epoch` becomes the
+/// only value the service will accept on a generate.
+public struct DecodeResetConversationRequest: Codable, Sendable, Equatable {
+    public var epoch: UUID
+    public var requestID: UUID
+
+    public init(epoch: UUID = UUID(), requestID: UUID = UUID()) {
+        self.epoch = epoch
+        self.requestID = requestID
+    }
+}
+
 public enum DecodeServiceCommand: Codable, Sendable {
     case load(DecodeLoadRequest)
     case generate(DecodeGenerationRequest)
+    case resetConversation(DecodeResetConversationRequest)
     case cancel
     case unload(UUID)
     case shutdown
@@ -118,6 +151,11 @@ public enum DecodeServiceEventKind: String, Codable, Sendable {
     case finished
     case cancelled
     case failed
+    /// The KV no longer matches the recorded conversation, so this lineage is
+    /// unusable and only a reset can recover it. Distinct from `failed`, which
+    /// leaves the conversation resumable.
+    case lineageLost
+    case conversationReset
     case unloaded
 }
 
@@ -191,6 +229,16 @@ public struct DecodeServiceEvent: Codable, Sendable {
     /// Bytes of image tower the inference process holds mapped, or nil when
     /// it has no vision runtime.
     public var visionTowerMappedBytes: UInt64?
+    /// Prompt tokens served from the retained KV instead of being prefilled
+    /// again. Reported per turn because a cache nobody can see is a cache that
+    /// can regress to nothing without a single bug report.
+    public var cachedPromptTokens: Int?
+    /// Tokens the conversation's KV holds after this turn, for the context
+    /// gauge. Nil outside conversation mode.
+    public var conversationTokenCount: Int?
+    /// The lineage this event belongs to, so a late event from a replaced
+    /// conversation can be dropped rather than shown under the new one.
+    public var conversationEpoch: UUID?
     public var prefill: DecodePrefillDiagnostics?
     public var runner: DecodeRunnerDiagnostics?
 
@@ -204,6 +252,9 @@ public struct DecodeServiceEvent: Codable, Sendable {
                 stopReason: String? = nil, error: String? = nil,
                 currentMemoryBytes: UInt64? = nil, peakMemoryBytes: UInt64? = nil,
                 visionTowerMappedBytes: UInt64? = nil,
+                cachedPromptTokens: Int? = nil,
+                conversationTokenCount: Int? = nil,
+                conversationEpoch: UUID? = nil,
                 prefill: DecodePrefillDiagnostics? = nil,
                 runner: DecodeRunnerDiagnostics? = nil) {
         self.kind = kind
@@ -223,6 +274,9 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.currentMemoryBytes = currentMemoryBytes
         self.peakMemoryBytes = peakMemoryBytes
         self.visionTowerMappedBytes = visionTowerMappedBytes
+        self.cachedPromptTokens = cachedPromptTokens
+        self.conversationTokenCount = conversationTokenCount
+        self.conversationEpoch = conversationEpoch
         self.prefill = prefill
         self.runner = runner
     }

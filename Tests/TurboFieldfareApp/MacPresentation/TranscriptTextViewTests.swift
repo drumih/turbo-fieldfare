@@ -200,4 +200,35 @@ import Testing
 
         #expect(board.string(forType: .string) == rendered.string)
     }
+
+    @Test func contextMenuKeepsOnlyTheTranscriptCommands() throws {
+        let view = Self.view(NSAttributedString(string: "Earlier answer"))
+        view.answerAtCharacterIndex = { _ in "Earlier answer" }
+        view.lastAnswerText = { "Last answer" }
+        view.conversationText = { "Whole conversation" }
+        view.startNewChat = {}
+        view.setSelectedRange(NSRange(location: 0, length: 7))
+        let event = try #require(NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1))
+
+        let menu = try #require(view.menu(for: event))
+
+        #expect(!menu.allowsContextMenuPlugIns,
+                "AppKit appends Services when contextual-menu plug-ins are enabled")
+        #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title) == [
+            "Copy This Answer",
+            "Copy Selection",
+            "Copy Last Answer",
+            "Copy Conversation",
+            "New Chat",
+        ])
+    }
 }

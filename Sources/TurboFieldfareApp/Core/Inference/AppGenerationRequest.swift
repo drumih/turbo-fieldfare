@@ -12,6 +12,22 @@ public struct AppGenerationRequest: Equatable, Sendable {
     public var topP: Float?
     public var repetitionPenalty: Float
     public var runtimeOptions: AppRuntimeOptions
+    /// Append this turn to the retained conversation instead of resetting the
+    /// KV and prefilling the whole prompt. The decode service sets it only
+    /// after `DecodeConversationGate` has admitted the turn.
+    public var continuesConversation: Bool
+    /// Tokens the conversation's KV already holds. Only the image budget uses
+    /// it, and getting it wrong is unsafe in one direction: a reserve of zero
+    /// admits an image that fits an empty context into a nearly full one.
+    public var conversationTokens: Int
+    /// The conversation this turn belongs to, and its position in it.
+    ///
+    /// Set by `AppModel`, read only by the IPC client, which puts them on the
+    /// wire for the service's gate to check. The in-process session reads
+    /// `continuesConversation` instead: that is the post-gate decision, and
+    /// only the service is entitled to make it.
+    public var conversationEpoch: UUID?
+    public var turnIndex: Int?
 
     public init(modelDirectory: URL,
                 prompt: String,
@@ -22,7 +38,15 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 topK: Int? = 64,
                 topP: Float? = 0.95,
                 repetitionPenalty: Float = 1.0,
-                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions()) {
+                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions(),
+                continuesConversation: Bool = false,
+                conversationTokens: Int = 0,
+                conversationEpoch: UUID? = nil,
+                turnIndex: Int? = nil) {
+        self.continuesConversation = continuesConversation
+        self.conversationTokens = conversationTokens
+        self.conversationEpoch = conversationEpoch
+        self.turnIndex = turnIndex
         self.modelDirectory = modelDirectory
         self.prompt = prompt
         self.imageAttachments = imageAttachments
@@ -50,8 +74,12 @@ public struct AppGenerationRequest: Equatable, Sendable {
         guard Set(imageAttachments.map(\.id)).count == imageAttachments.count else {
             throw AppInferenceError.invalidRequest("Images must be distinct.")
         }
+        // The conversation already in the KV is text the next image has to fit
+        // around. Reserving zero here admitted an image that fits an empty
+        // context into a context that was almost full, and the turn then failed
+        // deep in prefill instead of at the composer.
         let capacity = VisionImageTokenBudget.capacity(
-            maxContext: maxContextTokens, reservedTextTokens: 0)
+            maxContext: maxContextTokens, reservedTextTokens: conversationTokens)
         guard imageAttachments.count <= capacity else {
             throw AppInferenceError.invalidRequest(
                 "\(imageAttachments.count) images need up to "

@@ -57,11 +57,14 @@ Report the commit, hardware and RAM, macOS, Swift version, exact command, exit c
 The Mac app sends prompts through the pinned Gemma 4 IT chat format. It
 exposes context length, temperature, Top-K, Top-P, expert-cache slots, prefill,
 and RDADVISE. The defaults are temperature `0.2`, Top-K `64`, and Top-P `0.95`.
-Responses can use the context space left after formatting the prompt, and FP16
-is the runtime KV format. The HUD shows generation rate, token count, and
-decode-service memory; Last run also shows time to first token and I/O. Build
-the app with its sibling `TurboFieldfareDecodeService`; it never loads a second
-in-process model. See [README](README.md) and [Runtime controls](docs/RUNTIME_CONTROLS.md).
+The app retains one in-memory conversation and reuses its FP16 KV state across
+turns. The HUD shows generation rate, context use, decode-service memory, and,
+on hover, cached-token reuse; Last run also shows time to first token and I/O.
+Use **New Chat** to clear the transcript, KV lineage, gauge, and retained
+images. Reloading or unloading keeps the transcript but marks it outside the
+new model context. Build the app with its sibling
+`TurboFieldfareDecodeService`; it never loads a second in-process model. See
+[README](README.md) and [Runtime controls](docs/RUNTIME_CONTROLS.md).
 
 ## Images
 

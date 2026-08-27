@@ -64,6 +64,73 @@ public enum TranscriptPlainText {
 /// Every route out of a selection — Cmd-C, a drag, a Services provider — goes
 /// through `writeSelection`, so they cannot drift apart.
 public final class TranscriptTextView: NSTextView {
+    /// The answer of the turn containing a character index, if it has one.
+    public var answerAtCharacterIndex: ((Int) -> String?)?
+    /// The newest answer, the whole chat, and New chat. Supplied by the pane so
+    /// this view owns the only context menu the transcript has.
+    public var lastAnswerText: (() -> String)?
+    public var conversationText: (() -> String)?
+    public var startNewChat: (() -> Void)?
+
+    /// The transcript's whole context menu, built here rather than added to
+    /// AppKit's.
+    ///
+    /// Two reasons, both found by right-clicking the running app. The pane also
+    /// carried a SwiftUI `.contextMenu`, and this view's menu wins everywhere
+    /// the text is — so those commands were unreachable exactly where a reader
+    /// would look for them. And AppKit's default menu for a text view offers
+    /// Cut, Paste, Font, Spelling, Substitutions and Writing Tools on a
+    /// transcript that cannot be edited.
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        menu.allowsContextMenuPlugIns = false
+        let point = convert(event.locationInWindow, from: nil)
+        let index = characterIndexForInsertion(at: point)
+
+        if let answer = answerAtCharacterIndex?(index), !answer.isEmpty {
+            add(to: menu, title: "Copy This Answer", text: answer)
+        }
+        if selectedRange().length > 0 {
+            let item = NSMenuItem(title: "Copy Selection",
+                                  action: #selector(copy(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        if let last = lastAnswerText?(), !last.isEmpty {
+            add(to: menu, title: "Copy Last Answer", text: last)
+        }
+        if let conversation = conversationText?(), !conversation.isEmpty {
+            add(to: menu, title: "Copy Conversation", text: conversation)
+        }
+        if startNewChat != nil {
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            let item = NSMenuItem(title: "New Chat",
+                                  action: #selector(newChat(_:)), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    private func add(to menu: NSMenu, title: String, text: String) {
+        let item = NSMenuItem(title: title, action: #selector(copyText(_:)),
+                              keyEquivalent: "")
+        item.target = self
+        item.representedObject = text
+        menu.addItem(item)
+    }
+
+    @objc private func copyText(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    @objc private func newChat(_ _: NSMenuItem) {
+        startNewChat?()
+    }
+
     public override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
         selectedAttributedText() == nil ? [] : [.rtfd, .rtf, .string]
     }

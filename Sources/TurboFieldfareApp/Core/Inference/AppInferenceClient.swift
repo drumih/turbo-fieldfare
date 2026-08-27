@@ -13,6 +13,13 @@ public protocol AppModelLifecycleClient: AnyObject, AppInferenceClient {
                       options: AppRuntimeOptions, forceLogitsHead: Bool,
                       onState: @escaping @Sendable (AppModelLoadState) -> Void) async throws
     func unload() async
+    /// Ends the current conversation and opens `epoch` as the only lineage the
+    /// inference side will accept turns for. The model stays loaded.
+    ///
+    /// Required rather than defaulted: a client that silently did nothing here
+    /// would keep appending a new chat's turns onto the previous chat's KV, and
+    /// nothing downstream could detect it.
+    func resetConversation(epoch: UUID) async throws
 }
 
 public protocol AppInferenceMemoryReporting: AnyObject {

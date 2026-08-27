@@ -114,11 +114,6 @@ struct TurboFieldfareMacApp: App {
                     Text("Show").tag(true)
                     Text("Hide").tag(false)
                 }
-                Picker("After Sending", selection: sentPromptBehaviorBinding) {
-                    ForEach(AppSentPromptBehavior.allCases) { behavior in
-                        Text(behavior.settingsLabel).tag(behavior)
-                    }
-                }
                 Picker("Load Model At Launch", selection: loadModelOnLaunchBinding) {
                     Text("Off").tag(false)
                     Text("On").tag(true)
@@ -168,11 +163,4 @@ struct TurboFieldfareMacApp: App {
         }
     }
 
-    private var sentPromptBehaviorBinding: Binding<AppSentPromptBehavior> {
-        Binding {
-            model.sentPromptBehavior
-        } set: { behavior in
-            model.setSentPromptBehavior(behavior)
-        }
-    }
 }
