@@ -46,8 +46,9 @@ public struct AppConversation: Equatable, Sendable {
     public private(set) var turns: [AppChatTurn]
     /// Turns whose tokens are in the KV. Must equal the service gate's count.
     public private(set) var committedTurns: Int
-    /// Tokens the KV holds, for the context gauge and the image budget.
-    public private(set) var kvTokens: Int
+    /// Tokens the KV holds, for the context gauge and the image budget. `nil`
+    /// means the client committed a turn without reporting its exact position.
+    public private(set) var kvTokens: Int?
     /// Set when the runtime reports the KV no longer matches this conversation.
     /// Nothing can continue it; only a new chat clears it.
     public private(set) var isLineageLost: Bool
@@ -129,16 +130,11 @@ public struct AppConversation: Equatable, Sendable {
             stopReason: diagnostics?.stopReason))
         committedTurns += 1
         self.pendingUserTurnID = nil
-        // The conversation's own count first. The `prompt + generated` fallback
-        // is one too many whenever a run stopped on max tokens or was
-        // cancelled, because that final token is held outside the KV for the
-        // next turn to replay — a real off-by-one caught by the first
-        // three-turn real-model run.
-        if let reported = diagnostics?.conversationTokens {
-            kvTokens = reported
-        } else if let prompt = diagnostics?.promptTokenCount {
-            kvTokens = prompt + (diagnostics?.generatedTokens ?? 0)
-        }
+        // Only the runtime knows the committed position. Sampled-token counts
+        // include a boundary token that may not be in KV, and stop-string
+        // cleanup can rewind more than one token. Missing data stays unknown so
+        // capacity checks fail closed instead of trusting a stale lower bound.
+        kvTokens = diagnostics?.conversationTokens
     }
 
     /// Drops the in-flight user turn and hands it back, because the runtime

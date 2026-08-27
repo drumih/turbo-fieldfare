@@ -55,8 +55,12 @@ public enum VisionImageTokenBudget {
         maxContext: Int,
         reservedTextTokens: Int
     ) -> Int {
+        guard maxContext > 0,
+              reservedTextTokens >= 0,
+              reservedTextTokens < maxContext else {
+            return 0
+        }
         let available = maxContext - reservedTextTokens
-        guard available > 0 else { return 0 }
-        return max(0, available / maximumTokensPerImage)
+        return available / maximumTokensPerImage
     }
 }

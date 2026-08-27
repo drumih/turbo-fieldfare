@@ -33,6 +33,57 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
     }
 
+    init(testInput: FileHandle, responseOutput: FileHandle) {
+        self.serviceURL = Self.defaultServiceURL()
+        DecodeUnixSocket.ignoreSIGPIPEProcessWide()
+        let responses = makeRouter(output: responseOutput)
+        connection.withLock {
+            $0.input = testInput
+            $0.responses = responses
+        }
+    }
+
+    var connectionIsInstalled: Bool {
+        connection.withLock { $0.input != nil && $0.responses != nil }
+    }
+
+    var installedRouter: DecodeServiceResponseRouter? {
+        connection.withLock { $0.responses }
+    }
+
+    private func invalidateConnection(
+        expecting router: DecodeServiceResponseRouter? = nil
+    ) {
+        let dead = connection.withLock { state -> Connection? in
+            if let router, state.responses !== router { return nil }
+            defer { state = Connection() }
+            return state
+        }
+        guard let dead else { return }
+        if let input = dead.input {
+            try? input.write(contentsOf: DecodeFrameCodec.encode(
+                DecodeServiceCommand.shutdown))
+            try? input.close()
+        }
+        dead.responses?.closeStream()
+        if let label = dead.launchLabel { Self.removeLaunchJob(label: label) }
+        if let socketPath = dead.socketPath { unlink(socketPath) }
+        inferenceMemory.withLock { $0 = nil }
+        inferenceTowerMemory.withLock { $0 = nil }
+    }
+
+    private func write(_ command: DecodeServiceCommand,
+                       to input: FileHandle,
+                       expecting responses: DecodeServiceResponseRouter) throws {
+        do {
+            try input.write(contentsOf: DecodeFrameCodec.encode(command))
+        } catch {
+            invalidateConnection(expecting: responses)
+            throw AppInferenceError.unknown(
+                "could not reach the decode service: \(error)")
+        }
+    }
+
     public func ensureLoaded(modelDirectory: URL, maxContextTokens: Int,
                              options: AppRuntimeOptions, forceLogitsHead: Bool,
                              onState: @escaping @Sendable (AppModelLoadState) -> Void) async throws {
@@ -44,8 +95,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             modelPath: modelDirectory.path, maxContextTokens: maxContextTokens,
             runtimeOptions: Self.decodeRuntimeOptions(options),
             forceLogitsHead: forceLogitsHead)
-        try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.load(request)))
+        try write(.load(request), to: handles.input, expecting: handles.responses)
         let event = try await handles.responses.next(matching: request.requestID)
         switch event.kind {
         case .ready:
@@ -66,8 +116,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public func unload() async {
         guard let handles = currentHandles() else { return }
         let requestID = UUID()
-        try? handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.unload(requestID)))
+        try? write(.unload(requestID), to: handles.input, expecting: handles.responses)
         guard let event = try? await handles.responses.next(matching: requestID),
               event.kind == .unloaded else { return }
         connection.withLock { $0.loadedDirectory = nil }
@@ -106,8 +155,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         generationID: generationID,
                         conversationEpoch: request.conversationEpoch,
                         turnIndex: request.turnIndex)
-                    try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-                        DecodeServiceCommand.generate(command)))
+                    try write(.generate(command), to: handles.input,
+                              expecting: handles.responses)
 
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
@@ -217,9 +266,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 "the decode service connection is gone; the new chat was not opened")
         }
         let requestID = UUID()
-        try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.resetConversation(
-                DecodeResetConversationRequest(epoch: epoch, requestID: requestID))))
+        try write(.resetConversation(
+            DecodeResetConversationRequest(epoch: epoch, requestID: requestID)),
+            to: handles.input, expecting: handles.responses)
         let event = try await handles.responses.next(matching: requestID)
         guard event.kind == .conversationReset else {
             throw AppInferenceError.unknown(
@@ -228,9 +277,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     }
 
     public func cancel() {
-        guard let input = currentHandles()?.input else { return }
-        try? input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.cancel))
+        guard let handles = currentHandles() else { return }
+        try? write(.cancel, to: handles.input, expecting: handles.responses)
     }
 
     deinit {
@@ -243,6 +291,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 DecodeServiceCommand.shutdown))
             try? input.close()
         }
+        state.responses?.closeStream()
         if let label = state.launchLabel { Self.removeLaunchJob(label: label) }
         if let socketPath = state.socketPath { unlink(socketPath) }
     }
@@ -329,7 +378,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         for _ in 0..<200 {
             do {
                 let handles = try DecodeUnixSocket.connect(path: socketPath)
-                let responses = DecodeServiceResponseRouter(output: handles.output)
+                let responses = makeRouter(output: handles.output)
                 connection.withLock {
                     $0.input = handles.input
                     $0.responses = responses
@@ -369,11 +418,24 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
 
     private func currentHandles()
         -> (input: FileHandle, responses: DecodeServiceResponseRouter)? {
-        connection.withLock { state in
+        let handles = connection.withLock { state
+            -> (input: FileHandle, responses: DecodeServiceResponseRouter)? in
             guard let input = state.input, let responses = state.responses else {
                 return nil
             }
             return (input, responses)
+        }
+        guard let handles else { return nil }
+        if handles.responses.isTerminated {
+            invalidateConnection(expecting: handles.responses)
+            return nil
+        }
+        return handles
+    }
+
+    private func makeRouter(output: FileHandle) -> DecodeServiceResponseRouter {
+        DecodeServiceResponseRouter(output: output) { [weak self] router, _ in
+            self?.invalidateConnection(expecting: router)
         }
     }
 
@@ -388,6 +450,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             stopReason: stop,
             promptTokenCount: event.promptTokenCount,
             cachedPromptTokens: event.cachedPromptTokens,
+            computedPrefillTokens: event.computedPrefillTokens,
             conversationTokens: event.conversationTokenCount,
             prefillSeconds: event.prefillSeconds,
             timeToFirstTokenSeconds: event.timeToFirstTokenSeconds,

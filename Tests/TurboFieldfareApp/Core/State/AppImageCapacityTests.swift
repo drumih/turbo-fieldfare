@@ -19,9 +19,24 @@ import TurboFieldfare
         let expected = VisionImageTokenBudget.capacity(
             maxContext: option.tokens,
             reservedTextTokens: AppModel.reservedPromptTokens)
-        #expect(model.maximumImageAttachments == max(1, expected))
-        // A bigger context must never allow fewer images.
-        #expect(model.maximumImageAttachments >= 1)
+        #expect(model.maximumImageAttachments == expected)
+    }
+
+    @Test func capacityReachesZeroAtTheConversationBoundary() {
+        let context = AppContextLengthOption.fourK.tokens
+        let imageCost = VisionImageTokenBudget.maximumTokensPerImage
+        #expect(AppModel.imageAttachmentCapacity(
+            maxContextTokens: context,
+            conversationTokens: context - imageCost) == 1)
+        #expect(AppModel.imageAttachmentCapacity(
+            maxContextTokens: context,
+            conversationTokens: context - imageCost + 1) == 0)
+    }
+
+    @Test func unknownConversationPositionHasNoImageCapacity() {
+        #expect(AppModel.imageAttachmentCapacity(
+            maxContextTokens: AppContextLengthOption.fourK.tokens,
+            conversationTokens: nil) == 0)
     }
 
     @MainActor

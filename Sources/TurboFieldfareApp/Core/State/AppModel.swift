@@ -629,7 +629,7 @@ public final class AppModel {
     /// Room left for the prompt when working out how many images fit. The
     /// runtime still rejects a combination that does not fit, so this only has
     /// to be a defensible reserve rather than an exact prompt measurement.
-    static let reservedPromptTokens = 1_024
+    nonisolated static let reservedPromptTokens = 1_024
 
     /// How many images this conversation can hold, derived from the context
     /// exactly as the server derives its budget. It used to be a fixed four,
@@ -644,9 +644,19 @@ public final class AppModel {
         // reserves it (`AppGenerationRequest.validate`). Reserving only a fixed
         // 1,024 here meant that past that point the composer kept offering
         // images Send would refuse — accepted on attach, rejected on the button.
-        max(1, VisionImageTokenBudget.capacity(
-            maxContext: effectiveMaxContextTokens,
-            reservedTextTokens: max(Self.reservedPromptTokens, conversation.kvTokens)))
+        Self.imageAttachmentCapacity(
+            maxContextTokens: effectiveMaxContextTokens,
+            conversationTokens: conversation.kvTokens)
+    }
+
+    nonisolated static func imageAttachmentCapacity(
+        maxContextTokens: Int,
+        conversationTokens: Int?
+    ) -> Int {
+        guard let conversationTokens else { return 0 }
+        return VisionImageTokenBudget.capacity(
+            maxContext: maxContextTokens,
+            reservedTextTokens: max(reservedPromptTokens, conversationTokens))
     }
 
     /// The context a generation would run with right now.
@@ -1838,6 +1848,7 @@ public final class AppModel {
 
         generationTranscriptMailbox?.reset()
         runIdentity &+= 1
+        let generation = runIdentity
         outputPromptText = request.prompt
         // Not released: every turn of a conversation keeps its own images for
         // as long as the conversation shows them. They are hard links to files
@@ -1873,17 +1884,17 @@ public final class AppModel {
         imageAttachments.removeAll()
         imageAttachmentError = nil
 
-        runTask = Task.detached { [weak self, client, request] in
+        runTask = Task.detached { [weak self, client, request, generation] in
             guard let self else { return }
             do {
                 try await self.openConversationIfNeeded()
                 for try await event in client.generate(request) {
-                    await self.apply(event)
+                    await self.apply(event, generation: generation)
                 }
             } catch let appError as AppInferenceError {
-                await self.finishStreamFailure(appError)
+                await self.finishStreamFailure(appError, generation: generation)
             } catch {
-                await self.finishStreamFailure(.unknown("\(error)"))
+                await self.finishStreamFailure(.unknown("\(error)"), generation: generation)
             }
         }
     }
@@ -1926,14 +1937,18 @@ public final class AppModel {
             // ran every turn through the single-prompt path while the app drew a
             // growing transcript, so the model saw only the newest message.
             continuesConversation: ticket != nil,
-            conversationTokens: conversation.kvTokens,
+            // Unknown means the runtime committed a turn but did not report its
+            // position. Reserve the whole window: text can still continue on
+            // the service's own exact state, while every image fails closed.
+            conversationTokens: conversation.kvTokens ?? effective.maxContextTokens,
             conversationEpoch: ticket?.epoch,
             turnIndex: ticket?.index)
         try request.validate(requireModelDirectory: true)
         return request
     }
 
-    func apply(_ event: AppInferenceEvent) {
+    func apply(_ event: AppInferenceEvent, generation: Int? = nil) {
+        guard generation == nil || generation == runIdentity else { return }
         switch event {
         case .memorySample:
             sampleLiveMemory()
@@ -2045,7 +2060,8 @@ public final class AppModel {
         outputImageAttachments = []
     }
 
-    private func finishStreamFailure(_ appError: AppInferenceError) {
+    private func finishStreamFailure(_ appError: AppInferenceError, generation: Int) {
+        guard generation == runIdentity else { return }
         materializeServiceTranscript()
         finishWithError(appError)
     }

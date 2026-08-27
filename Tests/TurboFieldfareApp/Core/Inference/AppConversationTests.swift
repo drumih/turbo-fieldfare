@@ -8,12 +8,15 @@ import Testing
 /// turn of the conversation.
 @Suite struct AppConversationTests {
     private func diagnostics(prompt: Int?, cached: Int?, generated: Int,
-                             stopReason: AppStopReason = .endOfTurn) -> AppDiagnostics {
+                             stopReason: AppStopReason = .endOfTurn,
+                             omitConversationTokens: Bool = false) -> AppDiagnostics {
         AppDiagnostics(
             generatedTokens: generated,
             stopReason: stopReason,
             promptTokenCount: prompt,
             cachedPromptTokens: cached,
+            conversationTokens: omitConversationTokens
+                ? nil : prompt.map { $0 + generated },
             timeToFirstTokenSeconds: nil,
             decodeSeconds: 0,
             tokensPerSecond: 0,
@@ -144,6 +147,33 @@ import Testing
         // visible without a stopwatch.
         #expect(conversation.turns[2].cachedTokens == 15)
         #expect(conversation.kvTokens == 26)
+    }
+
+    @Test(arguments: [
+        AppStopReason.endOfTurn,
+        .maxTokens,
+        .cancelled,
+        .stopString
+    ])
+    func missingCommittedPositionMarksTheKVCountUnknown(_ stopReason: AppStopReason) {
+        var conversation = AppConversation()
+        _ = conversation.beginTurn(text: "one")
+        conversation.completeTurn(
+            text: "a", diagnostics: diagnostics(prompt: 10, cached: 0, generated: 5))
+        #expect(conversation.kvTokens == 15)
+
+        _ = conversation.beginTurn(text: "two")
+        conversation.completeTurn(
+            text: "b",
+            diagnostics: diagnostics(
+                prompt: 40,
+                cached: 15,
+                generated: 9,
+                stopReason: stopReason,
+                omitConversationTokens: true))
+
+        #expect(conversation.kvTokens == nil)
+        #expect(conversation.committedTurns == 2)
     }
 
     @Test func completingWithoutAPendingTurnChangesNothing() {

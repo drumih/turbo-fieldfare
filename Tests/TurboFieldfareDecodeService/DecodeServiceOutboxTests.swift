@@ -16,6 +16,7 @@ import TurboFieldfareDecodeProtocol
 
         #expect(event.kind == .cancelled)
         #expect(event.generationID == generationID)
+        #expect(event.computedPrefillTokens == 7)
     }
 
     @Test func failureFollowedByThrownErrorWritesOneTerminal() throws {
@@ -160,6 +161,7 @@ import TurboFieldfareDecodeProtocol
         AppDiagnostics(
             generatedTokens: 0,
             stopReason: stopReason,
+            computedPrefillTokens: 7,
             timeToFirstTokenSeconds: nil,
             decodeSeconds: 0,
             tokensPerSecond: 0,

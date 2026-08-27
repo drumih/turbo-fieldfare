@@ -47,6 +47,7 @@ import TurboFieldfareDecodeProtocol
             generationID: UUID(),
             tokenCount: 256,
             promptTokenCount: 1_017,
+            computedPrefillTokens: 17,
             prefillSeconds: 10.2,
             timeToFirstTokenSeconds: 0.04,
             decodeSeconds: 7.7,
@@ -64,6 +65,7 @@ import TurboFieldfareDecodeProtocol
 
         #expect(decoded.tokenCount == 256)
         #expect(decoded.promptTokenCount == 1_017)
+        #expect(decoded.computedPrefillTokens == 17)
         #expect(decoded.currentMemoryBytes == 2_000_000_000)
         #expect(decoded.peakMemoryBytes == 2_100_000_000)
         #expect(decoded.runner == runner)

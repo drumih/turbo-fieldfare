@@ -613,7 +613,7 @@ actor RealInferenceSession {
             // all three as one generic failure is how a chat becomes
             // undiagnosable.
             switch error {
-            case .lineageBroken:
+            case .lineageBroken, .lineageRecoveryFailed:
                 throw AppInferenceError.conversationLineageLost("\(error)")
             case .contextExhausted(let prompt, let maxContext):
                 throw AppInferenceError.contextOverflow(

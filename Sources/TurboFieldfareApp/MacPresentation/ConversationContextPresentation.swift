@@ -24,13 +24,14 @@ public enum ConversationContextPresentation {
     ///
     /// `prefillDone` is absolute: `runRawCompletion` reports progress as
     /// `cachedPromptTokens + done`, so during prefill it *is* the KV position.
-    /// Once a token has been generated the prompt is fully in, and the position
-    /// is the whole prompt plus what has been decoded since.
+    /// Once a token has been sampled the prompt is fully in. The newest sampled
+    /// token is still the boundary for the next producer call, so only the
+    /// earlier generated tokens are committed.
     public static func liveTokens(prefillDone: Int,
                                   prefillTotal: Int,
                                   generated: Int,
                                   committed: Int) -> Int {
-        if generated > 0 { return prefillTotal + generated }
+        if generated > 0 { return prefillTotal + generated - 1 }
         if prefillDone > 0 { return prefillDone }
         // Nothing reported yet — an image is still encoding, or the first chunk
         // has not landed. The committed figure is the last thing that was true.

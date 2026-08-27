@@ -191,10 +191,19 @@ final class MockInferenceClient: AppInferenceClient, @unchecked Sendable {
         _ = memorySampler.sample()
         let decodeStart = prefillEnd ?? start
         let decodeElapsed = max(Date().timeIntervalSince(decodeStart), 0)
+        let promptTokens = mockPromptTokenCount(request.prompt)
+        let committedGenerated = stopReason == .maxTokens ? max(0, generated - 1) : generated
+        let conversationTokens = request.continuesConversation
+            ? min(request.maxContextTokens,
+                  request.conversationTokens + promptTokens + committedGenerated)
+            : nil
         return AppDiagnostics(
             generatedTokens: generated,
             stopReason: stopReason,
-            promptTokenCount: mockPromptTokenCount(request.prompt),
+            promptTokenCount: promptTokens,
+            cachedPromptTokens: request.continuesConversation
+                ? request.conversationTokens : nil,
+            conversationTokens: conversationTokens,
             prefillSeconds: prefillEnd.map { max($0.timeIntervalSince(start), 0) },
             timeToFirstTokenSeconds: firstToken.map { max($0.timeIntervalSince(decodeStart), 0) },
             decodeSeconds: decodeElapsed,

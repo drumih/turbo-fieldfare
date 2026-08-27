@@ -51,27 +51,35 @@ struct StatusHUDView: View {
     /// Shown once a conversation is holding anything. A gauge that reads 0 for
     /// the whole of a single-prompt session is noise.
     private var showsContext: Bool {
-        liveContextTokens > 0
+        liveContextTokens.map { $0 > 0 } ?? !model.conversation.isEmpty
     }
 
     /// The KV position now, not at the end of the last turn.
-    private var liveContextTokens: Int {
+    private var liveContextTokens: Int? {
         guard model.isRunning else { return model.conversation.kvTokens }
+        guard model.livePrefillDone > 0 || model.liveTokenCount > 0 else {
+            return model.conversation.kvTokens
+        }
         return ConversationContextPresentation.liveTokens(
             prefillDone: model.livePrefillDone,
             prefillTotal: model.livePrefillTotal,
             generated: model.liveTokenCount,
-            committed: model.conversation.kvTokens)
+            committed: model.conversation.kvTokens ?? 0)
     }
 
     private var contextText: String {
-        ConversationContextPresentation.gauge(
+        guard let liveContextTokens else { return "\u{2014}" }
+        return ConversationContextPresentation.gauge(
             kvTokens: liveContextTokens,
             maxContext: model.effectiveMaxContextTokens)
     }
 
     private var contextHelp: String {
-        ConversationContextPresentation.explanation(
+        guard let liveContextTokens else {
+            return "The decode service did not report the committed context position. "
+                + "Start a new chat before adding images."
+        }
+        return ConversationContextPresentation.explanation(
             kvTokens: liveContextTokens,
             maxContext: model.effectiveMaxContextTokens,
             cachedTokens: model.diagnostics?.cachedPromptTokens)

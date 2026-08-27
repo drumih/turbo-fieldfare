@@ -176,4 +176,45 @@ import TurboFieldfare
         try request.validate()
     }
 
+    @Test(arguments: [Int.min, -1, 8_193, Int.max])
+    func invalidConversationTokenCountsAreRejectedBeforeBudgetArithmetic(_ tokens: Int) {
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "hello",
+            imageAttachments: [image("one.png")],
+            maxContextTokens: 8_192,
+            conversationTokens: tokens)
+
+        #expect(throws: AppInferenceError.self) {
+            try request.validate()
+        }
+    }
+
+    @Test func conversationTokenBoundariesAreValid() throws {
+        for tokens in [0, 8_192] {
+            try AppGenerationRequest(
+                modelDirectory: existingDirectory,
+                prompt: "hello",
+                maxContextTokens: 8_192,
+                conversationTokens: tokens).validate()
+        }
+    }
+
+    @Test func invalidContextCannotOverflowImageCapacity() {
+        let request = AppGenerationRequest(
+            modelDirectory: existingDirectory,
+            prompt: "hello",
+            imageAttachments: [image("one.png")],
+            maxContextTokens: Int.min,
+            conversationTokens: Int.max)
+
+        #expect(throws: AppInferenceError.self) {
+            try request.validate()
+        }
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: Int.min, reservedTextTokens: Int.max) == 0)
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: Int.max, reservedTextTokens: Int.min) == 0)
+    }
+
 }

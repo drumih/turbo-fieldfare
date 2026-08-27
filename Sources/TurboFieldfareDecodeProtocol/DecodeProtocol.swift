@@ -216,6 +216,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public var textDelta: String
     public var tokenCount: Int
     public var promptTokenCount: Int?
+    public var computedPrefillTokens: Int?
     public var prefillDone: Int?
     public var prefillTotal: Int?
     public var prefillSeconds: Double?
@@ -245,6 +246,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public init(kind: DecodeServiceEventKind, generationID: UUID,
                 sequence: UInt64 = 0, textDelta: String = "",
                 tokenCount: Int = 0, promptTokenCount: Int? = nil,
+                computedPrefillTokens: Int? = nil,
                 prefillDone: Int? = nil, prefillTotal: Int? = nil,
                 prefillSeconds: Double? = nil,
                 timeToFirstTokenSeconds: Double? = nil,
@@ -263,6 +265,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.textDelta = textDelta
         self.tokenCount = tokenCount
         self.promptTokenCount = promptTokenCount
+        self.computedPrefillTokens = computedPrefillTokens
         self.prefillDone = prefillDone
         self.prefillTotal = prefillTotal
         self.prefillSeconds = prefillSeconds

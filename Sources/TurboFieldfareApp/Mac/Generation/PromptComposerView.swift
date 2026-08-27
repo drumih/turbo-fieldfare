@@ -107,7 +107,9 @@ struct PromptComposerView: View {
                 .disabled(model.isRunning || model.isAddingImages
                     || model.imageAttachments.count
                         >= model.maximumImageAttachments)
-                .help("Add images")
+                .help(model.maximumImageAttachments == 0
+                    ? "Start a new chat to make room for images."
+                    : "Add images")
             }
             promptTips
             Spacer()

@@ -74,6 +74,13 @@ public struct AppGenerationRequest: Equatable, Sendable {
         guard Set(imageAttachments.map(\.id)).count == imageAttachments.count else {
             throw AppInferenceError.invalidRequest("Images must be distinct.")
         }
+        guard maxContextTokens > 0 else {
+            throw AppInferenceError.invalidRequest("Max context must be greater than zero.")
+        }
+        guard conversationTokens >= 0, conversationTokens <= maxContextTokens else {
+            throw AppInferenceError.invalidRequest(
+                "Conversation tokens must be between zero and the max context.")
+        }
         // The conversation already in the KV is text the next image has to fit
         // around. Reserving zero here admitted an image that fits an empty
         // context into a context that was almost full, and the turn then failed
@@ -100,9 +107,6 @@ public struct AppGenerationRequest: Equatable, Sendable {
         }
         guard maxNewTokens > 0 else {
             throw AppInferenceError.invalidRequest("Max response length must be greater than zero.")
-        }
-        guard maxContextTokens > 0 else {
-            throw AppInferenceError.invalidRequest("Max context must be greater than zero.")
         }
         guard temperature >= 0 else {
             throw AppInferenceError.invalidRequest("Temperature cannot be negative.")

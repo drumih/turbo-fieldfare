@@ -5,6 +5,7 @@ public enum MultimodalConversationError: Error, CustomStringConvertible {
     case closed
     case busy
     case lineageBroken
+    case lineageRecoveryFailed(reason: String)
     case emptyTurn
     case contextExhausted(prompt: Int, maxContext: Int)
     case imageUnavailable(reason: String?)
@@ -16,6 +17,9 @@ public enum MultimodalConversationError: Error, CustomStringConvertible {
         case .lineageBroken:
             "generation failed partway, so the KV no longer matches this "
                 + "conversation; call reset() to start over"
+        case .lineageRecoveryFailed(let reason):
+            "generation failed partway and the KV could not be restored; "
+                + "call reset() to start over. \(reason)"
         case .emptyTurn: "a turn needs text or an image"
         case .contextExhausted(let prompt, let maxContext):
             "conversation needs \(prompt) tokens, beyond the \(maxContext)-token context"
@@ -23,6 +27,53 @@ public enum MultimodalConversationError: Error, CustomStringConvertible {
             reason.map { "image support is unavailable: \($0)" }
                 ?? "image support is unavailable: no companion pack is installed"
         }
+    }
+}
+
+enum MultimodalConversationKVRecovery {
+    static func restoreAfterFailure(
+        positionBefore: Int,
+        generationError: Error,
+        rewind: (Int) throws -> Void,
+        reset: () -> Void
+    ) throws {
+        guard positionBefore > 0 else {
+            reset()
+            return
+        }
+        do {
+            try rewind(positionBefore)
+        } catch {
+            throw MultimodalConversationError.lineageRecoveryFailed(
+                reason: "The turn failed with \(generationError). Rewinding to "
+                    + "token \(positionBefore) then failed with \(error).")
+        }
+    }
+
+    static func trimHiddenStopTokens(
+        _ tokenIDs: [Int32],
+        withheld: Int,
+        rewind: (Int) throws -> Void,
+        reset: () -> Void
+    ) throws -> [Int32] {
+        guard withheld > 0, withheld <= tokenIDs.count else {
+            throw MultimodalConversationError.lineageRecoveryFailed(
+                reason: "Stop-string cleanup reported \(withheld) hidden tokens "
+                    + "for a \(tokenIDs.count)-token KV.")
+        }
+        let target = tokenIDs.count - withheld
+        if target == 0 {
+            reset()
+        } else {
+            do {
+                try rewind(target)
+            } catch {
+                throw MultimodalConversationError.lineageRecoveryFailed(
+                    reason: "Removing stop-string tokens required rewinding to "
+                        + "token \(target), which failed with \(error).")
+            }
+        }
+        return Array(tokenIDs.prefix(target))
     }
 }
 public struct MultimodalTurnResult: Sendable {
@@ -354,7 +405,7 @@ public actor MultimodalConversation {
                         kvAdvanced = true
                     }
                 }
-        } catch {
+        } catch let generationError {
             if runner.continuationPosition != positionBefore { kvAdvanced = true }
             // A failure that moved the KV used to condemn the lineage outright,
             // but the same rewind the stop-string path uses can usually put the
@@ -364,19 +415,18 @@ public actor MultimodalConversation {
             // a successful rewind makes the turn retryable. Only a rewind past
             // the SWA ring slack fails, and only then is the lineage unusable.
             if kvAdvanced {
-                if positionBefore > 0 {
-                    if (try? runner.rewind(to: positionBefore)) != nil {
-                        kvAdvanced = false
-                    }
-                } else {
-                    // rewind(to:) rejects position 0; a first turn that fails
-                    // restores the empty lineage with a plain reset.
-                    runner.reset()
-                    kvAdvanced = false
+                do {
+                    try MultimodalConversationKVRecovery.restoreAfterFailure(
+                        positionBefore: positionBefore,
+                        generationError: generationError,
+                        rewind: runner.rewind(to:),
+                        reset: runner.reset)
+                } catch {
+                    lineageBroken = true
+                    throw error
                 }
             }
-            lineageBroken = kvAdvanced
-            throw error
+            throw generationError
         }
 
         // The KV now holds exactly what the run reported, including the tokens
@@ -395,13 +445,16 @@ public actor MultimodalConversation {
         // visible prefix before the match began stays, so at most a few
         // characters of one boundary token remain hidden.
         if result.reason == .stopString, result.withheldTrailingKVTokens > 0 {
-            let target = result.kvBackedTokenIDs.count - result.withheldTrailingKVTokens
-            if target > 0, (try? runner.rewind(to: target)) != nil {
-                kvTokenIDs = Array(result.kvBackedTokenIDs.prefix(target))
+            do {
+                kvTokenIDs = try MultimodalConversationKVRecovery.trimHiddenStopTokens(
+                    result.kvBackedTokenIDs,
+                    withheld: result.withheldTrailingKVTokens,
+                    rewind: runner.rewind(to:),
+                    reset: runner.reset)
+            } catch {
+                lineageBroken = true
+                throw error
             }
-            // A rewind past the SWA ring slack would expose clobbered window
-            // rows, so a failed rewind keeps the full record — the pre-trim
-            // divergence — rather than a broken cache.
         }
         uncommittedBoundary = result.uncommittedBoundaryTokenIDs
         boundaryNeedsReplay = result.reason == .maxTokens || result.reason == .cancelled

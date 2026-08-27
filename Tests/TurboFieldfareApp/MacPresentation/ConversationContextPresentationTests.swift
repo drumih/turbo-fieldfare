@@ -23,12 +23,13 @@ import Testing
         // Prefill reports absolute position, so it is the KV position directly.
         #expect(ConversationContextPresentation.liveTokens(
             prefillDone: 70, prefillTotal: 120, generated: 0, committed: 56) == 70)
-        // Once a token exists the prompt is fully in; the position is the whole
-        // prompt plus what has been decoded.
+        // The newest sampled token is the next producer boundary and is not in
+        // KV yet. The first sample therefore leaves the committed position at
+        // the prompt boundary.
         #expect(ConversationContextPresentation.liveTokens(
-            prefillDone: 120, prefillTotal: 120, generated: 1, committed: 56) == 121)
+            prefillDone: 120, prefillTotal: 120, generated: 1, committed: 56) == 120)
         #expect(ConversationContextPresentation.liveTokens(
-            prefillDone: 120, prefillTotal: 120, generated: 9, committed: 56) == 129)
+            prefillDone: 120, prefillTotal: 120, generated: 9, committed: 56) == 128)
     }
 
     @Test func theLiveCountNeverGoesBackwardsWithinATurn() {
