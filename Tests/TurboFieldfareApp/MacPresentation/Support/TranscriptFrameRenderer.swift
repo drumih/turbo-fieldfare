@@ -88,7 +88,23 @@ enum TranscriptFrameRenderer {
     /// `TURBO_FIELDFARE_FRAME_DIR` is set, also writes it there so frames can
     /// be reviewed without passing `--attachments-path`.
     static func record(_ image: NSImage, named name: String) throws {
+        #if compiler(>=6.3)
         Attachment.record(image, named: name, as: .png)
+        #else
+        // `NSImage` gained its `Attachable` conformance in the Testing library
+        // shipped with Swift 6.3, and this suite has to build on the 6.2
+        // toolchains the README supports. The bytes are the same; what is lost
+        // is the lazy serialization, so a 6.2 run pays a PNG encode per frame
+        // even without `--attachments-path`. Isolating a lazy wrapper is not
+        // available either: a struct holding an `NSImage` cannot conform
+        // without the conformance crossing into main-actor code.
+        if let rep = image.representations.first as? NSBitmapImageRep,
+           let data = rep.representation(using: .png, properties: [:]) {
+            Attachment.record(data, named: name)
+        } else {
+            Issue.record("frame \(name) has no PNG representation to attach")
+        }
+        #endif
         guard let directory = ProcessInfo.processInfo
             .environment["TURBO_FIELDFARE_FRAME_DIR"], !directory.isEmpty else {
             return

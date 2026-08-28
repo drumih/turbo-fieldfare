@@ -342,7 +342,10 @@ private actor EchoBackend: ServerInferenceBackend {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model", queueLimit: 1, backend: EchoBackend())
         let channel = try await server.start(port: 0)
-        let backlog = try await channel.getOption(ChannelOptions.backlog)
+        // Annotated: without it Swift 6.2 picks the `EventLoopFuture`-returning
+        // overload and the comparison fails to type-check, while 6.3 picks the
+        // async one.
+        let backlog: Int32 = try await channel.getOption(ChannelOptions.backlog)
         #expect(backlog >= Int32(TurboFieldfareHTTPServer.maximumConnections))
         try await server.shutdown()
     }

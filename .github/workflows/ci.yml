@@ -20,11 +20,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The runner's default Xcode is the newest on the image, so this job alone
+  # never exercised the oldest toolchain the README supports. Three Swift 6.2
+  # build breaks shipped in 0.5.0 behind that gap.
+  build-oldest-supported-toolchain:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the oldest supported Xcode
+        run: |
+          app=$(ls -d /Applications/Xcode_26.3*.app 2>/dev/null | head -1)
+          if [ -z "$app" ]; then
+            echo "Xcode 26.3 is not on this runner image; available:" >&2
+            ls -d /Applications/Xcode*.app >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$app"
+      - name: Report the toolchain
+        run: swift --version
+      - name: Build release products
+        run: swift build -c release
+
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+      - name: Report the toolchain
+        run: swift --version
       - name: Build release products
         run: swift build -c release
       - name: Run serial tests

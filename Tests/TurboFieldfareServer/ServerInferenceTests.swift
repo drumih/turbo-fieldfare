@@ -41,15 +41,27 @@ struct ServerRequestImagesTests {
     private static let rewrittenWidth = 128
     private static let rewrittenHeight = 64
 
-    /// What an image's span was laid out for, beside what its encode read.
-    private struct EncodedImage {
-        let planned: Int
-        let encoded: Int
+    /// The soft-token count an image's encode would read, taken the way
+    /// `encodeTurnImage` takes it.
+    private static func encodedCount(
+        of image: ServerRequestImages.Planned,
+        with preprocessor: Gemma4ImagePreprocessor
+    ) throws -> Int {
+        switch ServerRequestImages.source(for: image) {
+        case .plan(let plan):
+            return plan.geometry.softTokenCount
+        case .reopened(let url):
+            return try preprocessor.plan(fileURL: url).geometry.softTokenCount
+        }
     }
 
     /// The full-prefill path: every image of the request encoded from the plan
     /// its count came from, so a file rewritten after the request was planned
     /// cannot move the count out from under the span already laid out for it.
+    ///
+    /// The assertion is against a fresh read of the same file, not against
+    /// `Planned.softTokenCount` — that field is copied from the plan's own
+    /// geometry, so comparing the two would hold however the code behaved.
     @Test func aFullPrefillEncodesEveryImageFromThePlanItsCountCameFrom() throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let preprocessor = Gemma4ImagePreprocessor(device: device)
@@ -63,44 +75,55 @@ struct ServerRequestImagesTests {
                 width: Self.plannedWidth, height: Self.plannedHeight, to: url)
             imageFiles[UUID()] = url
         }
+        let planned = try ServerRequestImages.plannedEntries(
+            imageFiles, with: preprocessor)
 
-        // Rewritten from inside the first encode, which is the only point that
-        // sits between the counts and the rest of the encodes. It stands in for
-        // a staged file replaced while the request was in flight.
-        var rewritten = false
-        let encoded = try ServerRequestImages.encodeAll(
-            imageFiles,
-            with: preprocessor,
-            encode: { image -> EncodedImage in
-                if !rewritten {
-                    rewritten = true
-                    for url in imageFiles.values {
-                        try Self.writeSolidImage(
-                            width: Self.rewrittenWidth,
-                            height: Self.rewrittenHeight,
-                            to: url)
-                    }
-                }
-                let tokens = try ServerRequestImages.encode(
-                    image,
-                    fromPlan: { $0.geometry.softTokenCount },
-                    byReopening: {
-                        try preprocessor.plan(fileURL: $0).geometry.softTokenCount
-                    })
-                return EncodedImage(planned: image.softTokenCount, encoded: tokens)
-            })
+        // Every staged file replaced after the request was planned, standing in
+        // for one rewritten while the request was in flight.
+        for url in imageFiles.values {
+            try Self.writeSolidImage(
+                width: Self.rewrittenWidth, height: Self.rewrittenHeight, to: url)
+        }
 
-        #expect(encoded.count == imageFiles.count)
-        let plannedCounts = Set(encoded.values.map(\.planned))
-        let reread = try ServerRequestImages.plans(
-            for: Array(imageFiles.values), with: preprocessor)
-        let rereadCounts = Set(reread.map(\.softTokenCount))
-        try #require(
-            plannedCounts.isDisjoint(with: rereadCounts),
-            "the rewrite has to move the projected count or a second read is invisible")
-        for (id, image) in encoded {
-            #expect(image.encoded == image.planned,
-                    "image \(id) was read again at encode time: its span was laid out for \(image.planned) tokens and the encode read \(image.encoded)")
+        #expect(planned.count == imageFiles.count)
+        for entry in planned {
+            let rereadCount = try preprocessor
+                .plan(fileURL: entry.image.url).geometry.softTokenCount
+            try #require(
+                rereadCount != entry.image.softTokenCount,
+                "the rewrite has to move the projected count or a second read is invisible")
+            let encoded = try Self.encodedCount(of: entry.image, with: preprocessor)
+            #expect(encoded != rereadCount,
+                    "\(entry.image.url.lastPathComponent) was read again at encode time: the encode saw the rewritten file's \(rereadCount) tokens")
+            #expect(encoded == entry.image.softTokenCount)
+        }
+    }
+
+    /// The features of one image must not be filed under another's id. The
+    /// dictionary has no order, so the ids and the plans have to come from one
+    /// snapshot; taking them from two walks pairs them wrongly, and when both
+    /// images project to the same count nothing downstream can notice.
+    @Test func everyPlanIsPairedWithItsOwnImageID() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let preprocessor = Gemma4ImagePreprocessor(device: device)
+        let directory = try Self.makeStagingDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var imageFiles: [UUID: URL] = [:]
+        for index in 0..<8 {
+            let url = directory.appendingPathComponent("staged-\(index).png")
+            try Self.writeSolidImage(
+                width: Self.plannedWidth, height: Self.plannedHeight, to: url)
+            imageFiles[UUID()] = url
+        }
+
+        let planned = try ServerRequestImages.plannedEntries(
+            imageFiles, with: preprocessor)
+        #expect(planned.count == imageFiles.count)
+        #expect(Set(planned.map(\.id)) == Set(imageFiles.keys))
+        for entry in planned {
+            #expect(entry.image.url == imageFiles[entry.id],
+                    "\(entry.id) was paired with \(entry.image.url.lastPathComponent)")
         }
     }
 
@@ -125,15 +148,19 @@ struct ServerRequestImagesTests {
             try Self.writeSolidImage(
                 width: Self.rewrittenWidth, height: Self.rewrittenHeight, to: url)
         }
-        let encoded = try planned.map { image in
-            try ServerRequestImages.encode(
-                image,
-                fromPlan: { $0.geometry.softTokenCount },
-                byReopening: {
-                    try preprocessor.plan(fileURL: $0).geometry.softTokenCount
-                })
+
+        guard case .plan = ServerRequestImages.source(for: planned[0]) else {
+            Issue.record("the image inside the bound gave its plan up")
+            return
+        }
+        guard case .reopened = ServerRequestImages.source(for: planned[1]) else {
+            Issue.record("the image past the bound kept a plan it had to release")
+            return
         }
 
+        let encoded = try planned.map {
+            try Self.encodedCount(of: $0, with: preprocessor)
+        }
         #expect(encoded[0] == planned[0].softTokenCount,
                 "the image inside the bound kept its plan, so its encode reads \(planned[0].softTokenCount) tokens rather than \(encoded[0])")
         #expect(encoded[1] != planned[1].softTokenCount,
@@ -141,8 +168,11 @@ struct ServerRequestImagesTests {
     }
 
     /// An unreadable image is the request's problem whichever position it sits
-    /// in, and the tower is the expensive part: planning every image first
-    /// refuses the request before any of the others is encoded.
+    /// in, and the tower is the expensive part: planning is one complete pass
+    /// that either yields a plan for every image or throws, so the caller has
+    /// nothing to encode from until every image has been read. The broken image
+    /// is last, which is the position that used to run the tower on the two
+    /// ahead of it before failing.
     @Test func anUnreadableImageIsRefusedBeforeAnyOtherImageIsEncoded() throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let preprocessor = Gemma4ImagePreprocessor(device: device)
@@ -161,23 +191,46 @@ struct ServerRequestImagesTests {
             .write(to: broken)
         imageFiles[UUID()] = broken
 
-        var encodes = 0
+        var planned: [(id: UUID, image: ServerRequestImages.Planned)]?
         var failure: (any Error)?
         do {
-            _ = try ServerRequestImages.encodeAll(
-                imageFiles,
-                with: preprocessor,
-                encode: { image -> Int in
-                    encodes += 1
-                    return image.softTokenCount
-                })
+            planned = try ServerRequestImages.plannedEntries(
+                imageFiles, with: preprocessor)
         } catch {
             failure = error
         }
-
         #expect(failure != nil, "an image that cannot be read has to fail the request")
-        #expect(encodes == 0,
-                "the request was refused only after \(encodes) of its images had been encoded")
+        #expect(planned == nil,
+                "planning handed the caller \(planned?.count ?? 0) images to encode from a request it could not read in full")
+    }
+
+    /// An image the client sent that cannot be read is a bad request. The
+    /// encode re-plans with stream verification on, so a truncated upload is
+    /// admitted and fails there; reaching the generic handler made it a 500,
+    /// which official clients retry and 4xx they do not.
+    @Test func anUnreadableImageAtEncodeTimeIsAClientError() {
+        struct ReadFailure: Error {}
+
+        let mapped = ServerRequestImages.requestError(forUnreadable: ReadFailure())
+        guard case .invalid(_, _, let code) = mapped as? ServerRequestError else {
+            Issue.record("an unreadable image mapped to \(mapped), not a request error")
+            return
+        }
+        #expect(code == "invalid_image")
+
+        // A refusal the caller already classified, and an abandoned request,
+        // both keep their own meaning.
+        let alreadyClassified = ServerRequestError.invalid(
+            message: "image support is unavailable",
+            param: "messages", code: "vision_unavailable")
+        let preserved = ServerRequestImages.requestError(forUnreadable: alreadyClassified)
+        guard case .invalid(_, _, let preservedCode) = preserved as? ServerRequestError else {
+            Issue.record("a classified refusal was rewritten to \(preserved)")
+            return
+        }
+        #expect(preservedCode == "vision_unavailable")
+        #expect(ServerRequestImages.requestError(
+            forUnreadable: CancellationError()) is CancellationError)
     }
 
     private static func makeStagingDirectory() throws -> URL {
