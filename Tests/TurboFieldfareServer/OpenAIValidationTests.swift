@@ -764,6 +764,122 @@ struct ServerArgumentTests {
             try ServerArguments.parse(["--model", "model.gturbo"] + flag)
         }
     }
+
+    /// The integers a message names, in order. Comparing these against the
+    /// array the guard tests catches a message that omits a legal value and one
+    /// that names an illegal extra, and cannot be fooled the way a
+    /// `contains("256")` substring check is by "2560".
+    private func integers(in text: String) -> [Int] {
+        text.split { !$0.isNumber }.compactMap { Int($0) }
+    }
+
+    @Test func allowedValueListRendersChoices() {
+        #expect(ServerArguments.allowedValueList([8]) == "8")
+        #expect(ServerArguments.allowedValueList([8, 16]) == "8 or 16")
+        #expect(ServerArguments.allowedValueList([8, 16, 24, 32]) == "8, 16, 24, or 32")
+        #expect(ServerArguments.allowedValueList([]) == "")
+    }
+
+    /// Public 0.5.0 through 0.7.1 printed "--prefill-chunk-tokens must be 32,
+    /// 64, or 128" from a hardcoded string while the guard beside it already
+    /// accepted 256, so the rejection named a legal value as illegal. The
+    /// assertion is on the integer set rather than on the sentence, because the
+    /// invariant is that the message and the guard read the same array.
+    @Test(arguments: [
+        (flag: "--expert-cache-slots",
+         allowed: RuntimeConfiguration.allowedExpertCacheSlots,
+         badValue: "12"),
+        (flag: "--expert-cache-slots",
+         allowed: RuntimeConfiguration.allowedExpertCacheSlots,
+         badValue: "many"),
+        (flag: "--prefill-chunk-tokens",
+         allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+         badValue: "512"),
+        (flag: "--prefill-chunk-tokens",
+         allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+         badValue: "many"),
+    ])
+    func parseRejectionNamesExactlyTheAllowedValues(
+        testCase: (flag: String, allowed: [Int], badValue: String)
+    ) {
+        do {
+            _ = try ServerArguments.parse([
+                "--model", "model.gturbo", testCase.flag, testCase.badValue,
+            ])
+            Issue.record("\(testCase.flag) \(testCase.badValue) parsed")
+        } catch let error as ServerArgumentError {
+            let named = integers(in: error.description)
+            #expect(error.description.hasPrefix(testCase.flag),
+                    "the rejection does not lead with \(testCase.flag): \(error)")
+            #expect(named == testCase.allowed,
+                    "\(testCase.flag) rejection names \(named), guard accepts \(testCase.allowed)")
+        } catch {
+            Issue.record("unexpected error for \(testCase.flag): \(error)")
+        }
+    }
+
+    @Test func resolveRejectionNamesExactlyTheAllowedValues() {
+        let cases: [(flag: String, arguments: ServerArguments, allowed: [Int])] = [
+            (flag: "--expert-cache-slots",
+             arguments: ServerArguments(model: "model.gturbo",
+                                        port: 8080,
+                                        modelID: "gemma-4-26b-a4b-it",
+                                        maxContext: 16_384,
+                                        queueLimit: 4,
+                                        promptCacheMode: .singlePrefix,
+                                        expertCacheSlots: 12,
+                                        expertCachePolicy: .lfu,
+                                        prefillPolicy: .off,
+                                        prefillChunkTokens: 128,
+                                        rdadvisePolicy: .off,
+                                        visionPack: nil,
+                                        visionResidency: .onDemand),
+             allowed: RuntimeConfiguration.allowedExpertCacheSlots),
+            (flag: "--prefill-chunk-tokens",
+             arguments: ServerArguments(model: "model.gturbo",
+                                        port: 8080,
+                                        modelID: "gemma-4-26b-a4b-it",
+                                        maxContext: 16_384,
+                                        queueLimit: 4,
+                                        promptCacheMode: .singlePrefix,
+                                        expertCacheSlots: 16,
+                                        expertCachePolicy: .lfu,
+                                        prefillPolicy: .off,
+                                        prefillChunkTokens: 512,
+                                        rdadvisePolicy: .off,
+                                        visionPack: nil,
+                                        visionResidency: .onDemand),
+             allowed: RuntimeConfiguration.allowedPrefillChunkTokens),
+        ]
+        for testCase in cases {
+            do {
+                _ = try testCase.arguments.resolvedRuntimeConfiguration()
+                Issue.record("\(testCase.flag) resolved an unsupported value")
+            } catch let error as ServerArgumentError {
+                let named = integers(in: error.description)
+                #expect(error.description.hasPrefix(testCase.flag),
+                        "the rejection does not lead with \(testCase.flag): \(error)")
+                #expect(named == testCase.allowed,
+                        "\(testCase.flag) rejection names \(named), guard accepts \(testCase.allowed)")
+            } catch {
+                Issue.record("unexpected error for \(testCase.flag): \(error)")
+            }
+        }
+    }
+
+    @Test func usageNamesExactlyTheAllowedValues() throws {
+        let lines = ServerArguments.usage.split(separator: "\n", omittingEmptySubsequences: false)
+        let slotsLine = try #require(lines.first { $0.contains("--expert-cache-slots") })
+        let namedSlots = integers(in: String(slotsLine))
+        let defaultSlots = try ServerArguments.parse(["--model", "model.gturbo"]).expertCacheSlots
+        #expect(namedSlots == RuntimeConfiguration.allowedExpertCacheSlots + [defaultSlots],
+                "the --expert-cache-slots help line names \(namedSlots)")
+        let chunkLine = try #require(lines.first { $0.contains("--prefill-chunk-tokens") })
+        let namedChunks = integers(in: String(chunkLine))
+        #expect(namedChunks == RuntimeConfiguration.allowedPrefillChunkTokens,
+                "the --prefill-chunk-tokens help line names \(namedChunks)")
+    }
+
     @Test func imageDataURLPreservesOrderedMultimodalParts() throws {
         let dataURL = "data:image/png;base64,iVBORw0KGgo="
         let data = Data(#"""
