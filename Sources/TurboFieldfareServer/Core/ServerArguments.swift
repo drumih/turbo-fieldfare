@@ -12,6 +12,10 @@ public struct ServerArguments: Equatable, Sendable {
     public let expertCachePolicy: RuntimeExpertCachePolicy
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
+    /// Routed experts per token. 8 is the checkpoint's own routing width and
+    /// the only width benchmarks use; smaller widths are a quality trade the
+    /// operator opts into.
+    public let expertsPerToken: Int
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
@@ -29,13 +33,23 @@ public struct ServerArguments: Equatable, Sendable {
       --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                                  Prompt KV reuse mode (default single-prefix).
-      --expert-cache-slots <n>   Expert-cache slots: \(allowedValueList(RuntimeConfiguration.allowedExpertCacheSlots)) (default 16).
+      --expert-cache-slots <n>   Expert-cache slots: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertCacheSlots)) (default 16).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
-      --prefill-chunk-tokens <n> Prefill chunk size: \(allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens))
+      --prefill-chunk-tokens <n> Prefill chunk size: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens, alsoAccepting: ["auto"]))
                                  (default 128). Each chunk re-reads the routed
-                                 expert pool, so larger chunks read less.
+                                 expert pool, so larger chunks read less; auto
+                                 runs at the cap, 256, which prefills every
+                                 prompt in the same spans a per-request size
+                                 would. Prefill scratch is sized from the chunk,
+                                 so the cap holds about 33 MB of it against
+                                 16.6 MB at 128.
+      --experts-per-token <n>    Routed experts per token: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertsPerToken))
+                                 (default 8). 8 is the checkpoint's own routing
+                                 width; fewer experts cut the routed computation
+                                 and the expert reads each token needs, at a
+                                 quality cost.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.
@@ -56,7 +70,13 @@ public struct ServerArguments: Equatable, Sendable {
         guard RuntimeConfiguration.allowedPrefillChunkTokens.contains(prefillChunkTokens) else {
             throw ServerArgumentError.notAllowed(
                 flag: "--prefill-chunk-tokens",
-                allowed: RuntimeConfiguration.allowedPrefillChunkTokens)
+                allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+                alsoAccepting: ["auto"])
+        }
+        guard RuntimeConfiguration.allowedExpertsPerToken.contains(expertsPerToken) else {
+            throw ServerArgumentError.notAllowed(
+                flag: "--experts-per-token",
+                allowed: RuntimeConfiguration.allowedExpertsPerToken)
         }
         guard prefillPolicy == .off
                 || expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
@@ -70,6 +90,7 @@ public struct ServerArguments: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
+            expertsPerToken: expertsPerToken,
             forceLogitsHead: forceLogitsHead)
     }
 
@@ -86,6 +107,7 @@ public struct ServerArguments: Equatable, Sendable {
         var expertCachePolicy = RuntimeExpertCachePolicy.lfu
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
+        var expertsPerToken = RuntimeConfiguration.defaultExpertsPerToken
         var rdadvisePolicy = RDAdvicePolicyMode.off
         var index = 0
         while index < input.count {
@@ -154,13 +176,34 @@ public struct ServerArguments: Equatable, Sendable {
                 default: throw ServerArgumentError.invalid("--prefill must be on or off")
                 }
             case "--prefill-chunk-tokens":
+                // `auto` is an alias for the cap here, and nothing downstream
+                // learns it was spelled that way. A per-request size is the
+                // smallest allowed size that covers the span, so the cap
+                // prefills every prompt in exactly the spans that size would,
+                // and the KV ring is sized from the cap either way. The prefill
+                // scratch is the one thing a per-request size changes: it is
+                // allocated from the chunk, about 129.7 KB per token, and the
+                // server would reallocate it on every size change.
+                if value == "auto" {
+                    prefillChunkTokens = PrefillRuntimeConfig.maxChunkTokens
+                    break
+                }
                 guard let parsed = Int(value),
                       RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed) else {
                     throw ServerArgumentError.notAllowed(
                         flag: flag,
-                        allowed: RuntimeConfiguration.allowedPrefillChunkTokens)
+                        allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+                        alsoAccepting: ["auto"])
                 }
                 prefillChunkTokens = parsed
+            case "--experts-per-token":
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedExpertsPerToken.contains(parsed) else {
+                    throw ServerArgumentError.notAllowed(
+                        flag: flag,
+                        allowed: RuntimeConfiguration.allowedExpertsPerToken)
+                }
+                expertsPerToken = parsed
             case "--rdadvise":
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
                     throw ServerArgumentError.invalid(
@@ -182,26 +225,10 @@ public struct ServerArguments: Equatable, Sendable {
                                expertCachePolicy: expertCachePolicy,
                                prefillPolicy: prefillPolicy,
                                prefillChunkTokens: prefillChunkTokens,
+                               expertsPerToken: expertsPerToken,
                                rdadvisePolicy: rdadvisePolicy,
                                visionPack: visionPack,
                                visionResidency: visionResidency)
-    }
-}
-
-extension ServerArguments {
-    /// The one rendering shared by the help text and every rejection, so neither
-    /// can name a value the guard does not accept: the hardcoded
-    /// "32, 64, or 128" outlived the widening of the allowed set and told users
-    /// 256 was illegal while the guard accepted it.
-    static func allowedValueList(_ values: [Int]) -> String {
-        let words = values.map(String.init)
-        switch words.count {
-        case 0: return ""
-        case 1: return words[0]
-        case 2: return "\(words[0]) or \(words[1])"
-        default:
-            return words.dropLast().joined(separator: ", ") + ", or " + words[words.count - 1]
-        }
     }
 }
 
@@ -218,7 +245,10 @@ public enum ServerArgumentError: Error, Equatable, CustomStringConvertible {
 }
 
 extension ServerArgumentError {
-    static func notAllowed(flag: String, allowed: [Int]) -> ServerArgumentError {
-        .invalid("\(flag) must be \(ServerArguments.allowedValueList(allowed))")
+    static func notAllowed(flag: String,
+                           allowed: [Int],
+                           alsoAccepting aliases: [String] = []) -> ServerArgumentError {
+        .invalid("\(flag) must be "
+            + RuntimeConfiguration.allowedValueList(allowed, alsoAccepting: aliases))
     }
 }

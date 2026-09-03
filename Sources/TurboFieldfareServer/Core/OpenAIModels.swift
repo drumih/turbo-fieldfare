@@ -134,6 +134,23 @@ public struct OpenAIStreamOptions: Codable, Equatable, Sendable {
     }
 }
 
+/// Bounds what a rejection quotes back. The body cap is 5 MiB, so a caller must
+/// not be able to have an arbitrary slice of its own request echoed back;
+/// `String(reflecting:)` also escapes a value that embeds a quote, which would
+/// otherwise read as two values.
+private func boundedQuoted(_ text: String, maxLength: Int) -> String {
+    String(reflecting: bounded(text, maxLength: maxLength))
+}
+
+/// The unquoted form, for an error's `param`. A `param` names a field rather
+/// than quoting prose, but it needs the same bound: an unknown key is echoed
+/// back out of the request body, and the 5 MiB body cap is the only other
+/// limit on how long that key can be.
+private func bounded(_ text: String, maxLength: Int) -> String {
+    let head = text.prefix(maxLength + 1)
+    return String(head.prefix(maxLength)) + (head.count > maxLength ? "..." : "")
+}
+
 public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     public let model: String
     public let messages: [OpenAIChatMessage]
@@ -154,9 +171,17 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     public let logprobs: Bool?
     public let presencePenalty: Float?
     public let frequencyPenalty: Float?
+    /// Kept as raw JSON. Only `type` is ever read, because the rest of a
+    /// `response_format` describes a schema this server cannot honour, and a
+    /// value of any other shape has to reach the validator as a request error
+    /// rather than reading as malformed JSON.
+    public let responseFormat: JSONValue?
+    public let functions: JSONValue?
+    public let functionCall: JSONValue?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
+        case functions
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -167,6 +192,120 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case repetitionPenalty = "repetition_penalty"
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
+        case responseFormat = "response_format"
+        case functionCall = "function_call"
+    }
+
+    /// Top-level keys accepted and ignored because they are caller-side
+    /// bookkeeping that cannot change what the model generates. Every other
+    /// undeclared key is a 400, so a misspelled option cannot silently
+    /// generate under settings the caller did not ask for. This set is the
+    /// only place the list lives; the OpenAI server doc quotes it.
+    static let toleratedKeys: Set<String> = [
+        "user",
+        "store",
+        "metadata",
+        "service_tier",
+        "prompt_cache_key",
+        "safety_identifier",
+    ]
+
+    /// Real OpenAI parameters this server cannot honour. They are refused as
+    /// unsupported rather than unknown, so a caller sending a parameter that
+    /// exists is not told it looks like a typo.
+    static let unsupportedKeys: Set<String> = [
+        "logit_bias",
+        "top_logprobs",
+        "reasoning_effort",
+        "modalities",
+        "audio",
+        "prediction",
+        "web_search_options",
+    ]
+
+    /// Reads the request object's keys as written, which the `CodingKeys`
+    /// container cannot: that one reports only the keys it declares, so an
+    /// undeclared key is discarded before validation could see it.
+    private struct AnyKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    private static let maximumNamedKeyLength = 64
+    private static let maximumNamedKeys = 8
+
+    private static func renderedKeyNames(_ names: [String]) -> String {
+        let shown = names.prefix(maximumNamedKeys).map {
+            boundedQuoted($0, maxLength: maximumNamedKeyLength)
+        }
+        let listed = shown.joined(separator: ", ")
+        let remaining = names.count - shown.count
+        return remaining > 0 ? "\(listed), and \(remaining) more" : listed
+    }
+
+    public init(from decoder: any Decoder) throws {
+        // The key sweep runs before any typed decode, so a misspelled key is
+        // named as itself rather than answered with whatever DecodingError
+        // another field happens to raise first.
+        let anyKeys = try decoder.container(keyedBy: AnyKey.self)
+        // A key set to null asks for nothing: openai-python sends an unset
+        // option as an explicit `null`, and the declared keys already read null
+        // as absent through `decodeIfPresent`.
+        let written = try anyKeys.allKeys
+            .filter { try !anyKeys.decodeNil(forKey: $0) }
+            .map(\.stringValue)
+        // Sorted throughout so the answer never depends on the order the keys
+        // arrived in.
+        if let unsupported = written.filter(Self.unsupportedKeys.contains).sorted().first {
+            throw ServerRequestError.invalid(
+                message: "\(unsupported) is not supported",
+                param: unsupported,
+                code: "unsupported_value")
+        }
+        let unknown = written
+            .filter { CodingKeys(stringValue: $0) == nil && !Self.toleratedKeys.contains($0) }
+            .sorted()
+        if let first = unknown.first {
+            throw ServerRequestError.invalid(
+                message: "unrecognized request field\(unknown.count == 1 ? "" : "s") "
+                    + Self.renderedKeyNames(unknown),
+                param: bounded(first, maxLength: Self.maximumNamedKeyLength),
+                code: "unknown_parameter")
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        model = try container.decode(String.self, forKey: .model)
+        messages = try container.decode([OpenAIChatMessage].self, forKey: .messages)
+        stream = try container.decodeIfPresent(Bool.self, forKey: .stream)
+        streamOptions = try container.decodeIfPresent(
+            OpenAIStreamOptions.self, forKey: .streamOptions)
+        temperature = try container.decodeIfPresent(Float.self, forKey: .temperature)
+        topP = try container.decodeIfPresent(Float.self, forKey: .topP)
+        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        maxCompletionTokens = try container.decodeIfPresent(
+            Int.self, forKey: .maxCompletionTokens)
+        stop = try container.decodeIfPresent(OpenAIStop.self, forKey: .stop)
+        seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
+        tools = try container.decodeIfPresent([OpenAITool].self, forKey: .tools)
+        toolChoice = try container.decodeIfPresent(JSONValue.self, forKey: .toolChoice)
+        parallelToolCalls = try container.decodeIfPresent(
+            Bool.self, forKey: .parallelToolCalls)
+        topK = try container.decodeIfPresent(Int.self, forKey: .topK)
+        repetitionPenalty = try container.decodeIfPresent(
+            Float.self, forKey: .repetitionPenalty)
+        n = try container.decodeIfPresent(Int.self, forKey: .n)
+        logprobs = try container.decodeIfPresent(Bool.self, forKey: .logprobs)
+        presencePenalty = try container.decodeIfPresent(
+            Float.self, forKey: .presencePenalty)
+        frequencyPenalty = try container.decodeIfPresent(
+            Float.self, forKey: .frequencyPenalty)
+        responseFormat = try container.decodeIfPresent(
+            JSONValue.self, forKey: .responseFormat)
+        functions = try container.decodeIfPresent(JSONValue.self, forKey: .functions)
+        functionCall = try container.decodeIfPresent(JSONValue.self, forKey: .functionCall)
     }
 }
 
@@ -337,10 +476,7 @@ private enum OpenAIToolName {
     }
 
     static func validationMessage(for name: String) -> String {
-        let prefix = name.prefix(maximumLength + 1)
-        let displayed = String(prefix.prefix(maximumLength))
-            + (prefix.count > maximumLength ? "..." : "")
-        return "tool name \(String(reflecting: displayed)) must contain 1 to 64 ASCII letters, numbers, underscores, or hyphens"
+        "tool name \(boundedQuoted(name, maxLength: maximumLength)) must contain 1 to 64 ASCII letters, numbers, underscores, or hyphens"
     }
 }
 
@@ -374,6 +510,43 @@ public enum OpenAIRequestValidator {
         guard request.parallelToolCalls != false else {
             throw invalid("parallel_tool_calls=false is not supported",
                           "parallel_tool_calls", "unsupported_value")
+        }
+        switch request.responseFormat {
+        case nil:
+            break
+        case .object(let fields)?:
+            switch fields["type"] {
+            case nil, .null?:
+                throw invalid("response_format.type is required",
+                              "response_format", "invalid_value")
+            case .string(let type)?:
+                switch type {
+                case "text":
+                    break
+                case "json_object", "json_schema":
+                    throw invalid("structured output is not supported",
+                                  "response_format", "unsupported_value")
+                default:
+                    throw invalid(
+                        "response_format type \(boundedQuoted(type, maxLength: 64)) "
+                            + "is not recognized",
+                        "response_format", "invalid_value")
+                }
+            default:
+                throw invalid("response_format.type must be a string",
+                              "response_format", "invalid_value")
+            }
+        default:
+            throw invalid(#"response_format must be an object such as {"type": "text"}"#,
+                          "response_format", "invalid_value")
+        }
+        guard request.functions == nil else {
+            throw invalid("legacy functions are not supported; use tools",
+                          "functions", "unsupported_value")
+        }
+        guard request.functionCall == nil else {
+            throw invalid("legacy function_call is not supported; use tools and tool_choice",
+                          "function_call", "unsupported_value")
         }
 
         let temperature = request.temperature ?? 0.2

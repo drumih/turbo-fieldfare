@@ -59,13 +59,18 @@ defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
   --expert-cache-policy lru \
   --prefill on \
   --prefill-chunk-tokens 64 \
+  --experts-per-token 8 \
   --rdadvise bounded
 ```
 
 Without these flags the server runs the production defaults: 16 expert-cache
-slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
-off. Values are validated before the model loads, so an unsupported one exits
-with the usage text rather than failing partway through startup. Chunked
+slots, LFU eviction, chunked prefill on with 128-token chunks, 8 routed experts
+per token, and read advice off. `--prefill-chunk-tokens auto` runs at the cap,
+256, on the server: a per-request size is the smallest allowed size covering the
+span being prefilled, so the cap prefills every prompt in exactly those spans,
+and it costs about 33 MB of prefill scratch against about 16.6 MB at the 128
+default. Values are validated before the model loads, so an unsupported one
+exits with the usage text rather than failing partway through startup. Chunked
 prefill needs at least 16 expert-cache slots, so `--expert-cache-slots 8`
 requires `--prefill off`.
 
@@ -221,6 +226,20 @@ Requests may contain system, developer, user, assistant, and tool messages.
 Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
 `max_completion_tokens`, and function-tool fields.
+
+Unknown top-level request fields return HTTP 400 with `code`
+`unknown_parameter` and the field name in `param`, so a misspelled option is
+refused rather than silently ignored. `response_format` is accepted only as
+`{"type": "text"}`; `json_object` and `json_schema` return
+`unsupported_value`, as do `logit_bias`, `top_logprobs`, `reasoning_effort`,
+`modalities`, `audio`, `prediction`, `web_search_options`, and the legacy
+`functions` and `function_call`. `response_format` must be an object; any
+other JSON value returns `invalid_value`. `user`, `store`, `metadata`,
+`service_tier`, `prompt_cache_key`, and `safety_identifier` are accepted and
+ignored. A top-level field set to `null` is treated as absent. Fields inside
+`messages`, `tools`, and `stream_options` are not checked for extras. Inside
+`stream_options` only `include_usage` is read, so a misspelled key there is
+ignored rather than refused.
 
 The server supports one model and one choice. It does not support the Responses
 API, legacy Completions, embeddings, structured output,

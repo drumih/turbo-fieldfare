@@ -897,6 +897,108 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func unknownFieldReturns400WithTheFieldName() async throws {
+        // Pre-fix this returned 200: the decoder dropped `max_token` and the
+        // request generated with the server's default maximum, so the caller
+        // never learned the option had not applied.
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],
+         "max_token":4}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(text.contains(#""code":"unknown_parameter""#))
+        #expect(text.contains("max_token"))
+        #expect(!text.contains("malformed JSON request"))
+
+        try await server.shutdown()
+    }
+
+    @Test func unknownFieldOnAStreamingRequestFailsBeforeSSEStarts() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],
+         "max_token":4,"stream":true}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let http = response as? HTTPURLResponse
+        #expect(http?.statusCode == 400)
+        // An SSE body cannot carry a status, so the refusal has to land before
+        // the event stream opens.
+        #expect(http?.value(forHTTPHeaderField: "content-type") == "application/json")
+        #expect(String(decoding: data, as: UTF8.self)
+            .contains(#""code":"unknown_parameter""#))
+
+        try await server.shutdown()
+    }
+
+    @Test func responseFormatJSONObjectReturns400() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"emit json"}],
+         "response_format":{"type":"json_object"}}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(text.contains(#""code":"unsupported_value""#))
+        #expect(text.contains(#""param":"response_format""#))
+
+        try await server.shutdown()
+    }
+
+    @Test func wrongTypedDeclaredValueStillReadsAsInvalidJSON() async throws {
+        // A declared key carrying the wrong type is not an unknown field, and
+        // keeps the invalid_json class the unknown-key path must not swallow.
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],
+         "temperature":"not-a-number"}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        #expect(String(decoding: data, as: UTF8.self).contains(#""code":"invalid_json""#))
+
+        try await server.shutdown()
+    }
 }
 
 private enum RawSocketError: Error {

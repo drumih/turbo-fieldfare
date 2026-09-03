@@ -72,6 +72,39 @@ public struct ArchConfig: Sendable, Equatable {
         self.hiddenActivation = hiddenActivation
     }
 
+    /// The same architecture run at a narrower routing width.
+    ///
+    /// This describes a run, not a checkpoint: `Model.config` keeps the width
+    /// the manifest declared and the manifest gate still validates it, while
+    /// `RealForwardRunner` narrows its own copy once at init so every reader of
+    /// `topKExperts` — decode buffers, dispatch geometry, readback, and the
+    /// prefill scratch layout — follows without being touched.
+    public func replacingTopKExperts(_ width: Int) -> ArchConfig {
+        precondition(width >= 1 && width <= topKExperts,
+                     "routed width \(width) is outside 1...\(topKExperts)")
+        return ArchConfig(hiddenSize: hiddenSize,
+                          intermediateSize: intermediateSize,
+                          moeIntermediateSize: moeIntermediateSize,
+                          numHeads: numHeads,
+                          numKVHeads: numKVHeads,
+                          numFullKVHeads: numFullKVHeads,
+                          headDim: headDim,
+                          fullHeadDim: fullHeadDim,
+                          vocabSize: vocabSize,
+                          slidingWindow: slidingWindow,
+                          finalLogitSoftcap: finalLogitSoftcap,
+                          ropeTheta: ropeTheta,
+                          fullRopeTheta: fullRopeTheta,
+                          partialRotaryFactor: partialRotaryFactor,
+                          numLayers: numLayers,
+                          numExperts: numExperts,
+                          topKExperts: width,
+                          tieWordEmbeddings: tieWordEmbeddings,
+                          attentionKEqV: attentionKEqV,
+                          fullAttentionLayerMask: fullAttentionLayerMask,
+                          hiddenActivation: hiddenActivation)
+    }
+
     /// Canonical Gemma 4 26B-A4B baseline, checked against the installed
     /// model manifest.
     /// `intermediateSize = 2112` is the shared-expert FFN width (3 × moe).

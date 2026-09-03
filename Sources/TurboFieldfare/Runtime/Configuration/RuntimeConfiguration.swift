@@ -23,6 +23,37 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public static let allowedExpertCacheSlots = [8, 16, 24, 32]
     public static let allowedPrefillChunkTokens = PrefillRuntimeConfig.allowedChunkTokens
     public static let minimumExpertCacheSlotsForChunkedPrefill = 16
+    /// The routed widths the control accepts. A list rather than a range
+    /// because those are the widths that have measurements; the hard cap is
+    /// separately `MoE.maxStreamedExperts`.
+    public static let allowedExpertsPerToken = [4, 6, 8]
+    /// The checkpoint's own `num_experts_per_tok`, and the only width used in
+    /// benchmarks.
+    public static let defaultExpertsPerToken = 8
+
+    /// The one rendering shared by every help text and every rejection that
+    /// names one of the arrays above, so neither can name a value the guard
+    /// does not accept: the hardcoded "32, 64, or 128" outlived the widening of
+    /// the allowed set and told users 256 was illegal while the guard accepted
+    /// it. It lives here, beside the arrays, because the CLI's usage and the
+    /// server's usage and rejections all render the same sets.
+    ///
+    /// `alsoAccepting` appends parse-level aliases after the integers, so
+    /// `--prefill-chunk-tokens` renders "32, 64, 128, 256, or auto". They come
+    /// last because they are not members of the array the guards test, and
+    /// because the help line's integers are read back by
+    /// `usageNamesExactlyTheAllowedValues`.
+    public static func allowedValueList(_ values: [Int],
+                                        alsoAccepting aliases: [String] = []) -> String {
+        let words = values.map(String.init) + aliases
+        switch words.count {
+        case 0: return ""
+        case 1: return words[0]
+        case 2: return "\(words[0]) or \(words[1])"
+        default:
+            return words.dropLast().joined(separator: ", ") + ", or " + words[words.count - 1]
+        }
+    }
 
     public let expertCacheSlots: Int
     public let expertCachePolicy: RuntimeExpertCachePolicy
@@ -30,6 +61,12 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
     public let prefillAttentionPath: RuntimePrefillAttentionPath
+    /// Routed experts per token. `RealForwardRunner` narrows its own
+    /// `ArchConfig` copy to this width, so decode buffers, dispatch geometry,
+    /// readback, and the prefill scratch layout all follow; `model.config`
+    /// keeps the width the manifest declared. 8 is the checkpoint's own routing
+    /// width and the only width used in benchmarks.
+    public let expertsPerToken: Int
     public let headPath: RuntimeHeadPath
 
     public init(expertCacheSlots: Int = 16,
@@ -38,11 +75,15 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
+                expertsPerToken: Int = RuntimeConfiguration.defaultExpertsPerToken,
                 forceLogitsHead: Bool = false) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
         precondition(Self.allowedPrefillChunkTokens.contains(prefillChunkTokens),
                      "unsupported prefill chunk size")
+        precondition(Self.allowedExpertsPerToken.contains(expertsPerToken),
+                     "unsupported routed-expert width")
+        self.expertsPerToken = expertsPerToken
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.rdadvisePolicy = rdadvisePolicy

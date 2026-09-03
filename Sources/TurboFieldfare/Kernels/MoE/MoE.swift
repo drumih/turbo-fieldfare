@@ -50,15 +50,15 @@ final class MoE {
 
     private let routerGemvPSO: MTLComputePipelineState
     private let routerGemvSpecializedPSO: MTLComputePipelineState
-    private let routerSelectK8PSO: MTLComputePipelineState
-    private let routerSelectK8SpecializedPSO: MTLComputePipelineState
+    private let routerSelectPSO: MTLComputePipelineState
+    private let routerSelectSpecializedPSO: MTLComputePipelineState
     private let routerLogits: MTLBuffer
     private let phase1U16PSO: MTLComputePipelineState
     private let phase1U16SpecializedPSO: MTLComputePipelineState
     private let phase1SubsetU16PSO: MTLComputePipelineState
     private let phase1SubsetU16SpecializedPSO: MTLComputePipelineState
-    private let phase2ReduceK8PSO: MTLComputePipelineState
-    private let phase2ReduceK8SpecializedPSO: MTLComputePipelineState
+    private let phase2ReducePSO: MTLComputePipelineState
+    private let phase2ReduceSpecializedPSO: MTLComputePipelineState
     private let routedArgEncoder: MTLArgumentEncoder
     private let reusableRoutedArgBuffer: MTLBuffer
 
@@ -72,9 +72,9 @@ final class MoE {
             routerName,
             constants: Self.realDecodeRouterConstants,
             maxTotalThreadsPerThreadgroup: 512)
-        self.routerSelectK8PSO = try context.pipeline("router_topk_select_k8")
-        self.routerSelectK8SpecializedPSO = try context.pipeline(
-            "router_topk_select_k8",
+        self.routerSelectPSO = try context.pipeline("router_topk_select")
+        self.routerSelectSpecializedPSO = try context.pipeline(
+            "router_topk_select",
             constants: Self.realDecodeRouterConstants)
         self.phase1U16PSO = try context.pipeline("moe_phase1_gate_up_act_u16load")
         self.phase1U16SpecializedPSO = try context.pipeline(
@@ -84,9 +84,9 @@ final class MoE {
         self.phase1SubsetU16SpecializedPSO = try context.pipeline(
             "moe_phase1_gate_up_act_subset_u16load",
             constants: Self.realDecodeMoEConstants)
-        self.phase2ReduceK8PSO = try context.pipeline("moe_phase2_down_reduce_k8")
-        self.phase2ReduceK8SpecializedPSO = try context.pipeline(
-            "moe_phase2_down_reduce_k8",
+        self.phase2ReducePSO = try context.pipeline("moe_phase2_down_reduce")
+        self.phase2ReduceSpecializedPSO = try context.pipeline(
+            "moe_phase2_down_reduce",
             constants: Self.realDecodeMoEConstants)
 
         guard let logits = context.device.makeBuffer(
@@ -120,12 +120,18 @@ final class MoE {
                                    topK: UInt32) {
         precondition(d.isMultiple(of: UInt32(Quantization.groupSize)))
         precondition(numExperts <= 256)
-        precondition(topK == UInt32(Self.maxStreamedExperts))
+        precondition(topK >= 1 && topK <= UInt32(Self.maxStreamedExperts))
 
         var expertCount = numExperts
         var dimension = d
+        var routedWidth = topK
+        // The specialised pipelines bake `FC_ROUTER_TOP_K = 8`, which overrides
+        // the runtime `top_k` the select kernel reads. A narrower run therefore
+        // has to take the generic pipelines, or it would select eight experts
+        // into a K-slot buffer.
         let useSpecialized = numExperts == Self.realDecodeNumExperts
             && d == Self.realDecodeD
+            && topK == Self.realDecodeTopK
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             encoder.setComputePipelineState(
                 useSpecialized ? routerGemvSpecializedPSO : routerGemvPSO)
@@ -145,12 +151,13 @@ final class MoE {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             encoder.setComputePipelineState(
-                useSpecialized ? routerSelectK8SpecializedPSO : routerSelectK8PSO)
+                useSpecialized ? routerSelectSpecializedPSO : routerSelectPSO)
             encoder.setBuffer(routerLogits, offset: 0, index: 0)
             encoder.setBuffer(perExpertScale, offset: perExpertScaleOffset, index: 1)
             encoder.setBuffer(outIndices, offset: 0, index: 2)
             encoder.setBuffer(outWeights, offset: 0, index: 3)
             encoder.setBytes(&expertCount, length: MemoryLayout<UInt32>.stride, index: 4)
+            encoder.setBytes(&routedWidth, length: MemoryLayout<UInt32>.stride, index: 5)
             encoder.dispatchThreadgroups(
                 MTLSize(width: 1, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 32, height: 1, depth: 1))
@@ -194,7 +201,7 @@ final class MoE {
         var expertCount = topK
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(
-            useRealDecodeConstants(d: d, f: f)
+            useRealDecodeConstants(d: d, f: f, topK: topK)
                 ? phase1U16SpecializedPSO
                 : phase1U16PSO)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 0)
@@ -235,7 +242,7 @@ final class MoE {
         var active = activeCount
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(
-            useRealDecodeConstants(d: d, f: f)
+            useRealDecodeConstants(d: d, f: f, topK: topK)
                 ? phase1SubsetU16SpecializedPSO
                 : phase1SubsetU16PSO)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 0)
@@ -273,11 +280,12 @@ final class MoE {
         validate(routedBlobs: routedBlobs, topK: topK)
         var dimension = d
         var intermediate = f
+        var routedWidth = topK
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encoder.setComputePipelineState(
-            useRealDecodeConstants(d: d, f: f)
-                ? phase2ReduceK8SpecializedPSO
-                : phase2ReduceK8PSO)
+            useRealDecodeConstants(d: d, f: f, topK: topK)
+                ? phase2ReduceSpecializedPSO
+                : phase2ReducePSO)
         encoder.setBuffer(routedArgBuffer, offset: 0, index: 0)
         for buffer in routedBlobs { encoder.useResource(buffer, usage: .read) }
         var offsets = routedOffsets
@@ -288,14 +296,20 @@ final class MoE {
         encoder.setBuffer(y, offset: 0, index: 5)
         encoder.setBytes(&dimension, length: MemoryLayout<UInt32>.stride, index: 6)
         encoder.setBytes(&intermediate, length: MemoryLayout<UInt32>.stride, index: 7)
+        encoder.setBytes(&routedWidth, length: MemoryLayout<UInt32>.stride, index: 8)
+        // Exactly one SIMD group per routed slot, so every group reaches the
+        // kernel's threadgroup barrier. A fixed 256 threads with an early
+        // return for the slots above K is undefined in Metal.
         encoder.dispatchThreadgroups(
             MTLSize(width: Int(d), height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            threadsPerThreadgroup: MTLSize(width: 32 * Int(topK), height: 1, depth: 1))
         encoder.endEncoding()
     }
 
     private func validate(routedBlobs: [MTLBuffer], topK: UInt32) {
-        precondition(topK == UInt32(Self.maxStreamedExperts))
+        precondition(topK >= 1 && topK <= UInt32(Self.maxStreamedExperts))
+        // The argument buffer keeps its eight encoded slots; the ones at or
+        // beyond K are simply never read.
         precondition(routedBlobs.count == Int(topK))
     }
 
@@ -307,7 +321,10 @@ final class MoE {
         }
     }
 
-    private func useRealDecodeConstants(d: UInt32, f: UInt32) -> Bool {
-        d == Self.realDecodeD && f == Self.realDecodeF
+    /// The specialised pipelines bake `FC_MOE_TOP_K = 8`, which overrides the
+    /// runtime `top_k` both phases read, so a narrower run takes the generic
+    /// pipelines rather than one compiled for eight slots.
+    private func useRealDecodeConstants(d: UInt32, f: UInt32, topK: UInt32) -> Bool {
+        d == Self.realDecodeD && f == Self.realDecodeF && topK == Self.realDecodeTopK
     }
 }
