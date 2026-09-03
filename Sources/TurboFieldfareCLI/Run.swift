@@ -54,6 +54,7 @@ public func run(args: Args,
             stopStrings: args.stops,
             extraStopTokens: [])
         let runtime = RuntimeConfiguration(
+            expertCacheSlots: args.expertCacheSlots,
             forceLogitsHead: !config.isPureGreedy)
 
         guard MTLCreateSystemDefaultDevice() != nil else {
