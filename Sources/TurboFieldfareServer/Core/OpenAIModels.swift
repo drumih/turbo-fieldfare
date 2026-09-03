@@ -347,14 +347,64 @@ public enum OpenAIRequestValidator {
             throw invalid("tool parameters must be an object schema",
                           "tools", "invalid_tool_schema")
         }
-        try validateSchemaKeys(tool.function.parameters)
-        guard (try? tool.function.parameters.jinjaSendableValue()) != nil else {
+        let parameters = normalizeSchema(tool.function.parameters)
+        try validateSchemaKeys(parameters)
+        guard (try? parameters.jinjaSendableValue()) != nil else {
             throw invalid("tool schema contains a number that cannot be represented exactly",
                           "tools", "invalid_tool_schema")
         }
         return GFTokenizer.FunctionDefinition(name: name,
                                               description: tool.function.description ?? "",
-                                              parameters: tool.function.parameters)
+                                              parameters: parameters)
+    }
+
+    /// Collapse JSON-Schema `anyOf`/`oneOf` union types found anywhere in a tool
+    /// parameter schema down to a single concrete `type`.
+    ///
+    /// Some clients (e.g. Hermes) declare a parameter as a union — e.g.
+    /// `notify: {anyOf: [{type: boolean}, {type: array, items: {type: string}}]}`
+    /// — with no top-level `type` key. The tokenizer/chat-template layer this
+    /// schema flows into (a vendored HF-format Jinja renderer) has no notion of
+    /// union schemas and fails *every* request carrying one, instantly and with
+    /// a generic 500 "generation failed" — confirmed 2026-09-04: any request
+    /// including the `terminal` tool (whose `notify` param is exactly this
+    /// shape) failed even for a one-word prompt, while stripping `anyOf` from
+    /// that single field fixed it immediately. Rather than patch the vendored
+    /// renderer, normalize the union away before it gets there: pick the first
+    /// non-null branch's `type` as representative and fold the alternatives
+    /// into the description. The tool stays usable — the model loses the
+    /// union's precision (e.g. `notify` reads as boolean-only) but the request
+    /// no longer crashes.
+    private static func normalizeSchema(_ schema: JSONValue) -> JSONValue {
+        guard case .object(var object) = schema else {
+            if case .array(let values) = schema {
+                return .array(values.map(normalizeSchema))
+            }
+            return schema
+        }
+        if case .array(let variants)? = object["anyOf"] ?? object["oneOf"] {
+            object.removeValue(forKey: "anyOf")
+            object.removeValue(forKey: "oneOf")
+            let normalizedVariants = variants.map(normalizeSchema)
+            let variantTypes: [String] = normalizedVariants.compactMap { variant in
+                guard case .object(let v) = variant, case .string(let t)? = v["type"] else { return nil }
+                return t
+            }
+            let chosenType = variantTypes.first { $0 != "null" } ?? variantTypes.first ?? "string"
+            object["type"] = .string(chosenType)
+            if !variantTypes.isEmpty {
+                let note = "Accepts \(variantTypes.joined(separator: " or "))."
+                if case .string(let existing)? = object["description"], !existing.isEmpty {
+                    object["description"] = .string("\(existing) \(note)")
+                } else {
+                    object["description"] = .string(note)
+                }
+            }
+        }
+        for (key, value) in object {
+            object[key] = normalizeSchema(value)
+        }
+        return .object(object)
     }
 
     private static func validateSchemaKeys(_ schema: JSONValue) throws {
