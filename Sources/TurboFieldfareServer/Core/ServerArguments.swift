@@ -7,6 +7,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let maxContext: Int
     public let queueLimit: Int
     public let promptCacheMode: ServerPromptCacheMode
+    public let expertCacheSlots: Int
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
@@ -18,6 +19,14 @@ public struct ServerArguments: Equatable, Sendable {
       --queue-limit <count>  Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                              Prompt KV reuse mode (default single-prefix).
+      --expert-cache-slots <count>
+                             8, 16, 24, or 32 (default 16). Higher values retain
+                             more routed experts in RAM and can reduce SSD reads
+                             on machines with headroom, at the cost of more
+                             memory pressure — see docs/RUNTIME_CONTROLS.md and
+                             docs/experiments/summaries/03-expert-cache-prediction-and-layout.md
+                             (CACHE-03) before raising this in production: on an
+                             8 GB Mac, 32 slots measured *slower* than 16.
       --help                 Show this help.
     """
 
@@ -28,6 +37,7 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var expertCacheSlots = 16
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -67,6 +77,12 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--expert-cache-slots":
+                guard let parsed = Int(value), [8, 16, 24, 32].contains(parsed) else {
+                    throw ServerArgumentError.invalid(
+                        "--expert-cache-slots must be 8, 16, 24, or 32")
+                }
+                expertCacheSlots = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -77,7 +93,8 @@ public struct ServerArguments: Equatable, Sendable {
                                modelID: modelID,
                                maxContext: maxContext,
                                queueLimit: queueLimit,
-                               promptCacheMode: promptCacheMode)
+                               promptCacheMode: promptCacheMode,
+                               expertCacheSlots: expertCacheSlots)
     }
 }
 

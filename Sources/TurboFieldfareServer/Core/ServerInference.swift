@@ -128,7 +128,8 @@ public actor ServerModelSession: ServerInferenceBackend {
 
     public static func load(modelDirectory: URL,
                             maxContext: Int,
-                            promptCacheMode: ServerPromptCacheMode = .singlePrefix) async throws -> ServerModelSession {
+                            promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+                            expertCacheSlots: Int = 16) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
             throw GFTokenizerError.missingToolTemplate
@@ -139,7 +140,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         }
         let tokenizer = try await GFTokenizer.load(from: tokenizerFolder)
         let context = try MetalContext()
-        let runtime = RuntimeConfiguration(forceLogitsHead: true)
+        let runtime = RuntimeConfiguration(expertCacheSlots: expertCacheSlots, forceLogitsHead: true)
         let model = try Model.load(
             directoryURL: modelDirectory,
             device: context.device,
