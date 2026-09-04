@@ -129,6 +129,29 @@ struct OpenAIRequestDecodingTests {
         #expect(refusal.code == "unsupported_value")
     }
 
+    // A Character-counted bound is no bound: one base scalar plus combining
+    // marks is a single Character however many bytes it carries, so the whole
+    // key came back in `param` and, quoted, in `message`. Bounded in bytes,
+    // the echo stays within the 64-byte limit plus the ellipsis.
+    @Test func aKeyMadeOfCombiningMarksIsBoundedInBytes() throws {
+        let key = "a" + String(repeating: "\u{0301}", count: 100_000)
+        let refusal = try #require(decodeRejection(request(#""\#(key)":1"#)))
+        #expect(refusal.code == "unknown_parameter")
+        let param = try #require(refusal.param)
+        #expect(param.hasSuffix("..."))
+        #expect(param.utf8.count <= 64 + 3, "param is \(param.utf8.count) bytes")
+        #expect(refusal.message.utf8.count < 1_024,
+                "message is \(refusal.message.utf8.count) bytes")
+    }
+
+    @Test func legacyFunctionsAreNamedEvenBesideAMistypedDeclaredField() throws {
+        let refusal = try #require(
+            decodeRejection(request(#""functions":[{"name":"f"}],"temperature":"hot""#)))
+        #expect(refusal.message == "legacy functions are not supported; use tools")
+        #expect(refusal.param == "functions")
+        #expect(refusal.code == "unsupported_value")
+    }
+
     // The body cap is 5 MiB, so no rejection may echo an arbitrary slice of it.
     @Test func responseFormatTypeIsBoundedInTheRejection() throws {
         let long = String(repeating: "t", count: 200)

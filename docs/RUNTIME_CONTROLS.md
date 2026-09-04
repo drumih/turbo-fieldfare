@@ -35,7 +35,7 @@ model, so an unsupported combination fails immediately with the usage text.
 | Expert-cache slots | 8, 16, 24, 32 | `--expert-cache-slots` | 16 | More slots can retain more routed experts and reduce later reads, but values above 16 use more RAM. Chunked prefill requires at least 16 slots. |
 | Expert-cache policy | LFU | `--expert-cache-policy lfu\|lru` | LFU | Chooses which expert is evicted when the cache is full. |
 | Prompt prefill | On, off | `--prefill on\|off` | On | On processes known prompt tokens through the chunked prefill path. Off disables that path. |
-| Prefill chunk size | 128 | `--prefill-chunk-tokens 32\|64\|128\|256\|auto` | 128 | Sets the number of prompt tokens processed by each chunked-prefill step, and has no effect while prefill is off. Chunks loop outside layers, so each one re-reads that layer's routed experts: fewer, larger chunks read less. `auto` picks the smallest size that covers the prompt. On the server `auto` is the cap, 256: a per-request size is the smallest allowed size covering the span, so the cap prefills every prompt in exactly those spans, and the KV ring is sized from the cap either way. Only the prefill scratch is sized from the chunk, at about 129.7 KB per token, so the cap holds about 33 MB of it against 16.6 MB at 128, and a per-request size would reallocate it whenever the chosen size moved. On a 7,019-token prompt, 256 measured 16% faster than 128 with byte-identical output. |
+| Prefill chunk size | 128 | `--prefill-chunk-tokens 32\|64\|128\|256\|auto` | 128 | Sets the number of prompt tokens processed by each chunked-prefill step, and has no effect while prefill is off. Chunks loop outside layers, so each one re-reads that layer's routed experts: fewer, larger chunks read less. `auto` picks the smallest size that covers the prompt. On the server `auto` is the cap, 256: a per-request size is the smallest allowed size covering the span, so the cap prefills every prompt in exactly those spans, and the KV ring is sized from the cap either way. Only the prefill scratch is sized from the chunk, at about 125.5 KB per token over a fixed 328 KB, so the cap holds about 32.5 MB of it against 16.4 MB at 128, and a per-request size would reallocate it whenever the chosen size moved. On a 7,019-token prompt, 256 measured 16% faster than 128 with byte-identical output. |
 | RDADVISE | Off, Default, Bounded, Adaptive | `--rdadvise off\|default\|bounded\|adaptive` | Off | Applies experimental read advice. Its effect depends on the workload; it may help a short decode and slow a long one. |
 
 In the app, changing context length, expert-cache slots, or RDADVISE requires a
@@ -47,7 +47,7 @@ context begins. Each CLI invocation loads a new model process, so its selected
 runtime settings apply immediately. The server fixes its runtime settings at
 startup, so changing one means restarting the process;
 `--prefill-chunk-tokens auto` resolves to the cap, 256, there, which allocates
-about 33 MB of prefill scratch against about 16.6 MB at the 128 default.
+about 32.5 MB of prefill scratch against about 16.4 MB at the 128 default.
 
 ### macOS interactivity mitigation
 

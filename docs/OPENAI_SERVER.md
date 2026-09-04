@@ -67,7 +67,7 @@ slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
 off. `--prefill-chunk-tokens auto` runs at the cap,
 256, on the server: a per-request size is the smallest allowed size covering the
 span being prefilled, so the cap prefills every prompt in exactly those spans,
-and it costs about 33 MB of prefill scratch against about 16.6 MB at the 128
+and it costs about 32.5 MB of prefill scratch against about 16.4 MB at the 128
 default. Values are validated before the model loads, so an unsupported one
 exits with the usage text rather than failing partway through startup. Chunked
 prefill needs at least 16 expert-cache slots, so `--expert-cache-slots 8`
@@ -231,8 +231,8 @@ Unknown top-level request fields return HTTP 400 with `code`
 refused rather than silently ignored. `response_format` is accepted only as
 `{"type": "text"}`; `json_object` and `json_schema` return
 `unsupported_value`, as do `logit_bias`, `top_logprobs`, `reasoning_effort`,
-`modalities`, `audio`, `prediction`, `web_search_options`, and the legacy
-`functions` and `function_call`. `response_format` must be an object; any
+`verbosity`, `modalities`, `audio`, `prediction`, `web_search_options`, and
+the legacy `functions` and `function_call`. `response_format` must be an object; any
 other JSON value returns `invalid_value`. `user`, `store`, `metadata`,
 `service_tier`, `prompt_cache_key`, and `safety_identifier` are accepted and
 ignored. A top-level field set to `null` is treated as absent. Fields inside

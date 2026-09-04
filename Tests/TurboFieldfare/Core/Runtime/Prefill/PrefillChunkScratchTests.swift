@@ -111,6 +111,20 @@ import Metal
         #expect(scratch.routeWeights.storageMode == MTLStorageMode.shared)
     }
 
+    /// The server help, `docs/RUNTIME_CONTROLS.md`, and `docs/OPENAI_SERVER.md`
+    /// quote these two sizes, rounded, as the cost of `--prefill-chunk-tokens
+    /// auto` against the default. A layout change that moves them has to move
+    /// the prose too; the earlier prose was computed by hand and was off.
+    @Test func documentedScratchSizesMatchTheLayout() {
+        let at128 = PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 128)
+        let at256 = PrefillChunkScratchLayout(config: .gemma4_26B_A4B, chunkTokens: 256)
+        let perToken = at256.totalPersistentBytes - at128.totalPersistentBytes
+        #expect(at128.totalPersistentBytes == 16_390_528)
+        #expect(at256.totalPersistentBytes == 32_452_992)
+        #expect(perToken == 128 * 125_488)
+        #expect(at128.totalPersistentBytes - 128 * 125_488 == 328_064)
+    }
+
     @Test func multimodalBlockScratchStaysInsideBoundedBudget() {
         let tokens = VisionConfig().maximumPooledTokens
         let layout = PrefillChunkScratchLayout(

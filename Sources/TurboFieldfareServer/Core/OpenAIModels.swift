@@ -146,9 +146,22 @@ private func boundedQuoted(_ text: String, maxLength: Int) -> String {
 /// than quoting prose, but it needs the same bound: an unknown key is echoed
 /// back out of the request body, and the 5 MiB body cap is the only other
 /// limit on how long that key can be.
+///
+/// The bound is in UTF-8 bytes, never Characters: one Character can carry
+/// megabytes of combining marks, so a Character-counted prefix of a key like
+/// "a" followed by a million U+0301 is the whole key. Cutting between scalars
+/// may split a grapheme, which is harmless in a diagnostic.
 private func bounded(_ text: String, maxLength: Int) -> String {
-    let head = text.prefix(maxLength + 1)
-    return String(head.prefix(maxLength)) + (head.count > maxLength ? "..." : "")
+    var bytes = 0
+    var head = String.UnicodeScalarView()
+    for scalar in text.unicodeScalars {
+        bytes += scalar.utf8.count
+        if bytes > maxLength {
+            return String(head) + "..."
+        }
+        head.append(scalar)
+    }
+    return text
 }
 
 public struct OpenAIChatRequest: Codable, Equatable, Sendable {
@@ -176,12 +189,9 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// value of any other shape has to reach the validator as a request error
     /// rather than reading as malformed JSON.
     public let responseFormat: JSONValue?
-    public let functions: JSONValue?
-    public let functionCall: JSONValue?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
-        case functions
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -193,7 +203,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
         case responseFormat = "response_format"
-        case functionCall = "function_call"
     }
 
     /// Top-level keys accepted and ignored because they are caller-side
@@ -212,15 +221,28 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
 
     /// Real OpenAI parameters this server cannot honour. They are refused as
     /// unsupported rather than unknown, so a caller sending a parameter that
-    /// exists is not told it looks like a typo.
+    /// exists is not told it looks like a typo. Refused here, before the typed
+    /// decode, so the answer is the same beside a mistyped declared field as
+    /// alone; a refusal left to the validator would lose to whatever
+    /// DecodingError the typed decode raised first.
     static let unsupportedKeys: Set<String> = [
         "logit_bias",
         "top_logprobs",
         "reasoning_effort",
+        "verbosity",
         "modalities",
         "audio",
         "prediction",
         "web_search_options",
+        "functions",
+        "function_call",
+    ]
+
+    /// Refusals that can point at the supported replacement. Every other
+    /// member of `unsupportedKeys` is refused with the plain form.
+    static let unsupportedKeyMessages: [String: String] = [
+        "functions": "legacy functions are not supported; use tools",
+        "function_call": "legacy function_call is not supported; use tools and tool_choice",
     ]
 
     /// Reads the request object's keys as written, which the `CodingKeys`
@@ -261,7 +283,8 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         // arrived in.
         if let unsupported = written.filter(Self.unsupportedKeys.contains).sorted().first {
             throw ServerRequestError.invalid(
-                message: "\(unsupported) is not supported",
+                message: Self.unsupportedKeyMessages[unsupported]
+                    ?? "\(unsupported) is not supported",
                 param: unsupported,
                 code: "unsupported_value")
         }
@@ -304,8 +327,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
             Float.self, forKey: .frequencyPenalty)
         responseFormat = try container.decodeIfPresent(
             JSONValue.self, forKey: .responseFormat)
-        functions = try container.decodeIfPresent(JSONValue.self, forKey: .functions)
-        functionCall = try container.decodeIfPresent(JSONValue.self, forKey: .functionCall)
     }
 }
 
@@ -540,15 +561,6 @@ public enum OpenAIRequestValidator {
             throw invalid(#"response_format must be an object such as {"type": "text"}"#,
                           "response_format", "invalid_value")
         }
-        guard request.functions == nil else {
-            throw invalid("legacy functions are not supported; use tools",
-                          "functions", "unsupported_value")
-        }
-        guard request.functionCall == nil else {
-            throw invalid("legacy function_call is not supported; use tools and tool_choice",
-                          "function_call", "unsupported_value")
-        }
-
         let temperature = request.temperature ?? 0.2
         guard temperature >= 0, temperature <= 2 else {
             throw invalid("temperature must be between 0 and 2",

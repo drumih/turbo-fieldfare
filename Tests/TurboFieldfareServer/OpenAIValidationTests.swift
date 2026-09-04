@@ -654,7 +654,7 @@ struct OpenAIValidationTests {
     }
 
     @Test(arguments: [
-        "logit_bias", "top_logprobs", "reasoning_effort", "modalities",
+        "logit_bias", "top_logprobs", "reasoning_effort", "verbosity", "modalities",
         "audio", "prediction", "web_search_options",
     ])
     func knownUnsupportedFieldsAreRefusedAsUnsupportedNotUnknown(_ key: String) {
@@ -725,17 +725,22 @@ struct OpenAIValidationTests {
         ("functions", #""functions":[{"name":"f","parameters":{"type":"object"}}]"#),
         ("function_call", #""function_call":{"name":"f"}"#),
     ])
-    func legacyFunctionsAreUnsupported(_ key: String, _ field: String) throws {
+    func legacyFunctionsAreUnsupported(_ key: String, _ field: String) {
+        // Refused at decode time like every other unsupported key, so the
+        // answer names the legacy field even beside a mistyped declared one;
+        // a validator-side refusal lost to that field's DecodingError.
         let data = Data("""
-        {"model":"m","messages":[{"role":"user","content":"x"}],\(field)}
+        {"model":"m","messages":[{"role":"user","content":"x"}],\(field),"temperature":"hot"}
         """.utf8)
-        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
         do {
-            _ = try OpenAIRequestValidator.validate(request, modelID: "m")
-            Issue.record("legacy \(key) validated")
-        } catch ServerRequestError.invalid(_, let param, let code) {
+            _ = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            Issue.record("legacy \(key) decoded instead of failing")
+        } catch ServerRequestError.invalid(let message, let param, let code) {
+            #expect(message.contains("use tools"))
             #expect(param == key)
             #expect(code == "unsupported_value")
+        } catch {
+            Issue.record("decoding threw \(error) rather than a ServerRequestError")
         }
     }
 
@@ -1187,13 +1192,13 @@ struct ServerArgumentTests {
                 "the --expert-cache-slots help line names \(namedSlots)")
         #expect(!slotsLine.contains("auto"),
                 "the --expert-cache-slots help line offers auto: \(slotsLine)")
-        let chunkLine = try #require(lines.first { $0.contains("--prefill-chunk-tokens") })
+        let flagLine = try #require(lines.first { $0.contains("--prefill-chunk-tokens") })
+        #expect(flagLine.contains("<n|auto>"),
+                "the --prefill-chunk-tokens placeholder does not admit auto: \(flagLine)")
+        let chunkLine = try #require(lines.first { $0.contains("Prefill chunk size:") })
         let namedChunks = integers(in: String(chunkLine))
         #expect(namedChunks == RuntimeConfiguration.allowedPrefillChunkTokens,
                 "the --prefill-chunk-tokens help line names \(namedChunks)")
-        // On the flag's own line rather than a continuation, because the
-        // integer assertion above reads that line and a two-line CLI-style
-        // layout would leave it with no integers to read.
         #expect(chunkLine.contains("auto"),
                 "the --prefill-chunk-tokens help line omits auto: \(chunkLine)")
     }

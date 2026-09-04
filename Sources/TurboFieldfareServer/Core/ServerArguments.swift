@@ -33,14 +33,15 @@ public struct ServerArguments: Equatable, Sendable {
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
-      --prefill-chunk-tokens <n> Prefill chunk size: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens, alsoAccepting: ["auto"]))
+      --prefill-chunk-tokens <n|auto>
+                                 Prefill chunk size: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens, alsoAccepting: ["auto"]))
                                  (default 128). Each chunk re-reads the routed
                                  expert pool, so larger chunks read less; auto
                                  runs at the cap, 256, which prefills every
                                  prompt in the same spans a per-request size
                                  would. Prefill scratch is sized from the chunk,
-                                 so the cap holds about 33 MB of it against
-                                 16.6 MB at 128.
+                                 so the cap holds about 32.5 MB of it against
+                                 16.4 MB at 128.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.
@@ -166,7 +167,8 @@ public struct ServerArguments: Equatable, Sendable {
                 // prefills every prompt in exactly the spans that size would,
                 // and the KV ring is sized from the cap either way. The prefill
                 // scratch is the one thing a per-request size changes: it is
-                // allocated from the chunk, about 129.7 KB per token, and the
+                // allocated from the chunk, about 125.5 KB per token over a
+                // fixed 328 KB, and the
                 // server would reallocate it on every size change.
                 if value == "auto" {
                     prefillChunkTokens = PrefillRuntimeConfig.maxChunkTokens
