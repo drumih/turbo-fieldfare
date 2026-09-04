@@ -111,55 +111,6 @@ import Metal
         #expect(scratch.routeWeights.storageMode == MTLStorageMode.shared)
     }
 
-    /// The runner narrows its own `ArchConfig` copy once and hands that copy to
-    /// the layout, so prefill and decode can never end up routing at different
-    /// widths. The second half is what makes the narrowing safe: the helper
-    /// moves `topKExperts` and nothing else, so a transposed argument in its
-    /// long memberwise call — `headDim` for `fullHeadDim`, say — fails here
-    /// rather than in an attention kernel.
-    @Test func routedWidthSizesTheRouteBuffersAndMovesNoOtherArchField() {
-        let baseline = ArchConfig.gemma4_26B_A4B
-        let narrowed = baseline.replacingTopKExperts(4)
-        let eight = PrefillChunkScratchLayout(config: baseline, chunkTokens: 32)
-        let four = PrefillChunkScratchLayout(config: narrowed, chunkTokens: 32)
-
-        #expect(eight.topK == 8)
-        #expect(four.topK == 4)
-        #expect(four.routePartialElements == eight.routePartialElements / 2)
-        #expect(four.routeIDElements == eight.routeIDElements / 2)
-        #expect(four.routeWeightElements == eight.routeWeightElements / 2)
-        #expect(four.totalPersistentBytes < eight.totalPersistentBytes)
-        #expect(four.hiddenElements == eight.hiddenElements)
-        #expect(four.qElements == eight.qElements)
-        #expect(four.sharedExpertScratchElements == eight.sharedExpertScratchElements)
-
-        #expect(narrowed == ArchConfig(
-            hiddenSize: baseline.hiddenSize,
-            intermediateSize: baseline.intermediateSize,
-            moeIntermediateSize: baseline.moeIntermediateSize,
-            numHeads: baseline.numHeads,
-            numKVHeads: baseline.numKVHeads,
-            numFullKVHeads: baseline.numFullKVHeads,
-            headDim: baseline.headDim,
-            fullHeadDim: baseline.fullHeadDim,
-            vocabSize: baseline.vocabSize,
-            slidingWindow: baseline.slidingWindow,
-            finalLogitSoftcap: baseline.finalLogitSoftcap,
-            ropeTheta: baseline.ropeTheta,
-            fullRopeTheta: baseline.fullRopeTheta,
-            partialRotaryFactor: baseline.partialRotaryFactor,
-            numLayers: baseline.numLayers,
-            numExperts: baseline.numExperts,
-            topKExperts: 4,
-            tieWordEmbeddings: baseline.tieWordEmbeddings,
-            attentionKEqV: baseline.attentionKEqV,
-            fullAttentionLayerMask: baseline.fullAttentionLayerMask,
-            hiddenActivation: baseline.hiddenActivation))
-        // The checkpoint's width is the hard cap: a run cannot route more
-        // experts than the file has weights for in its argument buffer.
-        #expect(baseline.replacingTopKExperts(8) == baseline)
-    }
-
     @Test func multimodalBlockScratchStaysInsideBoundedBudget() {
         let tokens = VisionConfig().maximumPooledTokens
         let layout = PrefillChunkScratchLayout(

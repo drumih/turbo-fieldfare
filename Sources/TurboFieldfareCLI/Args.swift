@@ -24,9 +24,6 @@ public struct Args: Equatable, Sendable {
     /// `--prefill-chunk-tokens auto`: the size is decided once the prompt length
     /// is known, which needs the tokenizer and, for images, their geometry.
     public var prefillChunkTokensAuto: Bool
-    /// Routed experts per token. 8 is the checkpoint's own routing width and
-    /// the only width benchmarks use; smaller widths are a quality trade.
-    public var expertsPerToken: Int
     public var rdadvisePolicy: RDAdvicePolicyMode
 
     public init(model: String,
@@ -50,7 +47,6 @@ public struct Args: Equatable, Sendable {
                 prefillPolicy: RuntimePrefillPolicy = RuntimeConfiguration.production.prefillPolicy,
                 prefillChunkTokens: Int = RuntimeConfiguration.production.prefillChunkTokens,
                 prefillChunkTokensAuto: Bool = false,
-                expertsPerToken: Int = RuntimeConfiguration.production.expertsPerToken,
                 rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy) {
         self.model = model
         self.prompt = prompt
@@ -73,7 +69,6 @@ public struct Args: Equatable, Sendable {
         self.prefillPolicy = prefillPolicy
         self.prefillChunkTokens = prefillChunkTokens
         self.prefillChunkTokensAuto = prefillChunkTokensAuto
-        self.expertsPerToken = expertsPerToken
         self.rdadvisePolicy = rdadvisePolicy
     }
 }
@@ -153,11 +148,6 @@ extension Args {
                                  (default 128). Each chunk re-reads the routed
                                  expert pool, so larger chunks read less; auto
                                  picks the smallest size that covers the prompt.
-      --experts-per-token <n>    Routed experts per token: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertsPerToken)).
-                                 Default is the checkpoint's own routing width;
-                                 fewer experts cut the routed computation and
-                                 the expert reads each token needs, at a quality
-                                 cost that depends on the prompt.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive (default off).
       --help                     Show this message.
     """
@@ -184,10 +174,6 @@ extension Args {
             throw ArgsError.invalidValue(
                 flag: "--prefill-chunk-tokens", value: "\(prefillChunkTokens)")
         }
-        guard RuntimeConfiguration.allowedExpertsPerToken.contains(expertsPerToken) else {
-            throw ArgsError.invalidValue(
-                flag: "--experts-per-token", value: "\(expertsPerToken)")
-        }
         let chunkedPrefillSupported = expertCacheSlots >=
             RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
         guard prefillPolicy == .off || chunkedPrefillSupported else {
@@ -201,7 +187,6 @@ extension Args {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            expertsPerToken: expertsPerToken,
             forceLogitsHead: forceLogitsHead)
     }
 
@@ -228,7 +213,6 @@ extension Args {
         var prefillPolicy = runtimeDefaults.prefillPolicy
         var prefillChunkTokens = runtimeDefaults.prefillChunkTokens
         var prefillChunkTokensAuto = false
-        var expertsPerToken = runtimeDefaults.expertsPerToken
         var rdadvisePolicy = runtimeDefaults.rdadvisePolicy
 
         var index = 0
@@ -337,13 +321,6 @@ extension Args {
                 // overridden at run time by the resolved size.
                 prefillChunkTokensAuto = false
                 prefillChunkTokens = parsed
-            case "--experts-per-token":
-                let value = try takeValue(argv, &index, flag: flag)
-                guard let parsed = Int(value),
-                      RuntimeConfiguration.allowedExpertsPerToken.contains(parsed) else {
-                    throw ArgsError.invalidValue(flag: flag, value: value)
-                }
-                expertsPerToken = parsed
             case "--rdadvise":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
@@ -410,7 +387,6 @@ extension Args {
                              prefillPolicy: prefillPolicy,
                              prefillChunkTokens: prefillChunkTokens,
                              prefillChunkTokensAuto: prefillChunkTokensAuto,
-                             expertsPerToken: expertsPerToken,
                              rdadvisePolicy: rdadvisePolicy)
         _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         return arguments

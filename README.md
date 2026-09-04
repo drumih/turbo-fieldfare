@@ -274,9 +274,8 @@ generate until the selected context window is full.
 Common generation options include `--max-context`, `--temperature`, `--top-k`,
 `--top-p`, `--repetition-penalty`, `--seed`, and repeatable `--stop` strings.
 Runtime options include `--expert-cache-slots`, `--expert-cache-policy`,
-`--prefill`, `--prefill-chunk-tokens`, `--experts-per-token`, and
-`--rdadvise`; omitted options use the
-[production defaults](docs/RUNTIME_CONTROLS.md). Run the following command
+`--prefill`, `--prefill-chunk-tokens`, and `--rdadvise`; omitted options use
+the [production defaults](docs/RUNTIME_CONTROLS.md). Run the following command
 for the complete option list:
 
 ```bash

@@ -12,10 +12,6 @@ public struct ServerArguments: Equatable, Sendable {
     public let expertCachePolicy: RuntimeExpertCachePolicy
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
-    /// Routed experts per token. 8 is the checkpoint's own routing width and
-    /// the only width benchmarks use; smaller widths are a quality trade the
-    /// operator opts into.
-    public let expertsPerToken: Int
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
@@ -45,11 +41,6 @@ public struct ServerArguments: Equatable, Sendable {
                                  would. Prefill scratch is sized from the chunk,
                                  so the cap holds about 33 MB of it against
                                  16.6 MB at 128.
-      --experts-per-token <n>    Routed experts per token: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertsPerToken))
-                                 (default 8). 8 is the checkpoint's own routing
-                                 width; fewer experts cut the routed computation
-                                 and the expert reads each token needs, at a
-                                 quality cost.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.
@@ -73,11 +64,6 @@ public struct ServerArguments: Equatable, Sendable {
                 allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
                 alsoAccepting: ["auto"])
         }
-        guard RuntimeConfiguration.allowedExpertsPerToken.contains(expertsPerToken) else {
-            throw ServerArgumentError.notAllowed(
-                flag: "--experts-per-token",
-                allowed: RuntimeConfiguration.allowedExpertsPerToken)
-        }
         guard prefillPolicy == .off
                 || expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
         else {
@@ -90,7 +76,6 @@ public struct ServerArguments: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            expertsPerToken: expertsPerToken,
             forceLogitsHead: forceLogitsHead)
     }
 
@@ -107,7 +92,6 @@ public struct ServerArguments: Equatable, Sendable {
         var expertCachePolicy = RuntimeExpertCachePolicy.lfu
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
-        var expertsPerToken = RuntimeConfiguration.defaultExpertsPerToken
         var rdadvisePolicy = RDAdvicePolicyMode.off
         var index = 0
         while index < input.count {
@@ -196,14 +180,6 @@ public struct ServerArguments: Equatable, Sendable {
                         alsoAccepting: ["auto"])
                 }
                 prefillChunkTokens = parsed
-            case "--experts-per-token":
-                guard let parsed = Int(value),
-                      RuntimeConfiguration.allowedExpertsPerToken.contains(parsed) else {
-                    throw ServerArgumentError.notAllowed(
-                        flag: flag,
-                        allowed: RuntimeConfiguration.allowedExpertsPerToken)
-                }
-                expertsPerToken = parsed
             case "--rdadvise":
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
                     throw ServerArgumentError.invalid(
@@ -225,7 +201,6 @@ public struct ServerArguments: Equatable, Sendable {
                                expertCachePolicy: expertCachePolicy,
                                prefillPolicy: prefillPolicy,
                                prefillChunkTokens: prefillChunkTokens,
-                               expertsPerToken: expertsPerToken,
                                rdadvisePolicy: rdadvisePolicy,
                                visionPack: visionPack,
                                visionResidency: visionResidency)

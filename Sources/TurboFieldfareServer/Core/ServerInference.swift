@@ -528,9 +528,6 @@ public actor ServerModelSession: ServerInferenceBackend {
             runtime.rdadvisePolicy.rawValue,
             runtime.prefillPolicy.rawValue,
             String(runtime.prefillChunkTokens),
-            // A narrower routing width is a different model, so a prefix built
-            // at one width must never be resumed at another.
-            String(runtime.expertsPerToken),
             runtime.headPath.rawValue,
         ]
         let switches = environment

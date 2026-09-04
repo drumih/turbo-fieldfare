@@ -917,45 +917,7 @@ struct ServerArgumentTests {
         #expect(arguments.expertCachePolicy == .lfu)
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)
-        #expect(arguments.expertsPerToken == 8)
         #expect(arguments.rdadvisePolicy == .off)
-    }
-
-    /// The width has to survive as far as the resolved configuration, because
-    /// that is what `RealForwardRunner` reads to narrow its `ArchConfig` copy;
-    /// an argument the resolver drops would run at 8 while the operator
-    /// believed otherwise. The identity moving is the second half: a prefix
-    /// cached at one width must never be reused at another.
-    @Test func expertsPerTokenReachesTheResolvedConfigurationAndItsCacheIdentity() throws {
-        let narrow = try ServerArguments.parse([
-            "--model", "model.gturbo",
-            "--experts-per-token", "4",
-        ])
-        #expect(narrow.expertsPerToken == 4)
-        let narrowConfiguration = try narrow.resolvedRuntimeConfiguration()
-        #expect(narrowConfiguration.expertsPerToken == 4)
-
-        let baseline = try ServerArguments.parse(["--model", "model.gturbo"])
-            .resolvedRuntimeConfiguration()
-        #expect(baseline.expertsPerToken == 8)
-        #expect(ServerModelSession.runtimeIdentityString(
-            runtime: narrowConfiguration, environment: [:])
-            != ServerModelSession.runtimeIdentityString(
-                runtime: baseline, environment: [:]))
-
-        // Naming the default is the same run as omitting the flag, so pinning 8
-        // cannot invalidate a cached prefix or move a recorded identity.
-        let pinned = try ServerArguments.parse([
-            "--model", "model.gturbo",
-            "--experts-per-token", "8",
-        ])
-        #expect(try pinned.resolvedRuntimeConfiguration() == baseline)
-        #expect(ServerModelSession.runtimeIdentityString(
-            runtime: try pinned.resolvedRuntimeConfiguration(), environment: [:])
-            == ServerModelSession.runtimeIdentityString(
-                runtime: baseline, environment: [:]))
-        #expect(try pinned.resolvedRuntimeConfiguration(forceLogitsHead: false)
-                == RuntimeConfiguration.production)
     }
 
     /// The server rejected `--prefill-chunk-tokens auto` while the CLI accepted
@@ -1087,8 +1049,6 @@ struct ServerArgumentTests {
         ["--prefill", "maybe"],
         ["--prefill-chunk-tokens", "512"],
         ["--prefill-chunk-tokens", "automatic"],
-        ["--experts-per-token", "5"],
-        ["--experts-per-token", "nine"],
         ["--rdadvise", "eager"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
@@ -1135,14 +1095,6 @@ struct ServerArgumentTests {
          allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
          badValue: "many",
          namesAuto: true),
-        (flag: "--experts-per-token",
-         allowed: RuntimeConfiguration.allowedExpertsPerToken,
-         badValue: "5",
-         namesAuto: false),
-        (flag: "--experts-per-token",
-         allowed: RuntimeConfiguration.allowedExpertsPerToken,
-         badValue: "nine",
-         namesAuto: false),
     ])
     func parseRejectionNamesExactlyTheAllowedValues(
         testCase: (flag: String, allowed: [Int], badValue: String, namesAuto: Bool)
@@ -1184,7 +1136,6 @@ struct ServerArgumentTests {
                                         expertCachePolicy: .lfu,
                                         prefillPolicy: .off,
                                         prefillChunkTokens: 128,
-                                        expertsPerToken: 8,
                                         rdadvisePolicy: .off,
                                         visionPack: nil,
                                         visionResidency: .onDemand),
@@ -1201,29 +1152,11 @@ struct ServerArgumentTests {
                                         expertCachePolicy: .lfu,
                                         prefillPolicy: .off,
                                         prefillChunkTokens: 512,
-                                        expertsPerToken: 8,
                                         rdadvisePolicy: .off,
                                         visionPack: nil,
                                         visionResidency: .onDemand),
              allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
              namesAuto: true),
-            (flag: "--experts-per-token",
-             arguments: ServerArguments(model: "model.gturbo",
-                                        port: 8080,
-                                        modelID: "gemma-4-26b-a4b-it",
-                                        maxContext: 16_384,
-                                        queueLimit: 4,
-                                        promptCacheMode: .singlePrefix,
-                                        expertCacheSlots: 16,
-                                        expertCachePolicy: .lfu,
-                                        prefillPolicy: .off,
-                                        prefillChunkTokens: 128,
-                                        expertsPerToken: 5,
-                                        rdadvisePolicy: .off,
-                                        visionPack: nil,
-                                        visionResidency: .onDemand),
-             allowed: RuntimeConfiguration.allowedExpertsPerToken,
-             namesAuto: false),
         ]
         for testCase in cases {
             do {
@@ -1263,10 +1196,6 @@ struct ServerArgumentTests {
         // layout would leave it with no integers to read.
         #expect(chunkLine.contains("auto"),
                 "the --prefill-chunk-tokens help line omits auto: \(chunkLine)")
-        let widthLine = try #require(lines.first { $0.contains("--experts-per-token") })
-        #expect(integers(in: String(widthLine))
-                == RuntimeConfiguration.allowedExpertsPerToken,
-                "the --experts-per-token help line names \(integers(in: String(widthLine)))")
     }
 
     @Test func imageDataURLPreservesOrderedMultimodalParts() throws {

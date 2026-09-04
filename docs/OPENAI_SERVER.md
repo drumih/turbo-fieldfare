@@ -59,13 +59,12 @@ defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
   --expert-cache-policy lru \
   --prefill on \
   --prefill-chunk-tokens 64 \
-  --experts-per-token 8 \
   --rdadvise bounded
 ```
 
 Without these flags the server runs the production defaults: 16 expert-cache
-slots, LFU eviction, chunked prefill on with 128-token chunks, 8 routed experts
-per token, and read advice off. `--prefill-chunk-tokens auto` runs at the cap,
+slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
+off. `--prefill-chunk-tokens auto` runs at the cap,
 256, on the server: a per-request size is the smallest allowed size covering the
 span being prefilled, so the cap prefills every prompt in exactly those spans,
 and it costs about 33 MB of prefill scratch against about 16.6 MB at the 128

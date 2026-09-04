@@ -230,16 +230,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 runtimeConfiguration: RuntimeConfiguration = .production) throws {
         self.model = model
         self.ctx = context
-        // One site owns the routed-width override. `cfg` is this runner's own
-        // copy, so narrowing it here carries the run's width to every
-        // `cfg.topKExperts` reader — decode buffers, dispatch geometry,
-        // readback, and the prefill scratch layout, which is what keeps prefill
-        // and decode at the same K — while `model.config` keeps the width the
-        // manifest declared. `min` because a configuration may not ask for more
-        // experts than the checkpoint routes.
-        let routedWidth = min(runtimeConfiguration.expertsPerToken,
-                              model.config.topKExperts)
-        self.cfg = model.config.replacingTopKExperts(routedWidth)
+        self.cfg = model.config
         self.maxContext = maxContext
         self.useFusedGreedyHead = runtimeConfiguration.headPath == .fusedRows
         self.prefillAttentionPath = runtimeConfiguration.prefillAttentionPath

@@ -20,34 +20,8 @@ import TurboFieldfare
         #expect(arguments.stops.isEmpty)
         #expect(!arguments.quiet)
 
-        #expect(arguments.expertsPerToken == 8)
-
         let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         #expect(runtime == RuntimeConfiguration.production)
-        #expect(runtime.expertsPerToken == 8)
-    }
-
-    /// The width has to reach the resolved configuration, because that is what
-    /// `RealForwardRunner` reads to narrow its `ArchConfig` copy; a flag the
-    /// resolver drops would run at 8 while the user believed otherwise.
-    @Test func expertsPerTokenReachesTheResolvedConfiguration() throws {
-        let arguments = try Args.parse([
-            "--model", "m.gturbo", "--prompt", "hi",
-            "--experts-per-token", "4",
-        ])
-        #expect(arguments.expertsPerToken == 4)
-        let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
-        #expect(runtime.expertsPerToken == 4)
-        #expect(runtime != RuntimeConfiguration.production)
-
-        // Naming the default is the same run as omitting the flag, so a user
-        // who pins 8 changes nothing about the process, the kernels it selects,
-        // or any recorded identity taken from the configuration.
-        let pinned = try Args.parse([
-            "--model", "m.gturbo", "--prompt", "hi",
-            "--experts-per-token", "8",
-        ]).resolvedRuntimeConfiguration(forceLogitsHead: false)
-        #expect(pinned == RuntimeConfiguration.production)
     }
 
     /// `auto` only resolves a size where a chunked prefill will run at it.
@@ -92,17 +66,6 @@ import TurboFieldfare
         ])
         #expect(autoLast.prefillChunkTokensAuto)
         #expect(autoLast.resolvesPrefillChunkAuto)
-    }
-
-    /// The help text and the guard read the same set. A hardcoded list is how
-    /// `--prefill-chunk-tokens` came to advertise 256 as illegal while the
-    /// guard accepted it.
-    @Test func usageNamesExactlyTheAllowedRoutedWidths() throws {
-        let lines = Args.usage.split(separator: "\n", omittingEmptySubsequences: false)
-        let line = try #require(lines.first { $0.contains("--experts-per-token") })
-        let named = String(line).split { !$0.isNumber }.compactMap { Int($0) }
-        #expect(named == RuntimeConfiguration.allowedExpertsPerToken,
-                "the --experts-per-token help line names \(named)")
     }
 
     @Test func generationOptionsParseAndStopsRepeat() throws {
@@ -153,7 +116,7 @@ import TurboFieldfare
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--seed", "--stop", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
-            "--experts-per-token", "--rdadvise", "--help",
+            "--rdadvise", "--help",
             "--chat-prompt", "--image", "--vision-pack", "--vision-residency",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
@@ -211,13 +174,6 @@ import TurboFieldfare
             ])
             #expect(arguments.expertCachePolicy.rawValue == value)
         }
-        for value in RuntimeConfiguration.allowedExpertsPerToken {
-            let arguments = try Args.parse([
-                "--model", "m.gturbo", "--prompt", "hi",
-                "--experts-per-token", "\(value)",
-            ])
-            #expect(arguments.expertsPerToken == value)
-        }
         for value in ["off", "default", "bounded", "adaptive"] {
             let arguments = try Args.parse([
                 "--model", "m.gturbo", "--prompt", "hi", "--rdadvise", value,
@@ -238,8 +194,6 @@ import TurboFieldfare
             ("--expert-cache-policy", "fifo"),
             ("--prefill", "yes"),
             ("--prefill-chunk-tokens", "512"),
-            ("--experts-per-token", "5"),
-            ("--experts-per-token", "nine"),
             ("--rdadvise", "automatic"),
         ]
         for (flag, value) in invalidValues {
@@ -278,15 +232,6 @@ import TurboFieldfare
         arguments.expertCacheSlots = 8
         #expect(throws: ArgsError.invalidValue(
             flag: "--expert-cache-slots", value: "8 requires --prefill off")) {
-            _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
-        }
-
-        // Ahead of `RuntimeConfiguration`'s precondition, which would trap the
-        // process rather than report the flag.
-        arguments.expertCacheSlots = RuntimeConfiguration.production.expertCacheSlots
-        arguments.expertsPerToken = 5
-        #expect(throws: ArgsError.invalidValue(
-            flag: "--experts-per-token", value: "5")) {
             _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         }
     }

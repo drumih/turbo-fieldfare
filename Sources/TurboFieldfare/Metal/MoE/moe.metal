@@ -24,14 +24,6 @@ static inline uint router_fc_num_experts(constant uint& num_experts) {
         : num_experts;
 }
 
-static inline uint router_fc_top_k(constant uint& top_k) {
-    return (is_function_constant_defined(FC_ROUTER_USE_FC) &&
-            FC_ROUTER_USE_FC &&
-            is_function_constant_defined(FC_ROUTER_TOP_K))
-        ? FC_ROUTER_TOP_K
-        : top_k;
-}
-
 static inline uint router_fc_d(constant uint& D) {
     return (is_function_constant_defined(FC_ROUTER_USE_FC) &&
             FC_ROUTER_USE_FC &&
@@ -140,42 +132,35 @@ kernel void router_gemv_gemma4_r4(
                             out_logits, num_experts, D, 4, tg_idx, sg_idx, lane);
 }
 
-// Selects K experts and softmaxes over those K, which is what Gemma 4's router
-// computes at `num_experts_per_tok = K`: the weights are renormalised over the
-// experts the token actually uses, never over eight with the tail dropped. The
-// local arrays stay at kMaxStreamedExperts because that is the hard cap the
-// routed argument buffer imposes.
-kernel void router_topk_select(
+kernel void router_topk_select_k8(
     device const float* logits [[buffer(0)]],
     device const bfloat* per_expert_scale [[buffer(1)]],
     device uint* out_indices [[buffer(2)]],
     device half* out_weights [[buffer(3)]],
     constant uint& num_experts [[buffer(4)]],
-    constant uint& top_k [[buffer(5)]],
     uint tid [[thread_position_in_threadgroup]]
 ) {
     if (tid != 0) return;
     const uint NE = router_fc_num_experts(num_experts);
-    const uint K = clamp(router_fc_top_k(top_k), 1u, kMaxStreamedExperts);
-    uint top_idx[kMaxStreamedExperts];
-    float top_score[kMaxStreamedExperts];
-    for (uint i = 0; i < kMaxStreamedExperts; ++i) {
+    uint top_idx[8];
+    float top_score[8];
+    for (uint i = 0; i < 8; ++i) {
         top_idx[i] = 0u;
         top_score[i] = -INFINITY;
     }
 
     for (uint e = 0; e < NE; ++e) {
         const float s = logits[e];
-        if (s <= top_score[K - 1u]) continue;
-        uint pos = K;
-        for (uint i = 0; i < K; ++i) {
+        if (s <= top_score[7]) continue;
+        uint pos = 8u;
+        for (uint i = 0; i < 8; ++i) {
             if (s > top_score[i] || (s == top_score[i] && e < top_idx[i])) {
                 pos = i;
                 break;
             }
         }
-        if (pos >= K) continue;
-        for (uint i = K - 1u; i > pos; --i) {
+        if (pos >= 8u) continue;
+        for (uint i = 7; i > pos; --i) {
             top_idx[i] = top_idx[i - 1];
             top_score[i] = top_score[i - 1];
         }
@@ -185,13 +170,13 @@ kernel void router_topk_select(
 
     const float max_s = top_score[0];
     float sum_exp = 0.0f;
-    float exps[kMaxStreamedExperts];
-    for (uint i = 0; i < K; ++i) {
+    float exps[8];
+    for (uint i = 0; i < 8; ++i) {
         const float ex = fast::exp(top_score[i] - max_s);
         exps[i] = ex;
         sum_exp += ex;
     }
-    for (uint i = 0; i < K; ++i) {
+    for (uint i = 0; i < 8; ++i) {
         const uint expert_idx = top_idx[i];
         const float weight = exps[i] / sum_exp;
         out_indices[i] = expert_idx;
@@ -458,12 +443,7 @@ kernel void moe_phase1_gate_up_act_subset_u16load(
         tg_idx, sg_idx, lane);
 }
 
-// Dispatched with exactly `32 * K` threads, so the threadgroup holds K SIMD
-// groups and every one of them owns a routed slot and reaches the barrier. A
-// SIMD group returning early while the rest wait on a threadgroup barrier is
-// undefined in Metal, which is why the geometry rather than a guard carries the
-// width. The reduction sums slots in index order, so K=8 is today's sum.
-kernel void moe_phase2_down_reduce(
+kernel void moe_phase2_down_reduce_k8(
     device const RoutedBlobs& routed [[buffer(0)]],
     constant ExpertOffsets& routed_offsets [[buffer(1)]],
     device const half* acts [[buffer(2)]],
@@ -472,17 +452,13 @@ kernel void moe_phase2_down_reduce(
     device half* y [[buffer(5)]],
     constant uint& D [[buffer(6)]],
     constant uint& F [[buffer(7)]],
-    constant uint& top_k [[buffer(8)]],
     uint d [[threadgroup_position_in_grid]],
     uint sg_idx [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]]
 ) {
-    threadgroup float partial[kMaxStreamedExperts];
+    threadgroup float partial[8];
     const uint DD = moe_fc_d(D);
     const uint FF = moe_fc_f(F);
-    const uint KK = clamp(moe_fc_top_k(top_k), 1u, kMaxStreamedExperts);
-    // Uniform across the threadgroup: `d` is the threadgroup index, so either
-    // every group leaves here or none does, and the barrier below stays whole.
     if (d >= DD) return;
 
     device const uint8_t* base = routed.blob[sg_idx];
@@ -499,9 +475,8 @@ kernel void moe_phase2_down_reduce(
 
     if (sg_idx == 0 && lane == 0) {
         float acc = float(residual[d]);
-        for (uint slot = 0; slot < KK; ++slot) {
-            acc += partial[slot];
-        }
+        acc += partial[0]; acc += partial[1]; acc += partial[2]; acc += partial[3];
+        acc += partial[4]; acc += partial[5]; acc += partial[6]; acc += partial[7];
         y[d] = half(acc);
     }
 }
