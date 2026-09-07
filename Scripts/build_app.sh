@@ -9,7 +9,10 @@ MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
 ICON_SOURCE="$ROOT_DIR/Sources/TurboFieldfareApp/Mac/Resources/turbofieldfare-app-icon.png"
 ICON_FILE="$RESOURCES_DIR/TurboFieldfare.icns"
-ICONSET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/turbofieldfare-icon.XXXXXX.iconset")"
+
+ICONSET_TMP="$(mktemp -d "${TMPDIR:-/tmp}/turbofieldfare-icon.XXXXXX")"
+ICONSET_DIR="${ICONSET_TMP}.iconset"
+mv "$ICONSET_TMP" "$ICONSET_DIR"
 
 cleanup() {
     rm -rf "$ICONSET_DIR"
@@ -34,9 +37,9 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$BUILD_DIR/TurboFieldfareMac" "$MACOS_DIR/TurboFieldfareMac"
 cp "$BUILD_DIR/TurboFieldfareDecodeService" "$MACOS_DIR/TurboFieldfareDecodeService"
-cp "$BUILD_DIR/TurboFieldfareCLI" "$MACOS_DIR/TurboFieldfareDecodeService"
-cp "$BUILD_DIR/TurboFieldfareRepack" "$MACOS_DIR/TurboFieldfareDecodeService"
-cp "$BUILD_DIR/TurboFieldfareServer" "$MACOS_DIR/TurboFieldfareDecodeService"
+cp "$BUILD_DIR/TurboFieldfareCLI" "$MACOS_DIR/TurboFieldfareCLI"
+cp "$BUILD_DIR/TurboFieldfareRepack" "$MACOS_DIR/TurboFieldfareRepack"
+cp "$BUILD_DIR/TurboFieldfareServer" "$MACOS_DIR/TurboFieldfareServer"
 cp -R "$BUILD_DIR"/*.bundle "$RESOURCES_DIR/"
 
 for size in 16 32 128 256 512; do
