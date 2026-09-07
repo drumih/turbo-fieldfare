@@ -32,10 +32,9 @@ import Testing
         #expect(shows(modelInstalled: true, packInstalled: false))
     }
 
-    /// Installed and healthy is the one case with nothing to say, so the section
-    /// collapses rather than occupying the inspector permanently.
-    @Test func anInstalledHealthyPackCollapsesTheSection() {
-        #expect(!shows(modelInstalled: true, packInstalled: true))
+    /// Removal remains available after install, so the section must not vanish.
+    @Test func anInstalledHealthyPackKeepsTheRemoveActionReachable() {
+        #expect(shows(modelInstalled: true, packInstalled: true))
     }
 
     @Test func workInProgressKeepsTheSectionOpen() {

@@ -9,6 +9,8 @@ final class MockLifecycleInferenceClient: AppModelLifecycleClient, @unchecked Se
     private var unloadContinuations: [CheckedContinuation<Void, Never>] = []
     private var unloadStartedCount = 0
     private var loadStartedCount = 0
+    private var generateStartedCount = 0
+    private var shutdownStartedCount = 0
     private var loadStateHandlers: [@Sendable (AppModelLoadState) -> Void] = []
     private var nextLoadFailure: AppInferenceError?
     private(set) var ensureLoadedCalls: [(URL, Int, AppRuntimeOptions, Bool)] = []
@@ -37,6 +39,24 @@ final class MockLifecycleInferenceClient: AppModelLifecycleClient, @unchecked Se
                        loadSeconds: 0))
     }
 
+    private var openedEpochs: [UUID] = []
+    var conversationEpochs: [UUID] { lock.withLock { openedEpochs } }
+
+    func resetConversation(epoch: UUID) async throws {
+        lock.withLock { openedEpochs.append(epoch) }
+    }
+
+    func restoreConversation(
+        _ lineage: AppConversationLineage,
+        epoch: UUID,
+        options: AppRuntimeOptions,
+        maxContextTokens: Int,
+        onPrefillProgress: @escaping @Sendable (Int, Int) -> Void
+    ) async throws -> Int {
+        lock.withLock { openedEpochs.append(epoch) }
+        return lineage.tokenIDs.count
+    }
+
     func unload() async {
         if beginUnload() {
             await withCheckedContinuation { continuation in
@@ -46,7 +66,6 @@ final class MockLifecycleInferenceClient: AppModelLifecycleClient, @unchecked Se
 
     }
 
-    func resetConversation(epoch _: UUID) async throws {}
 
     func generate(_ request: AppGenerationRequest) -> AsyncThrowingStream<AppInferenceEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -69,6 +88,12 @@ final class MockLifecycleInferenceClient: AppModelLifecycleClient, @unchecked Se
     }
 
     func cancel() {}
+
+    func shutdownForTermination() {
+        lock.withLock { shutdownStartedCount += 1 }
+    }
+
+    var shutdownCount: Int { lock.withLock { shutdownStartedCount } }
 
     func releaseUnloads() {
         let continuations: [CheckedContinuation<Void, Never>]

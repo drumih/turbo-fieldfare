@@ -6,11 +6,35 @@ struct StatusHUDView: View {
     let model: AppModel
 
     var body: some View {
-        strip
-            .padding(.top, 10)
-            .padding(.leading, 84)
-            .padding(.trailing, 20)
+        // The controls flank the pill rather than sitting in it. The pill is
+        // the model's state — what it is, what it is doing, what it costs — and
+        // a button inside it reads as part of that reading rather than as
+        // something to press. Outside, each toggle also sits on the side of the
+        // window it opens.
+        HStack(spacing: Self.gap) {
+            chatControls
+            // Yields first when the row is squeezed. Without this the HStack
+            // takes the space out of every child at once and the two rigid
+            // controls beside the pill end up drawn on top of each other.
+            strip
+                .layoutPriority(-1)
+            inspectorToggle
+        }
+        .padding(.top, 10)
+        // No clearance for the traffic lights. This row is not beside them:
+        // the window's title-bar inset puts it 42 points down and the lights
+        // end at 22, so nothing here ever reaches them. Insetting for them
+        // anyway — first the whole column, then just this row — only opened a
+        // hole to the left of the controls with nothing in it.
+        .padding(.horizontal, Self.gap)
     }
+
+    /// One spacing for the whole row: panel edge to button, button to pill,
+    /// pill to button, button to panel edge. Two different values — 20 outside
+    /// and 10 either side of the pill — made the controls read as sitting
+    /// closer to the pill on one side than the other even though the numbers
+    /// mirrored.
+    private static let gap: CGFloat = 12
 
     private var strip: some View {
         HStack(spacing: 12) {
@@ -19,19 +43,22 @@ struct StatusHUDView: View {
             PhaseLabel(model: model)
             Spacer(minLength: 12)
             if showsMetrics {
-                HUDMetricView(value: rateText, label: "tok/s", animated: !model.isRunning)
+                HUDMetricView(value: rateText, label: "tok/s", animated: !model.isRunning,
+                              identifier: .hudRate)
                 if showsContext {
                     // No info button beside this one. The memory figure has one
                     // because `phys_footprint` is genuinely misread; "20/8.2K"
                     // is not, and the same words are on hover.
                     HUDMetricView(value: contextText, label: "context",
-                                  animated: !model.isRunning)
+                                  animated: !model.isRunning, identifier: .hudContext)
                         .help(contextHelp)
                 }
                 HStack(spacing: 2) {
-                    HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning)
+                    HUDMetricView(value: memoryText, label: "memory", animated: !model.isRunning,
+                                  identifier: .hudMemory)
                         .help(memoryHelp)
                     InfoPopoverButton(subject: "Memory", text: memoryHelp, arrowEdge: .bottom)
+                        .accessibilityIdentifier(.hudMemoryInfo)
                 }
             }
         }
@@ -46,6 +73,41 @@ struct StatusHUDView: View {
                 }
         }
         .gesture(WindowDragGesture())
+    }
+
+    /// Show or hide the chat list, and start a new chat.
+    ///
+    /// These lived in the window toolbar, beside the traffic lights. That put
+    /// them in a strip of their own above the content, in a corner with no
+    /// relation to anything. They belong on the one row this window uses for
+    /// its chrome, at the end nearest the list they open.
+    private var chatControls: some View {
+        HStack(spacing: 4) {
+            StripControlButton(
+                systemImage: "sidebar.leading",
+                help: WindowControlsPresentation.sidebarToggleHelp(
+                    isVisible: model.isSidebarVisible),
+                identifier: .stripSidebar,
+                action: { withAnimation(RootView.panelSlide) { model.toggleSidebar() } })
+
+            StripControlButton(
+                systemImage: "square.and.pencil",
+                help: WindowControlsPresentation.newChatHelp,
+                identifier: .stripNewChat,
+                action: model.newChat)
+                .disabled(!model.canStartNewChat)
+        }
+    }
+
+    /// The mirror of the sidebar toggle, at the end of the row nearest the
+    /// panel it controls.
+    private var inspectorToggle: some View {
+        StripControlButton(
+            systemImage: "sidebar.trailing",
+            help: WindowControlsPresentation.inspectorToggleHelp(
+                isVisible: model.isInspectorVisible),
+            identifier: .stripInspector,
+            action: { withAnimation(RootView.panelSlide) { model.toggleInspector() } })
     }
 
     /// Shown once a conversation is holding anything. A gauge that reads 0 for
@@ -139,6 +201,7 @@ private struct PhaseLabel: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Model status")
         .accessibilityValue(model.presentation.label)
+        .accessibilityIdentifier(.hudPhase)
     }
 
     private enum Content {
@@ -167,5 +230,55 @@ private struct PulsingDot: View {
             } animation: { _ in
                 .easeInOut(duration: 0.7)
             }
+    }
+}
+
+/// One icon control on the status row, beside the pill.
+///
+/// Plain, not bordered: the pill is the only filled shape on this row, and
+/// giving each toggle one of its own would put three competing capsules across
+/// the top of the window. The hover highlight is what says it is pressable.
+private struct StripControlButton: View {
+    let systemImage: String
+    let help: String
+    let identifier: AccessibilityID
+    let action: () -> Void
+    @State private var isHovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16, weight: .regular))
+                .frame(width: 32, height: 32)
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isHovering && isEnabled
+                              ? Color.primary.opacity(0.09)
+                              : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(StripControlButtonStyle())
+        .foregroundStyle(isEnabled ? Color.primary : Color.secondary.opacity(0.5))
+        .onHover { isHovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+/// Press feedback that owns its own timing.
+///
+/// `.plain` dims the label while the mouse is down and restores it on release —
+/// inside whatever animation is in flight. Clicking a panel toggle starts one
+/// that covers the window, so the button that was just pressed faded back in
+/// over the whole slide and read as having disappeared. This says how long a
+/// press takes and refuses the ambient transaction.
+private struct StripControlButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.45 : 1)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }

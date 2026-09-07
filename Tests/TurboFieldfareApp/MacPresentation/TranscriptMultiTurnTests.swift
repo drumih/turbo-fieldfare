@@ -10,6 +10,25 @@ import Testing
 /// `setAttributedString`, which took the history with it.
 @MainActor
 @Suite struct TranscriptMultiTurnTests {
+    @Test(arguments: [true, false])
+    func clearingReplayLeavesNoEmptyAnswer(progressive: Bool) {
+        let controller = InstructionTranscriptDocumentController(
+            environment: ["TURBO_FIELDFARE_PROGRESSIVE_RENDER": progressive ? "1" : "0"])
+        let storage = NSMutableAttributedString()
+        firstTurn(controller, storage)
+        let history = NSAttributedString(attributedString: storage)
+        _ = controller.synchronize(storage: storage, prompt: "pending", response: "",
+                                   isTerminal: false, showsPrefillPlaceholder: true)
+        // Recovery restores the draft to the composer, leaving no live turn.
+        _ = controller.synchronize(storage: storage, prompt: "", response: "", isTerminal: true)
+        _ = controller.synchronize(storage: storage, prompt: "", response: "", isTerminal: false)
+        #expect(storage.isEqual(to: history))
+        #expect(controller.assistantRange == NSRange(location: history.length, length: 0))
+        _ = controller.synchronize(storage: storage, prompt: "retry", response: "OK", isTerminal: true)
+        #expect(storage.string.components(separatedBy: "Answer\n").count == 3)
+        #expect(storage.string.hasSuffix("OK"))
+    }
+
     private func controller() -> InstructionTranscriptDocumentController {
         InstructionTranscriptDocumentController()
     }

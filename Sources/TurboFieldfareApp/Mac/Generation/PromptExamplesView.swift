@@ -1,5 +1,6 @@
 import TurboFieldfareAppCore
 import SwiftUI
+import TurboFieldfareMacPresentation
 
 struct PromptExamplesView: View {
     let select: (AppPromptPreset) -> Void
@@ -66,6 +67,7 @@ struct PromptExamplesView: View {
             .accessibilityLabel(preset.title)
             .accessibilityValue(preset.prompt)
             .accessibilityHint("Copies this prompt into the prompt editor")
+            .accessibilityIdentifier(AccessibilityID.example(preset.id))
         }
     }
 
@@ -89,5 +91,6 @@ struct PromptExamplesView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .accessibilityHint("Shows additional prompts")
+        .accessibilityIdentifier(.examplesMore)
     }
 }

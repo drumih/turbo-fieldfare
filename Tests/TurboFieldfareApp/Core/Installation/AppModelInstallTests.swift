@@ -1,10 +1,88 @@
 import Foundation
+private struct PreparedVisionAppFixture {
+  let text: URL
+  let output: URL
+  let partial: URL
+  let checkpoint: URL
+
+  func remove() {
+    try? FileManager.default.removeItem(at: text)
+    try? FileManager.default.removeItem(at: partial)
+    try? FileManager.default.removeItem(at: checkpoint)
+  }
+}
+
+private func makePreparedVisionAppFixture(_ tag: String) throws
+  -> PreparedVisionAppFixture {
+  let text = try makeCompleteModelInstall(tag)
+  let output = text.deletingLastPathComponent().appendingPathComponent(
+    text.deletingPathExtension().lastPathComponent + ".vision.gturbo")
+  let paths = try RemoteInstallPaths(outputDirectory: output.path)
+  try FileManager.default.createDirectory(
+    atPath: paths.partialDirectory,
+    withIntermediateDirectories: true)
+  try Data("checkpoint".utf8).write(to: URL(fileURLWithPath: paths.checkpointFile))
+  return PreparedVisionAppFixture(
+    text: text,
+    output: output.standardizedFileURL,
+    partial: URL(fileURLWithPath: paths.partialDirectory),
+    checkpoint: URL(fileURLWithPath: paths.checkpointFile))
+}
 import Testing
 import TurboFieldfareRepackCore
 
 @testable import TurboFieldfareAppCore
 
 @Suite struct AppModelInstallTests {
+
+  @MainActor
+  @Test func completedInstallRebindsHistoryWithoutRelaunch() async throws {
+    let fixture = try makeCompleteModelInstall("history-rebind")
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("history-rebind-\(UUID())", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer {
+      try? FileManager.default.removeItem(at: fixture)
+      try? FileManager.default.removeItem(at: root)
+    }
+    let installed = root.appendingPathComponent("model.gturbo", isDirectory: true)
+    try FileManager.default.moveItem(at: fixture, to: installed)
+    let receiptURL = installed.appendingPathComponent("verified-install.json")
+    var receipt = try #require(
+      JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL)) as? [String: Any])
+    receipt["modelDirectoryPath"] = installed.standardizedFileURL.path
+    try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+      .write(to: receiptURL)
+    let missing = root
+      .appendingPathComponent("missing-\(UUID()).gturbo", isDirectory: true)
+    let client = FakeInferenceClient(eventDelay: .milliseconds(1))
+    let model = AppModel(
+      modelDirectory: missing,
+      client: client,
+      installer: MockModelInstallerClient(events: [.installed(installed)]),
+      settingsPersistenceEnabled: true)
+
+    model.installModel()
+    try await waitUntil {
+      if case .installed = model.installState { return true }
+      return false
+    }
+    #expect(model.conversationStore != nil)
+    #expect(model.conversationIdentity != nil)
+
+    try await client.ensureLoaded(
+      modelDirectory: installed, maxContextTokens: model.maxContextTokens,
+      options: model.runtimeOptions, forceLogitsHead: true) { _ in }
+    model.loadState = .ready(modelDirectory: installed, loadSeconds: 0)
+    model.promptText = "persist after install"
+    model.send()
+    await SendWaiting.turnEnds(model)
+    await model.persistenceTail?.value
+
+    let id = try #require(model.storedConversationID)
+    let opened = try await #require(model.conversationStore).open(id: id)
+    #expect(opened.meta.turnCount == 2)
+  }
 
   @MainActor
   @Test func missingModelCanInstall() {
@@ -33,6 +111,180 @@ import TurboFieldfareRepackCore
     #expect(!model.requiresModelInstallation)
     #expect(!model.canInstallModel)
     #expect(model.canLoadModel)
+    #expect(model.canInstallVisionPack)
+  }
+
+  @MainActor
+  @Test func visionInstallProgressCanCancelAndResumeWithoutBlockingText() async throws {
+    let directory = try makeCompleteModelInstall("vision-progress")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let visionInstaller = MockVisionPackInstallerClient(
+      events: [.copyingPayload(
+        reusedBytes: 4,
+        downloadedThisRunBytes: 6,
+        totalBytes: 20)],
+      holdOpen: true)
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: visionInstaller)
+
+    model.installVisionPack()
+    try await waitUntil {
+      model.visionInstallState == .copyingPayload(
+        reusedBytes: 4,
+        downloadedThisRunBytes: 6,
+        totalBytes: 20)
+    }
+    #expect(model.visionInstallProgressFraction == 0.5)
+    #expect(model.isModelInstalled)
+    model.cancelVisionInstall()
+    try await waitUntil { model.visionInstallState == .cancelled }
+    #expect(model.canInstallVisionPack)
+    #expect(model.canLoadModel)
+  }
+
+  @MainActor
+  @Test func visionPrepareWaitsForExplicitActivation() async throws {
+    let directory = try makeCompleteModelInstall("vision-ready")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let companion = directory.deletingLastPathComponent()
+      .appendingPathComponent(
+        directory.deletingPathExtension().lastPathComponent + ".vision.gturbo")
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(
+        events: [.readyToActivate(companion)]))
+
+    model.installVisionPack()
+    try await waitUntil {
+      model.visionInstallState == .readyToActivate(companion)
+    }
+
+    #expect(!model.isVisionPackInstalled)
+    #expect(!model.canInstallVisionPack)
+    #expect(model.canActivateVisionPack)
+    #expect(model.canLoadModel)
+  }
+
+  @MainActor
+  @Test func busyVisionActivationRemainsReadyWithoutRedownload() async throws {
+    let fixture = try makePreparedVisionAppFixture("vision-activation-busy")
+    defer { fixture.remove() }
+    let model = AppModel(
+      modelDirectory: fixture.text,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(
+        preparedValid: true,
+        activationError: .installBusy(path: fixture.output.path)))
+
+    #expect(model.canActivateVisionPack)
+    model.activateVisionPack()
+    try await waitUntil {
+      if case .readyToActivate = model.visionInstallState { return true }
+      return false
+    }
+    #expect(model.canActivateVisionPack)
+  }
+
+  @MainActor
+  @Test func corruptVisionActivationBecomesRecoverable() async throws {
+    let fixture = try makePreparedVisionAppFixture("vision-activation-corrupt")
+    defer { fixture.remove() }
+    let model = AppModel(
+      modelDirectory: fixture.text,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(
+        preparedValid: true,
+        activationError: .configurationInvalid(detail: "weights hash mismatch")))
+
+    model.activateVisionPack()
+    try await waitUntil {
+      if case .recoverable = model.visionInstallState { return true }
+      return false
+    }
+    #expect(model.canInstallVisionPack)
+  }
+
+  @MainActor
+  @Test func loadedModelAllowsVisionPayloadDownload() throws {
+    let directory = try makeCompleteModelInstall("vision-loaded-prepare")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(holdOpen: true))
+    model.loadState = .ready(modelDirectory: directory, loadSeconds: 0.5)
+
+    #expect(!model.canBeginVisionCompanionOperation)
+    #expect(model.canInstallVisionPack)
+    model.installVisionPack()
+    #expect(model.visionInstallState != .idle)
+  }
+
+  @MainActor
+  @Test func loadedModelBlocksVisionActivationAndDiscard() throws {
+    let fixture = try makePreparedVisionAppFixture("vision-loaded-activate")
+    defer { fixture.remove() }
+    let model = AppModel(
+      modelDirectory: fixture.text,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(preparedValid: true))
+    model.loadState = .ready(modelDirectory: fixture.text, loadSeconds: 0.5)
+
+    #expect(!model.canActivateVisionPack)
+    #expect(!model.canDiscardVisionPackDownload)
+    model.activateVisionPack()
+    guard case .readyToActivate = model.visionInstallState else {
+      Issue.record("blocked activation left \(model.visionInstallState)")
+      return
+    }
+
+    model.loadState = .notLoaded
+    #expect(model.canActivateVisionPack)
+    #expect(model.canDiscardVisionPackDownload)
+  }
+
+  @MainActor
+  @Test func visionPayloadDownloadKeepsTextRuntimeAvailableAndDraftIntact() async throws {
+    let directory = try makeCompleteModelInstall("vision-blocking")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let model = AppModel(
+      modelDirectory: directory,
+      client: MockLifecycleInferenceClient(),
+      installer: MockModelInstallerClient(),
+      visionInstaller: MockVisionPackInstallerClient(
+        events: [.copyingPayload(
+          reusedBytes: 4,
+          downloadedThisRunBytes: 6,
+          totalBytes: 20)],
+        holdOpen: true))
+    model.promptText = "describe this"
+    model.outputText = "earlier answer"
+    model.loadState = .ready(modelDirectory: directory, loadSeconds: 0.5)
+
+    model.installVisionPack()
+    try await waitUntil { model.isVisionCompanionOperationInProgress }
+
+    #expect(model.canUnloadModel)
+    #expect(!model.canInstallModel)
+    #expect(model.canRun)
+    #expect(!model.canInstallVisionPack)
+
+    model.cancelVisionInstall()
+    try await waitUntil { model.visionInstallState == .cancelled }
+
+    #expect(model.promptText == "describe this")
+    #expect(model.outputText == "earlier answer")
+    #expect(model.canUnloadModel)
+    #expect(model.canInstallVisionPack)
   }
 
   @MainActor

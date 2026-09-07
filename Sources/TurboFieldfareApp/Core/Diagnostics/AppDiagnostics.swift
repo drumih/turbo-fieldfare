@@ -57,6 +57,20 @@ public struct AppDiagnostics: Equatable, Sendable {
     public var computedPrefillTokens: Int?
     /// Tokens the conversation's KV holds after this turn.
     public var conversationTokens: Int?
+    /// What this turn added to the KV, in the model's own IDs: the
+    /// continuation-encoded prompt, then the reply the cache kept. Nil on the
+    /// single-prompt path and on any turn that never reached the KV.
+    ///
+    /// Carried as diagnostics because that is the channel the turn's terminal
+    /// event already travels on, and because these are exactly a diagnostic of
+    /// what the turn did — the difference being that this one is also the
+    /// record the conversation is stored as.
+    public var promptTokenIDs: [Int32]?
+    public var generatedTokenIDs: [Int32]?
+    /// A token the model emitted that the KV never took, left for the next turn
+    /// to replay. Stored with the conversation so a reopened one replays it too.
+    public var boundaryTokenIDs: [Int32]?
+    public var boundaryNeedsReplay: Bool?
     public var prefillSeconds: Double?
     public var timeToFirstTokenSeconds: Double?
     public var decodeSeconds: Double
@@ -90,6 +104,10 @@ public struct AppDiagnostics: Equatable, Sendable {
                 cachedPromptTokens: Int? = nil,
                 computedPrefillTokens: Int? = nil,
                 conversationTokens: Int? = nil,
+                promptTokenIDs: [Int32]? = nil,
+                generatedTokenIDs: [Int32]? = nil,
+                boundaryTokenIDs: [Int32]? = nil,
+                boundaryNeedsReplay: Bool? = nil,
                 prefillSeconds: Double? = nil,
                 timeToFirstTokenSeconds: Double?,
                 decodeSeconds: Double,
@@ -105,6 +123,10 @@ public struct AppDiagnostics: Equatable, Sendable {
         self.cachedPromptTokens = cachedPromptTokens
         self.computedPrefillTokens = computedPrefillTokens
         self.conversationTokens = conversationTokens
+        self.promptTokenIDs = promptTokenIDs
+        self.generatedTokenIDs = generatedTokenIDs
+        self.boundaryTokenIDs = boundaryTokenIDs
+        self.boundaryNeedsReplay = boundaryNeedsReplay
         self.prefillSeconds = prefillSeconds
         self.timeToFirstTokenSeconds = timeToFirstTokenSeconds
         self.decodeSeconds = decodeSeconds

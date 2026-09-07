@@ -23,7 +23,7 @@ import Testing
     }
 
     @MainActor
-    @Test func startingAnotherRunClearsPreviousServiceTranscriptSynchronously() {
+    @Test func startingAnotherRunClearsThePreviousServiceTranscriptBeforeItsFirstToken() async {
         let client = ReportingInferenceClient(memoryBytes: 2_100_000_000)
         let model = AppModel(client: client)
         let directory = FileManager.default.temporaryDirectory
@@ -32,7 +32,8 @@ import Testing
         client.generationTranscriptMailbox.append("previous completion")
         model.promptText = "new prompt"
 
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
 
         #expect(client.generationTranscriptMailbox.completeText.isEmpty)
         #expect(model.outputPromptText == "new prompt")

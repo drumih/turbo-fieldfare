@@ -15,6 +15,20 @@ struct TokenizerTests {
 
     // MARK: - Special tokens
 
+    /// The envelope the continuation rule reserves for a turn has to cover
+    /// what the real template wraps a one-word message in. A template change
+    /// that grew past it would put rows marked "continue" in front of a
+    /// composer that refuses every message, which is the defect the envelope
+    /// exists to prevent.
+    @Test("The turn envelope covers the continuation template")
+    func turnEnvelopeCoversTheContinuationTemplate() {
+        let shortest = tok.encodeTextContinuation(userContent: "x").count
+        #expect(shortest > 1)
+        let envelope = ConversationGenerationReserve.turnEnvelope
+        #expect(shortest <= envelope,
+                "a one-word turn costs \(shortest) tokens, past the envelope of \(envelope)")
+    }
+
     @Test("Special token IDs are distinct and within vocab")
     func specialTokensDistinct() {
         let ids: [Int32] = [tok.bosID, tok.eosID, tok.padID, tok.endOfTurnID]

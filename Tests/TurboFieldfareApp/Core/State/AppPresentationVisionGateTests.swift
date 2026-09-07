@@ -5,7 +5,7 @@ import Testing
 /// The banner offers exactly the model actions the model will actually perform.
 ///
 /// `canLoadModel`, `canReloadModel` and `canUnloadModel` all refuse while a
-/// companion operation is in flight, but the presentation snapshot carried no
+/// companion filesystem mutation is in flight, but the presentation snapshot carried no
 /// vision state — so this resolved to "Installed · Not loaded" with a `.load`
 /// action, and `ModelActionBanner` rendered it as a fully enabled button whose
 /// click did nothing for the whole 1.5 GB transfer.
@@ -27,7 +27,7 @@ import Testing
             isRunning: false,
             isGenerationCancellationPending: false,
             generationPhase: .idle,
-            isVisionCompanionOperationInProgress: companionOperationInProgress)
+            isVisionFilesystemMutationInProgress: companionOperationInProgress)
     }
 
     @Test func anUnloadedModelOffersLoadWhenNoCompanionOperationRuns() {
@@ -39,7 +39,7 @@ import Testing
 
     /// The case the banner got wrong: unloaded — which every companion
     /// operation requires — with a transfer running.
-    @Test func noModelActionIsOfferedWhileACompanionOperationRuns() {
+    @Test func noModelActionIsOfferedWhileACompanionFilesystemMutationRuns() {
         let state = AppPresentationState.resolve(
             snapshot(companionOperationInProgress: true))
         #expect(state.primaryAction == nil,
@@ -50,7 +50,7 @@ import Testing
 
     /// Not just the unloaded case: a stale runtime otherwise offers Reload, and
     /// `canReloadModel` refuses for the same reason.
-    @Test func astaleRuntimeOffersNoReloadWhileACompanionOperationRuns() {
+    @Test func astaleRuntimeOffersNoReloadWhileACompanionFilesystemMutationRuns() {
         let ready = AppModelLoadState.ready(
             modelDirectory: Self.modelDirectory, loadSeconds: 1)
 

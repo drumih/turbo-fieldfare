@@ -19,7 +19,7 @@ import Testing
     model.loadModel()
     try await waitForFakeClient { model.loadState.isReady }
     model.promptText = "Hello from the test"
-    model.run()
+    model.send()
     try await waitForFakeClient { model.diagnostics != nil && !model.isRunning }
 
     #expect(model.isModelInstalled)

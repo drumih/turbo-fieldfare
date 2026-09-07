@@ -23,7 +23,7 @@ import Testing
 
     @MainActor
     private func finish(_ model: AppModel) async {
-        while model.isRunning { await Task.yield() }
+        await SendWaiting.turnEnds(model)
     }
 
     @MainActor
@@ -47,7 +47,8 @@ import Testing
         let model = try await readyModel(client)
 
         model.promptText = "one"
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
         let firstEpoch = model.conversation.epoch
         #expect(model.conversation.turns.first?.role == .user,
                 "the user's message shows while the model is still thinking")
@@ -55,7 +56,7 @@ import Testing
         #expect(model.conversation.committedTurns == 1)
 
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.committedTurns == 2)
         #expect(model.conversation.epoch == firstEpoch,
@@ -69,10 +70,10 @@ import Testing
         let model = try await readyModel(client)
 
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
 
         // Opening it again per turn would reset the KV and undo the entire
@@ -85,7 +86,7 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         let firstEpoch = model.conversation.epoch
 
@@ -95,7 +96,7 @@ import Testing
         #expect(model.conversation.epoch != firstEpoch)
 
         model.promptText = "fresh"
-        model.run()
+        model.send()
         await finish(model)
         #expect(client.conversationEpochs.count == 2)
         #expect(client.conversationEpochs.last == model.conversation.epoch)
@@ -111,10 +112,10 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.committedTurns == 2)
         let before = model.conversation.epoch
@@ -128,11 +129,11 @@ import Testing
         // The transcript stays — lifecycle actions do not discard it — but the
         // turns move out of the model's context and the break says where.
         #expect(model.hasOutputTranscript)
-        #expect(model.archivedPairs.count == 2)
+        #expect(model.conversation.outOfContextPairs.count == 2)
         #expect(model.transcriptContextBreak == 2)
 
         model.promptText = "after reload"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.committedTurns == 1)
         #expect(client.conversationEpochs.last == model.conversation.epoch)
@@ -150,10 +151,10 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.committedTurns == 2)
         let before = model.conversation.epoch
@@ -166,7 +167,7 @@ import Testing
         #expect(model.conversation.epoch != before)
         // The transcript survives — lifecycle actions do not discard it — but
         // the turns are marked as out of the model's context.
-        #expect(model.archivedPairs.count == 2)
+        #expect(model.conversation.outOfContextPairs.count == 2)
         #expect(model.transcriptContextBreak == 2)
     }
 
@@ -175,7 +176,7 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         #expect(client.conversationEpochs.count == 1)
 
@@ -187,7 +188,7 @@ import Testing
             modelDirectory: FileManager.default.temporaryDirectory, loadSeconds: 1))
 
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(client.conversationEpochs.count == 2,
                 "the turn after a load has to open the conversation again")
@@ -201,14 +202,14 @@ import Testing
         let model = try await readyModel(client)
 
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.completedPairs.count == 1)
         #expect(model.transcriptHistory.isEmpty,
                 "the only finished turn is the one still drawn live")
 
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.completedPairs.count == 2)
         #expect(model.transcriptHistory.count == 1)
@@ -220,10 +221,10 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "first question"
-        model.run()
+        model.send()
         await finish(model)
         model.promptText = "second question"
-        model.run()
+        model.send()
         await finish(model)
 
         let text = model.outputConversationPlainText
@@ -239,10 +240,10 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
         #expect(!model.transcriptHistory.isEmpty)
 
@@ -262,15 +263,19 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(60))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
         #expect(model.conversation.committedTurns == 1)
 
         model.promptText = "two"
-        model.run()
+        model.send()
         // Wait for the run to actually be under way. Cancelling on the same
-        // tick races the double's own task registration, not the product.
-        while model.isRunning, model.livePrefillDone == 0 { await Task.yield() }
+        // tick races the double's own task registration, not the product — and
+        // the gauge still holds the previous turn's figures until the send
+        // reaches the stage that resets them, so waiting on the gauge alone
+        // returned before this turn had started at all.
+        await SendWaiting.generationStarts(model)
+        while model.isTurnInFlight, model.livePrefillDone == 0 { await Task.yield() }
         model.cancel()
         await finish(model)
 
@@ -297,14 +302,14 @@ import Testing
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = try await readyModel(client)
         model.promptText = "one"
-        model.run()
+        model.send()
         await finish(model)
 
         // A request the client refuses never reaches the KV, so the app must
         // not count it — the service does not either.
-        model.maxContextTokens = model.maxContextTokens * 2
+        model.setMaxContextTokens(model.maxContextTokens * 2)
         model.promptText = "two"
-        model.run()
+        model.send()
         await finish(model)
 
         #expect(model.conversation.committedTurns == 1)

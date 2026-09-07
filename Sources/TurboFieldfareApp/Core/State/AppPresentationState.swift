@@ -30,11 +30,11 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
     public var livePrefillDone: Int
     public var livePrefillTotal: Int
     public var lastStopReason: AppStopReason?
-    /// `canLoadModel` and its siblings refuse while a companion operation runs,
-    /// so the snapshot has to carry it: without it this resolved to
+    /// Model lifecycle actions refuse while a companion filesystem mutation
+    /// runs, so the snapshot has to carry it: without it this resolved to
     /// "Installed · Not loaded" with a `.load` action, and the banner rendered a
     /// fully enabled button that did nothing for the whole transfer.
-    public var isVisionCompanionOperationInProgress: Bool
+    public var isVisionFilesystemMutationInProgress: Bool
 
     public init(requiresInstallation: Bool,
                 installState: AppModelInstallState,
@@ -47,7 +47,7 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
                 livePrefillDone: Int = 0,
                 livePrefillTotal: Int = 0,
                 lastStopReason: AppStopReason? = nil,
-                isVisionCompanionOperationInProgress: Bool = false) {
+                isVisionFilesystemMutationInProgress: Bool = false) {
         self.requiresInstallation = requiresInstallation
         self.installState = installState
         self.installReadiness = installReadiness
@@ -59,7 +59,7 @@ public struct AppPresentationSnapshot: Equatable, Sendable {
         self.livePrefillDone = livePrefillDone
         self.livePrefillTotal = livePrefillTotal
         self.lastStopReason = lastStopReason
-        self.isVisionCompanionOperationInProgress = isVisionCompanionOperationInProgress
+        self.isVisionFilesystemMutationInProgress = isVisionFilesystemMutationInProgress
     }
 }
 
@@ -143,7 +143,7 @@ public struct AppPresentationState: Equatable, Sendable {
 
         // Every model action is refused for the duration, so offering one here
         // would be offering a button that does nothing.
-        if snapshot.isVisionCompanionOperationInProgress {
+        if snapshot.isVisionFilesystemMutationInProgress {
             return Self(label: "Preparing image support",
                         severity: .active, showsActivity: true)
         }

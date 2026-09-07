@@ -2,7 +2,6 @@ import Foundation
 import Synchronization
 import TurboFieldfare
 import TurboFieldfareRepackCore
-import TurboFieldfare
 import Observation
 
 @MainActor
@@ -13,10 +12,23 @@ public final class AppModel {
         case running
     }
 
+    /// How a turn ended.
+    ///
+    /// `committed` covers a reply that finished and a stop that landed at a
+    /// token boundary: both are in the KV and on disk. `rewound` is a turn the
+    /// runtime took back — a hard stop, a stream failure, a lost lineage — so
+    /// it is in neither, and its message goes back to the composer. The cause
+    /// is already in `error` by the time this is read.
+    private enum TurnOutcome {
+        case committed
+        case rewound
+    }
+
     public var modelPathText: String
     public var promptText: String = ""
-    public private(set) var imageAttachments: [AppImageAttachment] = []
+    public private(set) var imageAttachments: [StagedImage] = []
     public private(set) var imageAttachmentError: String?
+    private var visionAvailabilityAttachmentError: String?
     /// A count, not a flag. The picker and a drop can both be staging at once,
     /// and whichever finished first cleared a shared Bool — reopening `canRun`
     /// while the other was still copying, so Generate ran against a partial set
@@ -27,27 +39,32 @@ public final class AppModel {
     /// Set by the Model menu's Remove Image Support item; the window presents
     /// the confirmation.
     public var isConfirmingVisionPackRemoval = false
-    public private(set) var outputPromptText: String = ""
-    public private(set) var outputImageAttachments: [AppImageAttachment] = []
+    public internal(set) var outputPromptText: String = ""
+    /// The newest turn's pictures, as the transcript draws them. A live turn's
+    /// are staged; a reopened conversation's newest pair is drawn from its
+    /// document, whose pictures the conversation store owns.
+    public internal(set) var outputImageAttachments: [ChatImage] = []
     /// The open chat. The transcript renders it, and its turn order is what the
     /// decode service's gate checks every turn against.
-    public private(set) var conversation = AppConversation()
-    /// Turns from conversations whose KV no longer exists — a reload or an
-    /// unload took it. They stay on screen because the app deliberately keeps a
-    /// transcript across lifecycle actions, but they are not in the model's
-    /// context any more, and the transcript draws a break to say so. Keeping
-    /// them here rather than in `conversation` is what preserves that type's
-    /// invariant: its turns are exactly the model's context.
-    public private(set) var archivedPairs: [(user: AppChatTurn, assistant: AppChatTurn)] = []
+    public internal(set) var conversation = AppConversation()
+    /// What the window is showing, and in what state. One value: the six
+    /// fields it replaces could disagree, and twelve defects were two of them
+    /// disagreeing.
+    var machine = ConversationScreenMachine()
+    public var screen: ConversationScreen { machine.screen }
     /// The epoch the inference side has actually been told to open. Nil after a
     /// load or unload, both of which rebuild or release the KV; the next turn
     /// opens the conversation again before it sends anything.
-    private var serviceEpoch: UUID?
+    var serviceEpoch: UUID?
     public var outputText: String = ""
     public var runState: RunState = .idle
     public var runtimeOptions = AppRuntimeOptions()
     public var maxNewTokensOverride: Int?
-    public var maxContextTokens: Int = 4096
+    /// Settable only through `setMaxContextTokens`, because changing it changes
+    /// which stored conversations can be continued — and what is on screen has
+    /// to be redrawn from the answer that now applies, not the one taken when
+    /// the row was clicked.
+    public private(set) var maxContextTokens: Int = AppContextLengthOption.eightK.tokens
     public var temperature: Double = 0.2
     public var topKEnabled: Bool = true
     public var topK: Int = 64
@@ -55,6 +72,12 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
+    /// Whether the list of chats is showing. Persisted, so the window comes
+    /// back the way it was left.
+    public private(set) var isSidebarVisible: Bool = true
+    /// Whether the Inspector is showing. Persisted alongside the sidebar, for
+    /// the same reason: the window comes back the way it was left.
+    public private(set) var isInspectorVisible: Bool = true
     /// Whether launching the app should load the model straight away. Off by
     /// default, because loading takes minutes and holds gigabytes.
     public private(set) var loadModelOnLaunch: Bool = false
@@ -70,7 +93,9 @@ public final class AppModel {
     public private(set) var visionInstallETAPresentation: DownloadETAPresentation = .hidden
     public private(set) var visionInstallETAText: String?
     public private(set) var installReadiness: AppModelInstallReadiness = .checking
-    public private(set) var installationStatus: AppModelInstallationStatus
+    public internal(set) var installationStatus: AppModelInstallationStatus
+    public private(set) var modelStorageMetrics: AppModelStorageMetrics?
+    public private(set) var modelStorageMetricsError: String?
     public var visionInstallState: AppModelInstallState = .idle
     /// How far activation's hash of the companion weights has got, 0 to 1.
     /// Activation reads about 1.5 GB, which was a bare spinner with no way to
@@ -81,11 +106,11 @@ public final class AppModel {
 
     public var loadState: AppModelLoadState = .notLoaded
     public private(set) var loadedRuntimeKey: AppLoadedRuntimeKey?
-    public private(set) var phase: AppGenerationPhase = .idle
+    public internal(set) var phase: AppGenerationPhase = .idle
     public private(set) var liveTokenCount: Int = 0
     public private(set) var liveElapsedDecodeSeconds: Double = 0
-    public private(set) var livePrefillDone: Int = 0
-    public private(set) var livePrefillTotal: Int = 0
+    public internal(set) var livePrefillDone: Int = 0
+    public internal(set) var livePrefillTotal: Int = 0
     public private(set) var liveMemoryBytes: UInt64?
     /// Resident bytes of the inference process. The footprint above is what
     /// the system counts against the process; this is what it actually holds,
@@ -104,10 +129,14 @@ public final class AppModel {
     /// looking at their own attachments while the model worked.
     public private(set) var runIdentity: Int = 0
 
-    private let client: any AppInferenceClient
+    let client: any AppInferenceClient
     private let installer: any AppModelInstallerClient
     private let visionInstaller: any AppVisionPackInstallerClient
-    private var runTask: Task<Void, Never>?
+    /// The message currently on its way through the send pipeline, from the
+    /// click to the commit or the hand-back. `isTurnInFlight` reads it, so a
+    /// second Generate is refused for the whole journey and not only while the
+    /// runtime is generating.
+    private var sendTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
     private var visionInstallTask: Task<Void, Never>?
@@ -126,14 +155,56 @@ public final class AppModel {
     private var pendingExplicitLoadRuntimeKey: AppLoadedRuntimeKey?
     private var activeRunRuntimeKey: AppLoadedRuntimeKey?
     private var hasHandledTerminalEvent = false
+    private var hasShutDownForTermination = false
+    /// What the generation stage left behind, read by the stage that decides
+    /// whether the message is committed or goes back to the composer.
+    private var turnOutcome: TurnOutcome = .committed
+    /// The send waiting for its turn to end, with the run it belongs to.
+    private var turnCompletion:
+        (generation: Int, continuation: CheckedContinuation<Void, Never>)?
     private let memorySampler: AppMemorySampler
-    private let settingsPersistenceEnabled: Bool
+    let settingsPersistenceEnabled: Bool
     private let installETAClock: SuspendingClock
     private let installETAOrigin: SuspendingClock.Instant
     private var installETAEstimator = DownloadETAEstimator()
     private var visionInstallETAEstimator = DownloadETAEstimator()
-    private let attachmentStore: AppImageAttachmentStore
+    /// Internal rather than private: the history extension releases the staged
+    /// copies of a conversation the KV is giving up, and lives in another file.
+    let attachmentStore: AppImageAttachmentStore
     public let isVisionRuntimeSupported: Bool
+    /// The stored conversations and which one is open.
+    public let history = ConversationHistoryState()
+    /// Nil when history is off for this instance — the tests that drive the
+    /// model without a disk do exactly that, and so does a run with settings
+    /// persistence disabled, which is the same "do not touch the user's files"
+    /// switch.
+    var conversationBinding: ConversationStoreBinding?
+    var conversationStore: ConversationStore? { conversationBinding?.store }
+    /// The directory the open chat is being written to. Created on the first
+    /// send rather than at New Chat, so an empty chat never lands on disk.
+    var storedConversationID: UUID?
+    /// Read from the installed model's manifest, because the app process never
+    /// loads the model. Nil until a model is installed.
+    var conversationIdentity: ConversationIdentity? {
+        get { conversationBinding?.identity }
+        set { conversationBinding?.identity = newValue }
+    }
+    var conversationBindingGeneration: UInt64 = 0
+    let conversationIdentityProvider: @Sendable (URL) throws -> ConversationIdentity
+    let conversationStoreProvider: @Sendable (URL) -> ConversationStore
+    var pendingRestoredConversationID: UUID?
+    var pendingServiceRecoveryConversationID: UUID?
+    /// Stored copies of the in-flight turn's images, written while the model is
+    /// generating so the wait is not paid twice.
+    var pendingTurnImageWrite: Task<TurnImageWriteOutcome, Never>?
+    var persistenceTail: Task<Void, Never>?
+    /// Reserves deletion across the persistence wait and the store actor hop.
+    var conversationDeletionTask: Task<Void, Never>?
+    var quarantinedPersistenceLineages: Set<PersistenceLineageKey> = []
+    /// Why the store last refused to do something. Names, counts and paths
+    /// only: a diagnostic carrying transcript text would put the user's
+    /// conversation wherever this is collected.
+    public internal(set) var historyDiagnostic: String?
 
     public static var currentDeviceSupportsVisionRuntime: Bool {
         VisionRuntime.isSupportedOnDefaultDevice
@@ -146,7 +217,13 @@ public final class AppModel {
                 memorySampler: AppMemorySampler = AppMemorySampler(),
                 attachmentStore: AppImageAttachmentStore = AppImageAttachmentStore(),
                 visionRuntimeSupported: Bool = true,
-                settingsPersistenceEnabled: Bool = false) {
+                settingsPersistenceEnabled: Bool = false,
+                conversationIdentityProvider: @escaping @Sendable (URL) throws -> ConversationIdentity = {
+                    try ConversationIdentity.forModelDirectory($0)
+                },
+                conversationStoreProvider: @escaping @Sendable (URL) -> ConversationStore = {
+                    ConversationStore(rootURL: $0)
+                }) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settings = settingsPersistenceEnabled
@@ -172,7 +249,10 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.isSidebarVisible = settings.sidebarVisible
+        self.isInspectorVisible = settings.inspectorVisible
         self.loadModelOnLaunch = settings.loadModelOnLaunch
+        self.pendingRestoredConversationID = settings.selectedConversationID
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
         self.client = client
@@ -182,13 +262,39 @@ public final class AppModel {
         self.attachmentStore = attachmentStore
         self.isVisionRuntimeSupported = visionRuntimeSupported
         self.settingsPersistenceEnabled = settingsPersistenceEnabled
+        self.conversationIdentityProvider = conversationIdentityProvider
+        self.conversationStoreProvider = conversationStoreProvider
         self.installETAClock = installETAClock
         self.installETAOrigin = installETAClock.now
+        // History follows the same switch as settings: a model driven by tests
+        // must not write to the user's Application Support directory.
+        if settingsPersistenceEnabled {
+            conversationBindingGeneration = 1
+            let identity: ConversationIdentity?
+            if installationStatus == .complete {
+                do {
+                    identity = try conversationIdentityProvider(directory)
+                } catch {
+                    identity = nil
+                    historyDiagnostic = "the installed model identity could not be read: \(error)"
+                }
+            } else {
+                identity = nil
+            }
+            conversationBinding = ConversationStoreBinding(
+                modelDirectory: directory,
+                identity: identity,
+                generation: conversationBindingGeneration,
+                storeProvider: conversationStoreProvider)
+        } else {
+            conversationBinding = nil
+        }
         // Staged images of runs that were killed before they could clean up;
         // nothing else ever removes them.
         AppImageAttachmentStore.sweepAbandoned()
         refreshInstallReadiness()
         refreshVisionInstallReadiness()
+        activateConversationStore()
     }
 
     public var isRunning: Bool { runState == .running }
@@ -200,8 +306,13 @@ public final class AppModel {
         return loadedRuntimeKey != currentRuntimeKey
     }
 
+    // The three lifecycle actions gate on the whole send, not on `isRunning`:
+    // a deferred replay is a full prefill during which no turn is generating
+    // yet, and an unload taken then dropped the KV under the replay, lost the
+    // message it was carrying, and queued behind the prefill on the service
+    // until the load timeout killed the connection.
     public var canLoadModel: Bool {
-        isModelInstalled && !isRunning && !isVisionCompanionOperationInProgress
+        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && (loadState == .notLoaded || loadState.isFailed)
     }
 
@@ -211,12 +322,12 @@ public final class AppModel {
     }
 
     public var canReloadModel: Bool {
-        isModelInstalled && !isRunning && !isVisionCompanionOperationInProgress
+        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && loadState.isReady && hasStaleLoadedRuntime
     }
 
     public var canUnloadModel: Bool {
-        isModelInstalled && !isRunning && !isVisionCompanionOperationInProgress
+        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && loadState.isReady
     }
 
@@ -249,20 +360,28 @@ public final class AppModel {
         visionInstaller.descriptor
     }
 
-    /// Every companion Download, Resume, Verify, Activate, Repair, and Remove
-    /// operation is one app-blocking state: model actions stay disabled until it
-    /// reaches a resting state, so a companion transaction never overlaps a
-    /// loaded session or another companion operation.
+    /// Any companion operation currently owns the installer transaction.
     public var isVisionCompanionOperationInProgress: Bool {
         visionInstallState.isInstalling
     }
 
-    /// A companion operation may only begin against an unloaded model session
-    /// with no other transfer in flight; the draft, transcript, and attachments
-    /// are untouched by the gate.
+    public var isVisionFilesystemMutationInProgress: Bool {
+        switch visionInstallState {
+        case .activating, .discarding: return true
+        default: return false
+        }
+    }
+
+    /// Pack activation, repair and removal mutate the runtime's files and need
+    /// an unloaded model. Payload download does not use this gate.
     public var canBeginVisionCompanionOperation: Bool {
         !isRunning && !loadState.isLoading && !loadState.isReady
             && !isInstallingModel && !isVisionCompanionOperationInProgress
+    }
+
+    private var canBeginVisionDownload: Bool {
+        !isRunning && !loadState.isLoading && !isInstallingModel
+            && !isVisionCompanionOperationInProgress
     }
 
     public var canInstallVisionPack: Bool {
@@ -273,7 +392,7 @@ public final class AppModel {
         guard isModelInstalled, !isVisionPackInstalled,
               case .ready = visionInstallReadiness else { return false }
         if case .readyToActivate = visionInstallState { return false }
-        return canBeginVisionCompanionOperation
+        return canBeginVisionDownload
     }
 
     public var canActivateVisionPack: Bool {
@@ -387,23 +506,57 @@ public final class AppModel {
         // Staging copies the files a request will carry. Starting a run while
         // it is in flight sent a request without those images and then landed
         // them on the next message instead.
-        !isRunning && !isAddingImages && isModelAvailable && !loadState.isLoading
-            && !isVisionCompanionOperationInProgress
+        // A deferred replay is not `isRunning` — no turn is generating yet —
+        // but the message has been sent and the lineage it will be stamped
+        // against does not exist yet. Without this a second Generate started a
+        // second replay, and whichever finished last defined the epoch, so the
+        // first one's request came back rejected as belonging to a conversation
+        // that was no longer open.
+        !isTurnInFlight && conversationDeletionTask == nil
+            && !isAddingImages && isModelAvailable && !loadState.isLoading
+            && !isVisionFilesystemMutationInProgress
             && !hasStaleLoadedRuntime
             // A conversation whose KV no longer matches it cannot take another
             // turn; only New chat clears that.
             && conversation.canSend
+            // And the conversation on screen has to be one a message can go
+            // to. The live one always is; a stored row only when the notice
+            // says it can be continued. Asking only `conversation.canSend`
+            // let a row the notice had refused be sent anyway.
+            && screen.allowsSend
             && (!promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !imageAttachments.isEmpty)
+            && (imageAttachments.isEmpty || isImageInputAvailable)
     }
 
     public var canCancel: Bool { isRunning && !isCancellationPending }
 
+    /// The message has been sent and nothing has come back yet.
+    ///
+    /// Wider than `isRunning`, which covers only a generation: a reopened
+    /// conversation has to be replayed into the KV first, and that is a full
+    /// prefill of everything it holds. For the length of it the window showed a
+    /// composer that had been emptied and a transcript that had not changed, so
+    /// the app looked like it had dropped the message.
+    public var isTurnInFlight: Bool {
+        isRunning || screen.isReplaying || sendTask != nil
+    }
+
     public var hasOutputTranscript: Bool {
-        !archivedPairs.isEmpty
-            || !conversation.isEmpty
-            || !outputPromptText.isEmpty || !outputImageAttachments.isEmpty
-            || !outputText.isEmpty
+        // Same split as `transcriptHistory`: while a stored copy is on screen,
+        // the live conversation belongs to another chat and is not what decides
+        // whether this one has anything to show. A stored chat with no readable
+        // turns has to fall through to the empty state rather than borrow the
+        // held conversation's.
+        switch screen {
+        case .reading, .replaying:
+            return !transcriptHistory.isEmpty
+        case .live, .unreadable:
+            return !conversation.outOfContextPairs.isEmpty
+                || !conversation.isEmpty
+                || !outputPromptText.isEmpty || !outputImageAttachments.isEmpty
+                || !outputText.isEmpty
+        }
     }
 
     public var shouldShowPromptExamples: Bool {
@@ -414,7 +567,14 @@ public final class AppModel {
     }
 
     public var outputResponsePlainText: String {
-        generationTranscriptMailbox?.completeText ?? outputText
+        // The mailbox wins only when it has something to say. `??` alone fell
+        // back to `outputText` when the mailbox was *absent*, never when it was
+        // merely empty — so a reopened conversation, whose newest reply is put
+        // straight into `outputText` with the mailbox freshly reset, drew an
+        // "Answer" heading with nothing under it. During a run the two agree,
+        // and a genuinely empty reply is empty either way.
+        let streamed = generationTranscriptMailbox?.completeText ?? ""
+        return streamed.isEmpty ? outputText : streamed
     }
 
     /// Completed turns the transcript draws *above* the live one.
@@ -424,18 +584,84 @@ public final class AppModel {
     /// decoding the newest pair is drawn live and must not also appear here.
     /// One property, used by both the transcript and Copy Conversation, so the
     /// two cannot disagree about which turn is which.
+    /// The chat on screen is not the one the KV is holding.
+    public var isShowingStoredCopy: Bool { screen.isShowingStoredCopy }
+
+    /// The state of the conversation on screen. `.continuable` for a live chat
+    /// and for one being replayed; the other two say why the composer is
+    /// closed.
+    public var openedConversationState: ConversationContinuability {
+        switch screen {
+        case .live, .replaying:
+            return .continuable
+        case .reading(_, _, let state, _):
+            return state
+        case .unreadable:
+            // Nothing to put back and nothing to read: the same dead end as a
+            // record with no tokens, and the notice says the same thing.
+            return .cannotReplay(reason: .tokenCountUnknown)
+        }
+    }
+
+    /// Whether the live fields belong under what is on screen.
+    ///
+    /// While a stored copy is merely being read they do not: they hold the chat
+    /// the KV is keeping, which is a different conversation. But a send starts
+    /// by replaying the chat being read, and for that stretch the live fields
+    /// hold the message that started it — so suppressing them there drew an
+    /// "Answer / Processing your prompt" with no question above it.
+    public var showsLiveTurn: Bool { isTurnInFlight || !isShowingStoredCopy }
+
+    /// What the transcript is drawing, as an identity the incremental renderer
+    /// can key on.
+    ///
+    /// The renderer appends and cannot take pairs back, so it has to be told
+    /// when the thing on screen is a different conversation. The live
+    /// conversation's epoch used to be enough because every open started a new
+    /// one; now that browsing leaves the lineage alone, going out to a stored
+    /// copy and back would be two changes the epoch cannot express, and the
+    /// chat that was read stayed on screen under the row that was returned to.
+    public var displayedTranscriptID: UUID {
+        switch screen {
+        case .live, .unreadable:
+            return conversation.epoch
+        case .reading(_, _, _, let renderID):
+            return renderID
+        case .replaying(_, _, _, let renderID):
+            return renderID
+        }
+    }
+
     public var transcriptHistory: [(user: AppChatTurn, assistant: AppChatTurn)] {
-        let pairs = conversation.completedPairs
-        let live = conversation.hasTurnInFlight ? pairs
-            : (pairs.isEmpty ? pairs : Array(pairs.dropLast()))
-        return archivedPairs + live
+        // A stored conversation draws in full: its pairs are not
+        // `completedPairs`, so none of them is being held back for the live
+        // fields to draw — and the live conversation belongs to another chat.
+        switch screen {
+        case .reading, .replaying:
+            return screen.document?.pairs ?? []
+        case .live, .unreadable:
+            let pairs = conversation.completedPairs
+            let live = conversation.hasTurnInFlight ? pairs
+                : (pairs.isEmpty ? pairs : Array(pairs.dropLast()))
+            return conversation.outOfContextPairs + live
+        }
     }
 
     /// Where the transcript draws "earlier turns are no longer in context",
     /// counted in pairs from the top. Nil when everything on screen is still in
     /// the model's context.
+    ///
+    /// A fact about the live conversation, so it is drawn only under one: a
+    /// stored copy read off disk is not in the model's context at all, and a
+    /// rule under every turn of it says nothing a reader can act on.
     public var transcriptContextBreak: Int? {
-        archivedPairs.isEmpty ? nil : archivedPairs.count
+        switch screen {
+        case .reading, .replaying:
+            return nil
+        case .live, .unreadable:
+            return conversation.outOfContextPairs.isEmpty
+                ? nil : conversation.outOfContextPairs.count
+        }
     }
 
     public var outputConversationPlainText: String {
@@ -480,13 +706,13 @@ public final class AppModel {
             installReadiness: installReadiness,
             loadState: loadState,
             hasStaleRuntime: hasStaleLoadedRuntime,
-            isRunning: isRunning,
+            isRunning: isTurnInFlight,
             isGenerationCancellationPending: isCancellationPending,
             generationPhase: phase,
             livePrefillDone: livePrefillDone,
             livePrefillTotal: livePrefillTotal,
             lastStopReason: diagnostics?.stopReason,
-            isVisionCompanionOperationInProgress: isVisionCompanionOperationInProgress))
+            isVisionFilesystemMutationInProgress: isVisionFilesystemMutationInProgress))
     }
 
     public var currentProcessMemoryBytes: UInt64? {
@@ -521,7 +747,9 @@ public final class AppModel {
     }
 
     public func setModelURL(_ url: URL) {
-        guard !isRunning else { return }
+        // Rebinding replaces the screen machine outright, so a replay in
+        // flight would lose the message it is carrying.
+        guard !isTurnInFlight else { return }
         let path = url.standardizedFileURL.path
         guard path != modelPathText else { return }
 
@@ -557,6 +785,9 @@ public final class AppModel {
             at: URL(fileURLWithPath: path))
         refreshInstallReadiness()
         refreshVisionInstallReadiness()
+        replaceConversationBinding(
+            for: URL(fileURLWithPath: path, isDirectory: true),
+            reason: "the model location changed")
 
         if let lifecycle = client as? AppModelLifecycleClient {
             unloadGeneration &+= 1
@@ -595,6 +826,83 @@ public final class AppModel {
         guard showPromptExamples != show else { return }
         showPromptExamples = show
         persistSettings()
+    }
+
+    /// Changes the context, and redraws a stored conversation against it.
+    ///
+    /// Continuability is a function of the conversation's size and the context
+    /// in force, and the window took its answer once, when the row was clicked.
+    /// So raising the context from the notice left the chat continuable but
+    /// still drawn read-only, under a boundary rule saying earlier turns were
+    /// out of context when they no longer were. Re-opening rebuilds it from the
+    /// state that now applies, in both directions.
+    public func setMaxContextTokens(_ tokens: Int) {
+        guard maxContextTokens != tokens else { return }
+        maxContextTokens = tokens
+        persistSettings()
+        guard !isRunning, !screen.isReplaying,
+              let id = screen.conversationID,
+              let meta = history.entry(id) else { return }
+        perform(machine.apply(.contextChanged(
+            state: continuability(of: meta),
+            heldID: storedConversationID,
+            kvMatchesHeld: serviceEpoch == conversation.epoch,
+            renderID: UUID())))
+    }
+
+    public func setSidebarVisible(_ visible: Bool) {
+        guard isSidebarVisible != visible else { return }
+        isSidebarVisible = visible
+        persistSettings()
+    }
+
+    /// One action behind the strip button, the View menu item and its
+    /// shortcut, so the three cannot disagree about what "shown" means.
+    public func toggleSidebar() {
+        setSidebarVisible(!isSidebarVisible)
+    }
+
+    /// Retries the writer lock a second window could not take at launch.
+    ///
+    /// `isReadOnly` was decided once, when the store was activated, so a window
+    /// that opened while another held the lock said "this one can read them but
+    /// not change them" for the rest of its life — including long after the
+    /// other one had quit. Becoming the frontmost window is exactly when that
+    /// is worth asking again: it is what the user does after closing the other
+    /// copy.
+    public func reacquireStoreIfPossible() {
+        guard history.isReadOnlyStore, let store = conversationStore else { return }
+        Task { [weak self] in
+            // Nil is the ordinary answer — another window is open — and anything
+            // else is a fault this one can act on. Discarded, a store that could
+            // not be locked for any other reason read as "another instance holds
+            // it" for the rest of the session.
+            if let reason = await store.retryLock() {
+                self?.recordHistoryDiagnostic(
+                    "the conversation store could not be locked for writing: "
+                        + reason)
+            }
+            await self?.refreshHistory()
+        }
+    }
+
+    public func setInspectorVisible(_ visible: Bool) {
+        guard isInspectorVisible != visible else { return }
+        isInspectorVisible = visible
+        persistSettings()
+    }
+
+    public func toggleInspector() {
+        setInspectorVisible(!isInspectorVisible)
+    }
+
+    /// Whether New Chat can run right now.
+    ///
+    /// The same guard `newChat()` already has, made askable so the button and
+    /// the menu item can be disabled rather than silently doing nothing, plus
+    /// the installer: there is no chat to start before a model exists.
+    public var canStartNewChat: Bool {
+        !isTurnInFlight && !requiresModelInstallation
     }
 
 
@@ -654,9 +962,13 @@ public final class AppModel {
         conversationTokens: Int?
     ) -> Int {
         guard let conversationTokens else { return 0 }
+        // The reply's reserve too: `generate` refuses a prompt that leaves
+        // less than it free, after every image has been encoded on the GPU.
+        // Without it the composer offered image sets the turn then refused.
         return VisionImageTokenBudget.capacity(
             maxContext: maxContextTokens,
-            reservedTextTokens: max(reservedPromptTokens, conversationTokens))
+            reservedTextTokens: max(reservedPromptTokens, conversationTokens)
+                + ConversationGenerationReserve.tokens)
     }
 
     /// The context a generation would run with right now.
@@ -669,6 +981,7 @@ public final class AppModel {
     /// takes its own copy — so it must not outlive the staging that consumed
     /// it, which is exactly how it leaked.
     public func addImages(_ urls: [URL], discardingSourceDirectory: URL? = nil) {
+        recheckVisionPackAtCurrentLocation()
         // Every early return has to discard the promise directory itself. The
         // staging task's `defer` below owns it only once that task exists, so a
         // return above it strands the full-size copies with nothing left to
@@ -679,10 +992,17 @@ public final class AppModel {
             }
         }
         guard isImageInputAvailable, !urls.isEmpty else {
+            if !isImageInputAvailable {
+                recordVisionAvailabilityError(
+                    at: URL(fileURLWithPath: modelPathText, isDirectory: true))
+            }
             discardSource()
             return
         }
-        guard !isRunning else {
+        // The whole send, not just the generation: a picture attached during
+        // a deferred replay met `restoreComposer`'s draft-wins rule when the
+        // replay failed, which deleted the sent message's own pictures.
+        guard !isTurnInFlight else {
             // A promise drop admitted before the run started can be delivered
             // after it. Returning silently made the images look as though they
             // had simply vanished.
@@ -708,9 +1028,8 @@ public final class AppModel {
             imageAttachmentError = Self.imageCapacityMessage(
                 capacity: capacity, context: effectiveMaxContextTokens)
         }
-        let store = attachmentStore
-        Task.detached(priority: .userInitiated) { [weak self] in
-            var staged: [AppImageAttachment] = []
+        Task.detached(priority: .userInitiated) { [weak self, attachmentStore] in
+            var staged: [StagedImage] = []
             defer {
                 if let discardingSourceDirectory {
                     try? FileManager.default.removeItem(at: discardingSourceDirectory)
@@ -718,13 +1037,13 @@ public final class AppModel {
             }
             do {
                 for url in selected {
-                    staged.append(try store.stage(url))
+                    staged.append(try attachmentStore.stage(url))
                 }
                 await self?.finishAddingImages(staged)
             } catch {
                 // The batch is all-or-nothing, so the copies made before the
                 // failure are referenced by nothing and would never be deleted.
-                for attachment in staged { store.remove(attachment) }
+                for attachment in staged { attachmentStore.remove(attachment) }
                 await self?.finishAddingImages(error: error)
             }
         }
@@ -734,7 +1053,17 @@ public final class AppModel {
     /// of another app arrives on the pasteboard as data, and a drag from an app
     /// that has not written the file yet arrives as a promise.
     public func addImageData(_ data: Data, displayName: String) {
-        guard isImageInputAvailable, !isRunning else { return }
+        recheckVisionPackAtCurrentLocation()
+        guard isImageInputAvailable else {
+            recordVisionAvailabilityError(
+                at: URL(fileURLWithPath: modelPathText, isDirectory: true))
+            return
+        }
+        guard !isTurnInFlight else {
+            imageAttachmentError =
+                "Wait for the current run to finish before attaching images."
+            return
+        }
         let capacity = maximumImageAttachments
         guard imageAttachments.count < capacity else {
             imageAttachmentError = Self.imageCapacityMessage(
@@ -743,10 +1072,10 @@ public final class AppModel {
         }
         addingImagesCount += 1
         imageAttachmentError = nil
-        let store = attachmentStore
-        Task.detached(priority: .userInitiated) { [weak self] in
+        Task.detached(priority: .userInitiated) { [weak self, attachmentStore] in
             do {
-                let staged = try store.stage(data: data, displayName: displayName)
+                let staged = try attachmentStore.stage(
+                    data: data, displayName: displayName)
                 await self?.finishAddingImages([staged])
             } catch {
                 await self?.finishAddingImages(error: error)
@@ -769,21 +1098,30 @@ public final class AppModel {
     }
 
     public func removeImage(id: UUID) {
-        guard !isRunning,
+        guard !isTurnInFlight,
               let index = imageAttachments.firstIndex(where: { $0.id == id }) else { return }
         let attachment = imageAttachments.remove(at: index)
         attachmentStore.remove(attachment)
         imageAttachmentError = nil
     }
 
+    /// Puts the composer in the state a completed pick leaves it in.
+    ///
+    /// `addImages` needs a verifiable companion pack to reach its staging path,
+    /// which no unit test has, and the lifetime rules around these files are
+    /// exactly what needs covering.
+    func setComposerAttachmentsForTesting(_ attachments: [StagedImage]) {
+        imageAttachments = attachments
+    }
+
     public func clearImages() {
-        guard !isRunning else { return }
+        guard !isTurnInFlight else { return }
         for attachment in imageAttachments { attachmentStore.remove(attachment) }
         imageAttachments.removeAll()
         imageAttachmentError = nil
     }
 
-    private func finishAddingImages(_ staged: [AppImageAttachment]) {
+    private func finishAddingImages(_ staged: [StagedImage]) {
         // Two adds can be in flight at once — the picker and a drop — and each
         // sized itself against the count it saw at admission, so the second to
         // land can push past the cap. Re-check against the real count here and
@@ -909,7 +1247,7 @@ public final class AppModel {
     /// directly. Calling this from those sites is what actually runs it.
     private func endConversationForReleasedKV() {
         serviceEpoch = nil
-        archiveConversationContext()
+        presentStoredConversationAfterReleasedKV()
     }
 
     public func unloadModel() {
@@ -1187,10 +1525,24 @@ public final class AppModel {
         refreshVisionInstallReadiness(at: directory)
     }
 
+    public func recheckVisionPackAtCurrentLocation() {
+        refreshVisionInstallReadiness(
+            at: URL(fileURLWithPath: modelPathText, isDirectory: true)
+                .standardizedFileURL)
+    }
+
     private func refreshInstallReadiness(at outputDirectory: URL) {
         installationStatus = AppModelInstallationProbe.status(
             at: outputDirectory,
             descriptor: installer.descriptor)
+        do {
+            modelStorageMetrics = FileManager.default.fileExists(atPath: outputDirectory.path)
+                ? try AppModelStorageMetrics.measure(at: outputDirectory) : nil
+            modelStorageMetricsError = nil
+        } catch {
+            modelStorageMetrics = nil
+            modelStorageMetricsError = "installed storage could not be measured: \(error)"
+        }
         guard !isModelInstalled else { return }
         installReadiness = .checking
         do {
@@ -1213,21 +1565,20 @@ public final class AppModel {
     private func refreshVisionInstallReadiness(at textModelDirectory: URL) {
         visionInstallationStatus = AppVisionPackInstallationProbe.status(
             at: textModelDirectory)
-        // Removing the companion leaves any attached image unsendable, and the
-        // composer would keep offering it with nothing able to encode it.
+        // Removing the companion leaves any attached image unsendable. Keep the
+        // draft intact and refuse the send until the reproducibility input is
+        // present again.
         // Only once the dust has settled: the probe verifies the pack on disk,
         // and a companion operation renames that directory underneath it, so
         // refreshing mid-operation can briefly report no image support. Acting
         // on that would delete images the user had staged.
         if !isImageInputAvailable, !isVisionCompanionOperationInProgress,
            !imageAttachments.isEmpty {
-            for attachment in imageAttachments { attachmentStore.remove(attachment) }
-            imageAttachments.removeAll()
-            // Say so. Clearing the error alongside the images removed them and
-            // the only explanation for their absence in one step, so the
-            // composer just quietly emptied itself.
-            imageAttachmentError =
-                "Image support is unavailable, so the attached images were removed."
+            recordVisionAvailabilityError(at: textModelDirectory)
+        } else if isImageInputAvailable,
+                  imageAttachmentError == visionAvailabilityAttachmentError {
+            imageAttachmentError = nil
+            visionAvailabilityAttachmentError = nil
         }
         guard isModelInstalled else {
             visionInstallReadiness = .failed("Install the text model first")
@@ -1261,6 +1612,33 @@ public final class AppModel {
         } catch {
             visionInstallReadiness = .failed("\(error)")
         }
+    }
+
+    private func recordVisionAvailabilityError(at textModelDirectory: URL) {
+        let location: String
+        do {
+            location = try VisionPackLocation.companionURL(
+                forTextModel: textModelDirectory).path
+        } catch {
+            location = "an unresolved companion path (\(error))"
+        }
+        let cause: String
+        switch visionInstallationStatus {
+        case .missing:
+            cause = "the companion pack is missing"
+        case .partial(let detail):
+            cause = "the companion pack is incomplete: \(detail)"
+        case .unsupportedLayout:
+            cause = "this text-model layout cannot host a companion pack"
+        case .complete:
+            cause = isVisionRuntimeSupported
+                ? "the companion pack is unavailable"
+                : "image inference is unsupported on this device"
+        }
+        let message = "Image support is unavailable at \(location): \(cause). "
+            + "Restore the companion pack before sending."
+        visionAvailabilityAttachmentError = message
+        imageAttachmentError = message
     }
 
     private func applyVisionInstallEvent(
@@ -1464,6 +1842,9 @@ public final class AppModel {
             loadState = .notLoaded
             endConversationForReleasedKV()
             refreshVisionInstallReadiness(at: directory)
+            replaceConversationBinding(
+                for: directory,
+                reason: "the model installation completed")
         }
     }
 
@@ -1561,10 +1942,13 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
+        isSidebarVisible = settings.sidebarVisible
+        isInspectorVisible = settings.inspectorVisible
         loadModelOnLaunch = settings.loadModelOnLaunch
+        pendingRestoredConversationID = settings.selectedConversationID
     }
 
-    private func persistSettings() {
+    func persistSettings() {
         guard settingsPersistenceEnabled else { return }
         let settings = MacAppSettings(
             contextTokens: maxContextTokens,
@@ -1577,13 +1961,19 @@ public final class AppModel {
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
             showPromptExamples: showPromptExamples,
+            sidebarVisible: isSidebarVisible,
+            inspectorVisible: isInspectorVisible,
             visionResidencyPolicy: runtimeOptions.visionResidencyPolicy,
             rdadvisePolicy: runtimeOptions.rdadvisePolicy,
-            loadModelOnLaunch: loadModelOnLaunch)
+            loadModelOnLaunch: loadModelOnLaunch,
+            selectedConversationID: history.selection)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
-        try? MacAppSettingsFileStore.save(
-            settings,
-            forModelDirectory: modelDirectory)
+        do {
+            try MacAppSettingsFileStore.save(settings, forModelDirectory: modelDirectory)
+        } catch {
+            FileHandle.standardError.write(Data(
+                "Saving Mac app settings failed: \(error)\n".utf8))
+        }
     }
 
     private func finishInstallFailure(_ error: Error, generation: UInt64) {
@@ -1651,13 +2041,35 @@ public final class AppModel {
             // lineage on its side for the same reason; leaving the app's epoch
             // in place would have the next turn claim to resume onto a cache
             // that had just been rebuilt.
+            let isAlreadyWaitingForReplay = serviceEpoch == nil
+                && storedConversationID != nil
+                && screen.conversationID == storedConversationID
             serviceEpoch = nil
             // And the conversation itself is gone with that KV. Keeping the
             // turn list would leave the app numbering turns from where it left
             // off while the service, having just ended the lineage, expects
             // zero — so the gate would refuse the next turn and every turn
             // after it, for the rest of the session.
-            archiveConversationContext()
+            if let id = pendingServiceRecoveryConversationID,
+               screen.conversationID == id,
+               storedConversationID == id {
+                prepareServiceRecoveryForReplay()
+                pendingServiceRecoveryConversationID = nil
+            } else if let id = pendingServiceRecoveryConversationID,
+                      screen.conversationID == id {
+                // A replay lost the service with this row on screen and its
+                // message handed back; the failed replay already ended the
+                // held lineage. The row stays for the send that follows Retry
+                // Load. Archived instead, its selection went and the retried
+                // message opened a brand-new chat.
+                pendingServiceRecoveryConversationID = nil
+            } else if isAlreadyWaitingForReplay {
+                // An explicit unload already put the durable row on screen.
+                // Loading the new runner must not archive that row a second
+                // time or clear the selection before its deferred replay.
+            } else {
+                presentStoredConversationAfterReleasedKV()
+            }
             loadedRuntimeKey = pendingExplicitLoadRuntimeKey
                 ?? activeRunRuntimeKey
                 ?? currentRuntimeKey
@@ -1672,31 +2084,15 @@ public final class AppModel {
         }
     }
 
-    /// Releases the transcript's own references to the images it was showing.
-    /// They are separate files from the composer's, so nothing else frees them.
-    /// Releases every image the conversation is holding — each turn's, the
-    /// archived turns', and the newest turn's.
-    private func releaseConversationImages() {
-        for pair in archivedPairs {
-            for attachment in pair.user.images { attachmentStore.remove(attachment) }
-        }
-        for turn in conversation.turns {
-            for attachment in turn.images { attachmentStore.remove(attachment) }
-        }
-        releaseTranscriptImages()
-    }
-
-    private func releaseTranscriptImages() {
-        for attachment in outputImageAttachments { attachmentStore.remove(attachment) }
-        outputImageAttachments = []
-    }
-
     /// Deletes every file this session staged. Called when the app is quitting,
     /// which is the only moment they are all certainly unwanted.
+    ///
+    /// The whole staging directory at once rather than picture by picture: a
+    /// release that walks the window's own references can only free what the
+    /// window still remembers, and quitting frees the rest as well.
     public func releaseAllAttachments() {
-        releaseConversationImages()
-        for attachment in imageAttachments { attachmentStore.remove(attachment) }
         imageAttachments.removeAll()
+        outputImageAttachments = []
         attachmentStore.removeAll()
     }
 
@@ -1737,19 +2133,36 @@ public final class AppModel {
 
     /// Ends the conversation and starts an empty one.
     ///
-    /// There is no history to recover it from, so the window confirms before
-    /// calling this when the transcript is not empty.
+    /// No confirmation any more: the conversation being left is already on
+    /// disk, turn by turn, and one click in the sidebar brings it back. An
+    /// alert for something that is not lost is an alert for nothing.
     public func newChat() {
-        guard !isRunning else { return }
-        // Every turn holds its own hard links. Dropping the turn list without
-        // releasing them leaked one staged file per image per turn until quit:
-        // `releaseTranscriptImages` only ever covered the newest turn, which is
-        // why a single-turn test passed.
-        releaseConversationImages()
-        archivedPairs.removeAll()
+        // Refused during a replay as well as during a generation. The replay is
+        // putting a conversation into the KV for a turn that has already been
+        // sent; starting an empty chat under it left the window on the new chat
+        // and the model on the old one, and whichever landed last defined what
+        // the next turn was numbered against.
+        guard !isTurnInFlight else { return }
+        quarantinedPersistenceLineages.removeAll()
+        pendingServiceRecoveryConversationID = nil
+        // The empty chat is not written until its first send, so it takes no
+        // row in the sidebar and the previous conversation stops being the one
+        // this window is appending to.
+        storedConversationID = nil
+        // Every turn holds its own hard links, and dropping the turn list
+        // without releasing them leaked one staged file per image per turn
+        // until quit. The release is the machine's
+        // `.releaseImagesOfHeldConversation` effect, so the transitions that
+        // give the KV up and the transitions that free its pictures are one
+        // list rather than two that drifted apart.
+        perform(machine.apply(.newChat))
+        // The composer's own attachments too. Released only from the transcript
+        // and the conversation, a picture attached but never sent stayed in the
+        // box and followed the user into the new chat — and its staged copy
+        // stayed on disk until the app quit.
+        clearImages()
         conversation.startNew()
         outputPromptText = ""
-        releaseTranscriptImages()
         outputText = ""
         generationTranscriptMailbox?.reset()
         diagnostics = nil
@@ -1765,7 +2178,7 @@ public final class AppModel {
     ///
     /// Distinct from `newChat()`: the user did not ask for this. The transcript
     /// stays — lifecycle actions are not supposed to discard it — but its turns
-    /// move to `archivedPairs`, because the model can no longer see them. The
+    /// move out of context, because the model can no longer see them. The
     /// alternative, letting `conversation` keep counting, desynchronises the app
     /// from the service's gate, which has just gone back to expecting turn zero;
     /// the gate would then refuse every turn for the rest of the session.
@@ -1778,8 +2191,24 @@ public final class AppModel {
                                           images: outputImageAttachments),
                         assistant: AppChatTurn(role: .assistant, text: outputText))]
         }
-        archivedPairs.append(contentsOf: carried)
-        conversation.startNew()
+        // The read-only copy of a chat that was merely being looked at is not
+        // part of the live conversation's history, and it cannot be mistaken
+        // for one now: it lives in the screen and goes with the screen. When
+        // the two were one array, a reload or an unload while reading a chat
+        // that could not be continued drew that chat as the live conversation's
+        // own out-of-context turns, under a context break with nothing below
+        // it, and Re-read into a new chat built its prompt from a conversation
+        // the user had only been reading.
+        perform(machine.apply(.lineageEnded))
+        let outOfContext = conversation.outOfContextPairs + carried
+        conversation.startNew(carryingOutOfContext: outOfContext)
+        // The stored conversation keeps every turn it had, and its row will say
+        // whether it can still be continued. What must not happen is the next
+        // turn appending to that file while the KV holds only the new lineage:
+        // the transcript on disk would then claim a context the model does not
+        // have. So this window stops writing to it and the next send opens a
+        // new one.
+        storedConversationID = nil
         // The archived pairs are what the transcript draws now. Leaving the
         // live fields holding the newest of them would draw that turn twice,
         // once as history and once as the turn still on screen.
@@ -1789,6 +2218,24 @@ public final class AppModel {
             outputImageAttachments = []
             generationTranscriptMailbox?.reset()
         }
+    }
+
+    /// A persisted conversation remains the conversation on screen after its
+    /// KV is released. It is now a readable stored copy, and the next send
+    /// restores its exact token record before appending to the same directory.
+    /// A non-persisted session has no such record and keeps the legacy visible
+    /// context-break behavior instead.
+    private func presentStoredConversationAfterReleasedKV() {
+        // Browsing and KV ownership are independent. Releasing the held KV
+        // must not switch the viewed row or redirect its next message.
+        guard let id = screen.conversationID ?? storedConversationID,
+              conversationStore != nil,
+              history.entry(id) != nil else {
+            archiveConversationContext()
+            return
+        }
+        prepareServiceRecoveryForReplay()
+        openConversation(id: id)
     }
 
     /// Opens the conversation on the inference side if it has not been opened
@@ -1802,34 +2249,132 @@ public final class AppModel {
         serviceEpoch = conversation.epoch
     }
 
-    public func run() {
+    // MARK: - The send path
+
+    /// Hands a message over to the pipeline.
+    ///
+    /// Synchronous on purpose, and it empties the composer before it returns:
+    /// `canRun` reads the composer, so a second Generate between the click and
+    /// the pipeline's first suspension is refused by the same guard that
+    /// refused the first one. Started inside the task instead, two clicks
+    /// started two replays of the same chat under different epochs, and the
+    /// turn the first had already stamped came back rejected as belonging to a
+    /// conversation that was no longer open.
+    public func send() {
+        recheckVisionPackAtCurrentLocation()
         guard canRun else { return }
-        // Reserved before the request is built, so the position the service
-        // will check is the position the transcript shows.
-        guard let ticket = conversation.beginTurn(text: promptText, images: []) else {
-            return
+        let turn = takeComposer()
+        sendTask = Task { [weak self] in
+            guard let self else { return }
+            await deliver(turn)
+            sendTask = nil
         }
-        var request: AppGenerationRequest
-        do {
-            request = try makeRequest(ticket: ticket)
-        } catch let appError as AppInferenceError {
-            conversation.abandonTurn()
-            error = appError
-            return
-        } catch {
-            let appError = AppInferenceError.unknown("\(error)")
-            conversation.abandonTurn()
-            self.error = appError
+    }
+
+    /// Takes the message out of the composer and gives it to the caller.
+    ///
+    /// The images move rather than being copied: the composer stops drawing
+    /// them here and nothing deletes them, because the turn is now the only
+    /// thing that refers to those files. A stage that fails puts both halves
+    /// back through `restoreComposer`.
+    private func takeComposer() -> PreparedTurn {
+        let turn = PreparedTurn(prompt: promptText, images: imageAttachments)
+        promptText = ""
+        imageAttachments.removeAll()
+        imageAttachmentError = nil
+        return turn
+    }
+
+    /// The one path a message takes, in stages.
+    ///
+    /// Every stage either advances or ends in `restoreComposer`, and nothing
+    /// here calls itself: the replay used to hand the message back to the
+    /// composer and re-enter `run()`, so a replay that resolved without putting
+    /// anything into the KV re-entered the same branch forever.
+    private func deliver(_ turn: PreparedTurn) async {
+        var turn = turn
+        // The transcript draws this message as the current turn from the moment
+        // a replay starts, so a stage that fails before the model saw it takes
+        // the message off the screen with it. A turn the runtime rewound
+        // afterwards keeps it: the window shows a stopped turn as the current
+        // one until the next send replaces it.
+        var isDrawnAsTheLiveTurn = false
+
+        // 1. Replay. A reopened conversation is on screen but not in the
+        //    model's context, and the ticket below has to be reserved against
+        //    the restored lineage or the service's gate refuses a turn numbered
+        //    against the wrong epoch.
+        //
+        //    Anything but the live conversation goes through here. Only
+        //    `.reading` used to, so a send while the screen named an unreadable
+        //    row skipped the replay and ran on the held chat: the turn was
+        //    written into that chat's file while the sidebar, the notice and
+        //    the saved selection all named the row that could not be read.
+        if case .live = screen {} else {
+            var replayID: UUID?
+            for case .replay(let id, _) in machine.apply(.sendRequested(turn)) {
+                replayID = id
+            }
+            guard let replayID else {
+                // The machine refused: the row on screen cannot be continued,
+                // which `canRun` already says. Handed back rather than run on
+                // the held conversation under the wrong row.
+                restoreComposer(turn, error: .invalidRequest(
+                    "The conversation on screen cannot be continued."),
+                    withdrawingFromTranscript: false)
+                return
+            }
+            // The message moves into the transcript now, under the same prefill
+            // placeholder an ordinary turn gets. A replay is a full prefill of
+            // everything the conversation holds, and for the length of it the
+            // window showed nothing at all — the composer was empty and the
+            // transcript had not changed — which is what made a second Generate
+            // the obvious thing to press.
+            runIdentity &+= 1
+            generationTranscriptMailbox?.reset()
+            outputPromptText = turn.prompt
+            outputImageAttachments = turn.images.map(ChatImage.staged)
+            outputText = ""
+            isDrawnAsTheLiveTurn = true
+            if await !replayIntoKV(id: replayID, turn: turn) {
+                // The machine's `.restoreComposer` effect has already handed
+                // the message back with the reason it could not be replayed.
+                return
+            }
+        }
+
+        // 2. Reserve the position the service will check, before the request is
+        //    built, so the position the transcript shows is the position sent.
+        guard let ticket = conversation.beginTurn(text: turn.prompt) else {
+            // `canRun` already required `conversation.canSend`, and the emptied
+            // composer refuses a second send, so nothing should reach this.
+            // Refused with the message given back rather than dropped.
+            restoreComposer(turn, error: .invalidRequest(
+                "This conversation is already sending a turn."),
+                withdrawingFromTranscript: isDrawnAsTheLiveTurn)
             return
         }
 
-        // The run reads the transcript's own hard links rather than the
-        // composer's files, so clearing the composer below cannot delete an
-        // image this request has not opened yet. One set of files, one owner.
-        // A failed retain leaves no reference that is guaranteed to outlive
-        // the composer, so the run is refused instead of started against files
-        // that are about to be removed.
-        var retained: [AppImageAttachment] = []
+        // 3. Build the request from the message, not from the composer: the
+        //    composer was emptied at stage 1 and may already hold the next one.
+        var request: AppGenerationRequest
+        do {
+            request = try makeRequest(turn, ticket: ticket)
+        } catch {
+            conversation.abandonTurn()
+            restoreComposer(
+                turn,
+                error: (error as? AppInferenceError) ?? .unknown("\(error)"),
+                withdrawingFromTranscript: isDrawnAsTheLiveTurn)
+            return
+        }
+
+        // 4. Retain the images. The run reads the transcript's own hard links
+        //    rather than the composer's files, so the hand-off below cannot
+        //    delete an image this request has not opened yet. A failed retain
+        //    leaves no reference guaranteed to outlive the composer, so the run
+        //    is refused instead of started against files about to be removed.
+        var retained: [StagedImage] = []
         do {
             for attachment in request.imageAttachments {
                 retained.append(try attachmentStore.retain(attachment))
@@ -1838,14 +2383,21 @@ public final class AppModel {
             for attachment in retained { attachmentStore.remove(attachment) }
             conversation.abandonTurn()
             imageAttachmentError = String(describing: error)
-            self.error = .invalidRequest(
-                "Could not prepare the attached images for this run: \(error)")
+            restoreComposer(turn, error: .invalidRequest(
+                "Could not prepare the attached images for this run: \(error)"),
+                withdrawingFromTranscript: isDrawnAsTheLiveTurn)
             return
         }
         request.imageAttachments = retained
+        // The hand-off. The message is carried by its retained links from here,
+        // and the copies it arrived with are referenced by nothing: handing
+        // those back after a rewind would give the user thumbnails with no
+        // files behind them.
+        for attachment in turn.images { attachmentStore.remove(attachment) }
+        turn = turn.carrying(retained)
 
+        // 5. Start the turn.
         persistSettings()
-
         generationTranscriptMailbox?.reset()
         runIdentity &+= 1
         let generation = runIdentity
@@ -1854,11 +2406,12 @@ public final class AppModel {
         // as long as the conversation shows them. They are hard links to files
         // that already exist, so holding them costs no additional bytes.
         conversation.attachImagesToPendingTurn(retained)
-        outputImageAttachments = retained
+        outputImageAttachments = retained.map(ChatImage.staged)
         outputText = ""
         diagnostics = nil
         error = nil
         hasHandledTerminalEvent = false
+        turnOutcome = .committed
         activeRunRuntimeKey = AppLoadedRuntimeKey(
             modelDirectory: request.modelDirectory,
             maxContextTokens: request.maxContextTokens,
@@ -1872,19 +2425,17 @@ public final class AppModel {
         sampleLiveMemory()
         phase = .prefill
         runState = .running
-        // A chat composer always clears. Keeping the sent turn in the box means
-        // the next message starts as a copy of the last one, and the images
-        // silently re-attach to a different message. Dropping them is safe
-        // because the request above was repointed at the retained links:
-        // removing these files cannot pull the ground out from under a run that
-        // has not opened its images yet. A refused turn puts both back through
-        // `restoreComposer`.
-        promptText = ""
-        for attachment in imageAttachments { attachmentStore.remove(attachment) }
-        imageAttachments.removeAll()
-        imageAttachmentError = nil
 
-        runTask = Task.detached { [weak self, client, request, generation] in
+        // 6. Generate. The directory is created here, on the first send, rather
+        //    than at New Chat: a chat the user opens and never uses must leave
+        //    nothing behind. The images start being written now, overlapped with
+        //    the reply the user is already waiting for.
+        if let storedID = await ensureStoredConversation(firstMessage: request.prompt) {
+            beginStoringTurnImages(request.imageAttachments, in: storedID)
+        }
+        // Off the main actor: an event stream whose producer runs inline would
+        // hold the window for the length of the run.
+        let stream = Task.detached { [weak self, client, request, generation] in
             guard let self else { return }
             do {
                 try await self.openConversationIfNeeded()
@@ -1897,6 +2448,100 @@ public final class AppModel {
                 await self.finishStreamFailure(.unknown("\(error)"), generation: generation)
             }
         }
+        // The turn is over at its terminal event, not when the stream happens
+        // to close: a client that reports a failure and then goes quiet would
+        // otherwise hold the composer, New Chat and every later send for as
+        // long as it stayed quiet. The stream is watched as well, so a stream
+        // that ends without a terminal event still releases this.
+        await withCheckedContinuation { continuation in
+            turnCompletion = (generation: generation, continuation: continuation)
+            Task { [weak self] in
+                await stream.value
+                self?.endTurnWait(generation: generation)
+            }
+        }
+
+        // 7. Commit or hand back. `finishSuccessfully` has already written the
+        //    turn; a rewind reaches here with the cause already in `error`.
+        guard case .rewound = turnOutcome else { return }
+        restoreComposer(turn, error: nil, withdrawingFromTranscript: false)
+        // Its images were written while the reply was generating, and the turn
+        // that would have cited them is gone. Ended before the sweep rather
+        // than beside it: the sweep deletes every file no record names, and a
+        // write still running would have raced it into the same directory.
+        await discardPendingTurnImages()
+        await sweepImagesOfRewoundTurn()
+    }
+
+    /// Puts a stored conversation back into the KV and says whether the turn
+    /// waiting on it may go.
+    private func replayIntoKV(id: UUID, turn: PreparedTurn) async -> Bool {
+        phase = .prefill
+        livePrefillDone = 0
+        // A denominator from the record, so the gauge counts up from the first
+        // moment rather than from whenever the first progress event lands.
+        livePrefillTotal = history.entry(id)?.kvTokens ?? 0
+        let outcome = await replayOutcome(id: id)
+        // Back out of the prefill phase the send put the window into, or the
+        // gauge keeps claiming a replay that has already finished.
+        phase = .idle
+        livePrefillDone = 0
+        livePrefillTotal = 0
+        let effects = machine.apply(outcome)
+        perform(effects)
+        return effects.contains { if case .startTurn = $0 { return true } else { return false } }
+    }
+
+    /// Puts a turn that never reached the model, or one the runtime rewound,
+    /// back in the composer.
+    ///
+    /// The one function that hands a message back; every failing stage reaches
+    /// it exactly once. `error` is nil when the failure has already recorded
+    /// itself — a rewound generation sets `error` as it ends, and a second copy
+    /// of the same cause would replace what the window is already showing.
+    ///
+    /// `withdrawingFromTranscript` takes the message off the screen as well.
+    /// True for every stage that failed before the model saw the turn, because
+    /// what is drawn there is this very message with nothing underneath it;
+    /// false for a turn the runtime rewound, which the window keeps drawing as
+    /// the current one until the next send replaces it.
+    func restoreComposer(_ turn: PreparedTurn,
+                         error: AppInferenceError?,
+                         withdrawingFromTranscript: Bool) {
+        if withdrawingFromTranscript {
+            outputPromptText = ""
+            outputText = ""
+            generationTranscriptMailbox?.reset()
+        }
+        // Dropped, never released: these are the same links the turn below is
+        // carrying, and deleting them here handed the composer back a set of
+        // pictures whose files had just been removed. Only when they are this
+        // message's, though. A refusal before the model saw the turn — a
+        // request that did not validate, a retain that failed — reaches here
+        // with the live fields still drawing the previous turn, and clearing
+        // them made that turn's pictures vanish from the transcript.
+        var own: Set<UUID> = []
+        for image in turn.images { own.insert(image.id) }
+        var drawsThisMessage = withdrawingFromTranscript
+        for image in outputImageAttachments {
+            if let staged = image.staged, own.contains(staged.id) {
+                drawsThisMessage = true
+            }
+        }
+        if drawsThisMessage {
+            outputImageAttachments = []
+        }
+        if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            promptText = turn.prompt
+        }
+        if imageAttachments.isEmpty {
+            imageAttachments = turn.images
+        } else {
+            // The composer was used again while the turn was in flight, and its
+            // copies are the ones the next send will carry.
+            for attachment in turn.images { attachmentStore.remove(attachment) }
+        }
+        if let error { self.error = error }
     }
 
     public func cancel() {
@@ -1905,7 +2550,23 @@ public final class AppModel {
         client.cancel()
     }
 
+    /// The request the composer would build right now, for the callers that
+    /// only need to know whether what is in it is valid.
     public func makeRequest(
+        ticket: AppConversation.Ticket? = nil
+    ) throws -> AppGenerationRequest {
+        try makeRequest(
+            PreparedTurn(prompt: promptText, images: imageAttachments),
+            ticket: ticket)
+    }
+
+    /// The request one message makes.
+    ///
+    /// Built from the turn rather than from the composer, which the send path
+    /// emptied before this is reached and which may already hold the next
+    /// message.
+    func makeRequest(
+        _ turn: PreparedTurn,
         ticket: AppConversation.Ticket? = nil
     ) throws -> AppGenerationRequest {
         // A run executes against the session that is actually loaded. Sending
@@ -1918,8 +2579,8 @@ public final class AppModel {
         let effective = loadedRuntimeKey ?? currentRuntimeKey
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
-            prompt: promptText,
-            imageAttachments: imageAttachments,
+            prompt: turn.prompt,
+            imageAttachments: turn.images,
             maxNewTokens: maxNewTokensOverride ?? effective.maxContextTokens,
             maxContextTokens: effective.maxContextTokens,
             temperature: Float(temperature),
@@ -1982,7 +2643,17 @@ public final class AppModel {
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
         self.diagnostics = diagnostics
+        let userText = outputPromptText
+        let assistantText = outputText
         conversation.completeTurn(text: outputText, diagnostics: diagnostics)
+        // Written here and nowhere else: this is the one path that commits a
+        // turn to the KV, so it is the one path where the transcript on disk
+        // and the model's context can be made to say the same thing. A turn
+        // that threw was rewound by the runtime and reaches `finishWithError`,
+        // which writes nothing.
+        enqueueCompletedTurnPersistence(
+            userText: userText, assistantText: assistantText,
+            diagnostics: diagnostics)
         finishTerminalRun()
     }
 
@@ -2010,10 +2681,9 @@ public final class AppModel {
         // The turn itself is handed back rather than dropped: discarding it lost
         // the user's message and stranded its retained image links, which the
         // next run overwrote without releasing — one staged file per image,
-        // until quit.
-        if let abandoned = conversation.abandonTurn() {
-            restoreComposer(from: abandoned)
-        }
+        // until quit. Recorded rather than handed back here: the send pipeline
+        // is holding the message, and it is the one place that gives it back.
+        if conversation.abandonTurn() != nil { turnOutcome = .rewound }
         finishTerminalRun()
     }
 
@@ -2037,27 +2707,31 @@ public final class AppModel {
             // them retype it.
             abandoned = conversation.abandonTurn()
         }
-        if let abandoned {
-            restoreComposer(from: abandoned)
-        }
+        if abandoned != nil { turnOutcome = .rewound }
         finishTerminalRun()
+        if case .connectionLost = appError {
+            recordLostServiceConnection(appError)
+            if let id = storedConversationID, let meta = history.entry(id) {
+                pendingServiceRecoveryConversationID = id
+                perform(machine.apply(.rowClicked(
+                    id: id, heldID: id, kvMatchesHeld: false,
+                    state: continuability(of: meta), renderID: UUID())))
+            }
+        }
     }
 
-    /// Puts a turn that never reached the model back in the composer.
+    /// The loaded model is gone with the decode service that held it.
     ///
-    /// The images move with it: they are this turn's retained links, and the
-    /// turn is gone from the transcript, so nothing else refers to them. Losing
-    /// them here would silently drop attachments the user had picked.
-    private func restoreComposer(from turn: AppChatTurn) {
-        if promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            promptText = turn.text
-        }
-        if imageAttachments.isEmpty, !turn.images.isEmpty {
-            imageAttachments = turn.images
-        } else {
-            for attachment in turn.images { attachmentStore.remove(attachment) }
-        }
-        outputImageAttachments = []
+    /// One place for the state a lost connection leaves, reached by a
+    /// generation that ends on it and by a replay that does: the runtime key,
+    /// the memory readings and the epoch all belonged to a process that no
+    /// longer exists, and `.failed` is what puts Retry Load on screen.
+    func recordLostServiceConnection(_ appError: AppInferenceError) {
+        loadedRuntimeKey = nil
+        liveMemoryBytes = nil
+        liveResidentBytes = nil
+        loadState = .failed(appError)
+        serviceEpoch = nil
     }
 
     private func finishStreamFailure(_ appError: AppInferenceError, generation: Int) {
@@ -2071,7 +2745,20 @@ public final class AppModel {
         runState = .idle
         isCancellationPending = false
         activeRunRuntimeKey = nil
-        runTask = nil
+        endTurnWait(generation: runIdentity)
+    }
+
+    /// Releases the send's last stage.
+    ///
+    /// Keyed on the run it belongs to: a stream from an abandoned run can close
+    /// long after the run that replaced it started, and resuming the newer
+    /// turn's wait would commit it before it had generated anything.
+    private func endTurnWait(generation: Int) {
+        guard let pending = turnCompletion, pending.generation == generation else {
+            return
+        }
+        turnCompletion = nil
+        pending.continuation.resume()
     }
 
     private func clearLoadTask(generation: UInt64) {
@@ -2083,5 +2770,15 @@ public final class AppModel {
     private func clearUnloadTask(generation: UInt64) {
         guard generation == unloadGeneration else { return }
         unloadTask = nil
+    }
+
+    public func shutdownForTermination() {
+        guard !hasShutDownForTermination else { return }
+        hasShutDownForTermination = true
+        // Direct inspector bindings may have changed since the last saved action.
+        persistSettings()
+        client.cancel()
+        (client as? AppModelLifecycleClient)?.shutdownForTermination()
+        releaseAllAttachments()
     }
 }

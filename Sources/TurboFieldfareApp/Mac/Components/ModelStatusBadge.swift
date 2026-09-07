@@ -1,5 +1,6 @@
 import TurboFieldfareAppCore
 import SwiftUI
+import TurboFieldfareMacPresentation
 
 struct ModelStatusBadge: View {
     let model: AppModel
@@ -13,6 +14,7 @@ struct ModelStatusBadge: View {
                 .help(model.installDescriptor.repoID)
                 .accessibilityLabel("Model")
                 .accessibilityValue(model.installDescriptor.repoID)
+                .accessibilityIdentifier(.hudStatus)
         }
     }
 

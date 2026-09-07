@@ -604,14 +604,14 @@ import Testing
 
     // MARK: - Scroll follow
 
-    /// A tail re-render must not pull a reader who has scrolled up back to the
-    /// bottom; only the finalize restyle does that.
+    /// Neither a tail re-render nor final formatting may take the scroll from
+    /// a reader who moved away from the bottom.
     @Test func tailReplacementFollowsTheSameScrollRuleAsAnAppend() {
         #expect(!InstructionTranscriptDocumentController.shouldScrollToBottom(
             wasAtBottom: false, mutation: .tailReplaced))
         #expect(InstructionTranscriptDocumentController.shouldScrollToBottom(
             wasAtBottom: true, mutation: .tailReplaced))
-        #expect(InstructionTranscriptDocumentController.shouldScrollToBottom(
+        #expect(!InstructionTranscriptDocumentController.shouldScrollToBottom(
             wasAtBottom: false, mutation: .finalized))
     }
 }

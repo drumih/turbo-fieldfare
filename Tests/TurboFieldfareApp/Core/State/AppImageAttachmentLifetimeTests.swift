@@ -123,7 +123,8 @@ import TurboFieldfare
         #expect(model.imageAttachments.count == 1)
         model.promptText = "describe it"
         model.maxNewTokensOverride = 1
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
 
         #expect(model.promptText.isEmpty)
         #expect(model.imageAttachments.isEmpty,
@@ -133,9 +134,7 @@ import TurboFieldfare
         let shown = try #require(model.outputImageAttachments.first)
         #expect(try Data(contentsOf: shown.fileURL) == Data("fixture".utf8))
 
-        for _ in 0..<200 where model.isRunning {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await SendWaiting.turnEnds(model)
         // Clearing the transcript is what finally frees them.
         model.newChat()
         #expect(model.outputImageAttachments.isEmpty)
@@ -164,11 +163,9 @@ import TurboFieldfare
         await attach(model, [source])
         model.promptText = "describe it"
         model.maxNewTokensOverride = 1
-        model.run()
+        model.send()
 
-        for _ in 0..<400 where model.isRunning {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await SendWaiting.turnEnds(model)
         #expect(model.error == nil,
                 "the run could not open the images the composer had just deleted")
         #expect(!model.outputText.isEmpty, "the run produced nothing")
@@ -199,7 +196,8 @@ import TurboFieldfare
         try Data().write(to: store.directoryURL
             .appendingPathComponent("retained", isDirectory: false))
 
-        model.run()
+        model.send()
+        await SendWaiting.turnEnds(model)
 
         #expect(!model.isRunning, "the run started without stable references")
         #expect(model.error != nil, "the refusal was silent")
@@ -229,7 +227,8 @@ import TurboFieldfare
                              attachmentStore: store)
         model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
         model.promptText = "hello"
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
         #expect(model.isRunning)
 
         let promises = root.appendingPathComponent("promises", isDirectory: true)
@@ -329,10 +328,8 @@ import TurboFieldfare
         await attach(model, [source])
         model.promptText = "describe it"
         model.maxNewTokensOverride = 1
-        model.run()
-        for _ in 0..<200 where model.isRunning {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        model.send()
+        await SendWaiting.turnEnds(model)
 
         #expect(model.imageAttachments.isEmpty)
         #expect(model.outputImageAttachments.count == 1)
@@ -361,10 +358,8 @@ import TurboFieldfare
         for source in [first, second] {
             await attach(model, [source])
             model.promptText = "describe it"
-            model.run()
-            for _ in 0..<200 where model.isRunning {
-                try? await Task.sleep(nanoseconds: 5_000_000)
-            }
+            model.send()
+            await SendWaiting.turnEnds(model)
         }
         #expect(model.conversation.turns.compactMap { $0.images.first }.count == 2,
                 "the fixture needs two turns each holding an image")
@@ -372,6 +367,38 @@ import TurboFieldfare
         model.newChat()
         #expect(stagedFileCount(store) == 0,
                 "New chat left an earlier turn's staged image behind")
+    }
+
+    /// A short two-turn check cannot expose accumulation that grows by one
+    /// conversation. This stages one image for each of 40 turns and verifies
+    /// every completed chat releases all of its hard links before the next one.
+    @MainActor
+    @Test func twentyChatsWithFortyImageTurnsKeepStagingBounded() async throws {
+        let (root, store) = makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = try makeVisionReadyModelInstall("lifetime-soak")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = MockInferenceClient(response: "answer", tokenDelayNanos: 1)
+        let model = AppModel(modelDirectory: directory, client: client,
+                             attachmentStore: store)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
+        model.maxNewTokensOverride = 1
+
+        for chat in 0..<20 {
+            for turn in 0..<2 {
+                let source = try writeSource(
+                    root, "chat-\(chat)-turn-\(turn).png", "image \(chat) \(turn)")
+                await attach(model, [source])
+                model.promptText = "describe image \(chat)-\(turn)"
+                model.send()
+                await SendWaiting.turnEnds(model)
+            }
+            #expect(stagedFileCount(store) == 2,
+                    "chat \(chat) did not own exactly its two transcript images")
+            model.newChat()
+            #expect(stagedFileCount(store) == 0,
+                    "chat \(chat) left staged images after New chat")
+        }
     }
 
     /// Quitting is the one moment every staged file is certainly unwanted, and
@@ -480,7 +507,7 @@ import TurboFieldfare
         let model = AppModel(modelDirectory: directory, attachmentStore: store)
         // The smallest context the app offers, so the cap is reached without
         // staging dozens of files.
-        model.maxContextTokens = AppContextLengthOption.fourK.tokens
+        model.setMaxContextTokens(AppContextLengthOption.fourK.tokens)
         let capacity = model.maximumImageAttachments
 
         for index in 0..<(capacity + 1) {
@@ -571,5 +598,58 @@ import TurboFieldfare
         #expect(!AppModel(modelDirectory: withPack, visionRuntimeSupported: false)
             .isImageInputAvailable,
                 "an installed pack exposed image input on unsupported hardware")
+    }
+
+    /// The pack is external mutable state. Losing it after an image was staged
+    /// must preserve that draft, close Generate, and identify the exact path;
+    /// restoring the same pack should reopen the draft without reattachment.
+    @MainActor
+    @Test func aDisappearingCompanionPreservesTheDraftAndRecoversInPlace() async throws {
+        let directory = try makeVisionReadyModelInstall("availability-disappears")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let companion = try VisionPackLocation.companionURL(forTextModel: directory)
+        let removed = companion.appendingPathExtension("removed")
+        defer {
+            if FileManager.default.fileExists(atPath: removed.path),
+               !FileManager.default.fileExists(atPath: companion.path) {
+                try? FileManager.default.moveItem(at: removed, to: companion)
+            }
+        }
+
+        let model = AppModel(modelDirectory: directory)
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
+        model.promptText = "describe it"
+        withVisionEnabled {
+            model.addImageData(Data("bounded image".utf8), displayName: "image.png")
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while model.isAddingImages, Date() < deadline {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.imageAttachments.count == 1)
+        #expect(model.canRun)
+
+        try FileManager.default.moveItem(at: companion, to: removed)
+        model.recheckVisionPackAtCurrentLocation()
+
+        #expect(model.imageAttachments.count == 1,
+                "losing the pack deleted the user's staged image")
+        #expect(!model.isImageInputAvailable)
+        #expect(!model.canRun, "Generate stayed enabled without the companion")
+        let diagnostic = try #require(model.imageAttachmentError)
+        #expect(diagnostic.contains(companion.path))
+        #expect(diagnostic.contains("missing"))
+
+        withVisionEnabled {
+            model.addImageData(Data("second".utf8), displayName: "second.png")
+        }
+        #expect(model.imageAttachments.count == 1,
+                "another image was admitted while the pack was missing")
+
+        try FileManager.default.moveItem(at: removed, to: companion)
+        model.recheckVisionPackAtCurrentLocation()
+        #expect(model.imageAttachmentError == nil)
+        #expect(model.imageAttachments.count == 1)
+        #expect(model.canRun, "restoring the pack did not recover the draft")
     }
 }

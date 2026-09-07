@@ -177,6 +177,12 @@ right pane to configure sampling, context length, expert-cache slots, and
 runtime options. See [Runtime controls](docs/RUNTIME_CONTROLS.md) for details
 and defaults.
 
+Completed exchanges are saved locally. Use the sidebar to browse, search,
+rename and delete chats. Browsing preserves the currently held KV; sending in
+another saved chat restores that chat's context. See
+[Conversation history](docs/CONVERSATION_HISTORY.md) for storage, privacy and
+recovery behavior.
+
 ### Command-line interface
 
 The CLI uses an existing `.gturbo` installation. If you installed the model

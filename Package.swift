@@ -74,6 +74,7 @@ let package = Package(
         .target(
             name: "TurboFieldfareMacPresentation",
             dependencies: [
+                "TurboFieldfare",
                 "TurboFieldfareAppCore",
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
@@ -146,7 +147,13 @@ let package = Package(
         ),
         .testTarget(
             name: "TurboFieldfareAppCoreTests",
-            dependencies: ["TurboFieldfareAppCore", "TurboFieldfare", "TurboFieldfareRepackCore", "TurboFieldfareDecodeProtocol"],
+            dependencies: [
+                "TurboFieldfareAppCore", "TurboFieldfare", "TurboFieldfareRepackCore",
+                "TurboFieldfareDecodeProtocol",
+                // `SplitMix64`, for the seeded conversation-history walk. The
+                // only seeded generator in the tree; a second copy would drift.
+                "TurboFieldfareValidationSupport",
+            ],
             path: "Tests/TurboFieldfareApp/Core"
         ),
         .testTarget(

@@ -131,10 +131,70 @@ public struct DecodeResetConversationRequest: Codable, Sendable, Equatable {
     }
 }
 
+/// One image of a stored conversation, as the service needs it to replay.
+///
+/// The span is two integers rather than a `Range<Int>` because `Range`'s
+/// decoder builds the range straight from the bounds it read and traps when
+/// they arrive out of order. This arrives over a socket, so an inverted pair
+/// has to be a refusal, not a crash.
+public struct DecodeReplayImage: Codable, Sendable, Equatable {
+    public var tokenLowerBound: Int
+    public var tokenCount: Int
+    public var path: String
+    public var expectedDigest: String
+
+    public init(tokenLowerBound: Int, tokenCount: Int,
+                path: String, expectedDigest: String) {
+        self.tokenLowerBound = tokenLowerBound
+        self.tokenCount = tokenCount
+        self.path = path
+        self.expectedDigest = expectedDigest
+    }
+}
+
+/// Rebuilds a stored conversation's KV from the token IDs it recorded, and
+/// opens `epoch` as the lineage the service will accept turns for.
+///
+/// `committedTurns` is what the restored transcript already contains, so the
+/// next generate's `turnIndex` follows it. Opening at zero would reject every
+/// turn of a reopened conversation as out of order.
+public struct DecodeRestoreConversationRequest: Codable, Sendable, Equatable {
+    public var epoch: UUID
+    public var tokenIDs: [Int32]
+    public var images: [DecodeReplayImage]
+    public var boundaryTokenIDs: [Int32]
+    public var boundaryNeedsReplay: Bool
+    public var committedTurns: Int
+    public var maxContextTokens: Int
+    public var runtimeOptions: DecodeRuntimeOptions
+    public var requestID: UUID
+
+    public init(epoch: UUID = UUID(),
+                tokenIDs: [Int32],
+                images: [DecodeReplayImage] = [],
+                boundaryTokenIDs: [Int32] = [],
+                boundaryNeedsReplay: Bool = false,
+                committedTurns: Int,
+                maxContextTokens: Int,
+                runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
+                requestID: UUID = UUID()) {
+        self.epoch = epoch
+        self.tokenIDs = tokenIDs
+        self.images = images
+        self.boundaryTokenIDs = boundaryTokenIDs
+        self.boundaryNeedsReplay = boundaryNeedsReplay
+        self.committedTurns = committedTurns
+        self.maxContextTokens = maxContextTokens
+        self.runtimeOptions = runtimeOptions
+        self.requestID = requestID
+    }
+}
+
 public enum DecodeServiceCommand: Codable, Sendable {
     case load(DecodeLoadRequest)
     case generate(DecodeGenerationRequest)
     case resetConversation(DecodeResetConversationRequest)
+    case restoreConversation(DecodeRestoreConversationRequest)
     case cancel
     case unload(UUID)
     case shutdown
@@ -156,6 +216,9 @@ public enum DecodeServiceEventKind: String, Codable, Sendable {
     /// leaves the conversation resumable.
     case lineageLost
     case conversationReset
+    /// A stored conversation's token IDs are back in the KV and its epoch is
+    /// open. `conversationTokenCount` says how many tokens were replayed.
+    case conversationRestored
     case unloaded
 }
 
@@ -240,6 +303,19 @@ public struct DecodeServiceEvent: Codable, Sendable {
     /// The lineage this event belongs to, so a late event from a replaced
     /// conversation can be dropped rather than shown under the new one.
     public var conversationEpoch: UUID?
+    /// What this turn put into the KV, so the app can store the conversation as
+    /// the model saw it rather than as the transcript reads. Set once, on the
+    /// terminal event of a conversation turn, and nil everywhere else.
+    ///
+    /// Size is why they ride the terminal event rather than a channel of their
+    /// own: an 8K-token turn is about 50 KB of JSON against a 4 MiB frame cap,
+    /// and a 64K one about 400 KB.
+    public var promptTokenIDs: [Int32]?
+    public var generatedTokenIDs: [Int32]?
+    /// A token the model emitted that never entered the KV, which happens when
+    /// a run stops on max tokens or is cancelled. The next turn replays it.
+    public var boundaryTokenIDs: [Int32]?
+    public var boundaryNeedsReplay: Bool?
     public var prefill: DecodePrefillDiagnostics?
     public var runner: DecodeRunnerDiagnostics?
 
@@ -257,6 +333,10 @@ public struct DecodeServiceEvent: Codable, Sendable {
                 cachedPromptTokens: Int? = nil,
                 conversationTokenCount: Int? = nil,
                 conversationEpoch: UUID? = nil,
+                promptTokenIDs: [Int32]? = nil,
+                generatedTokenIDs: [Int32]? = nil,
+                boundaryTokenIDs: [Int32]? = nil,
+                boundaryNeedsReplay: Bool? = nil,
                 prefill: DecodePrefillDiagnostics? = nil,
                 runner: DecodeRunnerDiagnostics? = nil) {
         self.kind = kind
@@ -280,6 +360,10 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.cachedPromptTokens = cachedPromptTokens
         self.conversationTokenCount = conversationTokenCount
         self.conversationEpoch = conversationEpoch
+        self.promptTokenIDs = promptTokenIDs
+        self.generatedTokenIDs = generatedTokenIDs
+        self.boundaryTokenIDs = boundaryTokenIDs
+        self.boundaryNeedsReplay = boundaryNeedsReplay
         self.prefill = prefill
         self.runner = runner
     }

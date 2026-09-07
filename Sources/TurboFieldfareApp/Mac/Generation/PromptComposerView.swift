@@ -8,7 +8,6 @@ import UniformTypeIdentifiers
 struct PromptComposerView: View {
     @Bindable var model: AppModel
     @FocusState private var promptFocused: Bool
-    @State private var showingPromptTips = false
     @State private var showingImagePicker = false
     @State private var isImageDropTargeted = false
 
@@ -50,9 +49,9 @@ struct PromptComposerView: View {
             newlineShortcut: model.newlineShortcut,
             canRun: model.canRun,
             canAcceptImages: model.isImageInputAvailable
-                && !model.isRunning
+                && !model.isTurnInFlight
                 && !model.isAddingImages,
-            onSubmit: model.run,
+            onSubmit: model.send,
             onImagesDropped: { model.addImages($0) },
             onImageDataPasted: model.addImageData,
             onPromisedImagesReceived: { urls, directory in
@@ -104,12 +103,30 @@ struct PromptComposerView: View {
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
-                .disabled(model.isRunning || model.isAddingImages
+                .disabled(model.isTurnInFlight || model.isAddingImages
                     || model.imageAttachments.count
                         >= model.maximumImageAttachments)
                 .help(model.maximumImageAttachments == 0
                     ? "Start a new chat to make room for images."
                     : "Add images")
+                .accessibilityIdentifier(.composerAttach)
+            } else if model.visionRuntimeEnabled {
+                // Says why rather than leaving a gap. With the button simply
+                // gone, the composer offered no account of itself at all, and
+                // the only explanation was in the Inspector — which may not even
+                // be open.
+                Label(model.isVisionRuntimeSupported
+                      ? "Images need the companion pack"
+                      : "Images need Apple silicon with a supported GPU",
+                      systemImage: "photo.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .labelStyle(.titleAndIcon)
+                    .help(model.isVisionRuntimeSupported
+                          ? "Install image support from the Inspector to attach "
+                              + "pictures. Chats that already have them still "
+                              + "show them."
+                          : "This Mac cannot run the image tower.")
             }
             promptTips
             Spacer()
@@ -126,7 +143,7 @@ struct PromptComposerView: View {
                 // drifted out of line in the first place.
                 HStack(alignment: .top, spacing: 8) {
                     ForEach(model.imageAttachments, id: \.id) { attachment in
-                        SubmittedImageThumbnail(attachment: attachment)
+                        SubmittedImageThumbnail(attachment: .staged(attachment))
                             .overlay(alignment: .topTrailing) {
                             Button {
                                 model.removeImage(id: attachment.id)
@@ -137,6 +154,7 @@ struct PromptComposerView: View {
                             .background(.regularMaterial, in: Circle())
                             .offset(x: 5, y: -5)
                             .accessibilityLabel("Remove \(attachment.displayName)")
+                            .accessibilityIdentifier(AccessibilityID.remove("\(attachment.id)"))
                         }
                         .padding(.top, 5)
                         .padding(.trailing, 5)
@@ -153,22 +171,12 @@ struct PromptComposerView: View {
     }
 
     private var promptTips: some View {
-        Button {
-            showingPromptTips.toggle()
-        } label: {
-            Label("Prompt tips", systemImage: "questionmark.circle")
-                .labelStyle(.iconOnly)
-                .frame(width: 28, height: 28)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
-        .help("Prompt tips")
-        .popover(isPresented: $showingPromptTips,
-                 attachmentAnchor: .point(.top),
-                 arrowEdge: .top) {
+        TransientPopoverButton(
+            systemImage: "questionmark.circle", help: "Prompt tips") {
             promptGuide
         }
+        .frame(width: 28, height: 28)
+        .accessibilityIdentifier(.composerTips)
     }
 
     private var promptGuide: some View {
@@ -204,7 +212,7 @@ struct PromptComposerView: View {
 
     @ViewBuilder
     private var clearAction: some View {
-        if !model.isRunning
+        if !model.isTurnInFlight
             && (!model.promptText.isEmpty || !model.imageAttachments.isEmpty) {
             Button {
                 model.promptText = ""
@@ -219,18 +227,12 @@ struct PromptComposerView: View {
             }
             .buttonStyle(.borderless)
             .help("Clear text and images")
-        } else if !model.isRunning && model.hasOutputTranscript {
-            Button {
-                model.newChat()
-            } label: {
-                Label("New chat", systemImage: "trash")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 28, height: 28)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.borderless)
-            .help("Start a new chat")
+            .accessibilityIdentifier(.composerClear)
         }
+        // No trash-icon "new chat" here any more. The window control beside the
+        // traffic lights and Cmd+N own that action, and once chats are kept a
+        // trash glyph reads as delete — which, next to a list where delete is a
+        // real and different thing, is the wrong promise to make.
     }
 }
 
@@ -268,6 +270,7 @@ private struct PromptTextEditor: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 5
         textView.textContainer?.widthTracksTextView = true
         textView.setAccessibilityLabel("Message")
+        textView.setAccessibilityIdentifier(AccessibilityID.composerMessage.rawValue)
         // A promise-only drag — Photos, Mail, most browsers — never reaches
         // `draggingEntered` unless its types are registered here.
         textView.registerForDraggedTypes(
@@ -376,37 +379,16 @@ private final class ImageDropTextView: NSTextView {
             return
         }
         let pasteboard = NSPasteboard.general
-        let urls = fileURLs(from: pasteboard)
-        if !urls.isEmpty {
+        switch ImagePasteboardPayload.read(from: pasteboard) {
+        case .fileURLs(let urls):
             onImagesDropped?(urls)
-            return
-        }
-        // Text on the pasteboard wins over a picture that came with it.
-        // Copying a range of cells from Numbers or Excel, or a text box from
-        // Keynote, writes TIFF alongside the RTF and plain text; so does a
-        // rich selection from many other apps. Taking the picture and
-        // returning swallowed the text the user actually selected, in a text
-        // editor, with nothing said about it. A screenshot or an image copied
-        // from an image editor carries no text, so it still attaches.
-        //
-        // Only the byte-carrying branches need this. A file paste is handled
-        // above, and Finder puts the path on the pasteboard as a string too.
-        if pasteboard.string(forType: .string)?.isEmpty == false {
-            super.paste(sender)
-            return
-        }
-        // An image copied from another app arrives as bytes with no file
-        // behind it, which used to be refused with an instruction to go and
-        // find one.
-        if let image = imageData(from: pasteboard) {
-            onImageDataPasted?(image.data, image.name)
-            return
-        }
-        if containsImage(in: pasteboard) {
+        case .image(let data, let name):
+            onImageDataPasted?(data, name)
+        case .unsupportedImage:
             onUnsupportedImagePaste?()
-            return
+        case .text, .none:
+            super.paste(sender)
         }
-        super.paste(sender)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -535,28 +517,6 @@ private final class ImageDropTextView: NSTextView {
         !fileURLs(from: pasteboard).isEmpty || !filePromises(from: pasteboard).isEmpty
     }
 
-    /// The first pasteboard representation the vision pack can actually decode.
-    /// PNG and JPEG come through unchanged; anything else is re-encoded as PNG
-    /// rather than handing the decoder a format it was never validated against.
-    private func imageData(from pasteboard: NSPasteboard) -> (data: Data, name: String)? {
-        if let data = pasteboard.data(forType: .png) {
-            return (data, "Pasted image.png")
-        }
-        if let data = pasteboard.data(forType: NSPasteboard.PasteboardType("public.jpeg")) {
-            return (data, "Pasted image.jpeg")
-        }
-        guard let tiff = pasteboard.data(forType: .tiff),
-              let representation = NSBitmapImageRep(data: tiff),
-              let png = representation.representation(using: .png, properties: [:])
-        else { return nil }
-        return (png, "Pasted image.png")
-    }
-
-    private func containsImage(in pasteboard: NSPasteboard) -> Bool {
-        (pasteboard.types ?? []).contains { type in
-            UTType(type.rawValue)?.conforms(to: .image) == true
-        }
-    }
 }
 
 /// Collects the results of a multi-file promise drop, which arrive one

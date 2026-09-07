@@ -22,7 +22,7 @@ import Testing
         let model = AppModel(
             modelDirectory: directory,
             attachmentStore: AppImageAttachmentStore(directoryURL: staging))
-        model.maxContextTokens = AppContextLengthOption.sixtyFourK.tokens
+        model.setMaxContextTokens(AppContextLengthOption.sixtyFourK.tokens)
         try #require(model.maximumImageAttachments >= 3)
 
         let first = try Self.writePNG(named: "first.png", in: staging)
@@ -81,7 +81,7 @@ import Testing
         let model = AppModel(
             modelDirectory: directory,
             attachmentStore: AppImageAttachmentStore(directoryURL: staging))
-        model.maxContextTokens = AppContextLengthOption.sixtyFourK.tokens
+        model.setMaxContextTokens(AppContextLengthOption.sixtyFourK.tokens)
         try #require(model.maximumImageAttachments >= 2)
 
         let file = try Self.writePNG(named: "from-disk.png", in: staging)

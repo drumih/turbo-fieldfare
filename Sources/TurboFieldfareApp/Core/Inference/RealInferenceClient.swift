@@ -11,6 +11,8 @@ final class GenerationTaskRegistry: Sendable {
 
     private let state = Mutex<Entry?>(nil)
 
+    var hasActiveGeneration: Bool { state.withLock { $0 != nil } }
+
     func reserve(_ id: UUID) -> Bool {
         state.withLock { entry in
             guard entry == nil else { return false }
@@ -98,6 +100,55 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
     /// holds the gate that uses it.
     public func resetConversation(epoch: UUID) async throws {
         await session.resetConversation()
+    }
+
+    /// Replays a stored conversation into the KV and returns the token count it
+    /// holds afterwards.
+    ///
+    /// `onProgress` receives the same `.prefill` events a live turn reports, so
+    /// a reopen shows the progress a first turn would; the decode service
+    /// forwards them and the app animates its gauge from them.
+    /// In-process, so `epoch` has no gate to open and `maxContextTokens` is
+    /// already fixed by the loaded runner; both are accepted and ignored, the
+    /// same way `resetConversation(epoch:)` treats its epoch. The decode
+    /// service holds the gate that uses them.
+    public func restoreConversation(
+        _ lineage: AppConversationLineage,
+        epoch: UUID = UUID(),
+        options: AppRuntimeOptions,
+        maxContextTokens: Int = 0,
+        onPrefillProgress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
+    ) async throws -> Int {
+        return try await session.restoreConversation(
+            MultimodalConversationLineage(
+                tokenIDs: lineage.tokenIDs,
+                images: try lineage.images.map {
+                    // Bounded by the lineage before the range is built. Both
+                    // figures arrive over the socket in the service, and a
+                    // sign check alone let a pair near `Int.max` overflow the
+                    // addition and trap the process instead of failing the
+                    // restore. `lineage.tokenIDs.count - tokenLowerBound`
+                    // cannot overflow once the bound is non-negative.
+                    guard $0.tokenLowerBound >= 0, $0.tokenCount > 0,
+                          $0.tokenCount <= lineage.tokenIDs.count - $0.tokenLowerBound
+                    else {
+                        throw AppInferenceError.conversationRestoreFailed(
+                            "a stored image claims \($0.tokenCount) tokens at "
+                                + "offset \($0.tokenLowerBound) of a "
+                                + "\(lineage.tokenIDs.count)-token conversation")
+                    }
+                    return MultimodalReplayImage(
+                        tokenRange: $0.tokenLowerBound
+                            ..< ($0.tokenLowerBound + $0.tokenCount),
+                        pixelsURL: $0.fileURL,
+                        expectedDigest: $0.expectedDigest)
+                },
+                uncommittedBoundary: lineage.boundaryTokenIDs,
+                boundaryNeedsReplay: lineage.boundaryNeedsReplay),
+            options: options) { progress in
+                guard case .prefill(let done, let total) = progress else { return }
+                onPrefillProgress(done, total)
+            }
     }
 
     /// Whether a conversation is still open on the session.
@@ -259,6 +310,77 @@ actor RealInferenceSession {
         conversation = nil
         runner?.reset()
         conversationTokens.withLock { $0 = 0 }
+    }
+
+    /// Rebuilds a stored conversation's KV and returns how many tokens it holds.
+    ///
+    /// Always onto a conversation of its own, never onto whatever was open: the
+    /// caller has just reset, and restoring into a live lineage is refused
+    /// downstream anyway. The returned count is read back from the conversation
+    /// rather than from the request, so the gauge shows what the KV has and not
+    /// what the caller hoped it would have.
+    func restoreConversation(
+        _ lineage: MultimodalConversationLineage,
+        options: AppRuntimeOptions,
+        onProgress: @escaping @Sendable (RawDecodeProgress) -> Void
+    ) async throws -> Int {
+        var prefillConfig = options.prefillConfig
+        // A replay is a prefill and nothing else; with the app's prefill
+        // toggle off it ran at decode speed and outlived the restore deadline.
+        if let coerced = prefillConfig.coercedForReplay() {
+            prefillConfig = coerced
+        }
+        // Image spans only run under chunked prefill, and the app's prefill
+        // toggle can select `.off`. Coerce rather than refuse a conversation
+        // the user can see: whether its images replay is not a performance
+        // preference.
+        if !lineage.images.isEmpty,
+           let coerced = prefillConfig.coercedForImagePrompt() {
+            prefillConfig = coerced
+        }
+        await resetConversation()
+        let conversation = try conversationForRestore(options: options)
+        do {
+            try await conversation.restore(
+                lineage: lineage,
+                prefillConfig: prefillConfig,
+                checkCancellation: { try Task.checkCancellation() },
+                onProgress: onProgress)
+        } catch let error as MultimodalConversationError {
+            // A refused restore leaves the KV empty and this session usable, so
+            // the conversation is dropped rather than kept as an inert one the
+            // next turn would resume onto.
+            self.conversation = nil
+            runner?.reset()
+            conversationTokens.withLock { $0 = 0 }
+            throw AppInferenceError.conversationRestoreFailed("\(error)")
+        }
+        publishTowerBytes()
+        let count = await conversation.kvTokenCount
+        conversationTokens.withLock { $0 = count }
+        return count
+    }
+
+    private func conversationForRestore(
+        options: AppRuntimeOptions
+    ) throws -> MultimodalConversation {
+        guard let model, let ctx, let tokenizer, let runner, let scratch else {
+            throw AppInferenceError.modelLoadFailed("session lost its loaded state")
+        }
+        runner.reset()
+        // The same waiver `conversationForTurn` takes, for the same reason: one
+        // conversation and one generation at a time is this session's
+        // invariant, not the type system's.
+        nonisolated(unsafe) let sharedModel = model
+        nonisolated(unsafe) let sharedVision = visionRuntime
+        let created = MultimodalConversation(
+            model: sharedModel, context: ctx, tokenizer: tokenizer, runner: runner,
+            scratch: scratch, visionRuntime: sharedVision,
+            visionRuntimeError: visionRuntimeError,
+            visionResidency: options.visionResidencyPolicy,
+            maxContext: runner.maxContext)
+        conversation = created
+        return created
     }
 
     var hasConversation: Bool { conversation != nil }
@@ -515,6 +637,12 @@ actor RealInferenceSession {
         var cachedTokens: Int?
         var computedPrefillTokens: Int?
         var conversationTokens: Int?
+        /// What the turn put into the KV. Nil on the single-prompt path, which
+        /// keeps nothing and therefore has nothing to record.
+        var promptTokenIDs: [Int32]?
+        var generatedTokenIDs: [Int32]?
+        var boundaryTokenIDs: [Int32]?
+        var boundaryNeedsReplay: Bool?
     }
 
     /// The open conversation, or a new one on the same runner.
@@ -605,7 +733,11 @@ actor RealInferenceSession {
                 decodeSeconds: turn.decodeSeconds, newTokens: turn.completionTokens,
                 cachedTokens: turn.cachedTokens,
                 computedPrefillTokens: turn.computedPrefillTokens,
-                conversationTokens: turn.kvTokens)
+                conversationTokens: turn.kvTokens,
+                promptTokenIDs: turn.promptTokenIDs,
+                generatedTokenIDs: turn.generatedTokenIDs,
+                boundaryTokenIDs: turn.uncommittedBoundaryTokenIDs,
+                boundaryNeedsReplay: turn.boundaryNeedsReplay)
         } catch let error as MultimodalConversationError {
             // Mapped rather than flattened: a lineage that broke can only be
             // cleared, an exhausted context is the user's to act on, and an
@@ -615,13 +747,16 @@ actor RealInferenceSession {
             switch error {
             case .lineageBroken, .lineageRecoveryFailed:
                 throw AppInferenceError.conversationLineageLost("\(error)")
-            case .contextExhausted(let prompt, let maxContext):
-                throw AppInferenceError.contextOverflow(
-                    prompt: prompt, maxNew: request.maxNewTokens,
-                    maxContext: maxContext)
-            case .imageUnavailable:
+            case .contextExhausted(let prompt, let reserve, let maxContext):
+                // Not `contextOverflow`: that message names the user's max
+                // response, and the guard that refused this turn does not look
+                // at it. Reporting a figure the check never used is how a user
+                // lowers their reply length and sees no change.
+                throw AppInferenceError.conversationContextExhausted(
+                    prompt: prompt, reserve: reserve, maxContext: maxContext)
+            case .imageUnavailable, .invalidReplayImage, .invalidReplayToken:
                 throw AppInferenceError.invalidRequest("\(error)")
-            case .closed, .busy, .emptyTurn:
+            case .closed, .busy, .emptyTurn, .lineageNotEmpty:
                 throw AppInferenceError.unknown("\(error)")
             }
         }
@@ -716,6 +851,7 @@ actor RealInferenceSession {
                                               cachedTokens: result.cachedTokens,
                                               computedPrefillTokens: result.computedPrefillTokens,
                                               conversationTokens: result.conversationTokens,
+                                              turnRecord: result,
                                               prefill: prefillDiagnostics)
             continuation.yield(.finished(diagnostics))
             continuation.finish()
@@ -783,7 +919,9 @@ actor RealInferenceSession {
                                  cachedTokens: Int? = nil,
                                  computedPrefillTokens: Int? = nil,
                                  conversationTokens: Int? = nil,
-                                 prefill: PrefillExecutionDiagnostics? = nil) -> AppDiagnostics {
+                                 turnRecord: TurnOutcome? = nil,
+                                 prefill: PrefillExecutionDiagnostics? = nil,
+                                 errorDescription: String? = nil) -> AppDiagnostics {
         _ = memorySampler.sample()
         let ttft: Double?
         if let first = progress.firstTokenDate, let start = progress.decodeStart {
@@ -798,6 +936,10 @@ actor RealInferenceSession {
             cachedPromptTokens: cachedTokens,
             computedPrefillTokens: computedPrefillTokens,
             conversationTokens: conversationTokens,
+            promptTokenIDs: turnRecord?.promptTokenIDs,
+            generatedTokenIDs: turnRecord?.generatedTokenIDs,
+            boundaryTokenIDs: turnRecord?.boundaryTokenIDs,
+            boundaryNeedsReplay: turnRecord?.boundaryNeedsReplay,
             prefillSeconds: prefillSeconds,
             timeToFirstTokenSeconds: ttft,
             decodeSeconds: decodeSeconds,

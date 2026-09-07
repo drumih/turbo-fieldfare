@@ -184,7 +184,7 @@ public final class InstructionTranscriptDocumentController {
         wasAtBottom: Bool,
         mutation: Mutation
     ) -> Bool {
-        wasAtBottom || mutation == .finalized
+        wasAtBottom
     }
 
     public static func shouldRunPrefillAnimation(
@@ -394,9 +394,13 @@ public final class InstructionTranscriptDocumentController {
                 string: "\n\n",
                 attributes: Self.promptAttributes()))
         }
-        document.append(NSAttributedString(
-            string: "Answer\n",
-            attributes: Self.assistantLabelAttributes()))
+        // Recovery can clear the live turn while leaving completed history.
+        if !prompt.isEmpty || promptPrefix.length > 0
+            || !response.isEmpty || showsPrefillPlaceholder {
+            document.append(NSAttributedString(
+                string: "Answer\n",
+                attributes: Self.assistantLabelAttributes()))
+        }
         assistantRange = NSRange(location: document.length, length: 0)
         let assistant = progressiveRendering
             ? progressiveRender(response, closingTail: closingTail)

@@ -260,6 +260,9 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
 
     public let mode: Mode
     public let chunkTokens: Int
+    public func coercedForReplay() -> PrefillRuntimeConfig? {
+        mode == .off ? .defaultChunked : nil
+    }
 
     private init(mode: Mode, chunkTokens: Int) {
         self.mode = mode

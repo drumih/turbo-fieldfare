@@ -182,6 +182,14 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             visionTowerMappedBytes: diagnostics?.visionTowerMappedBytes,
             cachedPromptTokens: diagnostics?.cachedPromptTokens,
             conversationTokenCount: conversationTokens(),
+            // The turn's own record, carried once on the event that ends it.
+            // The snapshots this outbox sends per 100 ms carry text, which is
+            // what the transcript shows; these are what the model saw, and the
+            // app cannot store the conversation without them.
+            promptTokenIDs: diagnostics?.promptTokenIDs,
+            generatedTokenIDs: diagnostics?.generatedTokenIDs,
+            boundaryTokenIDs: diagnostics?.boundaryTokenIDs,
+            boundaryNeedsReplay: diagnostics?.boundaryNeedsReplay,
             prefill: diagnostics?.prefill.map(Self.prefillDiagnostics),
             runner: diagnostics?.runner.map(Self.runnerDiagnostics))
     }

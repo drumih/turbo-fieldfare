@@ -104,6 +104,14 @@ import CoreGraphics
         let afterEnd = follow.shouldScrollToBottom(origin: 0, documentHeight: 10_000)
         #expect(!afterEnd)
     }
+
+    @MainActor
+    @Test func finalizationDoesNotOverrideReaderOwnership() {
+        #expect(!InstructionTranscriptDocumentController.shouldScrollToBottom(
+            wasAtBottom: false, mutation: .finalized))
+        #expect(InstructionTranscriptDocumentController.shouldScrollToBottom(
+            wasAtBottom: true, mutation: .finalized))
+    }
 }
 
 /// The composer's attachment tiles. Aspect-fitting them gave a row of

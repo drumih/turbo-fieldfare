@@ -1,5 +1,6 @@
 import TurboFieldfareAppCore
 import SwiftUI
+import TurboFieldfareMacPresentation
 
 struct ModelActionBanner: View {
     @Bindable var model: AppModel
@@ -20,6 +21,7 @@ struct ModelActionBanner: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .accessibilityIdentifier(.bannerModelAction)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

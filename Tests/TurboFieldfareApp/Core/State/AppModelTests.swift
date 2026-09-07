@@ -2,6 +2,35 @@ import Foundation
 import Testing
 @testable import TurboFieldfareAppCore
 
+@Suite struct AppInferenceErrorDiagnosticTests {
+    /// What crosses a process boundary is the cause, not the sentence. The
+    /// decode service forwarded `"\(error)"` — which is the sentence — and the
+    /// client wrapped it again, so a failed replay read "This conversation
+    /// could not be reopened: This conversation could not be reopened: image
+    /// support is unavailable: …". Found running case E46 with the vision pack
+    /// moved aside.
+    @Test func adiagnosticMessageCarriesTheCauseWithoutTheSentence() {
+        let error = AppInferenceError.conversationRestoreFailed(
+            "image support is unavailable")
+        #expect(error.userMessage
+            == "This conversation could not be reopened: image support is unavailable")
+        #expect(error.diagnosticMessage == "image support is unavailable")
+        // Re-wrapping the diagnostic says it once; re-wrapping the sentence
+        // said it twice.
+        let rewrapped = AppInferenceError.conversationRestoreFailed(
+            error.diagnosticMessage)
+        #expect(rewrapped.userMessage == error.userMessage)
+    }
+
+    /// A case with no message of its own falls back to its own wording rather
+    /// than to an empty string.
+    @Test func acaseWithoutAMessageStillReportsSomething() {
+        #expect(!AppInferenceError.modelNotLoaded.diagnosticMessage.isEmpty)
+        #expect(AppInferenceError.modelNotLoaded.diagnosticMessage
+            == AppInferenceError.modelNotLoaded.userMessage)
+    }
+}
+
 @Suite struct AppModelTests {
     @MainActor
     @Test func defaultsUseSampledRequest() throws {
@@ -95,9 +124,8 @@ import Testing
         model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
 
         #expect(!model.hasStaleLoadedRuntime)
-        // Away from the default, which is 8K: setting the value it already has
-        // would prove nothing.
-        model.maxContextTokens = AppContextLengthOption.sixteenK.tokens
+        // 8K is the default now, so changing to it changes nothing.
+        model.setMaxContextTokens(AppContextLengthOption.sixteenK.tokens)
         #expect(model.hasStaleLoadedRuntime)
     }
 
@@ -106,7 +134,7 @@ import Testing
         let model = AppModel()
         model.modelPathText = FileManager.default.temporaryDirectory.path
         model.promptText = "go"
-        model.maxContextTokens = AppContextLengthOption.sixtyFourK.tokens
+        model.setMaxContextTokens(AppContextLengthOption.sixtyFourK.tokens)
 
         #expect(try model.makeRequest().maxNewTokens == AppContextLengthOption.sixtyFourK.tokens)
     }
@@ -163,7 +191,7 @@ import Testing
 
         model.setShowPromptExamples(true)
         model.promptText = "first turn"
-        model.run()
+        model.send()
         await waitForIdle(model)
 
         #expect(model.promptText.isEmpty)
@@ -183,11 +211,9 @@ import Testing
         model.loadState = .ready(modelDirectory: FileManager.default.temporaryDirectory, loadSeconds: 1)
         model.promptText = "go"
         model.maxNewTokensOverride = 4
-        model.run()
+        model.send()
 
-        for _ in 0..<200 where model.isRunning {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await SendWaiting.turnEnds(model)
 
         #expect(!model.isRunning)
         #expect(model.outputText.contains("alpha beta"))
@@ -201,10 +227,14 @@ import Testing
         let model = readyModel(client: client)
         model.promptText = "original prompt"
         model.maxNewTokensOverride = 1
-        model.run()
+        model.send()
+        // The composer clears on the click; the transcript picks the message up
+        // one stage later, when the request has been built and its images
+        // retained.
+        #expect(model.promptText.isEmpty)
+        await SendWaiting.generationStarts(model)
 
         #expect(model.outputPromptText == "original prompt")
-        #expect(model.promptText.isEmpty)
         #expect(model.hasOutputTranscript)
         #expect(model.outputResponsePlainText.isEmpty)
         #expect(model.outputConversationPlainText == "You:\noriginal prompt")
@@ -228,7 +258,8 @@ import Testing
         model.promptText = "original prompt"
         model.maxNewTokensOverride = 1
 
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
 
         #expect(model.isRunning)
         #expect(model.outputPromptText == "original prompt")
@@ -243,12 +274,15 @@ import Testing
     }
 
     @MainActor
-    @Test func failedValidationDoesNotClearPrompt() {
+    @Test func failedValidationDoesNotClearPrompt() async {
         let model = readyModel(client: MockInferenceClient(response: "answer"))
         model.promptText = "keep invalid prompt"
         model.maxNewTokensOverride = 0
 
-        model.run()
+        model.send()
+        // The composer is handed over before the request is built, so the
+        // message comes back a hop later rather than never having left.
+        await SendWaiting.turnEnds(model)
 
         #expect(!model.isRunning)
         #expect(model.promptText == "keep invalid prompt")
@@ -280,7 +314,7 @@ import Testing
         let model = readyModel(client: client)
         model.promptText = "stop after token"
         model.maxNewTokensOverride = 10
-        model.run()
+        model.send()
 
         for _ in 0..<200 where model.liveTokenCount == 0 {
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -314,7 +348,7 @@ import Testing
         client.prefillSteps = 20
         let model = readyModel(client: client)
         model.promptText = "prefill prompt"
-        model.run()
+        model.send()
 
         for _ in 0..<200 where model.livePrefillDone == 0 {
             try? await Task.sleep(nanoseconds: 5_000_000)
@@ -341,7 +375,7 @@ import Testing
         let model = readyModel(client: client)
         model.promptText = "fail"
 
-        model.run()
+        model.send()
         await waitForIdle(model)
 
         #expect(model.error?.userMessage == "synthetic failure")
@@ -389,8 +423,6 @@ import Testing
 
     @MainActor
     private func waitForIdle(_ model: AppModel) async {
-        for _ in 0..<200 where model.isRunning {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-        }
+        await SendWaiting.turnEnds(model)
     }
 }

@@ -4,6 +4,14 @@ import Testing
 @testable import TurboFieldfareMacPresentation
 
 @Suite struct GenericErrorBannerPolicyTests {
+    @Test func persistenceFailureIsVisibleWithAReadyModel() {
+        let error = AppInferenceError.conversationPersistenceFailed("Permission denied")
+        #expect(GenericErrorBannerPolicy.shouldShow(
+            error: error, loadState: .ready(modelDirectory: URL(fileURLWithPath: "/fixture"), loadSeconds: 0)))
+        #expect(error.userMessage.contains("not be saved"))
+        #expect(error.technicalDetail.contains("Permission denied"))
+    }
+
     @Test func nilErrorIsHidden() {
         #expect(!GenericErrorBannerPolicy.shouldShow(error: nil, loadState: .notLoaded))
     }

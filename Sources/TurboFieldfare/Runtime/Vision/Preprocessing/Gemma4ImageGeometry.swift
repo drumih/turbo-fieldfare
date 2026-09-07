@@ -71,4 +71,43 @@ public struct Gemma4ImageGeometry: Sendable, Equatable {
         patchCount = patches
         softTokenCount = patches / (config.poolingKernel * config.poolingKernel)
     }
+
+    /// Geometry for pixels that are already at the model's input size — the copy
+    /// a stored conversation replays.
+    ///
+    /// Re-deriving this through the scaling rule above would be wrong: that rule
+    /// maps a source *up* to the token budget as readily as down, so a 48x48
+    /// model input would come back as 768x768 and the stored soft-token count
+    /// would stop matching the span the tokenizer laid out.
+    public init(
+        processedWidth: Int,
+        processedHeight: Int,
+        config: VisionConfig = VisionConfig()
+    ) throws {
+        let sideMultiple = config.patchSize * config.poolingKernel
+        guard processedWidth > 0, processedHeight > 0,
+              processedWidth.isMultiple(of: sideMultiple),
+              processedHeight.isMultiple(of: sideMultiple) else {
+            throw VisionImageError.invalidMetadata(
+                "stored model input must be a positive multiple of \(sideMultiple)")
+        }
+        let (processedPixels, overflow) = processedWidth.multipliedReportingOverflow(
+            by: processedHeight)
+        let targetPixels = config.maximumPatches * config.patchSize * config.patchSize
+        guard !overflow, processedPixels <= targetPixels else {
+            throw VisionImageError.invalidMetadata("target geometry exceeds patch budget")
+        }
+        let gridWidth = processedWidth / config.patchSize
+        let gridHeight = processedHeight / config.patchSize
+        let patches = gridWidth * gridHeight
+        guard patches <= config.maximumPatches else {
+            throw VisionImageError.invalidMetadata("target patch grid is invalid")
+        }
+        self.processedWidth = processedWidth
+        self.processedHeight = processedHeight
+        patchGridWidth = gridWidth
+        patchGridHeight = gridHeight
+        patchCount = patches
+        softTokenCount = patches / (config.poolingKernel * config.poolingKernel)
+    }
 }

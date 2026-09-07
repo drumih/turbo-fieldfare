@@ -57,8 +57,11 @@ Report the commit, hardware and RAM, macOS, Swift version, exact command, exit c
 The Mac app sends prompts through the pinned Gemma 4 IT chat format. It
 exposes context length, temperature, Top-K, Top-P, expert-cache slots, prefill,
 and RDADVISE. The defaults are temperature `0.2`, Top-K `64`, and Top-P `0.95`.
-The app retains one in-memory conversation and reuses its FP16 KV state across
-turns. The HUD shows generation rate, context use, decode-service memory, and,
+The app saves conversation history locally and retains one live FP16 KV lineage.
+Browsing the sidebar preserves that lineage; continuing another saved chat
+replays its recorded tokens and replaces it. See
+[Conversation history](docs/CONVERSATION_HISTORY.md) for storage and recovery.
+The HUD shows generation rate, context use, decode-service memory, and,
 on hover, cached-token reuse; Last run also shows time to first token and I/O.
 Use **New Chat** to clear the transcript, KV lineage, gauge, and retained
 images. Reloading or unloading keeps the transcript but marks it outside the

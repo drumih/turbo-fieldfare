@@ -7,8 +7,14 @@ public enum MultimodalConversationError: Error, CustomStringConvertible {
     case lineageBroken
     case lineageRecoveryFailed(reason: String)
     case emptyTurn
-    case contextExhausted(prompt: Int, maxContext: Int)
+    case contextExhausted(prompt: Int, reserve: Int, maxContext: Int)
     case imageUnavailable(reason: String?)
+    case lineageNotEmpty(kvTokens: Int)
+    case invalidReplayImage(reason: String)
+    /// A recorded token ID is not one this model has. Restore is the one entry
+    /// point that prefills IDs it did not tokenize itself, and the embedding
+    /// lookup indexes its table by the raw value.
+    case invalidReplayToken(index: Int, token: Int32, vocabSize: Int)
 
     public var description: String {
         switch self {
@@ -21,12 +27,157 @@ public enum MultimodalConversationError: Error, CustomStringConvertible {
             "generation failed partway and the KV could not be restored; "
                 + "call reset() to start over. \(reason)"
         case .emptyTurn: "a turn needs text or an image"
-        case .contextExhausted(let prompt, let maxContext):
-            "conversation needs \(prompt) tokens, beyond the \(maxContext)-token context"
+        case .contextExhausted(let prompt, let reserve, let maxContext):
+            "conversation needs \(prompt) tokens plus \(reserve) kept free for a "
+                + "reply, beyond the \(maxContext)-token context"
         case .imageUnavailable(let reason):
             reason.map { "image support is unavailable: \($0)" }
                 ?? "image support is unavailable: no companion pack is installed"
+        case .lineageNotEmpty(let kvTokens):
+            "a stored conversation can only be restored into an empty KV; this "
+                + "one already holds \(kvTokens) tokens"
+        case .invalidReplayImage(let reason):
+            "a stored image cannot be replayed: \(reason)"
+        case .invalidReplayToken(let index, let token, let vocabSize):
+            "the stored record holds token \(token) at position \(index), "
+                + "outside this model's \(vocabSize)-entry vocabulary"
         }
+    }
+}
+
+/// How much context a turn keeps free for the model to answer in.
+///
+/// The guard used to admit any turn whose prompt alone fit, leaving room for
+/// exactly one generated token, while the refusal the user saw promised their
+/// whole max response — so a chat near the ceiling was accepted and then
+/// answered with a word. One constant now decides both that guard and whether a
+/// stored conversation can be continued at the current context length, because
+/// a row that says "continue" and a turn that then refuses are the same defect
+/// seen from two places.
+///
+/// It is a floor, not the requested `maxNewTokens`: the reply length is a
+/// setting the user can change at any time, and a stored conversation's
+/// continuability must not move with it.
+public enum ConversationGenerationReserve {
+    public static let tokens = 256
+
+    /// What the smallest continuation turn costs before its first word.
+    ///
+    /// `generate` prefills the lineage plus the message wrapped in the chat
+    /// template's turn markers and thought-channel opener, so a lineage that
+    /// fits with exactly `tokens` to spare fits nothing the user can type.
+    /// Rows within that margin of the ceiling were offered as continuable,
+    /// replayed in full, and then refused every message. The figure is an
+    /// upper bound on `encodeTextContinuation` with a one-token message; the
+    /// tokenizer test pins it against the real template.
+    public static let turnEnvelope = 16
+
+    /// Whether a prompt of `tokens` still leaves room to answer.
+    ///
+    /// The only place the ceiling is written down. `generate` asks it with
+    /// the whole prompt; `fitsLineage` asks it for a stored conversation
+    /// with the smallest turn added, so a row that offers to continue and a
+    /// turn that then refuses cannot disagree — which they did while both
+    /// asked this function with different inputs.
+    public static func fits(tokens: Int, maxContext: Int) -> Bool {
+        tokens + Self.tokens <= maxContext
+    }
+
+    /// Whether a stored lineage of `tokens` can take at least one turn.
+    ///
+    /// `tokens` counts everything the next turn's prompt starts with: the KV
+    /// and any boundary token the last run left outside it.
+    public static func fitsLineage(tokens: Int, maxContext: Int) -> Bool {
+        fits(tokens: tokens + turnEnvelope, maxContext: maxContext)
+    }
+
+    /// The smallest context that lets a stored lineage of `tokens` take a
+    /// turn: the figure `needsContext` reports.
+    public static func contextRequired(forLineage tokens: Int) -> Int {
+        tokens + turnEnvelope + Self.tokens
+    }
+}
+
+/// One image of a stored conversation, as replay needs it: where its soft
+/// tokens sit in the lineage, the model-input copy on disk, and the digest that
+/// copy has to hash to.
+public struct MultimodalReplayImage: Sendable {
+    public let tokenRange: Range<Int>
+    public let pixelsURL: URL
+    public let expectedDigest: String
+
+    public init(tokenRange: Range<Int>, pixelsURL: URL, expectedDigest: String) {
+        self.tokenRange = tokenRange
+        self.pixelsURL = pixelsURL
+        self.expectedDigest = expectedDigest
+    }
+}
+
+/// A conversation's KV as a sequence of token IDs, ready to be prefilled back.
+///
+/// `tokenIDs` is the effective sequence — every turn's prompt and reply
+/// concatenated in order, exactly what `kvTokenIDs` held. The embedding
+/// sequence is not carried: it differs from the effective one only inside image
+/// spans, so it is derived from `images` rather than stored twice and given the
+/// chance to disagree.
+public struct MultimodalConversationLineage: Sendable {
+    public let tokenIDs: [Int32]
+    public let images: [MultimodalReplayImage]
+    public let uncommittedBoundary: [Int32]
+    public let boundaryNeedsReplay: Bool
+
+    public init(tokenIDs: [Int32],
+                images: [MultimodalReplayImage] = [],
+                uncommittedBoundary: [Int32] = [],
+                boundaryNeedsReplay: Bool = false) {
+        self.tokenIDs = tokenIDs
+        self.images = images
+        self.uncommittedBoundary = uncommittedBoundary
+        self.boundaryNeedsReplay = boundaryNeedsReplay
+    }
+
+    /// Everything the next turn will put in front of its message: the KV and
+    /// the boundary token a stopped run left outside it, when that token is
+    /// replayed ahead of the turn.
+    public var promptPrefixCount: Int {
+        tokenIDs.count + (boundaryNeedsReplay ? uncommittedBoundary.count : 0)
+    }
+
+    /// Refuses a record that names a token this model does not have.
+    ///
+    /// Every other prefill feeds the tokenizer's own output; this record came
+    /// off disk, or over the decode service's socket, and the embedding kernel
+    /// reads its table at `token * rowBytes` with nothing in between. A
+    /// negative or too-large ID was an out-of-bounds GPU read: either a KV
+    /// built from whatever memory lay past the table, reported as a restored
+    /// conversation, or a GPU fault the app could only attribute to a lost
+    /// connection. The boundary tokens are checked too; they enter the same
+    /// prefill.
+    public func validateTokenIDs(vocabSize: Int) throws {
+        for (index, token) in tokenIDs.enumerated()
+        where token < 0 || Int(token) >= vocabSize {
+            throw MultimodalConversationError.invalidReplayToken(
+                index: index, token: token, vocabSize: vocabSize)
+        }
+        for (offset, token) in uncommittedBoundary.enumerated()
+        where token < 0 || Int(token) >= vocabSize {
+            throw MultimodalConversationError.invalidReplayToken(
+                index: tokenIDs.count + offset, token: token, vocabSize: vocabSize)
+        }
+    }
+}
+
+enum MultimodalTurnRecord {
+    /// The tokens a turn's reply left in the KV.
+    ///
+    /// Taken as a suffix of the post-turn record rather than counted by the
+    /// decode loop, so a stop-string trim is already applied: those tokens are
+    /// gone from the cache, and a transcript that still listed them would
+    /// replay a context the model no longer has. The clamp is not padding — a
+    /// trim that lands on the prompt boundary leaves nothing generated at all.
+    static func generatedTokenIDs(kvTokenIDs: [Int32], promptCount: Int) -> [Int32] {
+        guard kvTokenIDs.count > promptCount else { return [] }
+        return Array(kvTokenIDs.suffix(kvTokenIDs.count - promptCount))
     }
 }
 
@@ -102,6 +253,23 @@ public struct MultimodalTurnResult: Sendable {
     /// can show what resuming actually saved rather than asserting that it did.
     public let prefillSeconds: Double
     public let decodeSeconds: Double
+    /// What this turn's user half put into the KV: the continuation-encoded
+    /// prompt, behind any boundary token the previous run left outside the
+    /// cache and this one replayed. Not the whole prompt — the earlier turns
+    /// were already recorded when they ran.
+    public let promptTokenIDs: [Int32]
+    /// What this turn's assistant half left in the KV, after a stop-string
+    /// match has had its hidden tokens trimmed. Not the tokens the model
+    /// emitted: a run that stops on max tokens or is cancelled holds its final
+    /// token outside the cache, and that token is in `uncommittedBoundaryTokenIDs`.
+    ///
+    /// Concatenating every turn's `promptTokenIDs` and `generatedTokenIDs` in
+    /// order reproduces the KV exactly. Re-tokenising the transcript's text
+    /// cannot: the pinned template strips historical thought spans and trims
+    /// content, so the record has to be the IDs.
+    public let generatedTokenIDs: [Int32]
+    public let uncommittedBoundaryTokenIDs: [Int32]
+    public let boundaryNeedsReplay: Bool
 }
 
 /// A stateful multi-turn conversation that owns its own KV lineage.
@@ -343,9 +511,12 @@ public actor MultimodalConversation {
         // token it already emitted.
         let boundary = boundaryNeedsReplay ? uncommittedBoundary : []
         let promptIDs = kvTokenIDs + boundary + turn.effectiveTokenIDs
-        guard promptIDs.count + 1 <= maxContext else {
+        guard ConversationGenerationReserve.fits(
+            tokens: promptIDs.count, maxContext: maxContext) else {
             throw MultimodalConversationError.contextExhausted(
-                prompt: promptIDs.count, maxContext: maxContext)
+                prompt: promptIDs.count,
+                reserve: ConversationGenerationReserve.tokens,
+                maxContext: maxContext)
         }
 
         // Same coercion as the other entry points: a turn carrying image spans
@@ -458,6 +629,8 @@ public actor MultimodalConversation {
         }
         uncommittedBoundary = result.uncommittedBoundaryTokenIDs
         boundaryNeedsReplay = result.reason == .maxTokens || result.reason == .cancelled
+        let generatedTokenIDs = MultimodalTurnRecord.generatedTokenIDs(
+            kvTokenIDs: kvTokenIDs, promptCount: promptIDs.count)
         return MultimodalTurnResult(
             text: text,
             promptTokens: promptIDs.count,
@@ -472,7 +645,150 @@ public actor MultimodalConversation {
             completionTokens: result.newTokens,
             reason: result.reason,
             prefillSeconds: result.prefillSeconds,
-            decodeSeconds: result.decodeSeconds)
+            decodeSeconds: result.decodeSeconds,
+            promptTokenIDs: boundary + turn.effectiveTokenIDs,
+            generatedTokenIDs: generatedTokenIDs,
+            uncommittedBoundaryTokenIDs: uncommittedBoundary,
+            boundaryNeedsReplay: boundaryNeedsReplay)
+    }
+
+    /// Rebuilds the KV of a stored conversation by prefilling its own token IDs,
+    /// with no decode.
+    ///
+    /// This is the whole of resume. There is no KV on disk: the record is the
+    /// sequence the model saw, and replaying it is what makes the continued
+    /// conversation the one the transcript shows. Restoring is refused unless
+    /// the KV is empty, so a partially filled cache can never be mistaken for a
+    /// restored one — the failure mode every checkpoint-restore bug in this
+    /// space shares.
+    ///
+    /// The replayed KV is equivalent, not byte-identical: the original
+    /// assistant tokens entered through the decode path and the chunk
+    /// boundaries here are the planner's, not the turn's. The token sequence is
+    /// exact, which is what the next turn resumes on.
+    public func restore(
+        lineage: MultimodalConversationLineage,
+        prefillConfig: PrefillRuntimeConfig = .defaultChunked,
+        checkCancellation: @Sendable () throws -> Void = {},
+        onProgress: (@Sendable (RawDecodeProgress) -> Void)? = nil
+    ) async throws {
+        guard !closed else { throw MultimodalConversationError.closed }
+        guard !lineageBroken else { throw MultimodalConversationError.lineageBroken }
+        guard !generating, !resetting else { throw MultimodalConversationError.busy }
+        guard kvTokenIDs.isEmpty else {
+            throw MultimodalConversationError.lineageNotEmpty(kvTokens: kvTokenIDs.count)
+        }
+        guard !lineage.tokenIDs.isEmpty else {
+            throw MultimodalConversationError.emptyTurn
+        }
+        try lineage.validateTokenIDs(vocabSize: model.config.vocabSize)
+        // The headroom `generate` will require of the smallest turn, not just
+        // of the lineage. Restoring a conversation that could not then take a
+        // turn would put minutes of prefill behind a composer that refuses
+        // everything typed into it.
+        guard ConversationGenerationReserve.fitsLineage(
+            tokens: lineage.promptPrefixCount, maxContext: maxContext) else {
+            throw MultimodalConversationError.contextExhausted(
+                prompt: lineage.promptPrefixCount
+                    + ConversationGenerationReserve.turnEnvelope,
+                reserve: ConversationGenerationReserve.tokens,
+                maxContext: maxContext)
+        }
+        if !lineage.images.isEmpty, visionRuntime == nil {
+            throw MultimodalConversationError.imageUnavailable(
+                reason: visionRuntimeError.map(String.init(describing:)))
+        }
+        generating = true
+        defer { finishGeneration() }
+
+        // Images are re-encoded before anything touches the KV, so a stored
+        // image whose pixels no longer hash to what was recorded fails the
+        // restore with the cache still empty and this conversation still usable.
+        var embeddingTokenIDs = lineage.tokenIDs
+        var spans: [MultimodalImageSpan] = []
+        var previousUpperBound = 0
+        for image in lineage.images {
+            try checkCancellation()
+            let range = image.tokenRange
+            guard !range.isEmpty, range.lowerBound >= previousUpperBound,
+                  range.upperBound <= lineage.tokenIDs.count else {
+                throw MultimodalConversationError.invalidReplayImage(
+                    reason: "token range \(range) does not fit the "
+                        + "\(lineage.tokenIDs.count)-token lineage in order")
+            }
+            previousUpperBound = range.upperBound
+            let features: VisionFeatures
+            do {
+                features = try visionRuntime!.encodeStoredImage(
+                    at: image.pixelsURL,
+                    expectedDigest: image.expectedDigest,
+                    languageModel: model,
+                    residencyPolicy: visionResidency,
+                    checkCancellation: checkCancellation)
+            } catch is CancellationError {
+                // A cancelled restore is not a broken record; the caller asked
+                // for it to stop and the KV is still empty.
+                throw CancellationError()
+            } catch {
+                // Mapped here rather than let through as a vision error: to the
+                // caller this is one thing — the stored conversation cannot be
+                // replayed — and it has to be classifiable as that, with the
+                // underlying reason kept so the row can say which image and why.
+                throw MultimodalConversationError.invalidReplayImage(
+                    reason: "\(error)")
+            }
+            guard features.tokenCount == range.count else {
+                throw MultimodalConversationError.invalidReplayImage(
+                    reason: "the stored image encodes to \(features.tokenCount) "
+                        + "soft tokens, not the \(range.count) its turn recorded")
+            }
+            spans.append(MultimodalImageSpan(tokenRange: range, features: features))
+            // The encoder writes zero where an image's soft tokens go, and the
+            // effective sequence carries the placeholder ID. Deriving the
+            // embedding sequence here keeps the two from ever disagreeing on
+            // disk.
+            for index in range { embeddingTokenIDs[index] = 0 }
+        }
+
+        let prefillInput = spans.isEmpty ? nil : try MultimodalPrefillInput(
+            effectiveTokenIDs: lineage.tokenIDs,
+            embeddingTokenIDs: embeddingTokenIDs,
+            imageSpans: spans)
+        var effectivePrefill = prefillConfig
+        if prefillInput != nil, let coerced = effectivePrefill.coercedForImagePrompt() {
+            effectivePrefill = coerced
+        }
+
+        do {
+            _ = try await runRawPrefill(
+                producer: runner,
+                promptIds: lineage.tokenIDs,
+                multimodalInput: prefillInput,
+                prefillConfig: effectivePrefill,
+                start: .reset,
+                // No decode follows, so the seed is discarded. Asking for logits
+                // would only make the final row pay for a head nobody reads.
+                outputMode: .greedyIfAvailable,
+                seedUse: .discarded,
+                historyReserve: lineage.tokenIDs.count,
+                scratch: scratch,
+                onProgress: { onProgress?($0) })
+        } catch {
+            // A mid-conversation failure has to condemn the lineage because
+            // nothing knows how far the KV advanced past a recorded prefix.
+            // Here it does: restore starts from an empty cache, so resetting
+            // puts the conversation back exactly where it began and it stays
+            // usable for a fresh chat.
+            runner.reset()
+            kvTokenIDs.removeAll(keepingCapacity: true)
+            uncommittedBoundary = []
+            boundaryNeedsReplay = false
+            throw error
+        }
+
+        kvTokenIDs = lineage.tokenIDs
+        uncommittedBoundary = lineage.uncommittedBoundary
+        boundaryNeedsReplay = lineage.boundaryNeedsReplay
     }
 
     private struct EncodedTurn {

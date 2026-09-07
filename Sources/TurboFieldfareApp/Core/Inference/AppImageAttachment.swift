@@ -2,7 +2,17 @@ import Darwin
 import Foundation
 import TurboFieldfare
 
-public struct AppImageAttachment: Sendable, Equatable {
+/// A picture this session staged, which the attachment store owns and may
+/// delete.
+///
+/// The composer holds these, a run's retained hard links are these, and
+/// `AppImageAttachmentStore.remove` accepts nothing else. One type with an
+/// `ownership` tag used to stand for both this and `StoredImage`, checked at
+/// run time inside `remove` — and once a reopened conversation's turns carried
+/// attachments pointing into the conversation store, opening any other chat
+/// deleted the pictures out of the one just left. The files were gone from
+/// disk, not merely absent from the window.
+public struct StagedImage: Sendable, Equatable, Identifiable {
     public let id: UUID
     public let fileURL: URL
     public let displayName: String
@@ -16,6 +26,86 @@ public struct AppImageAttachment: Sendable, Equatable {
         self.displayName = displayName
         self.encodedBytes = encodedBytes
         self.sha256 = sha256
+    }
+}
+
+/// A picture the conversation store owns, kept for as long as the conversation
+/// exists and released only by deleting it.
+///
+/// There is deliberately no path from one of these to `remove`: the compiler
+/// refuses it, so a release path that finishes a turn cannot reach a stored
+/// conversation's files however it is written.
+public struct StoredImage: Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let fileURL: URL
+    public let displayName: String
+    public let encodedBytes: Int
+    public let sha256: String
+
+    public init(id: UUID = UUID(), fileURL: URL, displayName: String,
+                encodedBytes: Int, sha256: String) {
+        self.id = id
+        self.fileURL = fileURL
+        self.displayName = displayName
+        self.encodedBytes = encodedBytes
+        self.sha256 = sha256
+    }
+}
+
+/// A picture a turn is showing, and therefore who may delete it.
+///
+/// The transcript draws both kinds the same way, which is why they share a
+/// type here; everything that deletes takes `StagedImage` and cannot be handed
+/// one of these.
+public enum ChatImage: Sendable, Equatable, Identifiable {
+    case staged(StagedImage)
+    case stored(StoredImage)
+
+    public var id: UUID {
+        switch self {
+        case .staged(let image): return image.id
+        case .stored(let image): return image.id
+        }
+    }
+
+    public var fileURL: URL {
+        switch self {
+        case .staged(let image): return image.fileURL
+        case .stored(let image): return image.fileURL
+        }
+    }
+
+    public var displayName: String {
+        switch self {
+        case .staged(let image): return image.displayName
+        case .stored(let image): return image.displayName
+        }
+    }
+
+    public var encodedBytes: Int {
+        switch self {
+        case .staged(let image): return image.encodedBytes
+        case .stored(let image): return image.encodedBytes
+        }
+    }
+
+    /// The digest of the file the user attached. Also the thumbnail cache's
+    /// key, so a picture already decoded for the composer is not decoded again
+    /// for the transcript.
+    public var sha256: String {
+        switch self {
+        case .staged(let image): return image.sha256
+        case .stored(let image): return image.sha256
+        }
+    }
+
+    /// The staged file behind this picture, or nil when the conversation store
+    /// owns it. The only route from a drawn picture to a deletable one.
+    public var staged: StagedImage? {
+        switch self {
+        case .staged(let image): return image
+        case .stored: return nil
+        }
     }
 }
 
@@ -114,7 +204,7 @@ public struct AppImageAttachmentStore: Sendable {
     /// clearing or replacing the composer's attachments deleted the images a
     /// finished answer was still showing. A hard link rather than a copy: the
     /// files are sealed read-only and can be up to 64 MB each.
-    public func retain(_ attachment: AppImageAttachment) throws -> AppImageAttachment {
+    public func retain(_ attachment: StagedImage) throws -> StagedImage {
         let directory = directoryURL.appendingPathComponent(
             "retained", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -124,7 +214,7 @@ public struct AppImageAttachmentStore: Sendable {
             throw VisionImageError.invalidSource(
                 "could not retain \(attachment.displayName): errno \(errno)")
         }
-        return AppImageAttachment(
+        return StagedImage(
             id: attachment.id,
             fileURL: destination,
             displayName: attachment.displayName,
@@ -132,7 +222,7 @@ public struct AppImageAttachmentStore: Sendable {
             sha256: attachment.sha256)
     }
 
-    public func stage(_ sourceURL: URL) throws -> AppImageAttachment {
+    public func stage(_ sourceURL: URL) throws -> StagedImage {
         let accessed = sourceURL.startAccessingSecurityScopedResource()
         defer { if accessed { sourceURL.stopAccessingSecurityScopedResource() } }
 
@@ -202,7 +292,7 @@ public struct AppImageAttachmentStore: Sendable {
 
     /// Stages bytes that never existed as a file — an image copied from another
     /// app arrives on the pasteboard as data, with no URL to open.
-    public func stage(data: Data, displayName: String) throws -> AppImageAttachment {
+    public func stage(data: Data, displayName: String) throws -> StagedImage {
         let limit = VisionImageLimits().maximumEncodedBytes
         guard !data.isEmpty else {
             throw VisionImageError.invalidSource("the pasteboard image was empty")
@@ -219,7 +309,7 @@ public struct AppImageAttachmentStore: Sendable {
         displayName: String,
         encodedBytes: Int,
         writeContents: (Int32) throws -> Void
-    ) throws -> AppImageAttachment {
+    ) throws -> StagedImage {
         try FileManager.default.createDirectory(
             at: directoryURL, withIntermediateDirectories: true)
         let id = UUID()
@@ -262,7 +352,7 @@ public struct AppImageAttachmentStore: Sendable {
             try? FileManager.default.removeItem(at: destination)
             throw error
         }
-        return AppImageAttachment(
+        return StagedImage(
             id: id,
             fileURL: destination,
             displayName: displayName,
@@ -288,7 +378,21 @@ public struct AppImageAttachmentStore: Sendable {
         }
     }
 
-    public func remove(_ attachment: AppImageAttachment) {
+    /// Deletes a file this store staged, and nothing else.
+    ///
+    /// The type is the first condition and the compiler checks it: a
+    /// `StoredImage` cannot be handed to this at all, where the tag it
+    /// replaces was a run-time check on a value anybody could set.
+    public func remove(_ attachment: StagedImage) {
+        // This store's own directory, not the shared root: a store only
+        // removes what it staged, and a test store points somewhere else
+        // entirely.
+        // Resolved the same way `contains` resolves, or the two answer
+        // differently under a symlinked root (`/var` against `/private/var`):
+        // a link `contains` accepted was refused here and never freed.
+        let owned = directoryURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let file = attachment.fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        guard file.hasPrefix(owned + "/") else { return }
         try? FileManager.default.removeItem(at: attachment.fileURL)
     }
 

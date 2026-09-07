@@ -1,9 +1,11 @@
 import SwiftUI
+import TurboFieldfareMacPresentation
 
 struct HUDMetricView: View {
     let value: String
     let label: String
     var animated = true
+    let identifier: AccessibilityID
 
     var body: some View {
         VStack(spacing: 1) {
@@ -18,5 +20,8 @@ struct HUDMetricView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(minWidth: 56)
+        // One element, so the driver reads the figure by its identifier.
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(identifier)
     }
 }

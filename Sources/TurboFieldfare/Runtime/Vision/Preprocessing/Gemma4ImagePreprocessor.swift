@@ -1,7 +1,30 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import Metal
+
+/// The bytes a stored conversation replays: the model input's RGB channels,
+/// tightly packed, with the drawing surface's row padding and its alpha channel
+/// dropped. This — not the file the user attached — is what reproduces the
+/// tower's input, because decode, EXIF transform and resampling all happen
+/// before it and none of them has a documented pixel-stability contract across
+/// macOS versions.
+public struct VisionModelInputPixels: Sendable {
+    public let rgb8: [UInt8]
+    public let width: Int
+    public let height: Int
+    /// Lowercase hex SHA-256 of `rgb8`, the identity a replay checks.
+    public let digest: String
+}
+
+public struct VisionPreprocessOutput {
+    public let pixels: VisionPixelBuffer
+    /// Present only when the caller asked for it. Packing and hashing ~1.9 MB
+    /// is cheap beside the resize, but it is pure waste for the CLI and the
+    /// server, which never store an image.
+    public let modelInput: VisionModelInputPixels?
+}
 
 public final class Gemma4ImagePreprocessor {
     private static let unitBF16 = (0...255).map {
@@ -97,6 +120,20 @@ public final class Gemma4ImagePreprocessor {
     }
 
     public func preprocess(_ plan: VisionImagePlan) throws -> VisionPixelBuffer {
+        try preprocess(plan, capturingModelInput: false).pixels
+    }
+
+    /// The same preprocessing, optionally returning the model-input copy a
+    /// stored conversation keeps.
+    ///
+    /// The copy is taken from the very buffer `patchify` reads. Re-running the
+    /// pipeline to produce it would not be a slower way to get the same bytes:
+    /// it would be a second decode and a second resize, and therefore a second
+    /// chance to produce different ones.
+    public func preprocess(
+        _ plan: VisionImagePlan,
+        capturingModelInput: Bool
+    ) throws -> VisionPreprocessOutput {
         let source = plan.opened.source
         let metadata = plan.metadata
         let geometry = plan.geometry
@@ -195,6 +232,125 @@ public final class Gemma4ImagePreprocessor {
                 length: positionBytes, options: .storageModeShared) else {
             throw VisionImageError.allocationFailed
         }
+        let modelInput = capturingModelInput
+            ? Self.modelInputPixels(
+                rgba: rgba.assumingMemoryBound(to: UInt8.self),
+                rowBytes: rowBytes,
+                width: geometry.processedWidth,
+                height: geometry.processedHeight)
+            : nil
+        patchify(
+            rgba: rgba.assumingMemoryBound(to: UInt8.self),
+            rowBytes: rowBytes,
+            geometry: geometry,
+            patches: patches,
+            positions: positions)
+        return VisionPreprocessOutput(
+            pixels: VisionPixelBuffer(
+                patchesBF16: patches,
+                positionsInt32x2: positions,
+                metadata: metadata,
+                geometry: geometry,
+                wallNanoseconds: nanoseconds(plan.started.duration(to: .now)),
+                // Both full-resolution surfaces: ImageIO's decoded CGImage and
+                // ours, which `draw` holds simultaneously.
+                allocatedBytes: decodedSurfaceBytes + sourceBytes + rgbaBytes
+                    + resizeScratchBytes
+                    + patchBytes + positionBytes),
+            modelInput: modelInput)
+    }
+
+    /// Plans an image that is already the model's input: the stored PNG a
+    /// conversation replays.
+    ///
+    /// The scaling `plan(_:)` performs must not run here. The stored file's
+    /// pixels *are* the processed pixels, so its geometry is read straight off
+    /// its dimensions; putting them through the scaling rule again would resize
+    /// a small model input up towards the token budget and change its span
+    /// length.
+    public func plan(storedModelInput fileURL: URL) throws -> VisionImagePlan {
+        let started = ContinuousClock.now
+        let opened = try VisionImageSource(fileURL: fileURL).open(
+            maximumEncodedBytes: metadataReader.limits.maximumEncodedBytes)
+        let metadata = try metadataReader.read(opened: opened)
+        let geometry = try Gemma4ImageGeometry(
+            processedWidth: metadata.orientedWidth,
+            processedHeight: metadata.orientedHeight,
+            config: config)
+        return VisionImagePlan(
+            metadata: metadata, geometry: geometry, opened: opened, started: started)
+    }
+
+    /// Patchifies a stored model-input image, refusing anything whose pixels are
+    /// not the ones that were stored.
+    ///
+    /// Decode is unavoidable — a PNG has to be unpacked — but the resize is
+    /// skipped, because the stored file is already at the tower's geometry. The
+    /// digest check is not belt-and-braces: PNG decode of an sRGB 8-bit file is
+    /// very likely an identity and nowhere documented as one, so replay verifies
+    /// rather than assumes, and a mismatch fails the restore instead of quietly
+    /// continuing a conversation on pixels the model never saw.
+    public func preprocess(
+        storedModelInput plan: VisionImagePlan,
+        expectedDigest: String
+    ) throws -> VisionPixelBuffer {
+        let geometry = plan.geometry
+        let width = geometry.processedWidth
+        let height = geometry.processedHeight
+        guard let decoded = CGImageSourceCreateImageAtIndex(
+            plan.opened.source, 0, [
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceShouldAllowFloat: false,
+            ] as CFDictionary) else {
+            throw VisionImageError.decodeFailed
+        }
+        guard decoded.width == width, decoded.height == height else {
+            throw VisionImageError.invalidMetadata(
+                "stored model input decoded at \(decoded.width)x\(decoded.height), "
+                    + "not the \(width)x\(height) its header declares")
+        }
+
+        let rowBytes = try checkedMultiply(width, 4)
+        let rgbaBytes = try checkedMultiply(rowBytes, height)
+        let rgba = UnsafeMutableRawPointer.allocate(byteCount: rgbaBytes, alignment: 64)
+        defer { rgba.deallocate() }
+        rgba.initializeMemory(as: UInt8.self, repeating: 255, count: rgbaBytes)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let drawing = CGContext(
+                data: rgba,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: rowBytes,
+                space: colorSpace,
+                bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                    | CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw VisionImageError.allocationFailed
+        }
+        drawing.setFillColor(CGColor(gray: 1, alpha: 1))
+        drawing.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        drawing.draw(decoded, in: CGRect(x: 0, y: 0, width: width, height: height))
+        withExtendedLifetime(drawing) {}
+
+        let modelInput = Self.modelInputPixels(
+            rgba: rgba.assumingMemoryBound(to: UInt8.self),
+            rowBytes: rowBytes, width: width, height: height)
+        guard modelInput.digest == expectedDigest.lowercased() else {
+            throw VisionImageError.invalidMetadata(
+                "stored model input hashes to \(modelInput.digest), not the "
+                    + "\(expectedDigest.lowercased()) recorded with the turn")
+        }
+
+        let patchElements = try checkedMultiply(geometry.patchCount, config.patchDimension)
+        let patchBytes = try checkedMultiply(patchElements, MemoryLayout<UInt16>.stride)
+        let positionElements = try checkedMultiply(geometry.patchCount, 2)
+        let positionBytes = try checkedMultiply(
+            positionElements, MemoryLayout<Int32>.stride)
+        guard let patches = device.makeBuffer(length: patchBytes, options: .storageModeShared),
+              let positions = device.makeBuffer(
+                length: positionBytes, options: .storageModeShared) else {
+            throw VisionImageError.allocationFailed
+        }
         patchify(
             rgba: rgba.assumingMemoryBound(to: UInt8.self),
             rowBytes: rowBytes,
@@ -204,14 +360,36 @@ public final class Gemma4ImagePreprocessor {
         return VisionPixelBuffer(
             patchesBF16: patches,
             positionsInt32x2: positions,
-            metadata: metadata,
+            metadata: plan.metadata,
             geometry: geometry,
             wallNanoseconds: nanoseconds(plan.started.duration(to: .now)),
-            // Both full-resolution surfaces: ImageIO's decoded CGImage and
-            // ours, which `draw` holds simultaneously.
-            allocatedBytes: decodedSurfaceBytes + sourceBytes + rgbaBytes
-                + resizeScratchBytes
-                + patchBytes + positionBytes)
+            allocatedBytes: rgbaBytes + patchBytes + positionBytes)
+    }
+
+    static func modelInputPixels(
+        rgba: UnsafePointer<UInt8>,
+        rowBytes: Int,
+        width: Int,
+        height: Int
+    ) -> VisionModelInputPixels {
+        var rgb8 = [UInt8](repeating: 0, count: width * height * 3)
+        rgb8.withUnsafeMutableBufferPointer { out in
+            var output = 0
+            for y in 0..<height {
+                var input = y * rowBytes
+                for _ in 0..<width {
+                    out[output] = rgba[input]
+                    out[output + 1] = rgba[input + 1]
+                    out[output + 2] = rgba[input + 2]
+                    output += 3
+                    input += 4
+                }
+            }
+        }
+        let digest = SHA256.hash(data: rgb8)
+            .map { String(format: "%02x", $0) }.joined()
+        return VisionModelInputPixels(
+            rgb8: rgb8, width: width, height: height, digest: digest)
     }
 
     private func patchify(

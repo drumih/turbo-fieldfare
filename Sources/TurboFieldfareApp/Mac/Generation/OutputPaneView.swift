@@ -42,16 +42,25 @@ struct OutputPaneView: View {
         IncrementalTranscriptView(
             history: model.transcriptHistory,
             contextBreak: model.transcriptContextBreak,
-            conversationEpoch: model.conversation.epoch,
+            conversationEpoch: model.displayedTranscriptID,
             lastAnswer: model.outputResponsePlainText,
             conversationPlainText: model.outputConversationPlainText,
-            requestNewChat: model.isRunning ? nil : { model.newChat() },
-            prompt: model.outputPromptText,
-            images: model.outputImageAttachments,
-            output: model.outputText,
-            mailbox: model.generationTranscriptMailbox,
-            isTerminal: !model.isRunning,
-            showsPrefillPlaceholder: model.isRunning
+            requestNewChat: model.isTurnInFlight ? nil : { model.newChat() },
+            // Blank while a stored copy is on screen. The live fields hold the
+            // chat the KV is still keeping, which is a different conversation
+            // from the one being read, and drawing it here would append one
+            // chat's newest exchange to another's transcript.
+            prompt: model.showsLiveTurn ? model.outputPromptText : "",
+            images: model.showsLiveTurn ? model.outputImageAttachments : [],
+            output: model.showsLiveTurn ? model.outputText : "",
+            mailbox: model.showsLiveTurn ? model.generationTranscriptMailbox : nil,
+            // `isTurnInFlight`, not `isRunning`: a reopened conversation is
+            // replayed into the KV before its turn starts, and that is a full
+            // prefill. Keyed off `isRunning` the transcript treated the whole
+            // replay as a finished turn with no answer, so it drew nothing at
+            // all and the message looked lost.
+            isTerminal: !model.isTurnInFlight,
+            showsPrefillPlaceholder: model.isTurnInFlight
                 && model.outputResponsePlainText.isEmpty,
             runIdentity: model.runIdentity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -89,6 +98,7 @@ struct OutputPaneView: View {
                             ? "Copy last answer"
                             : "Response copied")
         .accessibilityHint("Copies only the generated answer")
+        .accessibilityIdentifier(.transcriptCopyResponse)
         .help(responseCopyFeedbackID == nil
               ? "Copy last answer"
               : "Response copied")
@@ -124,15 +134,16 @@ struct OutputPaneView: View {
                        action: model.loadModel)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-            } else if isLoadingModel {
-                Button("Load Model", action: {})
+                    .accessibilityIdentifier(.transcriptLoad)
+            } else if model.canCancelLoad {
+                Button("Cancel Load", action: model.cancelLoad)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .hidden()
-                    .accessibilityHidden(true)
+                    .accessibilityIdentifier(.bannerModelAction)
             } else if model.canReloadModel {
                 Button("Reload Model", action: model.reloadModel)
                     .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier(.transcriptReload)
             }
         }
         .frame(maxWidth: .infinity)
@@ -171,12 +182,12 @@ struct OutputPaneView: View {
 }
 
 struct SubmittedImageThumbnail: View {
-    let attachment: AppImageAttachment
+    let attachment: ChatImage
     let maximumSize: CGSize
     @State private var image: NSImage?
 
     init(
-        attachment: AppImageAttachment,
+        attachment: ChatImage,
         maximumSize: CGSize = CGSize(width: 48, height: 48)
     ) {
         self.attachment = attachment
@@ -344,7 +355,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     var conversationPlainText: String = ""
     var requestNewChat: (() -> Void)?
     var prompt: String
-    var images: [AppImageAttachment] = []
+    var images: [ChatImage] = []
     var output: String
     var mailbox: GenerationTranscriptMailbox?
     var isTerminal: Bool
@@ -441,7 +452,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             conversationPlainText: String,
             requestNewChat: (() -> Void)?,
             prompt: String,
-            images: [AppImageAttachment],
+            images: [ChatImage],
             output: String,
             mailbox: GenerationTranscriptMailbox?,
             isTerminal: Bool,
@@ -741,7 +752,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         /// stopped wanting is dropped rather than applied. Images arriving after
         /// the first paint is the case `follow` already exists for.
         private func buildPromptPrefix(
-            _ images: [AppImageAttachment], identifier: String
+            _ images: [ChatImage], identifier: String
         ) {
             guard !images.isEmpty else { return }
             Task { [weak self] in
@@ -767,23 +778,22 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         private static func makePromptPrefix(
-            _ images: [AppImageAttachment]
+            _ images: [ChatImage]
         ) -> NSAttributedString {
+            let cells = TranscriptImageCells.images(
+                for: images,
+                load: { attachment in
+                    guard let image = SubmittedImageThumbnail.loadThumbnail(
+                        at: attachment.fileURL,
+                        maximumPixelSize: 720,
+                        cacheKey: attachment.sha256) else { return nil }
+                    image.size = SubmittedImageThumbnail.fittedSize(
+                        image.size, within: CGSize(width: 360, height: 240))
+                    return image
+                },
+                unreadable: Self.unreadableImageTile)
             let result = NSMutableAttributedString()
-            for attachment in images {
-                // A refused or unreadable image is dropped from the transcript,
-                // which is the same degradation the composer's placeholder tile
-                // gives. The separator therefore keys off what has actually
-                // been written, not off the attachment's index: keyed off the
-                // index, a first image the decode budget refused left the line
-                // starting with a bare gap.
-                guard let image = SubmittedImageThumbnail.loadThumbnail(
-                    at: attachment.fileURL,
-                    maximumPixelSize: 720,
-                    cacheKey: attachment.sha256) else { continue }
-                image.size = SubmittedImageThumbnail.fittedSize(
-                    image.size,
-                    within: CGSize(width: 360, height: 240))
+            for image in cells {
                 let textAttachment = NSTextAttachment()
                 textAttachment.attachmentCell = NSTextAttachmentCell(
                     imageCell: Self.rounded(image))
@@ -798,6 +808,39 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         /// The transcript draws its images as text attachments, which cannot be
         /// clipped by the view the way the composer's thumbnails are, so the
         /// corners have to be drawn into the image itself.
+        /// Stands in for an image whose file is gone or will not decode.
+        ///
+        /// The same shape and the same symbol the composer already falls back
+        /// to, so the two degrade alike. Its job is only to say a picture
+        /// belongs here: what it was is in the answer, and why it cannot be
+        /// read is not something the reader can act on from the transcript.
+        private static func unreadableImageTile() -> NSImage {
+            let size = NSSize(width: 160, height: 120)
+            let tile = NSImage(size: size)
+            tile.lockFocus()
+            defer { tile.unlockFocus() }
+            NSColor.quaternarySystemFill.setFill()
+            NSRect(origin: .zero, size: size).fill()
+            let configuration = NSImage.SymbolConfiguration(
+                pointSize: 28, weight: .regular)
+            if let symbol = NSImage(
+                systemSymbolName: "photo", accessibilityDescription: nil)?
+                .withSymbolConfiguration(configuration) {
+                let tinted = NSImage(size: symbol.size)
+                tinted.lockFocus()
+                NSColor.tertiaryLabelColor.set()
+                NSRect(origin: .zero, size: symbol.size).fill(using: .sourceOver)
+                symbol.draw(in: NSRect(origin: .zero, size: symbol.size),
+                            from: .zero, operation: .destinationIn, fraction: 1)
+                tinted.unlockFocus()
+                tinted.draw(in: NSRect(
+                    x: (size.width - symbol.size.width) / 2,
+                    y: (size.height - symbol.size.height) / 2,
+                    width: symbol.size.width, height: symbol.size.height))
+            }
+            return tile
+        }
+
         private static func rounded(_ image: NSImage) -> NSImage {
             let size = image.size
             guard size.width > 1, size.height > 1 else { return image }

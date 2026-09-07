@@ -118,4 +118,27 @@ struct DownloadETAEstimatorTests {
         #expect(DownloadETAFormatter.remainingString(390) == "About 7 min remaining")
         #expect(DownloadETAFormatter.remainingString(410) == "About 7 min remaining")
     }
+
+    @Test func longElapsedClockValuesKeepTheEstimateFinite() {
+        var estimator = DownloadETAEstimator()
+        let mib = UInt64(1024 * 1024)
+        let origin = 1_000_000_000_000.0
+        _ = estimator.update(
+            .init(reusedBytes: 0, downloadedThisRunBytes: 0, totalBytes: 128 * mib),
+            timestamp: origin)
+
+        let result = estimator.update(
+            .init(reusedBytes: 0, downloadedThisRunBytes: 64 * mib,
+                  totalBytes: 128 * mib),
+            timestamp: origin + 48 * 60 * 60)
+        guard case .remaining(let seconds) = result else {
+            Issue.record("expected an ETA after a long-running download")
+            return
+        }
+
+        #expect(seconds.isFinite)
+        #expect(seconds == 48 * 60 * 60)
+        #expect(DownloadETAFormatter.string(for: result)
+            == "More than a day remaining")
+    }
 }

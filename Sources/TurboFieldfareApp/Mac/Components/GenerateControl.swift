@@ -16,7 +16,7 @@ struct GenerateControl: View {
 
     private var generateButton: some View {
         Button {
-            model.run()
+            model.send()
         } label: {
             Label("Generate", systemImage: "arrow.up")
                 .font(.callout.weight(.semibold))
@@ -33,6 +33,7 @@ struct GenerateControl: View {
         .keyboardShortcut(.return, modifiers: .command)
         .disabled(!model.canRun)
         .opacity(model.canRun ? 1 : 0.62)
+        .accessibilityIdentifier(.composerGenerate)
     }
 
     private var runningPill: some View {
@@ -73,6 +74,7 @@ struct GenerateControl: View {
         .keyboardShortcut(.cancelAction)
         .disabled(!model.canCancel)
         .help("Stop generation")
+        .accessibilityIdentifier(.composerStop)
         .animation(.smooth(duration: 0.2), value: model.presentation.label)
     }
 }

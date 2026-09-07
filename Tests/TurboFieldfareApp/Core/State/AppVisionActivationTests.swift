@@ -16,6 +16,25 @@ import TurboFieldfareRepackCore
     }
 
     @MainActor
+    @Test func payloadDownloadCanCoexistWithTextGenerationButActivationCannot() throws {
+        let directory = try makeCompleteModelInstall("vision-download-generation")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = AppModel(modelDirectory: directory,
+                             client: FakeInferenceClient())
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
+        model.promptText = "text remains available"
+
+        model.visionInstallState = .copyingPayload(
+            reusedBytes: 0, downloadedThisRunBytes: 1, totalBytes: 2)
+        #expect(model.canRun)
+        #expect(model.canUnloadModel)
+
+        model.visionInstallState = .activating
+        #expect(!model.canRun)
+        #expect(!model.canUnloadModel)
+    }
+
+    @MainActor
     @Test func activationReportsHowFarItsVerificationHasGot() async throws {
         let installer = MockVisionPackInstallerClient(
             preparedValid: true, activationProgress: [0.25, 0.5, 0.75, 1])

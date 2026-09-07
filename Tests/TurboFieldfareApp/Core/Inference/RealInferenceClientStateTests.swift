@@ -7,6 +7,47 @@ import TurboFieldfare
 /// before any network or Metal work, idle cancel is a no-op, and a bad
 /// request fails the stream with a typed error.
 @Suite struct RealInferenceClientStateTests {
+    /// A replay image's range is bounded by the record before it is built.
+    ///
+    /// Both figures arrive over the socket in the service, and a sign check
+    /// alone let a pair near `Int.max` overflow the addition: the decode
+    /// service trapped mid-command, the app saw EOF and forced a full reload,
+    /// and nothing named the record that caused it.
+    @Test func aReplayImageRangeThatOverflowsIsRefusedNotTrapped() async {
+        let client = RealInferenceClient()
+        let overflowing = AppConversationLineage(
+            tokenIDs: [1, 2, 3, 4],
+            images: [AppConversationReplayImage(
+                tokenLowerBound: Int.max - 8, tokenCount: 16,
+                fileURL: URL(fileURLWithPath: "/tmp/roof.png"),
+                expectedDigest: "roof")],
+            committedTurns: 1)
+        await #expect(throws: AppInferenceError.self) {
+            try await client.restoreConversation(overflowing, options: AppRuntimeOptions())
+        }
+    }
+
+    /// And a range past the end of the record is a bad record, not a request
+    /// the session should see.
+    @Test func aReplayImageRangePastTheRecordIsRefused() async {
+        let client = RealInferenceClient()
+        let past = AppConversationLineage(
+            tokenIDs: [1, 2, 3, 4],
+            images: [AppConversationReplayImage(
+                tokenLowerBound: 3, tokenCount: 2,
+                fileURL: URL(fileURLWithPath: "/tmp/roof.png"),
+                expectedDigest: "roof")],
+            committedTurns: 1)
+        do {
+            _ = try await client.restoreConversation(past, options: AppRuntimeOptions())
+            Issue.record("a range past the record was accepted")
+        } catch AppInferenceError.conversationRestoreFailed(let reason) {
+            #expect(reason.contains("4-token"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
     @Test func generationRegistryScopesTerminationToOwningID() async {
         let registry = GenerationTaskRegistry()
         let first = UUID()

@@ -35,6 +35,13 @@ private final class RunIdentityInferenceClient: AppModelLifecycleClient, Sendabl
 
     func unload() async {}
     func resetConversation(epoch: UUID) async throws {}
+    func restoreConversation(
+        _ lineage: AppConversationLineage,
+        epoch: UUID,
+        options: AppRuntimeOptions,
+        maxContextTokens: Int,
+        onPrefillProgress: @escaping @Sendable (Int, Int) -> Void
+    ) async throws -> Int { lineage.tokenIDs.count }
     func cancel() {}
 
     func generate(_ request: AppGenerationRequest)
@@ -70,11 +77,12 @@ private final class RunIdentityInferenceClient: AppModelLifecycleClient, Sendabl
         model.loadState = .ready(modelDirectory: directory, loadSeconds: 0)
 
         model.promptText = "first"
-        model.run()
-        while model.isRunning { await Task.yield() }
+        model.send()
+        await SendWaiting.turnEnds(model)
 
         model.promptText = "second"
-        model.run()
+        model.send()
+        await SendWaiting.generationStarts(model)
         let secondIdentity = model.runIdentity
         #expect(model.isRunning)
         #expect(model.conversation.hasTurnInFlight)
@@ -90,6 +98,6 @@ private final class RunIdentityInferenceClient: AppModelLifecycleClient, Sendabl
         #expect(model.error == nil)
 
         await client.secondTerminal.open()
-        while model.isRunning { await Task.yield() }
+        await SendWaiting.turnEnds(model)
     }
 }

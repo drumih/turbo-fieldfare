@@ -1,4 +1,5 @@
 import Darwin
+import Synchronization
 import TurboFieldfare
 import Foundation
 import TurboFieldfareAppCore
@@ -6,11 +7,14 @@ import TurboFieldfareDecodeProtocol
 
 enum DecodeServiceError: Error, CustomStringConvertible {
     case attachmentOutsideStore(path: String)
+    case replayImageOutsideStore(path: String)
 
     var description: String {
         switch self {
         case .attachmentOutsideStore(let path):
             "image attachment is not a staged attachment: \(path)"
+        case .replayImageOutsideStore(let path):
+            "replay image is not inside this model's conversation store: \(path)"
         }
     }
 }
@@ -38,17 +42,20 @@ enum DecodeServiceError: Error, CustomStringConvertible {
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
         let client = RealInferenceClient()
         let commands = DecodeCommandQueue()
+        let loadInFlight = ServiceLoadCancellation()
         let input = Thread {
             do {
                 while true {
                     let command = try DecodeFrameCodec.read(
                         DecodeServiceCommand.self, from: handles.input)
+                    if case .load = command { loadInFlight.enqueueLoad() }
                     if case .cancel = command {
                         // Cooperative: end the turn at the next token boundary
                         // and keep what it produced, so the conversation can
                         // continue from it. Cancelling the task instead throws
                         // out of the decode loop and the turn is rewound.
                         client.stop()
+                        loadInFlight.cancel()
                     }
                     commands.append(command)
                     if case .shutdown = command { break }
@@ -68,13 +75,39 @@ enum DecodeServiceError: Error, CustomStringConvertible {
             switch command {
             case .load(let request):
                 let directory = URL(fileURLWithPath: request.modelPath)
+                // Outside the `do`, because the queued load ends here even if
+                // it never starts: its runtime options are parsed below and can
+                // throw, and a load left counted as queued makes the next
+                // generation's cancel latch onto a later load.
+                defer { loadInFlight.finish() }
+                // The session drops what it held before it loads, so a load
+                // that then fails or is cancelled leaves nothing loaded. The
+                // facts below have to say so, or the next generate passed the
+                // directory and options checks, opened a writer thread and
+                // failed inside the run with "model is not loaded".
+                var loadStarted = false
+                defer {
+                    if loadStarted, modelDirectory == nil {
+                        conversation.endLineage()
+                        loadedOptions = nil
+                    }
+                }
                 do {
                     let options = try appRuntimeOptions(request.runtimeOptions)
-                    try await client.ensureLoaded(
-                        modelDirectory: directory,
-                        maxContextTokens: request.maxContextTokens,
-                        options: options,
-                        forceLogitsHead: request.forceLogitsHead) { _ in }
+                    // The session load already checks for cancellation between
+                    // its stages; running it in a task is what gives the input
+                    // thread something to cancel.
+                    let load = Task {
+                        try await client.ensureLoaded(
+                            modelDirectory: directory,
+                            maxContextTokens: request.maxContextTokens,
+                            options: options,
+                            forceLogitsHead: request.forceLogitsHead) { _ in }
+                    }
+                    loadInFlight.begin(load)
+                    loadStarted = true
+                    modelDirectory = nil
+                    try await load.value
                     modelDirectory = directory
                     loadedOptions = request.runtimeOptions
                     // A load builds a new runner and a new KV, so whatever
@@ -109,6 +142,85 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                     try? handles.output.close()
                     return
                 }
+            case .restoreConversation(let request):
+                guard let modelDirectory else {
+                    // Not `try?`: the app waits out the whole restore deadline
+                    // for a terminal event that never lands. A lost write is an
+                    // EOF the client rebuilds from, the same as below.
+                    do {
+                        try write(DecodeServiceEvent(
+                            kind: .failed, generationID: request.requestID,
+                            error: "model is not loaded"), to: handles.output)
+                    } catch {
+                        let message = "Decode service closing after a lost "
+                            + "conversation restore refusal: \(error)\n"
+                        FileHandle.standardError.write(Data(message.utf8))
+                        await client.unload()
+                        try? handles.output.close()
+                        return
+                    }
+                    continue
+                }
+                // The gate opens only after the KV actually holds the tokens.
+                // Opening it first and failing the replay would leave the app
+                // free to send turns onto a lineage that does not exist.
+                do {
+                    let lineage = try restoreLineage(
+                        request, modelDirectory: modelDirectory)
+                    let options = try appRuntimeOptions(request.runtimeOptions)
+                    // Progress goes straight out: the writer thread belongs to a
+                    // generation, and a restore has none. The loop is awaiting
+                    // this call, so nothing else is writing to the handle.
+                    let writeFailure = Mutex<Error?>(nil)
+                    let tokens = try await client.restoreConversation(
+                        lineage, epoch: request.epoch, options: options,
+                        maxContextTokens: request.maxContextTokens
+                    ) { done, total in
+                        do {
+                            try write(DecodeServiceEvent(
+                                kind: .prefill, generationID: request.requestID,
+                                prefillDone: done, prefillTotal: total,
+                                conversationEpoch: request.epoch), to: handles.output)
+                        } catch {
+                            writeFailure.withLock { $0 = $0 ?? error }
+                        }
+                    }
+                    if let error = writeFailure.withLock({ $0 }) { throw error }
+                    conversation.restore(to: request.epoch,
+                                         committedTurns: request.committedTurns)
+                    try write(DecodeServiceEvent(
+                        kind: .conversationRestored, generationID: request.requestID,
+                        conversationTokenCount: tokens,
+                        conversationEpoch: request.epoch), to: handles.output)
+                } catch {
+                    // The lineage that was open is gone with the KV the restore
+                    // reset, and the event says so: reporting the old epoch as
+                    // still open, and leaving the gate to admit its next turn,
+                    // was a turn prefilled as an opening one under a transcript
+                    // showing every exchange before it.
+                    conversation.restoreFailed()
+                    // Same reasoning as the reset path: a terminal event that
+                    // never lands leaves the app waiting out its whole timeout
+                    // for a reply that cannot come.
+                    do {
+                        try write(DecodeServiceEvent(
+                            kind: .failed, generationID: request.requestID,
+                            // The cause, not the sentence: the client phrases
+                            // it, and forwarding the phrasing made the app show
+                            // it twice.
+                            error: (error as? AppInferenceError)?.diagnosticMessage
+                                ?? "\(error)",
+                            conversationEpoch: conversation.openEpoch),
+                            to: handles.output)
+                    } catch {
+                        let message = "Decode service closing after a lost "
+                            + "conversation restore: \(error)\n"
+                        FileHandle.standardError.write(Data(message.utf8))
+                        await client.unload()
+                        try? handles.output.close()
+                        return
+                    }
+                }
             case .generate(let request):
                 guard let modelDirectory else {
                     try? write(DecodeServiceEvent(
@@ -139,9 +251,8 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                 case .success(let value):
                     admission = value
                 case .failure(let rejection):
-                    try? write(DecodeServiceEvent(
-                        kind: .failed, generationID: request.generationID,
-                        error: rejection.message,
+                    try? write(rejection.terminalEvent(
+                        generationID: request.generationID,
                         conversationEpoch: conversation.openEpoch), to: handles.output)
                     continue
                 }
@@ -186,7 +297,7 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                     let generation = AppGenerationRequest(
                         modelDirectory: modelDirectory, prompt: request.prompt,
                         imageAttachments: (request.imageAttachments ?? []).map {
-                            AppImageAttachment(
+                            StagedImage(
                                 id: $0.id,
                                 fileURL: URL(fileURLWithPath: $0.path),
                                 displayName: $0.displayName,
@@ -249,6 +360,38 @@ enum DecodeServiceError: Error, CustomStringConvertible {
     private static func write(_ event: DecodeServiceEvent,
                               to handle: FileHandle) throws {
         try handle.write(contentsOf: DecodeFrameCodec.encode(event))
+    }
+
+    /// The wire request as a lineage, with every path checked against the
+    /// conversation store first.
+    ///
+    /// Same trust boundary as an image attachment: these paths arrive over a
+    /// socket and this process opens and hashes whatever they name. Without the
+    /// check a peer could use the service to read any file the user can, and a
+    /// store rooted on the loaded model is the only place a stored conversation
+    /// can legitimately live.
+    private static func restoreLineage(
+        _ request: DecodeRestoreConversationRequest,
+        modelDirectory: URL
+    ) throws -> AppConversationLineage {
+        let images = try request.images.map { image -> AppConversationReplayImage in
+            let url = URL(fileURLWithPath: image.path)
+            guard ConversationStoreLocation.contains(
+                url, forModelDirectory: modelDirectory) else {
+                throw DecodeServiceError.replayImageOutsideStore(path: image.path)
+            }
+            return AppConversationReplayImage(
+                tokenLowerBound: image.tokenLowerBound,
+                tokenCount: image.tokenCount,
+                fileURL: url,
+                expectedDigest: image.expectedDigest)
+        }
+        return AppConversationLineage(
+            tokenIDs: request.tokenIDs,
+            images: images,
+            boundaryTokenIDs: request.boundaryTokenIDs,
+            boundaryNeedsReplay: request.boundaryNeedsReplay,
+            committedTurns: request.committedTurns)
     }
 
     private static func appRuntimeOptions(_ options: DecodeRuntimeOptions) throws

@@ -164,6 +164,7 @@ struct ModelInstallView: View {
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
                     .disabled(!model.canCancelInstall)
+                    .accessibilityIdentifier(.installCancel)
             } else {
                 if model.hasPartialModelDownload {
                     Button("Discard Download", role: .destructive) {
@@ -171,16 +172,19 @@ struct ModelInstallView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(!model.canDiscardModelDownload)
+                    .accessibilityIdentifier(.installDiscard)
                 }
 
                 Button("Check Again", action: model.recheckModelAtCurrentLocation)
                 .buttonStyle(.bordered)
                 .disabled(model.isInstallingModel)
+                .accessibilityIdentifier(.installCheckAgain)
 
                 Button(model.hasPartialModelDownload ? "Resume" : "Download",
                        action: model.installModel)
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canInstallModel)
+                    .accessibilityIdentifier(.installDownload)
             }
         }
         .controlSize(.large)

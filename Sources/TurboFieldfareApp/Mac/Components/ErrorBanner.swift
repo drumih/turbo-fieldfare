@@ -25,6 +25,7 @@ struct ErrorBanner: View {
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier(.bannerErrorDismiss)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 8)

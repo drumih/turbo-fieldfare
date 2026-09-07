@@ -351,6 +351,42 @@ public final class VisionRuntime {
         residencyPolicy: VisionResidencyPolicy = .defaultPolicy,
         checkCancellation: () throws -> Void = {}
     ) throws -> VisionFeatures {
+        try encode(languageModel: languageModel,
+                   residencyPolicy: residencyPolicy,
+                   checkCancellation: checkCancellation) { preprocessor in
+            try preprocessor.preprocess(plan)
+        }
+    }
+
+    /// Encodes the model-input copy a stored conversation kept, refusing it
+    /// unless its pixels still hash to what the turn recorded.
+    ///
+    /// It shares the expert-residency dance with `encodeImage` deliberately:
+    /// replaying a conversation with images pays exactly the encode a live turn
+    /// pays, and a residency policy that behaved differently on reopen would
+    /// make the reopen a different measurement from the turn it reproduces.
+    public func encodeStoredImage(
+        at fileURL: URL,
+        expectedDigest: String,
+        languageModel: Model? = nil,
+        residencyPolicy: VisionResidencyPolicy = .defaultPolicy,
+        checkCancellation: () throws -> Void = {}
+    ) throws -> VisionFeatures {
+        try encode(languageModel: languageModel,
+                   residencyPolicy: residencyPolicy,
+                   checkCancellation: checkCancellation) { preprocessor in
+            try preprocessor.preprocess(
+                storedModelInput: preprocessor.plan(storedModelInput: fileURL),
+                expectedDigest: expectedDigest)
+        }
+    }
+
+    private func encode(
+        languageModel: Model?,
+        residencyPolicy: VisionResidencyPolicy,
+        checkCancellation: () throws -> Void,
+        pixels: (Gemma4ImagePreprocessor) throws -> VisionPixelBuffer
+    ) throws -> VisionFeatures {
         try checkCancellation()
         let preprocessor = Gemma4ImagePreprocessor(device: context.device, config: config,
                                                    gpuResize: imageResize)
@@ -361,7 +397,7 @@ public final class VisionRuntime {
         let transition = languageModel?.prepareExpertResidencyForVision(
             residencyPolicy, gpuDrainNanoseconds: gpuDrainNanoseconds)
         try checkCancellation()
-        let input = try preprocessor.preprocess(plan)
+        let input = try pixels(preprocessor)
         return try encodePreparedPatches(
             patchesBF16: input.patchesBF16,
             positionsInt32x2: input.positionsInt32x2,
