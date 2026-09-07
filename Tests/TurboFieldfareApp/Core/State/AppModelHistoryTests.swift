@@ -27,6 +27,53 @@ import TurboFieldfare
     }
 
     @MainActor
+    @Test func queuedSendKeepsTheCompletedAnswerTerminal() async throws {
+        let client = FakeInferenceClient(eventDelay: .milliseconds(1))
+        let (model, root) = try await readyModel(client)
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.promptText = "first"
+        model.send()
+        try await finish(model)
+        let answer = model.outputText
+        let run = model.runIdentity
+        model.promptText = "second"
+        model.send()
+        // No actor hop: deliver has not published the new turn yet.
+        #expect(model.isTurnInFlight)
+        #expect(!model.canRun)
+        #expect(model.outputText == answer)
+        #expect(model.runIdentity == run)
+        #expect(!model.isTranscriptTurnInFlight)
+        try await finish(model)
+        #expect(!model.isTranscriptTurnInFlight)
+    }
+
+    @MainActor
+    @Test func queuedStoredSendDoesNotExposeTheHeldChat() async throws {
+        let client = FakeInferenceClient(eventDelay: .milliseconds(1))
+        let (model, root) = try await readyModel(client)
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.promptText = "stored A"
+        model.send()
+        try await finish(model)
+        let a = try #require(model.storedConversationID)
+        model.newChat()
+        model.promptText = "held B"
+        model.send()
+        try await finish(model)
+        model.openConversation(id: a)
+        try await waitUntil { await model.screen.document?.id == a }
+        model.promptText = "continue A"
+        model.send()
+        #expect(model.isTurnInFlight)
+        #expect(!model.isTranscriptTurnInFlight)
+        #expect(!model.showsLiveTurn)
+        #expect(model.screen.document?.id == a)
+        try await finish(model)
+        #expect(model.storedConversationID == a)
+    }
+
+    @MainActor
     @Test func failedCreationCannotStartSavingHalfwayThroughLiveKV() async throws {
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let (model, root) = try await readyModel(client)
@@ -1888,7 +1935,7 @@ import TurboFieldfare
         #expect(model.isTurnInFlight)
         try await waitUntil { await model.screen.isReplaying }
         #expect(model.outputPromptText == "does this show up?")
-        #expect(model.isTurnInFlight, "the transcript would draw this as finished")
+        #expect(model.isTranscriptTurnInFlight, "the transcript would draw this as finished")
         // And the transcript is told to draw it. Gated on `isShowingStoredCopy`
         // alone this was false for the whole replay, so the window showed an
         // "Answer / Processing your prompt" with no question above it.

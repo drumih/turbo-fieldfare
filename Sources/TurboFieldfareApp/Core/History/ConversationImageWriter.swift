@@ -50,7 +50,7 @@ public struct ConversationImageWriter: Sendable {
     }
 
     public init() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
+        guard let device = MetalContext.makeSystemDefaultDevice() else {
             throw ConversationImageWriterError.noMetalDevice
         }
         self.device = device

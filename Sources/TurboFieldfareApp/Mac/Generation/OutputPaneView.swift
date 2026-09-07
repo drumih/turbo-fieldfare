@@ -54,13 +54,9 @@ struct OutputPaneView: View {
             images: model.showsLiveTurn ? model.outputImageAttachments : [],
             output: model.showsLiveTurn ? model.outputText : "",
             mailbox: model.showsLiveTurn ? model.generationTranscriptMailbox : nil,
-            // `isTurnInFlight`, not `isRunning`: a reopened conversation is
-            // replayed into the KV before its turn starts, and that is a full
-            // prefill. Keyed off `isRunning` the transcript treated the whole
-            // replay as a finished turn with no answer, so it drew nothing at
-            // all and the message looked lost.
-            isTerminal: !model.isTurnInFlight,
-            showsPrefillPlaceholder: model.isTurnInFlight
+            // Include replay, but not a queued send still displaying the old answer.
+            isTerminal: !model.isTranscriptTurnInFlight,
+            showsPrefillPlaceholder: model.isTranscriptTurnInFlight
                 && model.outputResponsePlainText.isEmpty,
             runIdentity: model.runIdentity)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -517,60 +513,35 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             firstSynchronize: Bool
         ) {
             guard let textView, let storage = textView.textStorage else { return }
-            let steps = planner.plan(TranscriptSyncPlanner.Input(
-                epoch: epoch, historyCount: history.count, contextBreak: contextBreak,
-                startedNewRun: startedNewRun, firstSynchronize: firstSynchronize))
-            guard !steps.isEmpty else { return }
-
-            storage.beginEditing()
+            let controller = documentController
+            let steps = controller.synchronizeHistory(
+                storage: storage, planner: &planner,
+                input: TranscriptSyncPlanner.Input(
+                    epoch: epoch, historyCount: history.count, contextBreak: contextBreak,
+                    startedNewRun: startedNewRun, firstSynchronize: firstSynchronize)
+            ) { index in
+                let pair = history[index]
+                _ = controller.synchronize(
+                    storage: storage, prompt: pair.user.text,
+                    response: pair.assistant.text, isTerminal: true,
+                    promptPrefix: Self.makePromptPrefix(pair.user.images),
+                    promptPrefixIdentifier: pair.user.images
+                        .map { "\($0.id.uuidString):\($0.sha256)" }
+                        .joined(separator: ","))
+            }
             for step in steps {
                 switch step {
                 case .reset:
-                    documentController.resetTranscript(storage: storage)
-                    promptPrefixIdentifier = ""
                     promptPrefix = NSAttributedString()
+                    promptPrefixIdentifier = ""
                     prompt = ""
-                case .sealDrawnTurn:
-                    let before = documentController.frozenLength
-                    documentController.sealTurn(storage: storage)
-                    if documentController.frozenLength == before {
-                        // It froze nothing, so the pair is still owed; consuming
-                        // it would drop a turn that is in the KV from the
-                        // transcript for good.
-                        planner.sealFoundNothingToFreeze(historyCount: history.count)
-                    }
-                case .drawPair(let index):
-                    guard index < history.count else { break }
-                    let pair = history[index]
-                    _ = documentController.synchronize(
-                        storage: storage,
-                        prompt: pair.user.text,
-                        response: pair.assistant.text,
-                        isTerminal: true,
-                        // Cached thumbnails only. A history image whose
-                        // thumbnail has not been decoded yet is dropped rather
-                        // than blocking the redraw; the same degradation the
-                        // live path already accepts.
-                        promptPrefix: Self.makePromptPrefix(pair.user.images),
-                        promptPrefixIdentifier: pair.user.images
-                            .map { "\($0.id.uuidString):\($0.sha256)" }
-                            .joined(separator: ","))
-                    documentController.sealTurn(storage: storage)
+                case .drawPair:
                     prompt = ""
                     promptPrefixIdentifier = ""
-                case .appendContextBreak:
-                    let before = documentController.frozenLength
-                    documentController.appendContextBreak(
-                        storage: storage,
-                        text: "Earlier turns are no longer in the model's context")
-                    // Only marked when it actually wrote. Latching it on a
-                    // refusal suppressed the break for the rest of the session.
-                    if documentController.frozenLength != before {
-                        planner.markContextBreakDrawn()
-                    }
+                case .sealDrawnTurn, .appendContextBreak:
+                    break
                 }
             }
-            storage.endEditing()
         }
 
         func scrollToBottom() {

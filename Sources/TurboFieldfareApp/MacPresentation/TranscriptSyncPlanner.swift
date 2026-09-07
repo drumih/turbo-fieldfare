@@ -49,7 +49,8 @@ public struct TranscriptSyncPlanner: Equatable, Sendable {
 
     public mutating func plan(_ input: Input) -> [TranscriptSyncStep] {
         var steps: [TranscriptSyncStep] = []
-        if renderedEpoch != input.epoch {
+        let sameEpoch = renderedEpoch == input.epoch
+        if !sameEpoch {
             steps.append(.reset)
             renderedEpoch = input.epoch
             renderedHistory = 0
@@ -57,7 +58,7 @@ public struct TranscriptSyncPlanner: Equatable, Sendable {
         }
 
         if renderedHistory < input.historyCount {
-            if input.startedNewRun,
+            if sameEpoch, input.startedNewRun,
                renderedHistory == input.historyCount - 1,
                !input.firstSynchronize {
                 steps.append(.sealDrawnTurn)

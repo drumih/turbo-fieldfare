@@ -542,6 +542,12 @@ public final class AppModel {
         isRunning || screen.isReplaying || sendTask != nil
     }
 
+    /// Activity whose prompt/output has been published to the transcript.
+    /// A queued send owns the composer before replacing the previous answer.
+    public var isTranscriptTurnInFlight: Bool {
+        isRunning || screen.isReplaying
+    }
+
     public var hasOutputTranscript: Bool {
         // Same split as `transcriptHistory`: while a stored copy is on screen,
         // the live conversation belongs to another chat and is not what decides
@@ -610,7 +616,7 @@ public final class AppModel {
     /// by replaying the chat being read, and for that stretch the live fields
     /// hold the message that started it — so suppressing them there drew an
     /// "Answer / Processing your prompt" with no question above it.
-    public var showsLiveTurn: Bool { isTurnInFlight || !isShowingStoredCopy }
+    public var showsLiveTurn: Bool { isTranscriptTurnInFlight || !isShowingStoredCopy }
 
     /// What the transcript is drawing, as an identity the incremental renderer
     /// can key on.

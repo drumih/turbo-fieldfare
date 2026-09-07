@@ -13,6 +13,20 @@ import Testing
               startedNewRun: startedNewRun, firstSynchronize: firstSynchronize)
     }
 
+    @Test(arguments: [0, 1, 2, 3])
+    func changedEpochDrawsHistoryInTheFirstUpdate(count: Int) {
+        var planner = TranscriptSyncPlanner()
+        let viewed = UUID()
+        _ = planner.plan(input(epoch: viewed, history: 1, firstSynchronize: true))
+        _ = planner.plan(input(epoch: viewed, history: 1, startedNewRun: true))
+        let restored = UUID()
+        let expected: [TranscriptSyncStep] = [.reset]
+            + (0..<count).map { .drawPair(index: $0) }
+        #expect(planner.plan(input(epoch: restored, history: count, startedNewRun: true))
+                == expected)
+        #expect(planner.plan(input(epoch: restored, history: count)).isEmpty)
+    }
+
     @Test func afreshCoordinatorDrawsTheHistoryItFinds() {
         var planner = TranscriptSyncPlanner()
         let epoch = UUID()
