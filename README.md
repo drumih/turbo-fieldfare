@@ -48,13 +48,12 @@ decode.
 ```bash
 git clone https://github.com/drumih/turbo-fieldfare.git
 cd turbo-fieldfare
-swift build -c release
-.build/release/TurboFieldfareMac
+Scripts/build_app.sh --install
+open /Applications/TurboFieldfare.app
 ```
 
-On the first run, Swift Package Manager downloads and builds the Swift packages
-required by the tokenizer. The complete release build includes the foreground
-Mac app and its sibling decode-service executable.
+The script downloads and builds the Swift packages required by the tokenizer,
+then packages the foreground Mac app and its sibling decode-service executable.
 
 When the app opens, choose **Download** and let TurboFieldfare fetch and repack
 the pinned model (about 15 GB). Once it is ready, choose **Load Model**, type
@@ -138,13 +137,21 @@ what it costs on an 8 GB machine.
 Clone the repository, then run the app from its root:
 
 ```bash
-swift build -c release
-.build/release/TurboFieldfareMac
+Scripts/build_app.sh
+open .build/TurboFieldfare.app
 ```
 
-Build the complete package so the app and its sibling decode service are both
-available. When launched from this checkout, the app stores the model in
-`scratch/gemma4.gturbo`.
+The script packages `TurboFieldfare.app` with its icon, resources, command-line
+tools, and sibling decode service. To copy it to `/Applications` instead, pass
+`--install` and open the installed app:
+
+```bash
+Scripts/build_app.sh --install
+open /Applications/TurboFieldfare.app
+```
+
+When launched from this checkout, the app stores the model in
+`/Users/<user>/Library/Application Support/TurboFieldfare/gemma4.gturbo`.
 
 #### Install the model
 
