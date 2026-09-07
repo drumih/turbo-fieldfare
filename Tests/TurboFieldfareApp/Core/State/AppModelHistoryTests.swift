@@ -3096,3 +3096,90 @@ func waitUntil(_ condition: @Sendable () async -> Bool) async throws {
         try await Task.sleep(for: .milliseconds(5))
     }
 }
+
+
+extension AppModelHistoryTests {
+    @MainActor
+    @Test func replayWaitsForPreviouslyCommittedTurnsToReachDisk() async throws {
+        let client = FakeInferenceClient(eventDelay: .milliseconds(20))
+        let (model, root) = try await readyModel(client)
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.promptText = "first"
+        model.send()
+        try await finish(model)
+        let id = try #require(model.storedConversationID)
+        let gate = HistoryListGate()
+        model.promptText = "second"
+        model.send()
+        try await waitUntil { client.isGenerating }
+        model.pendingTurnImageWrite = Task {
+            await gate.wait()
+            return TurnImageWriteOutcome()
+        }
+        try await waitUntil { await !model.isTurnInFlight }
+        try #require(!model.isTurnInFlight)
+        await gate.waitUntilEntered()
+        model.newChat()
+        model.openConversation(id: id)
+        try await waitUntil { await model.screen.document != nil }
+        model.promptText = "third"
+        model.send()
+        // Leave the save blocked long enough for an incorrect replay to finish.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(client.restoredLineages.isEmpty)
+        await gate.open()
+        await SendWaiting.turnEnds(model)
+        await model.awaitPendingPersistence()
+        let store = try #require(model.conversationStore)
+        let disk = try await store.open(id: id).records.compactMap { record -> String? in
+            if case .turn(let turn) = record, turn.role == .user { return turn.text }
+            return nil
+        }
+        let live = model.conversation.turns.filter { $0.role == .user }.map(\.text)
+        #expect(live == disk)
+    }
+
+    @MainActor
+    @Test func rewindWaitsForPreviouslyCommittedImagesBeforeSweeping() async throws {
+        let client = FakeInferenceClient(eventDelay: .milliseconds(20))
+        let (model, root) = try await readyModel(client)
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.promptText = "first"
+        model.send()
+        try await finish(model)
+        let id = try #require(model.storedConversationID)
+        let store = try #require(model.conversationStore)
+        let directory = await store.imagesURL(for: id)
+        let pixels = directory.appendingPathComponent("second.png")
+        let thumbnail = directory.appendingPathComponent("second.thumb.jpg")
+        try Data("pixels".utf8).write(to: pixels)
+        try Data("thumb".utf8).write(to: thumbnail)
+        let gate = HistoryListGate()
+        let outcome = imageOutcome("second")
+        model.promptText = "second"
+        model.send()
+        try await waitUntil { client.isGenerating }
+        model.pendingTurnImageWrite = Task {
+            await gate.wait()
+            return outcome
+        }
+        try await waitUntil { await !model.isTurnInFlight }
+        try #require(!model.isTurnInFlight)
+        await gate.waitUntilEntered()
+        let orphan = directory.appendingPathComponent("rewound.png")
+        try Data("orphan".utf8).write(to: orphan)
+        client.failNextGeneration(with: .unknown("injected rewind"))
+        model.promptText = "third"
+        model.send()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(FileManager.default.fileExists(atPath: pixels.path))
+        #expect(FileManager.default.fileExists(atPath: thumbnail.path))
+        await gate.open()
+        await SendWaiting.turnEnds(model)
+        let saved = try await store.open(id: id)
+        #expect(saved.meta.imageCount == 1)
+        #expect(model.promptText == "third")
+        #expect(!FileManager.default.fileExists(atPath: orphan.path))
+        #expect(FileManager.default.fileExists(atPath: pixels.path))
+    }
+}

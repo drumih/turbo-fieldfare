@@ -641,6 +641,16 @@ extension AppModel {
         let generation = binding.generation
         let document: ConversationDocument
         do {
+            // Completed exchanges can still be waiting on image storage. Replay
+            // must include that prefix before the next turn replaces the KV.
+            await awaitPendingPersistence()
+            guard !Task.isCancelled else {
+                return .replayNotStarted(id: id, error: .cancelled)
+            }
+            guard isCurrentConversationBinding(generation: generation, store: store) else {
+                return .replayNotStarted(id: id, error: .conversationRestoreFailed(
+                    "the model location changed while the conversation was being saved"))
+            }
             let opened = try await store.open(id: id)
             guard isCurrentConversationBinding(
                 generation: generation, store: store) else {
@@ -931,7 +941,15 @@ extension AppModel {
     /// whole transcript, and doing that on every turn would make each one cost
     /// more as the conversation grows.
     func sweepImagesOfRewoundTurn() async {
-        guard let store = conversationStore, let id = storedConversationID else {
+        guard let binding = conversationBinding, let id = storedConversationID else {
+            return
+        }
+        let store = binding.store
+        // An earlier committed turn may have written its images without yet
+        // appending their records. They are not orphans until that save settles.
+        await awaitPendingPersistence()
+        guard !Task.isCancelled,
+              isCurrentConversationBinding(generation: binding.generation, store: store) else {
             return
         }
         do {
