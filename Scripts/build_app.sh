@@ -34,7 +34,9 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$BUILD_DIR/TurboFieldfareMac" "$MACOS_DIR/TurboFieldfareMac"
 cp "$BUILD_DIR/TurboFieldfareDecodeService" "$MACOS_DIR/TurboFieldfareDecodeService"
-
+cp "$BUILD_DIR/TurboFieldfareCLI" "$MACOS_DIR/TurboFieldfareDecodeService"
+cp "$BUILD_DIR/TurboFieldfareRepack" "$MACOS_DIR/TurboFieldfareDecodeService"
+cp "$BUILD_DIR/TurboFieldfareServer" "$MACOS_DIR/TurboFieldfareDecodeService"
 cp -R "$BUILD_DIR"/*.bundle "$RESOURCES_DIR/"
 
 for size in 16 32 128 256 512; do
