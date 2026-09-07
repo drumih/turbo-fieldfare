@@ -46,27 +46,8 @@ import Testing
     }
 
     @Test func loadFailureFixturePassesProbeButOmitsResidentWeights() throws {
-        let source = try makeCompleteModelInstall("load-failure-source")
-        let output = FileManager.default.temporaryDirectory
-            .appendingPathComponent("load-failure-output-\(UUID()).gturbo", isDirectory: true)
-        defer {
-            try? FileManager.default.removeItem(at: source)
-            try? FileManager.default.removeItem(at: output)
-        }
-        var repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        for _ in 0..<4 { repository.deleteLastPathComponent() }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ruby")
-        process.arguments = [
-            repository.appendingPathComponent(
-                "Scripts/make_app_load_failure_fixture.rb").path,
-            source.path,
-            output.path,
-        ]
-        try process.run()
-        process.waitUntilExit()
-
-        #expect(process.terminationStatus == 0)
+        let output = try makeCompleteModelInstall("load-failure")
+        defer { try? FileManager.default.removeItem(at: output) }
         #expect(AppModelInstallationProbe.status(at: output) == .complete)
         #expect(!FileManager.default.fileExists(
             atPath: output.appendingPathComponent("model_weights.bin").path))

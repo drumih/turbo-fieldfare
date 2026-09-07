@@ -168,6 +168,9 @@ all affect decode speed.
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 61 / 516 | 19.09 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 430 / 780 | 16.50 tok/s | One submitted run |
 | [Benjamin Schilling](https://github.com/benjamin-schilling) · [issue #27](https://github.com/drumih/turbo-fieldfare/issues/27) | M3 Pro MacBook Pro | 18 GB | Internal SSD | 3,015 / 617 | 13.88 tok/s | One submitted run |
+| [castillovas-arch](https://github.com/castillovas-arch) · [issue #172](https://github.com/drumih/turbo-fieldfare/issues/172) | M4 Mac mini | 16 GB | Internal SSD | 61 / 489 | 11.649 tok/s | One measured run after one discarded warmup |
+| [castillovas-arch](https://github.com/castillovas-arch) · [issue #172](https://github.com/drumih/turbo-fieldfare/issues/172) | M4 Mac mini | 16 GB | Internal SSD | 430 / 760 | 10.119 tok/s | One measured run after one discarded warmup |
+| [castillovas-arch](https://github.com/castillovas-arch) · [issue #172](https://github.com/drumih/turbo-fieldfare/issues/172) | M4 Mac mini | 16 GB | Internal SSD | 3,015 / 594 | 8.058 tok/s | One measured run after one discarded warmup |
 | [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 61 / 516 | 10.847 tok/s | One submitted run |
 | [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 430 / 780 | 9.878 tok/s | One submitted run |
 | [gandalfk7](https://github.com/gandalfk7) · [issue #95](https://github.com/drumih/turbo-fieldfare/issues/95) | M4 Mac mini | 16 GB | Internal 256 GB SSD | 3,015 / 617 | 8.658 tok/s | One submitted run |
@@ -208,3 +211,9 @@ all affect decode speed.
 These submissions use the public community prompts and generate until the end
 of the model turn. Compare rows only when the prompt and generated-token counts
 match.
+
+[Issue #172](https://github.com/drumih/turbo-fieldfare/issues/172) reports macOS
+26.6.2 (25G83), Swift 6.3.3, and commit `6c044011c24dd55595af823cfef10f26b525cfca`.
+Each measured case ran in a fresh process with the sampling settings above;
+all three ended with `stop=endOfTurn`. The reporter reviewed the outputs and
+reported no loops, repeated blocks or protocol deviations.

@@ -60,7 +60,7 @@ and RDADVISE. The defaults are temperature `0.2`, Top-K `64`, and Top-P `0.95`.
 The app saves conversation history locally and retains one live FP16 KV lineage.
 Browsing the sidebar preserves that lineage; continuing another saved chat
 replays its recorded tokens and replaces it. See
-[Conversation history](docs/CONVERSATION_HISTORY.md) for storage and recovery.
+[Conversation history](README.md#conversation-history) for an overview.
 The HUD shows generation rate, context use, decode-service memory, and,
 on hover, cached-token reuse; Last run also shows time to first token and I/O.
 Use **New Chat** to clear the transcript, KV lineage, gauge, and retained
