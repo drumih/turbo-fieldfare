@@ -7,6 +7,14 @@ BUILD_DIR="$ROOT_DIR/.build/release"
 APP_DIR="$ROOT_DIR/.build/TurboFieldfare.app"
 MACOS_DIR="$APP_DIR/Contents/MacOS"
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
+ICON_SOURCE="$ROOT_DIR/Sources/TurboFieldfareApp/Mac/Resources/turbofieldfare-app-icon.png"
+ICON_FILE="$RESOURCES_DIR/TurboFieldfare.icns"
+ICONSET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/turbofieldfare-icon.XXXXXX.iconset")"
+
+cleanup() {
+    rm -rf "$ICONSET_DIR"
+}
+trap cleanup EXIT
 
 INSTALL=false
 
@@ -29,11 +37,20 @@ cp "$BUILD_DIR/TurboFieldfareDecodeService" "$MACOS_DIR/TurboFieldfareDecodeServ
 
 cp -R "$BUILD_DIR"/*.bundle "$RESOURCES_DIR/"
 
+for size in 16 32 128 256 512; do
+    double_size=$((size * 2))
+    sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET_DIR/icon_${size}x${size}.png" >/dev/null
+    sips -z "$double_size" "$double_size" "$ICON_SOURCE" \
+        --out "$ICONSET_DIR/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET_DIR" -o "$ICON_FILE"
+
 plutil -create xml1 "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleDisplayName -string TurboFieldfare "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleName -string TurboFieldfare "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleIdentifier -string com.turbofieldfare.app "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleExecutable -string TurboFieldfareMac "$APP_DIR/Contents/Info.plist"
+plutil -insert CFBundleIconFile -string TurboFieldfare.icns "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundlePackageType -string APPL "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleSignature -string '????' "$APP_DIR/Contents/Info.plist"
 plutil -insert CFBundleShortVersionString -string 0.7.2 "$APP_DIR/Contents/Info.plist"
