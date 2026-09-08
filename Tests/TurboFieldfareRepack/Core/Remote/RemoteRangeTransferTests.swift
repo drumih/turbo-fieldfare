@@ -278,6 +278,74 @@ extension RemotePayloadCopyTests {
         #expect(second.value(forHTTPHeaderField: "Range") == "bytes=0-3")
     }
 
+    @Test func redirectPolicyForwardsAuthorizationToAllowedCDNHost() throws {
+        var original = rangeRequest(length: 4)
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        var policy = RemoteRedirectPolicy(
+            originalRequest: original,
+            maximumRedirects: 3)
+        let sourceResponse = HTTPURLResponse(
+            url: original.url!,
+            statusCode: 302,
+            httpVersion: nil,
+            headerFields: nil)!
+
+        var cdnRequest = URLRequest(
+            url: URL(string: "https://cdn-lfs.huggingface.co/signed?token=private")!)
+        cdnRequest.httpMethod = "GET"
+        let cdnRedirect = try policy.request(
+            response: sourceResponse,
+            proposedRequest: cdnRequest)
+        #expect(cdnRedirect?.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        #expect(cdnRedirect?.value(forHTTPHeaderField: "Range") == "bytes=0-3")
+
+        let unknownResponse = HTTPURLResponse(
+            url: cdnRequest.url!,
+            statusCode: 302,
+            httpVersion: nil,
+            headerFields: nil)!
+        var unknownRequest = URLRequest(
+            url: URL(string: "https://evil.test/stolen")!)
+        unknownRequest.httpMethod = "GET"
+        let unknownRedirect = try policy.request(
+            response: unknownResponse,
+            proposedRequest: unknownRequest)
+        #expect(unknownRedirect?.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
+    @Test func redirectPolicyStripsAuthAfterAllowedCDNThenUnknownHost() throws {
+        var original = rangeRequest(length: 4)
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        var policy = RemoteRedirectPolicy(
+            originalRequest: original,
+            maximumRedirects: 3)
+        let sourceResponse = HTTPURLResponse(
+            url: original.url!,
+            statusCode: 302,
+            httpVersion: nil,
+            headerFields: nil)!
+
+        var cdnRequest = URLRequest(
+            url: URL(string: "https://cdn-lfs.huggingface.co/signed")!)
+        cdnRequest.httpMethod = "GET"
+        _ = try policy.request(
+            response: sourceResponse,
+            proposedRequest: cdnRequest)
+
+        let cdnResponse = HTTPURLResponse(
+            url: cdnRequest.url!,
+            statusCode: 302,
+            httpVersion: nil,
+            headerFields: nil)!
+        var unknownRequest = URLRequest(
+            url: URL(string: "https://evil.test/stolen")!)
+        unknownRequest.httpMethod = "GET"
+        let result = try policy.request(
+            response: cdnResponse,
+            proposedRequest: unknownRequest)
+        #expect(result?.value(forHTTPHeaderField: "Authorization") == nil)
+    }
+
     @Test func redirectPolicyRejectsNonHTTPSAndExcessHops() throws {
         let original = rangeRequest(length: 1)
         let response = HTTPURLResponse(
