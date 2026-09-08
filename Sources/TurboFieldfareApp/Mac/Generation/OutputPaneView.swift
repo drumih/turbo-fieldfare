@@ -882,7 +882,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     }
 }
 
-#if DEBUG
+#if DEBUG && !TURBOFIELDFARE_NO_PREVIEWS
 private struct TranscriptPreview: View {
     let response: String
     let isTerminal: Bool
