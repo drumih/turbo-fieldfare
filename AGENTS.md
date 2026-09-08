@@ -31,7 +31,9 @@ The installer streams the pinned model without staging the full source checkpoin
 ## Local server
 
 Follow the [server guide](docs/OPENAI_SERVER.md) for launch commands, health
-checks, client setup, prompt reuse, tool loops, and supported API behavior.
+checks, client setup, prompt reuse, tool loops, and supported API behavior. For
+a single-run agent prompt that installs TurboFieldfare and registers the
+`turbofieldfare-api` skill, see the [Agent guide](docs/AGENT_GUIDE.md).
 Apply the model-process checks below first; never start a second model process
 or terminate an existing one.
 
