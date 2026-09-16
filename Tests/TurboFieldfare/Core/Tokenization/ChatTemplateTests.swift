@@ -107,4 +107,25 @@ struct ChatTemplateTests {
         let p = try tok.applyChatTemplate([])
         #expect(p == "<bos><|turn>model\n<|channel>thought\n<channel|>")
     }
+
+    @Test("Thinking enabled injects think token and leaves model turn open without thought channel suppression")
+    func thinkingEnabledWithoutSystemMessage() throws {
+        let p = try tok.applyChatTemplate([Message(role: .user, content: "Hi")], enableThinking: true)
+        #expect(p.hasPrefix("<bos><|turn>system\n<|think|>\n<turn|>\n"))
+        #expect(p.contains("<|turn>user\nHi<turn|>\n"))
+        #expect(p.hasSuffix("<|turn>model\n"))
+        #expect(!p.contains("<|channel>thought\n<channel|>"))
+    }
+
+    @Test("Thinking enabled with existing system message injects think token into system turn")
+    func thinkingEnabledWithSystemMessage() throws {
+        let p = try tok.applyChatTemplate([
+            Message(role: .system, content: "Be concise."),
+            Message(role: .user, content: "Hi"),
+        ], enableThinking: true)
+        #expect(p.hasPrefix("<bos><|turn>system\n<|think|>\nBe concise.<turn|>\n"))
+        #expect(p.contains("<|turn>user\nHi<turn|>\n"))
+        #expect(p.hasSuffix("<|turn>model\n"))
+        #expect(!p.contains("<|channel>thought\n<channel|>"))
+    }
 }

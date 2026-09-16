@@ -654,7 +654,7 @@ struct OpenAIValidationTests {
     }
 
     @Test(arguments: [
-        "logit_bias", "top_logprobs", "reasoning_effort", "verbosity", "modalities",
+        "logit_bias", "top_logprobs", "verbosity", "modalities",
         "audio", "prediction", "web_search_options",
     ])
     func knownUnsupportedFieldsAreRefusedAsUnsupportedNotUnknown(_ key: String) {
@@ -890,6 +890,29 @@ struct GemmaToolCallTests {
         #expect(throws: GemmaToolCallParserError.self) {
             try decoder.consumeTail("x")
         }
+    }
+
+    @Test func emitsThoughtBlockWhenEnabled() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [], emitThought: true)
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "deep thinking") == [
+            .thought("deep thinking"),
+        ])
+        #expect(try decoder.consume(tokenID: tokenizer.channelEndID, delta: "").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "visible answer") == [
+            .content("visible answer"),
+        ])
+        #expect(decoder.reasoningTokens == 4)
+    }
+
+    @Test func tailDuringThoughtChannelEmitsThoughtWhenEnabled() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [], emitThought: true)
+        #expect(try decoder.consume(tokenID: tokenizer.channelStartID, delta: "").isEmpty)
+        #expect(try decoder.consume(tokenID: tokenizer.bosID, delta: "thought\n").isEmpty)
+        #expect(try decoder.consumeTail("secret thought") == [.thought("secret thought")])
     }
 }
 
