@@ -140,7 +140,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
     private let model: Model
     private let ctx: MetalContext
-    private let kv: KVCacheManager?
+    /// The KV lineage every read and write below goes through: the active slot
+    /// of `kvSlots`. Kept as a stored property rather than a lookup so the
+    /// decode hot path costs what it did when there was only ever one.
+    private var kv: KVCacheManager?
     private let cfg: ArchConfig
 
     // Kernels
@@ -226,8 +229,45 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private var rdadviseAdaptiveState: RDAdviceAdaptivePolicyState
     private var rdadviseAdaptivePosition: Int = -1
     private var rdadviseAdaptivePositionBytes: UInt64 = 0
+
+    /// How a KV lineage is built here, kept so slots past the first can be
+    /// allocated the first time they are used rather than all at load. A server
+    /// configured for more lineages than its clients turn out to open pays only
+    /// for the ones they do.
+    private struct KVSlotGeometry {
+        let device: MTLDevice
+        let config: ArchConfig
+        let maxContext: Int
+        let fp16RingEnabled: Bool
+        let slidingWindow: Int
+        let maxPrefillChunkTokens: Int
+
+        func makeCache() throws -> KVCacheManager {
+            try KVCacheManager(device: device,
+                               config: config,
+                               maxContext: maxContext,
+                               fp16RingEnabled: fp16RingEnabled,
+                               slidingWindow: slidingWindow,
+                               maxPrefillChunkTokens: maxPrefillChunkTokens)
+        }
+
+        var storageBytes: Int {
+            KVCacheManager.storageBytes(config: config,
+                                        maxContext: maxContext,
+                                        fp16RingEnabled: fp16RingEnabled,
+                                        slidingWindow: slidingWindow,
+                                        maxPrefillChunkTokens: maxPrefillChunkTokens)
+        }
+    }
+
+    private let kvGeometry: KVSlotGeometry
+    /// One retained lineage per slot; nil until the slot is first activated.
+    private var kvSlots: [KVCacheManager?]
+
     public init(model: Model, context: MetalContext, maxContext: Int,
-                runtimeConfiguration: RuntimeConfiguration = .production) throws {
+                runtimeConfiguration: RuntimeConfiguration = .production,
+                kvSlotCount: Int = 1) throws {
+        precondition(kvSlotCount > 0, "kvSlotCount must be positive")
         self.model = model
         self.ctx = context
         self.cfg = model.config
@@ -242,14 +282,22 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 byteCap: Self.rdadviseAdaptiveByteCap,
                 slowCallNanos: Self.rdadviseAdaptiveSlowCallNanos))
         self.rdadviseEnabled = runtimeConfiguration.rdadviseEnabled
-        self.kv = try KVCacheManager(device: context.device,
-                                     config: cfg,
-                                     maxContext: maxContext,
-                                     fp16RingEnabled: useFP16Ring,
-                                     slidingWindow: cfg.slidingWindow,
-                                     maxPrefillChunkTokens: max(
-                                        PrefillRuntimeConfig.maxChunkTokens,
-                                        VisionConfig().maximumPooledTokens))
+        let kvGeometry = KVSlotGeometry(
+            device: context.device,
+            config: model.config,
+            maxContext: maxContext,
+            fp16RingEnabled: useFP16Ring,
+            slidingWindow: model.config.slidingWindow,
+            maxPrefillChunkTokens: max(
+                PrefillRuntimeConfig.maxChunkTokens,
+                VisionConfig().maximumPooledTokens))
+        self.kvGeometry = kvGeometry
+        // Slot 0 is allocated here so a single-slot runner allocates exactly
+        // when it always did; the rest wait for a first activation.
+        let first = try kvGeometry.makeCache()
+        self.kvSlots = [KVCacheManager?](repeating: nil, count: kvSlotCount)
+        self.kvSlots[0] = first
+        self.kv = first
 
         self.embedInt4 = try EmbedLookupInt4(context: context)
         self.rms       = try RMSNorm(context: context)
@@ -381,6 +429,50 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     public func reset() {
         kv?.reset()
         resetTransientState()
+    }
+
+    /// How many KV lineages this runner can retain at once.
+    public var kvSlotCount: Int { kvSlots.count }
+
+    /// Which lineage is currently active.
+    public private(set) var activeKVSlot: Int = 0
+
+    /// Bytes of KV storage one slot allocates. The figure is the geometry's,
+    /// not a measurement, so it can be reported before a slot exists.
+    public var kvSlotStorageBytes: Int { kvGeometry.storageBytes }
+
+    /// Makes `index` the lineage every later prefill, decode and reset reads
+    /// and writes, allocating its storage if this is its first use.
+    ///
+    /// Switching lineages is only sound between completions: the transient
+    /// prefill and read-advice state below describes the slot being left, so it
+    /// is dropped here rather than carried into the next one. The KV itself is
+    /// untouched — that is the point, and it is what lets one caller's
+    /// conversation survive another caller's request.
+    public func activateKVSlot(_ index: Int) throws {
+        guard kvSlots.indices.contains(index) else {
+            throw PrefillError.prefillCursorMismatch(
+                "KV slot \(index) is outside 0..<\(kvSlots.count)")
+        }
+        let cache: KVCacheManager
+        if let existing = kvSlots[index] {
+            cache = existing
+        } else {
+            cache = try kvGeometry.makeCache()
+            kvSlots[index] = cache
+        }
+        activeKVSlot = index
+        kv = cache
+        resetTransientState()
+    }
+
+    /// Drops a slot's cached positions and returns its pages to the OS, whether
+    /// or not it is the active one. A server retiring a conversation has no
+    /// reason to make its lineage active first.
+    public func resetKVSlot(_ index: Int) {
+        guard kvSlots.indices.contains(index) else { return }
+        kvSlots[index]?.reset()
+        if index == activeKVSlot { resetTransientState() }
     }
 
     /// Abandons the newest KV tokens so a stateful conversation can resume at

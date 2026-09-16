@@ -269,6 +269,39 @@ private actor FailingServerBackend: ServerInferenceBackend {
 
 @Suite("OpenAI HTTP server", .serialized)
 struct HTTPServerTests {
+    /// A client cannot tell a server that reserves a slot per
+    /// `prompt_cache_key` from one that accepts the field and ignores it — both
+    /// answer 200 to the same request, which is exactly what every version
+    /// before slots did. `/health` is where that is discoverable.
+    @Test func healthReportsHowManyConversationsAreRetained() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend(),
+            promptCacheSlots: 3)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        defer { Task { try? await server.shutdown() } }
+
+        let health = String(decoding: try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!).0, as: UTF8.self)
+        #expect(health.contains(#""prompt_cache_slots":3"#))
+    }
+
+    @Test func healthDefaultsToOneRetainedConversation() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        defer { Task { try? await server.shutdown() } }
+
+        let health = String(decoding: try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!).0, as: UTF8.self)
+        #expect(health.contains(#""prompt_cache_slots":1"#))
+    }
+
     @Test func healthModelsAndNonStreamingCompletion() async throws {
         let server = TurboFieldfareHTTPServer(
             modelID: "test-model",
