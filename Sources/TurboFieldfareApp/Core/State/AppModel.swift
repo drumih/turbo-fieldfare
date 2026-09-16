@@ -72,6 +72,7 @@ public final class AppModel {
     public var topP: Double = 0.95
     public private(set) var newlineShortcut: AppNewlineShortcut = .return
     public private(set) var showPromptExamples: Bool = true
+    public private(set) var textSize: AppTextSize = .standard
     /// Whether the list of chats is showing. Persisted, so the window comes
     /// back the way it was left.
     public private(set) var isSidebarVisible: Bool = true
@@ -192,7 +193,6 @@ public final class AppModel {
     var conversationBindingGeneration: UInt64 = 0
     let conversationIdentityProvider: @Sendable (URL) throws -> ConversationIdentity
     let conversationStoreProvider: @Sendable (URL) -> ConversationStore
-    var pendingRestoredConversationID: UUID?
     var pendingServiceRecoveryConversationID: UUID?
     /// Stored copies of the in-flight turn's images, written while the model is
     /// generating so the wait is not paid twice.
@@ -249,10 +249,10 @@ public final class AppModel {
         self.topP = settings.topP
         self.newlineShortcut = settings.newlineShortcut
         self.showPromptExamples = settings.showPromptExamples
+        self.textSize = settings.textSize
         self.isSidebarVisible = settings.sidebarVisible
         self.isInspectorVisible = settings.inspectorVisible
         self.loadModelOnLaunch = settings.loadModelOnLaunch
-        self.pendingRestoredConversationID = settings.selectedConversationID
         self.installationStatus = AppModelInstallationProbe.status(at: directory)
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
         self.client = client
@@ -825,6 +825,12 @@ public final class AppModel {
     public func setNewlineShortcut(_ shortcut: AppNewlineShortcut) {
         guard newlineShortcut != shortcut else { return }
         newlineShortcut = shortcut
+        persistSettings()
+    }
+
+    public func setTextSize(_ size: AppTextSize) {
+        guard textSize != size else { return }
+        textSize = size
         persistSettings()
     }
 
@@ -1948,10 +1954,10 @@ public final class AppModel {
         topP = settings.topP
         newlineShortcut = settings.newlineShortcut
         showPromptExamples = settings.showPromptExamples
+        textSize = settings.textSize
         isSidebarVisible = settings.sidebarVisible
         isInspectorVisible = settings.inspectorVisible
         loadModelOnLaunch = settings.loadModelOnLaunch
-        pendingRestoredConversationID = settings.selectedConversationID
     }
 
     func persistSettings() {
@@ -1967,12 +1973,12 @@ public final class AppModel {
             prefillEnabled: runtimeOptions.prefillEnabled,
             newlineShortcut: newlineShortcut,
             showPromptExamples: showPromptExamples,
+            textSize: textSize,
             sidebarVisible: isSidebarVisible,
             inspectorVisible: isInspectorVisible,
             visionResidencyPolicy: runtimeOptions.visionResidencyPolicy,
             rdadvisePolicy: runtimeOptions.rdadvisePolicy,
-            loadModelOnLaunch: loadModelOnLaunch,
-            selectedConversationID: history.selection)
+            loadModelOnLaunch: loadModelOnLaunch)
         let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
         do {
             try MacAppSettingsFileStore.save(settings, forModelDirectory: modelDirectory)

@@ -138,12 +138,6 @@ final class HistoryHarness {
             forceLogitsHead: true) { _ in }
         try await waitForWritableStore()
         try await settle("start")
-        if let restored = reference.reading {
-            try await settle("restore selection") {
-                model.screen.conversationID == restored
-                    && model.screen.document != nil
-            }
-        }
     }
 
     private func waitForWritableStore() async throws {

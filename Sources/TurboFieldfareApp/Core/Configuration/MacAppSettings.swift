@@ -16,6 +16,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var prefillEnabled: Bool = true
     var newlineShortcut: AppNewlineShortcut = .return
     var showPromptExamples: Bool = true
+    var textSize: AppTextSize = .standard
     /// Whether the list of chats is showing. Remembered because hiding it is a
     /// choice about how the window looks, and a window that forgot it every
     /// launch would be making that choice again for the user each time.
@@ -26,7 +27,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     var visionResidencyPolicy: VisionResidencyPolicy = .onDemand
     var rdadvisePolicy: AppRDAdvicePolicy = .off
     var loadModelOnLaunch: Bool = false
-    var selectedConversationID: UUID?
 
     private enum CodingKeys: String, CodingKey {
         case version
@@ -40,12 +40,12 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case prefillEnabled
         case newlineShortcut
         case showPromptExamples
+        case textSize
         case sidebarVisible
         case inspectorVisible
         case visionResidencyPolicy
         case rdadvisePolicy
         case loadModelOnLaunch
-        case selectedConversationID
     }
 
     init(version: Int = currentVersion,
@@ -59,12 +59,12 @@ struct MacAppSettings: Codable, Equatable, Sendable {
          prefillEnabled: Bool = true,
          newlineShortcut: AppNewlineShortcut = .return,
          showPromptExamples: Bool = true,
+         textSize: AppTextSize = .standard,
          sidebarVisible: Bool = true,
          inspectorVisible: Bool = true,
          visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
          rdadvisePolicy: AppRDAdvicePolicy = .off,
-         loadModelOnLaunch: Bool = false,
-         selectedConversationID: UUID? = nil) {
+         loadModelOnLaunch: Bool = false) {
         self.version = version
         self.contextTokens = contextTokens
         self.expertCacheSlots = expertCacheSlots
@@ -76,12 +76,12 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         self.prefillEnabled = prefillEnabled
         self.newlineShortcut = newlineShortcut
         self.showPromptExamples = showPromptExamples
+        self.textSize = textSize
         self.sidebarVisible = sidebarVisible
         self.inspectorVisible = inspectorVisible
         self.visionResidencyPolicy = visionResidencyPolicy
         self.rdadvisePolicy = rdadvisePolicy
         self.loadModelOnLaunch = loadModelOnLaunch
-        self.selectedConversationID = selectedConversationID
     }
 
     init(from decoder: Decoder) throws {
@@ -101,6 +101,18 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         showPromptExamples = try container.decodeIfPresent(
             Bool.self,
             forKey: .showPromptExamples) ?? true
+        // A damaged appearance preference must not reach settings-wide recovery,
+        // which discards the file and would reset unrelated runtime choices.
+        // Foundation can throw a non-DecodingError for a fractional integer.
+        if container.contains(.textSize) {
+            do {
+                textSize = try container.decode(AppTextSize.self, forKey: .textSize)
+            } catch {
+                FileHandle.standardError.write(Data(
+                    "Invalid Mac app setting textSize: unsupported value or type; using 100%.\n".utf8))
+                textSize = .standard
+            }
+        }
         // Additive, like every field around it: absent means the default, so
         // no version bump and no rewrite of a file an older build can still
         // read.
@@ -119,9 +131,6 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         loadModelOnLaunch = try container.decodeIfPresent(
             Bool.self,
             forKey: .loadModelOnLaunch) ?? false
-        selectedConversationID = try container.decodeIfPresent(
-            UUID.self,
-            forKey: .selectedConversationID)
     }
 
     func isValid() -> Bool {

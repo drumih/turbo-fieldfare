@@ -1188,7 +1188,7 @@ import TurboFieldfare
     }
 
     @MainActor
-    @Test func relaunchRestoresTheSelectedTranscriptWhileSidebarStaysHidden() async throws {
+    @Test func relaunchStartsEmptyAndSavedChatOpensOnlyWhenSelected() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("history-selection-\(UUID())", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1216,6 +1216,14 @@ import TurboFieldfare
         first = nil
         try await Task.sleep(for: .milliseconds(20))
 
+        // Older builds persisted the selected row. It must not reopen a chat
+        // on launch, even when the sidebar is hidden.
+        let settingsURL = MacAppSettingsFileStore.fileURL(forModelDirectory: directory)
+        var settings = try #require(JSONSerialization.jsonObject(
+            with: Data(contentsOf: settingsURL)) as? [String: Any])
+        settings["selectedConversationID"] = selected.uuidString
+        try JSONSerialization.data(withJSONObject: settings).write(to: settingsURL)
+
         let second = AppModel(
             modelDirectory: directory,
             client: FakeInferenceClient(eventDelay: .milliseconds(1)),
@@ -1223,9 +1231,18 @@ import TurboFieldfare
         second.conversationIdentity = Self.identity
         second.installationStatus = .complete
         try await second.waitForHistory(count: 1)
-        try await waitUntil { await second.screen.document != nil }
+        await second.refreshHistory()
 
         #expect(!second.isSidebarVisible)
+        #expect(second.history.selection == nil)
+        #expect(second.screen.document == nil)
+        #expect(second.transcriptHistory.isEmpty)
+        #expect(second.promptText.isEmpty)
+        #expect(second.outputText.isEmpty)
+        #expect(second.history.entry(selected) != nil)
+
+        second.openConversation(id: selected)
+        try await waitUntil { await second.screen.document != nil }
         #expect(second.history.selection == selected)
         #expect(second.transcriptHistory.map(\.user.text) == ["remember this"])
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import TurboFieldfareAppCore
 
 /// Every control the Mac app exposes to an acceptance pass, named once.
 ///
@@ -9,6 +10,23 @@ import SwiftUI
 /// `Scripts/check_app_case_coverage.rb` fails when one has no case in the
 /// `mac-app-acceptance` skill, so a new control cannot land without its case.
 public enum AccessibilityID: String, CaseIterable, Sendable {
+    case settingsTextSize = "settings.textSize"
+    case settingsTextSizeStandard = "settings.textSize.standard"
+    case settingsTextSizeLarge = "settings.textSize.large"
+    case settingsTextSizeLarger = "settings.textSize.larger"
+    case settingsTextSizeExtraLarge = "settings.textSize.extraLarge"
+    case settingsTextSizeLargest = "settings.textSize.largest"
+
+    public static func textSizeOption(_ size: AppTextSize) -> AccessibilityID {
+        switch size {
+        case .standard: .settingsTextSizeStandard
+        case .large: .settingsTextSizeLarge
+        case .larger: .settingsTextSizeLarger
+        case .extraLarge: .settingsTextSizeExtraLarge
+        case .largest: .settingsTextSizeLargest
+        }
+    }
+
     case stripSidebar = "strip.sidebar"
     case stripNewChat = "strip.newChat"
     case stripInspector = "strip.inspector"

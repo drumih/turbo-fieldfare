@@ -65,19 +65,21 @@ public struct TranscriptSyncPlanner: Equatable, Sendable {
                 renderedHistory = input.historyCount
             } else {
                 while renderedHistory < input.historyCount {
+                    if input.contextBreak == renderedHistory, !renderedContextBreak {
+                        steps.append(.appendContextBreak)
+                    }
                     steps.append(.drawPair(index: renderedHistory))
                     renderedHistory += 1
                 }
             }
         }
 
-        // After the history, not before it. Drawing the break first put it above
-        // the very turns it is supposed to sit under, and on the pass that
-        // resets for a new epoch it was skipped entirely — leaving archived
-        // turns on screen unmarked until some unrelated change forced another
-        // pass.
+        // Replay can include turns on both sides of the boundary; the loop
+        // inserts an interior break before its next pair. End boundaries and
+        // a break whose previous append was refused still need an attempt here.
         if let contextBreak = input.contextBreak,
            !renderedContextBreak,
+           !steps.contains(.appendContextBreak),
            renderedHistory >= contextBreak {
             steps.append(.appendContextBreak)
         }

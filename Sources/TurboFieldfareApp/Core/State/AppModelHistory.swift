@@ -69,7 +69,7 @@ extension AppModel {
         pendingServiceRecoveryConversationID = nil
         machine = ConversationScreenMachine()
         history.replaceEntries([])
-        history.selection = pendingRestoredConversationID
+        history.selection = nil
         history.setUnreadableCount(0)
         history.setDiscardedLegacyTrashCount(0)
         history.setReadOnlyStore(false)
@@ -169,15 +169,6 @@ extension AppModel {
                     }.joined(separator: ", "))
         }
         history.replaceEntries(entries)
-        if let saved = pendingRestoredConversationID {
-            pendingRestoredConversationID = nil
-            if history.entry(saved) != nil {
-                openConversation(id: saved)
-            } else {
-                history.selection = nil
-                persistHistorySelection()
-            }
-        }
     }
 
     /// Says so when a conversation's `conversation.json` had to be rebuilt.
@@ -239,7 +230,7 @@ extension AppModel {
                 sampling: currentSampling())
             storedConversationID = meta.id
             history.selection = meta.id
-            persistHistorySelection()
+            persistSettings()
             await refreshHistory()
             return meta.id
         } catch {
@@ -492,7 +483,7 @@ extension AppModel {
                     self.error = .conversationPersistenceFailed("\(error)")
                     storedConversationID = nil
                     history.selection = nil
-                    persistHistorySelection()
+                    persistSettings()
                 }
             }
         }
@@ -855,7 +846,7 @@ extension AppModel {
             switch effect {
             case .select(let id):
                 history.selection = id
-                persistHistorySelection()
+                persistSettings()
             case .dropOutOfContextTurns:
                 conversation.dropOutOfContextPairs()
             case .loadDocument(let id, let renderID):
@@ -889,10 +880,6 @@ extension AppModel {
                                 withdrawingFromTranscript: true)
             }
         }
-    }
-
-    private func persistHistorySelection() {
-        persistSettings()
     }
 
     /// The held chat's turns move out of context and keep their pictures:

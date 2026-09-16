@@ -167,13 +167,11 @@ struct HistoryReferenceModel {
         stoppedTurnOnScreen = nil
     }
 
-    /// Quitting and starting again. The store and selected row survive; no KV
-    /// does, so the selection returns as a stored copy awaiting replay.
+    /// Relaunch keeps saved conversations and preferences, but starts an empty chat.
     mutating func relaunch() {
-        let selected = reading ?? held
         held = nil
         heldIsInKV = false
-        reading = selected.flatMap { conversations[$0] == nil ? nil : $0 }
+        reading = nil
         outOfContext = []
         stoppedTurnOnScreen = nil
         maxContextTokens = persistedContextTokens

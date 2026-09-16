@@ -109,21 +109,19 @@ import Testing
         #expect(decoded.version == MacAppSettings.currentVersion)
     }
 
-    @Test func selectedConversationRoundTripsAndIsAdditive() throws {
-        let id = UUID()
-        let initial = MacAppSettings(selectedConversationID: id)
+    @Test(arguments: ["null", "42", "\"invalid\"", "\"00000000-0000-0000-0000-000000000001\""])
+    func obsoleteSelectionIsIgnoredWithoutResettingPreferences(_ selection: String) throws {
+        let initial = MacAppSettings(contextTokens: 4_096, textSize: .largest, sidebarVisible: false)
+        var json = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(initial)) as? [String: Any])
+        json["selectedConversationID"] = try JSONSerialization.jsonObject(
+            with: Data(selection.utf8), options: .fragmentsAllowed)
         let decoded = try JSONDecoder().decode(
-            MacAppSettings.self, from: try JSONEncoder().encode(initial))
-        #expect(decoded.selectedConversationID == id)
-
-        let oldJSON = """
-        {"version":2,"contextTokens":8192,"expertCacheSlots":16,
-        "temperature":0.2,"topKEnabled":true,"topK":64,"topPEnabled":true,
-        "topP":0.95,"prefillEnabled":true}
-        """
-        let old = try JSONDecoder().decode(
-            MacAppSettings.self, from: Data(oldJSON.utf8))
-        #expect(old.selectedConversationID == nil)
+            MacAppSettings.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == initial)
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(decoded)) as? [String: Any])
+        #expect(encoded["selectedConversationID"] == nil)
     }
 
     @MainActor
@@ -137,24 +135,6 @@ import Testing
 
         let saved = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
         #expect(saved.contextTokens == 4_096)
-    }
-
-    @MainActor
-    @Test func unknownRestoredSelectionIsClearedFromSettings() async throws {
-        let root = try makeTemporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let directory = root.appendingPathComponent("model.gturbo", isDirectory: true)
-        try MacAppSettingsFileStore.save(
-            MacAppSettings(selectedConversationID: UUID()),
-            forModelDirectory: directory)
-
-        let model = AppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
-        try await waitUntil {
-            MacAppSettingsFileStore.loadOrCreate(
-                forModelDirectory: directory).selectedConversationID == nil
-        }
-
-        #expect(model.history.selection == nil)
     }
 
     /// The Inspector's visibility is remembered on the same terms as the

@@ -117,15 +117,21 @@ public final class InstructionTranscriptDocumentController {
     private var prefillPlaceholderRange: NSRange?
     private var prefillDotCount = 0
 
-    private let renderer: any TranscriptBlockRendering
+    private var renderer: any TranscriptBlockRendering
+    public private(set) var typography: ConversationTypography
+    private let environment: [String: String]
     private let progressiveRendering: Bool
     private var progressive = ProgressiveState()
 
     public init(
-        renderer: any TranscriptBlockRendering = ResponseMarkdownRenderer(),
+        renderer: (any TranscriptBlockRendering)? = nil,
+        typography: ConversationTypography = .init(),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        self.renderer = renderer
+        self.typography = typography
+        self.environment = environment
+        self.renderer = renderer ?? ResponseMarkdownRenderer(
+            typography: typography, environment: environment)
         progressiveRendering = environment["TURBO_FIELDFARE_PROGRESSIVE_RENDER"] != "0"
     }
 
@@ -346,7 +352,7 @@ public final class InstructionTranscriptDocumentController {
         prefillDotCount = (prefillDotCount + 1) % 4
         let replacement = NSAttributedString(
             string: Self.prefillPlaceholder(dotCount: prefillDotCount),
-            attributes: Self.prefillPlaceholderAttributes())
+            attributes: prefillPlaceholderAttributes())
         storage.replaceCharacters(in: range, with: replacement)
         range.length = replacement.length
         prefillPlaceholderRange = range
@@ -359,7 +365,7 @@ public final class InstructionTranscriptDocumentController {
     ) -> Mutation {
         storage.append(NSAttributedString(
             string: delta,
-            attributes: Self.responseAttributes()))
+            attributes: responseAttributes()))
         assistantRange.length += (delta as NSString).length
         return .appended
     }
@@ -376,35 +382,35 @@ public final class InstructionTranscriptDocumentController {
         if !prompt.isEmpty || promptPrefix.length > 0 {
             document.append(NSAttributedString(
                 string: "You\n",
-                attributes: Self.userLabelAttributes()))
+                attributes: userLabelAttributes()))
             if promptPrefix.length > 0 {
                 document.append(promptPrefix)
                 if !prompt.isEmpty {
                     document.append(NSAttributedString(
                         string: "\n\n",
-                        attributes: Self.promptAttributes()))
+                        attributes: promptAttributes()))
                 }
             }
             if !prompt.isEmpty {
                 document.append(NSAttributedString(
                     string: prompt,
-                    attributes: Self.promptAttributes()))
+                    attributes: promptAttributes()))
             }
             document.append(NSAttributedString(
                 string: "\n\n",
-                attributes: Self.promptAttributes()))
+                attributes: promptAttributes()))
         }
         // Recovery can clear the live turn while leaving completed history.
         if !prompt.isEmpty || promptPrefix.length > 0
             || !response.isEmpty || showsPrefillPlaceholder {
             document.append(NSAttributedString(
                 string: "Answer\n",
-                attributes: Self.assistantLabelAttributes()))
+                attributes: assistantLabelAttributes()))
         }
         assistantRange = NSRange(location: document.length, length: 0)
         let assistant = progressiveRendering
             ? progressiveRender(response, closingTail: closingTail)
-            : NSAttributedString(string: response, attributes: Self.responseAttributes())
+            : NSAttributedString(string: response, attributes: responseAttributes())
         document.append(assistant)
         assistantRange.length = assistant.length
         prefillDotCount = 0
@@ -412,7 +418,7 @@ public final class InstructionTranscriptDocumentController {
         if showsPrefillPlaceholder {
             let placeholder = NSAttributedString(
                 string: Self.prefillPlaceholder(dotCount: prefillDotCount),
-                attributes: Self.prefillPlaceholderAttributes())
+                attributes: prefillPlaceholderAttributes())
             prefillPlaceholderRange = NSRange(
                 location: document.length,
                 length: placeholder.length)
@@ -446,7 +452,7 @@ public final class InstructionTranscriptDocumentController {
         let start = frozenLength
         let answer = response
         storage.append(NSAttributedString(
-            string: "\n\n", attributes: Self.promptAttributes()))
+            string: "\n\n", attributes: promptAttributes()))
         frozenLength = storage.length
         sealedTurns.append((
             range: NSRange(location: start, length: frozenLength - start),
@@ -482,7 +488,7 @@ public final class InstructionTranscriptDocumentController {
     public func appendContextBreak(storage: NSMutableAttributedString, text: String) {
         guard storage.length == frozenLength else { return }
         storage.append(NSAttributedString(
-            string: "\(text)\n\n", attributes: Self.contextBreakAttributes()))
+            string: "\(text)\n\n", attributes: contextBreakAttributes()))
         frozenLength = storage.length
         assistantRange = NSRange(location: frozenLength, length: 0)
     }
@@ -955,63 +961,63 @@ public final class InstructionTranscriptDocumentController {
         return count + seed
     }
 
-    private static func userLabelAttributes() -> [NSAttributedString.Key: Any] {
+    private func userLabelAttributes() -> [NSAttributedString.Key: Any] {
         labelAttributes(color: .secondaryLabelColor)
     }
 
-    private static func assistantLabelAttributes() -> [NSAttributedString.Key: Any] {
+    private func assistantLabelAttributes() -> [NSAttributedString.Key: Any] {
         labelAttributes(color: TurboFieldfareMacTheme.accentNSColor)
     }
 
-    private static func labelAttributes(
+    private func labelAttributes(
         color: NSColor
     ) -> [NSAttributedString.Key: Any] {
         let style = NSMutableParagraphStyle()
-        style.paragraphSpacing = 5
+        style.paragraphSpacing = typography.scaled(5)
         return [
             .font: NSFont.systemFont(
-                ofSize: NSFont.smallSystemFontSize,
+                ofSize: typography.labelSize,
                 weight: .semibold),
             .foregroundColor: color,
             .paragraphStyle: style,
         ]
     }
 
-    private static func contextBreakAttributes() -> [NSAttributedString.Key: Any] {
+    private func contextBreakAttributes() -> [NSAttributedString.Key: Any] {
         let style = NSMutableParagraphStyle()
         style.alignment = .center
-        style.paragraphSpacingBefore = 8
-        style.paragraphSpacing = 8
+        style.paragraphSpacingBefore = typography.scaled(8)
+        style.paragraphSpacing = typography.scaled(8)
         return [
             .font: NSFont.systemFont(
-                ofSize: NSFont.smallSystemFontSize, weight: .regular),
+                ofSize: typography.labelSize, weight: .regular),
             .foregroundColor: NSColor.tertiaryLabelColor,
             .paragraphStyle: style,
         ]
     }
 
-    private static func promptAttributes() -> [NSAttributedString.Key: Any] {
+    private func promptAttributes() -> [NSAttributedString.Key: Any] {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3
+        style.lineSpacing = typography.scaled(3)
         return [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .font: typography.bodyFont,
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: style,
         ]
     }
 
-    private static func responseAttributes() -> [NSAttributedString.Key: Any] {
+    private func responseAttributes() -> [NSAttributedString.Key: Any] {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3
-        style.paragraphSpacing = 6
+        style.lineSpacing = typography.scaled(3)
+        style.paragraphSpacing = typography.scaled(6)
         return [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .font: typography.bodyFont,
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: style,
         ]
     }
 
-    private static func prefillPlaceholderAttributes() -> [NSAttributedString.Key: Any] {
+    private func prefillPlaceholderAttributes() -> [NSAttributedString.Key: Any] {
         var attributes = responseAttributes()
         attributes[.foregroundColor] = NSColor.secondaryLabelColor
         return attributes
@@ -1030,6 +1036,52 @@ extension Array {
 
 
 extension InstructionTranscriptDocumentController {
+    /// Replays the current presentation once, without inventing a new run or
+    /// finalizing its open block. Ordinary token updates retain their caches.
+    @discardableResult
+    public func refreshTypography(
+        _ typography: ConversationTypography,
+        storage: NSMutableAttributedString,
+        planner: inout TranscriptSyncPlanner,
+        input: TranscriptSyncPlanner.Input,
+        promptPrefix: NSAttributedString,
+        renderer: (any TranscriptBlockRendering)? = nil,
+        drawPair: (Int) -> Void
+    ) -> UpdateResult {
+        guard typography != self.typography else {
+            return UpdateResult(mutation: .none, assistantRange: assistantRange)
+        }
+        let old = storage.string as NSString
+        let currentPrompt = prompt
+        let currentResponse = response
+        let prefixIdentifier = promptPrefixIdentifier
+        let terminal = isFinalized
+        let placeholder = showsPrefillPlaceholder
+        let dots = prefillDotCount
+        self.typography = typography
+        self.renderer = renderer ?? ResponseMarkdownRenderer(
+            typography: typography, environment: environment)
+        // resetTranscript deliberately retains this cache for ordinary replay.
+        // At a new size, every cached attributed run is stale.
+        progressive = ProgressiveState()
+        planner = TranscriptSyncPlanner()
+        storage.beginEditing()
+        defer { storage.endEditing() }
+        synchronizeHistory(storage: storage, planner: &planner, input: input,
+                           drawPair: drawPair)
+        synchronize(storage: storage, prompt: currentPrompt, response: currentResponse,
+                    isTerminal: terminal, showsPrefillPlaceholder: placeholder,
+                    promptPrefix: promptPrefix, promptPrefixIdentifier: prefixIdentifier)
+        if placeholder {
+            for _ in 0..<dots { advancePrefillAnimation(storage: storage) }
+        }
+        return UpdateResult(
+            mutation: .rebuilt, assistantRange: assistantRange,
+            replaced: ReplacedRange.differing(
+                previous: NSRange(location: 0, length: old.length),
+                old: old, new: storage.string as NSString))
+    }
+
     /// Execute history updates as one storage edit before the new live turn.
     /// The view supplies cached image prefixes without moving image loading here.
     @discardableResult

@@ -40,6 +40,7 @@ struct OutputPaneView: View {
 
     private var transcript: some View {
         IncrementalTranscriptView(
+            typography: ConversationTypography(model.textSize),
             history: model.transcriptHistory,
             contextBreak: model.transcriptContextBreak,
             conversationEpoch: model.displayedTranscriptID,
@@ -279,43 +280,6 @@ private struct EmptyPlaceholderIcon: View {
     }
 }
 
-private struct EmptyConversationLayout: Layout {
-    let spacing: CGFloat
-
-    func sizeThatFits(
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) -> CGSize {
-        proposal.replacingUnspecifiedDimensions()
-    }
-
-    func placeSubviews(
-        in bounds: CGRect,
-        proposal: ProposedViewSize,
-        subviews: Subviews,
-        cache: inout ()
-    ) {
-        guard subviews.count == 2 else { return }
-
-        let iconSize = subviews[0].sizeThatFits(.unspecified)
-        let iconCenter = CGPoint(x: bounds.midX, y: bounds.midY)
-        subviews[0].place(
-            at: iconCenter,
-            anchor: .center,
-            proposal: ProposedViewSize(
-                width: iconSize.width,
-                height: iconSize.height))
-
-        subviews[1].place(
-            at: CGPoint(
-                x: bounds.midX,
-                y: iconCenter.y + iconSize.height / 2 + spacing),
-            anchor: .top,
-            proposal: ProposedViewSize(width: bounds.width, height: nil))
-    }
-}
-
 private struct LoadingModelText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animationStart = Date()
@@ -342,6 +306,7 @@ private struct LoadingModelText: View {
 }
 
 private struct IncrementalTranscriptView: NSViewRepresentable {
+    var typography = ConversationTypography()
     var history: [(user: AppChatTurn, assistant: AppChatTurn)] = []
     /// Pairs above this index are on screen but no longer in the model's
     /// context. Nil when everything drawn is still in the KV.
@@ -409,6 +374,9 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         func attach(scrollView: NSScrollView, textView: NSTextView) {
             self.scrollView = scrollView
             self.textView = textView
+            (scrollView as? TranscriptScrollView)?.didRestoreReadingPosition = { [weak self] in
+                self?.recordScrollPosition()
+            }
             // Right-click inside a turn offers that turn's answer, so a
             // transcript of several turns has an unambiguous copy affordance
             // rather than one floating button that reads as the first turn's.
@@ -441,6 +409,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         }
 
         func synchronize(
+            typography: ConversationTypography,
             history: [(user: AppChatTurn, assistant: AppChatTurn)],
             contextBreak: Int?,
             conversationEpoch: UUID,
@@ -492,6 +461,8 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
             // view that is already at the bottom.
             if !response.isEmpty || isTerminal { follow.end() }
             if startedNewRun || shouldFollowNow() { scrollToBottom() }
+            refreshTypography(typography, history: history, contextBreak: contextBreak,
+                              epoch: conversationEpoch)
         }
 
         /// Keeps the drawn document in step with the conversation.
@@ -520,14 +491,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
                     epoch: epoch, historyCount: history.count, contextBreak: contextBreak,
                     startedNewRun: startedNewRun, firstSynchronize: firstSynchronize)
             ) { index in
-                let pair = history[index]
-                _ = controller.synchronize(
-                    storage: storage, prompt: pair.user.text,
-                    response: pair.assistant.text, isTerminal: true,
-                    promptPrefix: Self.makePromptPrefix(pair.user.images),
-                    promptPrefixIdentifier: pair.user.images
-                        .map { "\($0.id.uuidString):\($0.sha256)" }
-                        .joined(separator: ","))
+                drawHistoryPair(history[index], storage: storage)
             }
             for step in steps {
                 switch step {
@@ -542,6 +506,40 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
                     break
                 }
             }
+        }
+
+        private func refreshTypography(
+            _ typography: ConversationTypography,
+            history: [(user: AppChatTurn, assistant: AppChatTurn)],
+            contextBreak: Int?, epoch: UUID
+        ) {
+            guard documentController.typography != typography,
+                  let textView, let scrollView, let storage = textView.textStorage else { return }
+            let position = TranscriptReadingPosition(
+                textView: textView, scrollView: scrollView, followsPrefill: shouldFollowNow())
+            let update = documentController.refreshTypography(
+                typography, storage: storage, planner: &planner,
+                input: .init(epoch: epoch, historyCount: history.count,
+                             contextBreak: contextBreak, startedNewRun: false,
+                             firstSynchronize: true),
+                promptPrefix: promptPrefix
+            ) { index in
+                drawHistoryPair(history[index], storage: storage)
+            }
+            position.restore(textView: textView, scrollView: scrollView,
+                             replacing: update.replaced)
+            recordScrollPosition()
+        }
+
+        private func drawHistoryPair(
+            _ pair: (user: AppChatTurn, assistant: AppChatTurn), storage: NSMutableAttributedString
+        ) {
+            documentController.synchronize(
+                storage: storage, prompt: pair.user.text, response: pair.assistant.text,
+                isTerminal: true, promptPrefix: Self.makePromptPrefix(pair.user.images),
+                promptPrefixIdentifier: pair.user.images.map {
+                    "\($0.id.uuidString):\($0.sha256)"
+                }.joined(separator: ","))
         }
 
         func scrollToBottom() {
@@ -835,7 +833,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = TranscriptScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
@@ -862,6 +860,7 @@ private struct IncrementalTranscriptView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.synchronize(
+            typography: typography,
             history: history,
             contextBreak: contextBreak,
             conversationEpoch: conversationEpoch,
