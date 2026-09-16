@@ -20,6 +20,7 @@ public actor TurboFieldfareHTTPServer {
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
+    private let thinkingPolicy: ServerThinkingPolicy
     private let visionCapability: String
     private let attachmentRoot: URL
     private let idleTimeout: TimeAmount
@@ -31,6 +32,7 @@ public actor TurboFieldfareHTTPServer {
                 queueLimit: Int,
                 backend: any ServerInferenceBackend,
                 heartbeatInterval: TimeAmount = .seconds(5),
+                thinkingPolicy: ServerThinkingPolicy = .auto,
                 visionCapability: String = "missing",
                 attachmentRoot: URL = ServerAttachmentDirectory.root,
                 idleTimeout: TimeAmount = TurboFieldfareHTTPServer.idleTimeout,
@@ -40,6 +42,7 @@ public actor TurboFieldfareHTTPServer {
         self.backend = backend
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
         self.heartbeatInterval = heartbeatInterval
+        self.thinkingPolicy = thinkingPolicy
         self.visionCapability = visionCapability
         self.attachmentRoot = attachmentRoot
         self.idleTimeout = idleTimeout
@@ -51,6 +54,7 @@ public actor TurboFieldfareHTTPServer {
         let backend = self.backend
         let coordinator = self.coordinator
         let heartbeatInterval = self.heartbeatInterval
+        let thinkingPolicy = self.thinkingPolicy
         let childChannels = self.childChannels
         let visionCapability = self.visionCapability
         let attachmentRoot = self.attachmentRoot
@@ -77,6 +81,7 @@ public actor TurboFieldfareHTTPServer {
                         backend: backend,
                         coordinator: coordinator,
                         heartbeatInterval: heartbeatInterval,
+                        thinkingPolicy: thinkingPolicy,
                         visionCapability: visionCapability,
                         attachmentRoot: attachmentRoot,
                         childChannels: childChannels))
@@ -147,6 +152,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
+    private let thinkingPolicy: ServerThinkingPolicy
     private let childChannels: ChildChannelRegistry
     private let visionCapability: String
     private let attachmentRoot: URL
@@ -167,6 +173,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
          backend: any ServerInferenceBackend,
          coordinator: ServerCoordinator,
          heartbeatInterval: TimeAmount,
+         thinkingPolicy: ServerThinkingPolicy,
          visionCapability: String,
          attachmentRoot: URL,
          childChannels: ChildChannelRegistry) {
@@ -174,6 +181,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         self.backend = backend
         self.coordinator = coordinator
         self.heartbeatInterval = heartbeatInterval
+        self.thinkingPolicy = thinkingPolicy
         self.visionCapability = visionCapability
         self.attachmentRoot = attachmentRoot
         self.childChannels = childChannels
@@ -338,6 +346,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             let request = try OpenAIRequestValidator.validate(
                 decoded,
                 modelID: modelID,
+                thinkingPolicy: thinkingPolicy,
                 preStagedImages: body.stagedImages,
                 attachmentLease: body.lease)
             let responseID = "chatcmpl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
@@ -397,6 +406,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             return try await self.backend.generate(prepared) { event in
                                 guard request.stream else { return }
                                 switch event {
+                                case .thought(let text):
+                                    self.writeStreamChunk(
+                                        contextBox.value,
+                                        self.chunk(id: responseID, created: created,
+                                                   delta: ["reasoning_content": text],
+                                                   finishReason: nil))
                                 case .content(let text):
                                     self.writeStreamChunk(
                                         contextBox.value,
@@ -461,6 +476,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             "role": "assistant",
             "content": encodedContent,
         ]
+        if let reasoning = completion.reasoningContent, !reasoning.isEmpty {
+            message["reasoning_content"] = reasoning
+        }
         if !completion.toolCalls.isEmpty {
             message["tool_calls"] = completion.toolCalls.map(toolCallObject)
         }
@@ -713,7 +731,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     private func usageObject(_ usage: OpenAIUsage) -> [String: Any] {
-        [
+        var dict: [String: Any] = [
             "prompt_tokens": usage.promptTokens,
             "completion_tokens": usage.completionTokens,
             "total_tokens": usage.totalTokens,
@@ -721,6 +739,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 "cached_tokens": usage.promptTokensDetails.cachedTokens,
             ],
         ]
+        if let details = usage.completionTokensDetails {
+            dict["completion_tokens_details"] = [
+                "reasoning_tokens": details.reasoningTokens,
+            ]
+        }
+        return dict
     }
 
     private func toolCallObject(_ call: ParsedToolCall) -> [String: Any] {

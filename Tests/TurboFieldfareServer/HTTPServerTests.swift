@@ -267,6 +267,31 @@ private actor FailingServerBackend: ServerInferenceBackend {
     }
 }
 
+private actor ReasoningServerBackend: ServerInferenceBackend {
+    func generate(
+        _ request: ValidatedChatRequest,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerCompletion {
+        let thought = "Thinking deeply."
+        let answer = "Final answer."
+        onEvent(.thought(thought))
+        onEvent(.content(answer))
+        return ServerCompletion(
+            content: answer,
+            reasoningContent: thought,
+            toolCalls: [],
+            finishReason: "stop",
+            usage: OpenAIUsage(
+                promptTokens: 4,
+                completionTokens: 10,
+                totalTokens: 14,
+                cachedTokens: 0,
+                completionTokensDetails: OpenAIUsage.CompletionTokensDetails(reasoningTokens: 6)
+            )
+        )
+    }
+}
+
 @Suite("OpenAI HTTP server", .serialized)
 struct HTTPServerTests {
     @Test func healthModelsAndNonStreamingCompletion() async throws {
@@ -329,6 +354,65 @@ struct HTTPServerTests {
         #expect(text.contains(#""finish_reason":"stop""#))
         #expect(text.contains(#""prompt_tokens":3"#))
         #expect(text.contains(#""cached_tokens":0"#))
+        #expect(text.hasSuffix("data: [DONE]\n\n"))
+
+        try await server.shutdown()
+    }
+
+    @Test func nonStreamingCompletionWithReasoningContentAndDetails() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ReasoningServerBackend(),
+            thinkingPolicy: .on)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"explain"}]}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let choices = try #require(object["choices"] as? [[String: Any]])
+        let message = try #require(choices[0]["message"] as? [String: Any])
+        #expect(message["content"] as? String == "Final answer.")
+        #expect(message["reasoning_content"] as? String == "Thinking deeply.")
+        let usage = try #require(object["usage"] as? [String: Any])
+        let completionDetails = try #require(usage["completion_tokens_details"] as? [String: Any])
+        #expect(completionDetails["reasoning_tokens"] as? Int == 6)
+
+        try await server.shutdown()
+    }
+
+    @Test func streamingCompletionWithReasoningContentAndDetails() async throws {
+        let server = TurboFieldfareHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ReasoningServerBackend(),
+            thinkingPolicy: .on)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"explain"}],
+         "stream":true,"stream_options":{"include_usage":true}}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""reasoning_content":"Thinking deeply.""#))
+        #expect(text.contains(#""content":"Final answer.""#))
+        #expect(text.contains(#""reasoning_tokens":6"#))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
 
         try await server.shutdown()
