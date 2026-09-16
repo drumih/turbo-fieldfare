@@ -2,6 +2,7 @@ import Foundation
 
 public enum StructuredAssistantEvent: Equatable, Sendable {
     case content(String)
+    case thought(String)
     case toolCall(ParsedToolCall)
 }
 
@@ -14,20 +15,25 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
 
     private let tokenizer: GFTokenizer
     private let allowedTools: Set<String>
+    private let emitThought: Bool
     private let idGenerator: @Sendable () -> String
     private var channel: Channel = .visible
     private var label = ""
     private var toolTokens: [Int32]?
     private var emittedCalls = 0
     private var failed = false
+    private var pendingLabelTokens = 0
+    public private(set) var reasoningTokens = 0
 
     public init(tokenizer: GFTokenizer,
                 allowedTools: Set<String>,
+                emitThought: Bool = false,
                 idGenerator: @escaping @Sendable () -> String = {
                     "call_" + (0..<24).map { _ in String(format: "%x", UInt8.random(in: 0...15)) }.joined()
                 }) {
         self.tokenizer = tokenizer
         self.allowedTools = allowedTools
+        self.emitThought = emitThought
         self.idGenerator = idGenerator
     }
 
@@ -54,9 +60,13 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         if tokenID == tokenizer.channelStartID {
             label = ""
             channel = .label
+            pendingLabelTokens = 1
             return events
         }
         if tokenID == tokenizer.channelEndID {
+            if channel == .thought {
+                reasoningTokens += 1
+            }
             channel = .visible
             return events
         }
@@ -101,6 +111,11 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             toolTokens = tokens
             return []
         }
+        if channel == .thought {
+            reasoningTokens += 1
+        } else if channel == .label {
+            pendingLabelTokens += 1
+        }
         return routeText(delta)
     }
 
@@ -117,7 +132,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     private func routeText(_ delta: String) -> [StructuredAssistantEvent] {
         switch channel {
         case .thought:
-            return []
+            return (emitThought && !delta.isEmpty) ? [.thought(delta)] : []
         case .visible:
             return delta.isEmpty ? [] : [.content(delta)]
         case .label:
@@ -126,10 +141,20 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             let name = label[..<newline].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let contentStart = label.index(after: newline)
             let content = String(label[contentStart...])
-            channel = name == "final" || name == "answer" ? .visible : .thought
+            if name == "final" || name == "answer" {
+                channel = .visible
+                pendingLabelTokens = 0
+            } else {
+                channel = .thought
+                reasoningTokens += pendingLabelTokens
+                pendingLabelTokens = 0
+            }
             label = ""
             if channel == .visible, !content.isEmpty {
                 return [.content(content)]
+            }
+            if channel == .thought, emitThought, !content.isEmpty {
+                return [.thought(content)]
             }
             return []
         }

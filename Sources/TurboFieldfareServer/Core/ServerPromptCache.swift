@@ -203,7 +203,8 @@ struct ServerPromptCache: Sendable {
             return matchTextContinuation(
                 entry: entry,
                 continuation: continuation,
-                tokenizer: tokenizer)
+                tokenizer: tokenizer,
+                enableThinking: request.enableThinking)
         }
         return matchToolContinuation(
             entry: entry,
@@ -233,7 +234,8 @@ struct ServerPromptCache: Sendable {
     private func matchTextContinuation(
         entry: ServerPromptCacheEntry,
         continuation: [GFTokenizer.Message],
-        tokenizer: GFTokenizer
+        tokenizer: GFTokenizer,
+        enableThinking: Bool
     ) -> ServerPromptCacheMatch {
         guard continuation.count == 1,
               continuation[0].role == .user,
@@ -244,7 +246,7 @@ struct ServerPromptCache: Sendable {
                 || entry.assistantTurn.rawStopReason == .maxTokens else {
             return .miss(.unsupportedContinuation)
         }
-        var bridge = tokenizer.encodeTextContinuation(userContent: content)
+        var bridge = tokenizer.encodeTextContinuation(userContent: content, enableThinking: enableThinking)
         if entry.assistantTurn.rawStopReason == .maxTokens {
             bridge = entry.uncommittedBoundaryTokenIDs + bridge
         } else if bridge.first != entry.uncommittedBoundaryTokenIDs.first {
@@ -282,7 +284,8 @@ struct ServerPromptCache: Sendable {
                 cachedMessages: entry.inputMessages,
                 assistant: entry.assistantTurn.message,
                 incomingMessages: request.messages,
-                tools: request.tools)
+                tools: request.tools,
+                enableThinking: request.enableThinking)
         } catch {
             ServerLog.promptCacheBridgeFailed(error: error)
             return .miss(.bridgeRenderFailed)
