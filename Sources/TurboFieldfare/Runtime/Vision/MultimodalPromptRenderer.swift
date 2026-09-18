@@ -58,7 +58,8 @@ public enum MultimodalPromptRenderer {
         messages: [MultimodalMessage],
         featuresByID: [UUID: VisionFeatures],
         tokenizer: GFTokenizer,
-        tools: [GFTokenizer.FunctionDefinition] = []
+        tools: [GFTokenizer.FunctionDefinition] = [],
+        enableThinking: Bool = false
     ) throws -> MultimodalPrefillInput {
         guard !messages.isEmpty else { throw MultimodalPromptRendererError.emptyMessages }
         var orderedImages: [(UUID, VisionFeatures)] = []
@@ -102,9 +103,12 @@ public enum MultimodalPromptRenderer {
         if usesToolTemplate {
             templateTokens = try tokenizer.encodeToolChat(
                 messages: tokenizerMessages,
-                tools: tools)
+                tools: tools,
+                enableThinking: enableThinking)
         } else {
-            let rendered = try tokenizer.applyChatTemplate(tokenizerMessages)
+            let rendered = try tokenizer.applyChatTemplate(
+                tokenizerMessages,
+                enableThinking: enableThinking)
             templateTokens = tokenizer.encode(rendered, addBOS: false)
         }
         let placeholders = templateTokens.indices.filter {
