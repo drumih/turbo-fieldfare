@@ -32,6 +32,61 @@ import Testing
 }
 
 @Suite struct AppModelTests {
+
+    @MainActor @Test func cacheSelectionClampsContextAndPersistsBothSettings() throws {
+        let root = try makeSettingsRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("model.gturbo")
+        let model = AppModel(modelDirectory: directory, client: MockLifecycleInferenceClient(),
+                             settingsPersistenceEnabled: true, hostMemoryBytes: 8 << 30)
+        model.setMaxContextTokens(131_072)
+        model.setExpertCacheSlots(24)
+        #expect(model.maxContextTokens == 65_536)
+        #expect(model.contextClampNotice?.contains("131,072") == true)
+        #expect(!model.contextOptions.contains(.oneTwentyEightK))
+        let saved = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
+        #expect(saved.contextTokens == 65_536)
+        #expect(saved.expertCacheSlots == 24)
+        model.setExpertCacheSlots(16)
+        #expect(model.contextOptions.contains(.oneTwentyEightK))
+        #expect(model.maxContextTokens == 65_536)
+    }
+
+    @MainActor @Test func storedCacheGrowthClampsOnLaunchAndModelChange() throws {
+        let root = try makeSettingsRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first/model.gturbo")
+        let second = root.appendingPathComponent("second/model.gturbo")
+        for directory in [first, second] {
+            try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 131_072,
+                                                            expertCacheSlots: 24),
+                                             forModelDirectory: directory)
+        }
+        let model = AppModel(modelDirectory: first, client: MockLifecycleInferenceClient(),
+                             settingsPersistenceEnabled: true, hostMemoryBytes: 8 << 30)
+        #expect(model.maxContextTokens == 65_536)
+        #expect(model.contextClampNotice != nil)
+        model.setModelURL(second)
+        #expect(model.maxContextTokens == 65_536)
+        #expect(model.contextClampNotice != nil)
+    }
+
+    @MainActor @Test func loadRefusesCacheGrowthThatBypassedThePicker() throws {
+        let directory = try makeCompleteModelInstall("cache-context-refusal")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = MockLifecycleInferenceClient()
+        let model = AppModel(modelDirectory: directory, client: client, hostMemoryBytes: 8 << 30)
+        model.setMaxContextTokens(131_072)
+        model.runtimeOptions.expertCacheSlots = 32
+        model.loadModel()
+        guard case .failed(let error) = model.loadState else {
+            Issue.record("unbacked cache/context combination reached loading")
+            return
+        }
+        #expect("\(error)".contains("16 GB"))
+        #expect(client.ensureLoadedCallCount() == 0)
+    }
+
     @MainActor
     @Test func defaultsUseSampledRequest() throws {
         let model = AppModel()

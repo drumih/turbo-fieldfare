@@ -80,15 +80,6 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                 // throw, and a load left counted as queued makes the next
                 // generation's cancel latch onto a later load.
                 defer { loadInFlight.finish() }
-                if let refusal = DecodeLoadAdmission.refusal(
-                    maxContextTokens: request.maxContextTokens,
-                    hostMemoryBytes: ContextAdmission.hostMemoryBytes,
-                    environment: ProcessInfo.processInfo.environment) {
-                    try? write(DecodeServiceEvent(
-                        kind: .failed, generationID: request.requestID, error: refusal),
-                        to: handles.output)
-                    break
-                }
                 // The session drops what it held before it loads, so a load
                 // that then fails or is cancelled leaves nothing loaded. The
                 // facts below have to say so, or the next generate passed the
@@ -103,6 +94,16 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                 }
                 do {
                     let options = try appRuntimeOptions(request.runtimeOptions)
+                    if let refusal = DecodeLoadAdmission.refusal(
+                        maxContextTokens: request.maxContextTokens,
+                        hostMemoryBytes: ContextAdmission.hostMemoryBytes,
+                        environment: ProcessInfo.processInfo.environment,
+                        expertCacheSlots: options.expertCacheSlots) {
+                        try? write(DecodeServiceEvent(
+                            kind: .failed, generationID: request.requestID, error: refusal),
+                            to: handles.output)
+                        break
+                    }
                     // The session load already checks for cancellation between
                     // its stages; running it in a task is what gives the input
                     // thread something to cancel.

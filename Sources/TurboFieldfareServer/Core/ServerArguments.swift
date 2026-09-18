@@ -212,12 +212,12 @@ public struct ServerArguments: Equatable, Sendable {
         let config = ArchConfig.gemma4_26B_A4B
         if case .needsMemory = ContextAdmission.availability(config: config,
                                                              maxContext: maxContext,
-                                                             hostMemoryBytes: hostMemoryBytes),
+                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots),
            environment[unbackedContextOverrideVariable] != "1" {
             throw ServerArgumentError.invalid(
                 ContextAdmission.needDescription(config: config,
                                                  maxContext: maxContext,
-                                                 hostMemoryBytes: hostMemoryBytes)
+                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
                     + " Set \(unbackedContextOverrideVariable)=1 to start anyway.")
         }
         return ServerArguments(model: model,

@@ -18,7 +18,7 @@ enum DecodeLoadAdmission {
     /// The message to answer the load with, or nil to proceed.
     static func refusal(maxContextTokens: Int,
                         hostMemoryBytes: UInt64,
-                        environment: [String: String]) -> String? {
+                        environment: [String: String], expertCacheSlots: Int = 16) -> String? {
         let config = ArchConfig.gemma4_26B_A4B
         // The ceiling is the checkpoint's, not the host's, so no override
         // reaches it: memory cannot make a position the model was never
@@ -32,9 +32,9 @@ enum DecodeLoadAdmission {
         guard case .needsMemory = ContextAdmission.availability(
             config: config,
             maxContext: maxContextTokens,
-            hostMemoryBytes: hostMemoryBytes) else { return nil }
+            hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots) else { return nil }
         return ContextAdmission.needDescription(config: config,
                                                 maxContext: maxContextTokens,
-                                                hostMemoryBytes: hostMemoryBytes)
+                                                hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
     }
 }

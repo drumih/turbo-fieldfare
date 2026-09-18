@@ -125,3 +125,10 @@ to the remaining context budget.
 The [110K attention comparison](experiments/summaries/10-long-context.md)
 measured a decode improvement with 32 cache slots. Defaults remain unchanged.
 Retrieval at 64K/128K/256K and the 128K memory check on 8 GB remain release gates.
+
+Context admission includes the selected expert-cache size. The measured 2 GiB
+non-KV allowance covers 16 slots; 24 and 32 slots add about 0.75 and 1.50 GiB,
+respectively. At either larger cache size, 128K is refused on an 8 GB host.
+Changing Slots in the app clamps an incompatible Context and explains the
+change. The server's explicit override and the CLI's warning-only behavior
+remain available for diagnostic runs.

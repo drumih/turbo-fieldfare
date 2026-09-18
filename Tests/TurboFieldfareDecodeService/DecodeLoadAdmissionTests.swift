@@ -10,6 +10,20 @@ import TurboFieldfare
 /// only show a lost connection. Every case here is a load that must be answered
 /// before the runner is built.
 @Suite struct DecodeLoadAdmissionTests {
+
+    @Test(arguments: [24, 32])
+    func cacheGrowthRejects128KOnEightGB(slots: Int) throws {
+        let refusal = try #require(DecodeLoadAdmission.refusal(maxContextTokens: 131_072,
+            hostMemoryBytes: 8 << 30, environment: [:], expertCacheSlots: slots))
+        #expect(refusal.contains("16 GB"))
+        #expect(DecodeLoadAdmission.refusal(maxContextTokens: 131_072,
+            hostMemoryBytes: 16 << 30, environment: [:], expertCacheSlots: slots) == nil)
+        #expect(DecodeLoadAdmission.refusal(maxContextTokens: 131_072,
+            hostMemoryBytes: 8 << 30,
+            environment: [DecodeLoadAdmission.overrideEnvironmentKey: "1"],
+            expertCacheSlots: slots) == nil)
+    }
+
     private let eightGigabyteHost: UInt64 = 8_589_934_592
     private let twentyFourGigabyteHost: UInt64 = 25_769_803_776
 

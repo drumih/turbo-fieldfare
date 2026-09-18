@@ -9,6 +9,32 @@ import Foundation
 /// label, a server refusal and a CLI warning apart.
 @Suite struct ContextAdmissionTests {
 
+    @Test(arguments: [24, 32])
+    func extraCacheSlotsAreChargedAtTheAdmissionBoundary(slots: Int) {
+        let config = ArchConfig.gemma4_26B_A4B
+        let baseline = ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: 131_072)
+        let page = Int(getpagesize())
+        let slotBytes = ((3_358_720 + page - 1) / page) * page
+        let expected = baseline + UInt64((slots - 16) * 30 * slotBytes)
+        #expect(ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: 131_072,
+                                                        expertCacheSlots: slots) == expected)
+        #expect(ContextAdmission.availability(config: config, maxContext: 131_072,
+                                              hostMemoryBytes: expected - 1, expertCacheSlots: slots)
+                == .needsMemory(minimumHostBytes: expected))
+        #expect(ContextAdmission.availability(config: config, maxContext: 131_072,
+                                              hostMemoryBytes: expected, expertCacheSlots: slots) == .available)
+        #expect(ContextAdmission.availability(config: config, maxContext: 131_072,
+                                              hostMemoryBytes: 8 << 30, expertCacheSlots: slots)
+                == .needsMemory(minimumHostBytes: expected))
+    }
+
+    @Test func smallerCacheDoesNotDiscountTheMeasuredRuntimeAllowance() {
+        #expect(ContextAdmission.projectedFootprintBytes(config: config, maxContext: 131_072,
+                                                         expertCacheSlots: 8)
+                == ContextAdmission.projectedFootprintBytes(config: config, maxContext: 131_072))
+    }
+
+
     private let config = ArchConfig.gemma4_26B_A4B
     private let eightGigabyteHost: UInt64 = 8_589_934_592
     private let sixteenGigabyteHost: UInt64 = 17_179_869_184

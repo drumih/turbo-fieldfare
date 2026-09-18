@@ -37,16 +37,16 @@ public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
                                                 maxContext: tokens)
     }
 
-    public func availability(hostMemoryBytes: UInt64) -> ContextAdmission.Availability {
+    public func availability(hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> ContextAdmission.Availability {
         ContextAdmission.availability(config: Self.architecture,
                                       maxContext: tokens,
-                                      hostMemoryBytes: hostMemoryBytes)
+                                      hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
     }
 
-    public func needDescription(hostMemoryBytes: UInt64) -> String {
+    public func needDescription(hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> String {
         ContextAdmission.needDescription(config: Self.architecture,
                                          maxContext: tokens,
-                                         hostMemoryBytes: hostMemoryBytes)
+                                         hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
     }
 
     /// The options this host can actually back, in ascending order.
@@ -55,16 +55,16 @@ public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
     /// it — one full-attention layer over sixteen rows already costs the whole
     /// 1,085 MiB — so admission is decided by the cap, never by how much of it
     /// a conversation happens to use.
-    public static func available(on hostMemoryBytes: UInt64) -> [AppContextLengthOption] {
-        allCases.filter { $0.availability(hostMemoryBytes: hostMemoryBytes) == .available }
+    public static func available(on hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> [AppContextLengthOption] {
+        allCases.filter { $0.availability(hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots) == .available }
     }
 
     /// The largest context this host can back, for clamping a stored choice it
     /// cannot. A host too small even for the smallest option still gets one:
     /// the loader refuses an unbacked context before it allocates, so the
     /// refusal is where that machine is told, not a menu with no rows in it.
-    public static func largestAvailable(on hostMemoryBytes: UInt64) -> AppContextLengthOption {
-        available(on: hostMemoryBytes).last ?? .fourK
+    public static func largestAvailable(on hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> AppContextLengthOption {
+        available(on: hostMemoryBytes, expertCacheSlots: expertCacheSlots).last ?? .fourK
     }
 
     public static let defaultOption: AppContextLengthOption = .eightK

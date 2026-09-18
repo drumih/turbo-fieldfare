@@ -912,6 +912,21 @@ struct StreamingStopMatcherTests {
 
 @Suite("Server arguments")
 struct ServerArgumentTests {
+
+    @Test(arguments: [24, 32])
+    func cacheGrowthRejects128KOnEightGBUnlessExplicitlyOverridden(slots: Int) throws {
+        let input = ["--model", "unused.gturbo", "--max-context", "131072",
+                     "--expert-cache-slots", String(slots)]
+        #expect(throws: ServerArgumentError.self) {
+            _ = try ServerArguments.parse(input, hostMemoryBytes: 8 << 30, environment: [:])
+        }
+        let overridden = try ServerArguments.parse(input, hostMemoryBytes: 8 << 30,
+            environment: [ServerArguments.unbackedContextOverrideVariable: "1"])
+        #expect(overridden.expertCacheSlots == slots)
+        #expect(try ServerArguments.parse(input, hostMemoryBytes: 16 << 30,
+                                         environment: [:]).maxContext == 131_072)
+    }
+
     @Test func defaults() throws {
         let arguments = try ServerArguments.parse(["--model", "model.gturbo"])
         #expect(arguments.port == 8080)

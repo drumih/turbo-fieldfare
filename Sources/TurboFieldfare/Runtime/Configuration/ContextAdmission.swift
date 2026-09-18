@@ -12,8 +12,20 @@ public enum ContextAdmission {
     /// Everything resident that does not scale with context: the LM weights,
     /// the expert-cache slots, prefill scratch, the tokenizer and the Metal
     /// library. Measured at 1.75-1.94 GB across PR 156's five rungs and the
-    /// M2-8 8K row; rounded up to 2 GiB so the rule never under-reserves.
+    /// M2-8 8K row at 16 cache slots; extra slots are accounted for separately.
     public static let nonKVRuntimeFootprintBytes: UInt64 = 2 << 30
+
+    // The pinned IT pack uses 3,358,720 bytes per routed expert. Each layer
+    // owns its slots; the streamer rounds each allocation to the host page size.
+    private static let expertStrideBytes = 3_358_720
+
+    private static func additionalExpertCacheBytes(config: ArchConfig, slots: Int) -> UInt64 {
+        let page = Int(getpagesize())
+        let slotBytes = ((expertStrideBytes + page - 1) / page) * page
+        // Do not discount the measured baseline for smaller caches: the rest
+        // of that allowance has not been measured separately.
+        return UInt64(max(0, slots - 16)) * UInt64(config.numLayers) * UInt64(slotBytes)
+    }
 
     /// Headroom left to the OS and to a minimum routed-expert page cache. A
     /// host that satisfied only the projected footprint would run with every
@@ -55,19 +67,20 @@ public enum ContextAdmission {
     }
 
     /// What the process is expected to occupy at this context.
-    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int) -> UInt64 {
+    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
         fp16KVBytes(config: config, maxContext: maxContext) + nonKVRuntimeFootprintBytes
+            + additionalExpertCacheBytes(config: config, slots: expertCacheSlots)
     }
 
     /// The smallest host memory that admits this context.
-    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int) -> UInt64 {
-        projectedFootprintBytes(config: config, maxContext: maxContext) + hostReserveBytes
+    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
+        projectedFootprintBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots) + hostReserveBytes
     }
 
     public static func availability(config: ArchConfig,
                                     maxContext: Int,
-                                    hostMemoryBytes: UInt64) -> Availability {
-        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext)
+                                    hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> Availability {
+        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots)
         return hostMemoryBytes >= minimum ? .available : .needsMemory(minimumHostBytes: minimum)
     }
 
@@ -77,9 +90,9 @@ public enum ContextAdmission {
     /// refusal, a hidden menu row's caption or a CLI warning.
     public static func needDescription(config: ArchConfig,
                                        maxContext: Int,
-                                       hostMemoryBytes: UInt64) -> String {
+                                       hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> String {
         let need = marketingGigabytesRoundedUp(
-            minimumHostMemoryBytes(config: config, maxContext: maxContext))
+            minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots))
         let have = marketingGigabytesNearest(hostMemoryBytes)
         return "A \(grouped(maxContext))-token context needs \(need) GB of memory; this Mac has \(have) GB."
     }

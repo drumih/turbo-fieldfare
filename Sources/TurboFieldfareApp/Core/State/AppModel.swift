@@ -253,7 +253,8 @@ public final class AppModel {
             rdadvisePolicy: settings.rdadvisePolicy,
             visionResidencyPolicy: .onDemand)
         let admitted = Self.admittedContext(settings.contextTokens,
-                                            hostMemoryBytes: hostMemoryBytes)
+                                            hostMemoryBytes: hostMemoryBytes,
+                                            expertCacheSlots: settings.expertCacheSlots)
         self.maxContextTokens = admitted.tokens
         self.contextClampNotice = admitted.notice
         self.temperature = settings.temperature
@@ -314,7 +315,7 @@ public final class AppModel {
 
     /// What the Context picker may offer on this Mac.
     public var contextOptions: [AppContextLengthOption] {
-        AppContextLengthOption.available(on: hostMemoryBytes)
+        AppContextLengthOption.available(on: hostMemoryBytes, expertCacheSlots: runtimeOptions.expertCacheSlots)
     }
 
     /// The caption under the Context picker when admission is hiding rows.
@@ -322,18 +323,18 @@ public final class AppModel {
     /// Static and free of SwiftUI so the sentence a user reads is covered by a
     /// test rather than by looking at the window. Nil when every size is
     /// offered — there is then nothing to explain.
-    public nonisolated static func contextOptionsNote(hostMemoryBytes: UInt64) -> String? {
+    public nonisolated static func contextOptionsNote(hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> String? {
         let hidden = AppContextLengthOption.allCases.filter {
-            $0.availability(hostMemoryBytes: hostMemoryBytes) != .available
+            $0.availability(hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots) != .available
         }
         guard !hidden.isEmpty else { return nil }
         return hidden
-            .map { $0.needDescription(hostMemoryBytes: hostMemoryBytes) }
+            .map { $0.needDescription(hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots) }
             .joined(separator: " ")
     }
 
     public var contextOptionsNote: String? {
-        Self.contextOptionsNote(hostMemoryBytes: hostMemoryBytes)
+        Self.contextOptionsNote(hostMemoryBytes: hostMemoryBytes, expertCacheSlots: runtimeOptions.expertCacheSlots)
     }
 
     /// A stored context this host cannot back, replaced with the largest it
@@ -344,17 +345,18 @@ public final class AppModel {
     /// the app on a setting whose every load fails.
     nonisolated static func admittedContext(
         _ tokens: Int,
-        hostMemoryBytes: UInt64
+        hostMemoryBytes: UInt64,
+        expertCacheSlots: Int = 16
     ) -> (tokens: Int, notice: String?) {
         let config = ArchConfig.gemma4_26B_A4B
         guard case .needsMemory = ContextAdmission.availability(
-            config: config, maxContext: tokens, hostMemoryBytes: hostMemoryBytes) else {
+            config: config, maxContext: tokens, hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots) else {
             return (tokens, nil)
         }
-        let fallback = AppContextLengthOption.largestAvailable(on: hostMemoryBytes)
+        let fallback = AppContextLengthOption.largestAvailable(on: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
         let need = ContextAdmission.needDescription(config: config,
                                                     maxContext: tokens,
-                                                    hostMemoryBytes: hostMemoryBytes)
+                                                    hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
         return (fallback.tokens,
                 "\(need) Context is set to \(fallback.shortLabel) instead.")
     }
@@ -902,6 +904,19 @@ public final class AppModel {
         persistSettings()
     }
 
+    public func setExpertCacheSlots(_ slots: Int) {
+        guard runtimeOptions.expertCacheSlots != slots else { return }
+        runtimeOptions.expertCacheSlots = slots
+        let admitted = Self.admittedContext(maxContextTokens,
+                                            hostMemoryBytes: hostMemoryBytes,
+                                            expertCacheSlots: slots)
+        if admitted.tokens != maxContextTokens {
+            setMaxContextTokens(admitted.tokens)
+            contextClampNotice = admitted.notice
+        }
+        persistSettings()
+    }
+
     /// Changes the context, and redraws a stored conversation against it.
     ///
     /// Continuability is a function of the conversation's size and the context
@@ -1257,11 +1272,11 @@ public final class AppModel {
         if case .needsMemory = ContextAdmission.availability(
             config: ArchConfig.gemma4_26B_A4B,
             maxContext: maxContext,
-            hostMemoryBytes: hostMemoryBytes) {
+            hostMemoryBytes: hostMemoryBytes, expertCacheSlots: runtimeOptions.expertCacheSlots) {
             loadState = .failed(.modelLoadFailed(
                 ContextAdmission.needDescription(config: ArchConfig.gemma4_26B_A4B,
                                                  maxContext: maxContext,
-                                                 hostMemoryBytes: hostMemoryBytes)))
+                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: runtimeOptions.expertCacheSlots)))
             return
         }
         let forceLogitsHead = currentForceLogitsHead
@@ -2034,7 +2049,8 @@ public final class AppModel {
         // the app on a setting the loader refuses. Assigned before the notice
         // because the assignment clears it.
         let admitted = Self.admittedContext(settings.contextTokens,
-                                            hostMemoryBytes: hostMemoryBytes)
+                                            hostMemoryBytes: hostMemoryBytes,
+                                            expertCacheSlots: settings.expertCacheSlots)
         maxContextTokens = admitted.tokens
         contextClampNotice = admitted.notice
         temperature = settings.temperature

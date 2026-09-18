@@ -319,7 +319,9 @@ struct InspectorView: View {
                     .foregroundStyle(.secondary)
             }
             LabeledContent("Slots") {
-                Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {
+                Picker("Slots", selection: Binding(
+                    get: { model.runtimeOptions.expertCacheSlots },
+                    set: { model.setExpertCacheSlots($0) })) {
                     ForEach(AppRuntimeOptions.allowedSlotCounts, id: \.self) { slots in
                         Text(AppRuntimeOptions.slotsLabel(for: slots)).tag(slots)
                     }

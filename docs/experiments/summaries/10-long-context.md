@@ -75,7 +75,11 @@ The model's position ceiling is 262,144. The app offers 128K and 256K where
 the host-memory admission calculation permits them; the server also accepts
 96K and 192K. App and CLI defaults remain 8K, the server default remains 16K,
 and the expert-cache default remains 16 slots. Admission estimates FP16 KV
-plus a 2 GiB runtime allowance and reserves 3 GiB for the host.
+plus a 2 GiB runtime allowance at 16 expert-cache slots and reserves 3 GiB
+for the host. Larger caches add their page-aligned allocation across all 30
+layers: about 0.75 GiB for 24 slots or 1.50 GiB for 32. An 8 GB host therefore
+refuses 128K with either larger cache. The app adjusts context choices when
+Slots changes and clamps an incompatible selection with a visible notice.
 
 Before release, the outstanding checks are retrieval at 10%, 50% and 90%
 depth for 64K, 128K and 256K; repeated 128K/256K execution; same-checkpoint MLX
