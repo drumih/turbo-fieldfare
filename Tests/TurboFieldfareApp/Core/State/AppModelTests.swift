@@ -413,6 +413,135 @@ import Testing
         #expect(!model.canRun)
     }
 
+    /// A settings file can carry a context this Mac cannot back — written on a
+    /// larger machine, or on a build whose admission rule was looser. Opening
+    /// the app on it would put every load into `.failed` with no way back
+    /// except a menu the user has to guess at, so it is clamped and said.
+    @MainActor
+    @Test func unavailableStoredContextIsClampedWithNotice() throws {
+        let root = try makeSettingsRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
+                                         forModelDirectory: modelDirectory)
+
+        let model = AppModel(modelDirectory: modelDirectory,
+                             client: MockLifecycleInferenceClient(),
+                             settingsPersistenceEnabled: true,
+                             hostMemoryBytes: 8_589_934_592)
+
+        #expect(model.maxContextTokens == 131_072)
+        let notice = try #require(model.contextClampNotice,
+                                  "the context was changed without saying so")
+        #expect(notice.contains("262,144"))
+        #expect(notice.contains("16 GB"))
+        #expect(notice.contains("128K"))
+
+        model.setMaxContextTokens(model.maxContextTokens)
+        #expect(model.contextClampNotice == notice)
+
+        // Context edits must go through the history-aware setter after the merge;
+        // direct assignment clears the notice but loses persistence and redraw.
+        model.setMaxContextTokens(65_536)
+        #expect(model.contextClampNotice == nil)
+        #expect(MacAppSettingsFileStore.loadOrCreate(
+            forModelDirectory: modelDirectory).contextTokens == 65_536)
+    }
+
+    /// The same clamp on the settings-apply path, which `init` does not cover:
+    /// switching model directories adopts that directory's settings, and one
+    /// of them can carry a context this Mac cannot back. The notice also has
+    /// to survive being set — assigning the context clears it, so an
+    /// assignment made after the notice would wipe it.
+    @MainActor
+    @Test func achangedModelDirectoryClampsItsStoredContextToo() throws {
+        let root = try makeSettingsRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
+        let second = root.appendingPathComponent("second/model.gturbo", isDirectory: true)
+        try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 8_192),
+                                         forModelDirectory: first)
+        try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
+                                         forModelDirectory: second)
+        let model = AppModel(modelDirectory: first,
+                             client: MockLifecycleInferenceClient(),
+                             settingsPersistenceEnabled: true,
+                             hostMemoryBytes: 8_589_934_592)
+        try #require(model.contextClampNotice == nil)
+
+        model.setModelURL(second)
+
+        #expect(model.maxContextTokens == 131_072)
+        #expect(model.contextClampNotice?.contains("262,144") == true,
+                "the clamp on the settings-apply path said nothing")
+    }
+
+    @MainActor
+    @Test func availableStoredContextIsKept() throws {
+        let root = try makeSettingsRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
+                                         forModelDirectory: modelDirectory)
+
+        let model = AppModel(modelDirectory: modelDirectory,
+                             client: MockLifecycleInferenceClient(),
+                             settingsPersistenceEnabled: true,
+                             hostMemoryBytes: 25_769_803_776)
+
+        #expect(model.maxContextTokens == 262_144)
+        #expect(model.contextClampNotice == nil)
+    }
+
+    /// The refusal has to happen before the load state moves, or the app sends
+    /// the decode service a context that gets the service killed part-way
+    /// through — which reaches the user as a lost connection, not as a reason.
+    @MainActor
+    @Test func loadRefusesUnavailableContextBeforeLoading() async throws {
+        let directory = try makeCompleteModelInstall("context-refusal")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let client = MockLifecycleInferenceClient()
+        let model = AppModel(modelDirectory: directory,
+                             client: client,
+                             hostMemoryBytes: 8_589_934_592)
+        model.setMaxContextTokens(262_144)
+        try #require(model.canLoadModel)
+
+        model.loadModel()
+
+        guard case .failed(let error) = model.loadState else {
+            Issue.record("an unbacked context was allowed to start loading")
+            return
+        }
+        #expect("\(error)".contains("262,144"))
+        #expect(client.ensureLoadedCallCount() == 0,
+                "the loader was reached with a context this host cannot back")
+        #expect(!model.loadState.isLoading)
+    }
+
+    @Test func contextOptionsNoteNamesHiddenSizes() throws {
+        let note = try #require(
+            AppModel.contextOptionsNote(hostMemoryBytes: 8_589_934_592))
+        #expect(note.contains("262,144"))
+        #expect(note.contains("16 GB"))
+        #expect(note.contains("8 GB"))
+        // 128K is offered on this host, so it is not something to explain away.
+        #expect(!note.contains("131,072"))
+    }
+
+    @Test func contextOptionsNoteIsAbsentWhenEverySizeIsOffered() {
+        #expect(AppModel.contextOptionsNote(hostMemoryBytes: 25_769_803_776) == nil)
+    }
+
+    private func makeSettingsRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppModelContext-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: root,
+                                                withIntermediateDirectories: true)
+        return root
+    }
+
     @MainActor
     private func readyModel(client: MockInferenceClient) -> AppModel {
         let model = AppModel(client: client)

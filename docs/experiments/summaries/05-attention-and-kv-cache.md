@@ -5,14 +5,15 @@
 [Optimization journey](../../OPTIMIZATION_JOURNEY.md) |
 [Next: Prefill](06-prefill.md)
 
-The current runtime uses exact split-K/V attention and an FP16 KV cache. Packed
+The 0.9.0 draft uses grouped full attention, split-KV sliding-window attention,
+and an FP16 KV cache. Packed
 K4/V4 saved only about 82 MiB at 4K, grew across all 30 attention layers, and
 failed the quality gate. It was rejected and removed.
 
 | Current result | Disposition |
 | --- | --- |
 | Split-KV plus GQA-aware SWA | Production |
-| Exact split full attention | Production |
+| Grouped full attention | 0.9.0 draft; exact split retained for generic shapes |
 | FP16 KV ring | Production |
 | Packed K4/V4 and alternate codecs | Rejected and removed |
 
@@ -93,7 +94,7 @@ failed the quality gate. It was rejected and removed.
   candidate was removed.
 - **What changed the conclusion:** A corrected v2 reopened the geometry family,
   but the instruction checkpoint's full quality gate later rejected it too.
-- **Final disposition:** Rejected; exact split remains production.
+- **Final disposition:** Rejected; exact split remained production at that point.
 - **Lesson:** Select the quality oracle from the candidate's mathematical
   contract without retroactively declaring an old candidate safe. See
   [METH-01](09-validation-and-measurement-lessons.md#meth-01).
@@ -112,8 +113,8 @@ failed the quality gate. It was rejected and removed.
   mean delta-NLL threshold.
 - **What changed the conclusion:** Revalidation against the shipping instruction
   checkpoint replaced the earlier promotion result.
-- **Final disposition:** Rejected for the instruction checkpoint; exact split is
-  production.
+- **Final disposition:** Rejected for the instruction checkpoint; exact split remained
+  production at that point.
 - **Lesson:** Revalidate a strong speed signal when the rejection instrument
   was wrong. See [METH-01](09-validation-and-measurement-lessons.md#meth-01).
 
@@ -253,6 +254,20 @@ failed the quality gate. It was rejected and removed.
 - **Lesson:** Every reused threadgroup-memory cycle needs an explicit
   reader-to-next-writer edge. The surrounding compute path is covered in the
   [prefill summary](06-prefill.md).
+
+<a id="kv-15"></a>
+### KV-15: Grouped full attention with matched reduction order
+
+After 110,000 prompt tokens on M5 Pro 24 GB, the repaired grouped kernel
+reached 18.02 tok/s against 8.14 for exact split-KV. All 256 generated token
+IDs matched. Both arms used 32 expert-cache slots and 256-token prefill
+chunks; this was one pair, with zero new swapouts.
+
+The original grouped reduction failed the short quality gate. Matching the
+old score reduction and output FMA order repaired that defect. The grouped
+kernel is selected in the 0.9.0 draft, with larger-context retrieval and
+8 GB validation still open. See the [full measurement](10-long-context.md)
+for the method, earlier identity/quality checks and remaining limits.
 
 [Previous: RDADVISE](04-rdadvise.md) |
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |

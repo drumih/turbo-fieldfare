@@ -115,6 +115,7 @@ import TurboFieldfareValidationSupport
         seqLen: Int,
         mode: Mode,
         shareKV: Bool = false,
+        useGroupedVector: Bool = true,
         seed: UInt64,
         tolerance: Float = Tolerance.fp16ChainedReduction
     ) throws {
@@ -171,7 +172,7 @@ import TurboFieldfareValidationSupport
                               headDim: UInt32(headDim),
                               numQHeads: UInt32(numQHeads),
                               numKVHeads: UInt32(numKVHeads),
-                              seqLen: UInt32(seqLen))
+                              seqLen: UInt32(seqLen), useGroupedVector: useGroupedVector)
         }
         cmd.commit()
         cmd.waitUntilCompleted()
@@ -383,5 +384,178 @@ import TurboFieldfareValidationSupport
         try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 2,
                                seqLen: 128, mode: .full, shareKV: true,
                                seed: 0x177)
+    }
+
+    // Grouped vector split-KV (D512 full attention) ---------------------------
+
+    /// These are tolerance checks against the independent FP32 reference.
+    /// GroupedAttentionIdentityTests separately checks D-1a against production.
+    ///
+    /// 17 is the case that matters most: 16 chunks over 17 keys gives
+    /// chunkLen 2, so chunk 9 onward start past the range end and must
+    /// contribute (-inf, 0, 0) rather than garbage.
+    @Test(arguments: [1, 3, 5, 17, 31, 32, 33, 64, 128, 1_024, 4_096])
+    func attentionFull_groupedVector_matchesReference(seqLen: Int) throws {
+        try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 2,
+                               seqLen: seqLen, mode: .full,
+                               useGroupedVector: true,
+                               seed: 0x9E1 &+ UInt64(seqLen))
+    }
+
+    /// K and V diverge through separate per-head norms and RoPE in the real
+    /// runtime; aliasing them would hide a V-indexing bug.
+    @Test func attentionFull_groupedVector_sharedKV() throws {
+        try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 2,
+                               seqLen: 320, mode: .full, shareKV: true,
+                               useGroupedVector: true, seed: 0x9E2)
+    }
+
+    /// Production scale is 1.0; the reference convention is 1/sqrt(head_dim).
+    /// The kernel applies the scale after the dot, as the exact kernel does,
+    /// so both must land on the reference.
+    @Test func attentionFull_groupedVector_defaultScale() throws {
+        try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 2,
+                               seqLen: 96, mode: .full,
+                               useGroupedVector: true, seed: 0x9E3)
+    }
+
+    @Test func attentionFull_groupedVector_isDeterministic() throws {
+        let ctx = try MetalContext()
+        let kernel = try Attention(context: ctx)
+        var rng = SeedTree(0x9E4).key("grouped-vec-determinism")
+        let qCount = 16 * 512
+        let kvCount = 700 * 2 * 512
+        let q = (0..<qCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        let k = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        let v = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        guard let qBuf = Fp16Buffer.make(ctx.device, halves: q),
+              let kBuf = Fp16Buffer.make(ctx.device, halves: k),
+              let vBuf = Fp16Buffer.make(ctx.device, halves: v) else {
+            Issue.record("Failed to allocate buffers"); return
+        }
+        func run() -> [Float] {
+            guard let out = Fp16Buffer.make(ctx.device, count: qCount),
+                  let cb = ctx.queue.makeCommandBuffer() else { return [] }
+            kernel.encodeFull(commandBuffer: cb, q: qBuf, k: kBuf, v: vBuf, out: out,
+                              headDim: 512, numQHeads: 16, numKVHeads: 2,
+                              seqLen: 700, scale: 1.0, useGroupedVector: true)
+            cb.commit(); cb.waitUntilCompleted()
+            return Fp16Buffer.read(out, count: qCount)
+        }
+        #expect(run() == run())
+    }
+
+    /// One threadgroup per (kv_head, chunk) instead of one per (q_head, chunk):
+    /// 8x fewer partial threadgroups for the same split.
+    @Test func attentionFull_groupedVector_dispatchesPerKVHead() throws {
+        let grouped = Attention.splitGeometry(headDim: 512, numQHeads: 16,
+                                              numKVHeads: 2, seqLen: 4_096,
+                                              kvStart: 0, preferGQASWA: false,
+                                              forceGroupedVector: true)
+        let exact = Attention.splitGeometry(headDim: 512, numQHeads: 16,
+                                            numKVHeads: 2, seqLen: 4_096,
+                                            kvStart: 0, preferGQASWA: false)
+        #expect(grouped.useFullGroupedVectorPartial)
+        #expect(!exact.useFullGroupedVectorPartial)
+        #expect(grouped.numChunks == exact.numChunks)
+        #expect(grouped.partialThreadgroups == 2 * grouped.numChunks)
+        #expect(exact.partialThreadgroups == 16 * exact.numChunks)
+    }
+
+    /// The kernel indexes 16 Q heads over 2 KV heads with 16 components per
+    /// lane. Any other shape must fall back to the exact split kernel.
+    @Test func attentionFull_groupedVector_rejectsOtherShapes() throws {
+        let wrongHeadDim = Attention.splitGeometry(headDim: 256, numQHeads: 16,
+                                                   numKVHeads: 8, seqLen: 1_024,
+                                                   kvStart: 0, preferGQASWA: false,
+                                                   forceGroupedVector: true)
+        let wrongGQA = Attention.splitGeometry(headDim: 512, numQHeads: 16,
+                                               numKVHeads: 4, seqLen: 1_024,
+                                               kvStart: 0, preferGQASWA: false,
+                                               forceGroupedVector: true)
+        #expect(!wrongHeadDim.useFullGroupedVectorPartial)
+        #expect(!wrongGQA.useFullGroupedVectorPartial)
+    }
+
+    /// The FP32 reference holds ~0.8 GB of `[Float]` at these lengths, which
+    /// the 8 GB dev Mac cannot afford, so the long-context correctness pin is
+    /// against the exact split kernel instead: same inputs, same combine, a
+    /// different pass-1 reduction. Without this the kernel is only covered to
+    /// 4,096 while it is measured at 65,536.
+    @Test(arguments: [16_384, 65_536])
+    func attentionFull_groupedVector_matchesExactKernelAtLongContext(seqLen: Int) throws {
+        let ctx = try MetalContext()
+        let kernel = try Attention(context: ctx)
+        var rng = SeedTree(0x9E5).key("grouped-vec-long-\(seqLen)")
+        let qCount = 16 * 512
+        let kvCount = seqLen * 2 * 512
+        let q = (0..<qCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        let k = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        let v = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        guard let qBuf = Fp16Buffer.make(ctx.device, halves: q),
+              let kBuf = Fp16Buffer.make(ctx.device, halves: k),
+              let vBuf = Fp16Buffer.make(ctx.device, halves: v) else {
+            Issue.record("Failed to allocate buffers"); return
+        }
+        func run(grouped: Bool) -> [Float] {
+            guard let out = Fp16Buffer.make(ctx.device, count: qCount),
+                  let cb = ctx.queue.makeCommandBuffer() else { return [] }
+            kernel.encodeFull(commandBuffer: cb, q: qBuf, k: kBuf, v: vBuf, out: out,
+                              headDim: 512, numQHeads: 16, numKVHeads: 2,
+                              seqLen: UInt32(seqLen), scale: 1.0,
+                              useGroupedVector: grouped)
+            cb.commit(); cb.waitUntilCompleted()
+            return Fp16Buffer.read(out, count: qCount)
+        }
+        let rel = RelError.compute(actual: run(grouped: true),
+                                   reference: run(grouped: false))
+        if rel >= Tolerance.fp16ChainedReduction {
+            print("grouped-vec vs exact at seqLen=\(seqLen): rel=\(rel)")
+        }
+        #expect(rel < Tolerance.fp16ChainedReduction)
+    }
+
+    /// Every other case draws from U(-0.5, 0.5), which keeps scores near zero
+    /// and barely exercises the online-softmax rescale. At production scale 1.0
+    /// over 512 dims, real scores span a far wider range: here U(-3, 3) inputs
+    /// give scores around +/-200, so `alpha = exp(m_run - m_new)` underflows to
+    /// zero whenever a late key takes the running max and the accumulated
+    /// output must be discarded rather than blended. A kernel that dropped the
+    /// rescale entirely still passes the small-amplitude cases.
+    @Test(arguments: [64, 1_024, 4_096])
+    func attentionFull_groupedVector_wideScoreRange(seqLen: Int) throws {
+        let ctx = try MetalContext()
+        let kernel = try Attention(context: ctx)
+        var rng = SeedTree(0x9E6).key("grouped-vec-wide-\(seqLen)")
+        let qCount = 16 * 512
+        let kvCount = seqLen * 2 * 512
+        let q = (0..<qCount).map { _ in Float16(rng.uniform(-3.0, 3.0)) }
+        let k = (0..<kvCount).map { _ in Float16(rng.uniform(-3.0, 3.0)) }
+        let v = (0..<kvCount).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
+        guard let qBuf = Fp16Buffer.make(ctx.device, halves: q),
+              let kBuf = Fp16Buffer.make(ctx.device, halves: k),
+              let vBuf = Fp16Buffer.make(ctx.device, halves: v) else {
+            Issue.record("Failed to allocate buffers"); return
+        }
+        func run(grouped: Bool) -> [Float] {
+            guard let out = Fp16Buffer.make(ctx.device, count: qCount),
+                  let cb = ctx.queue.makeCommandBuffer() else { return [] }
+            kernel.encodeFull(commandBuffer: cb, q: qBuf, k: kBuf, v: vBuf, out: out,
+                              headDim: 512, numQHeads: 16, numKVHeads: 2,
+                              seqLen: UInt32(seqLen), scale: 1.0,
+                              useGroupedVector: grouped)
+            cb.commit(); cb.waitUntilCompleted()
+            return Fp16Buffer.read(out, count: qCount)
+        }
+        let reference = AttentionRef.apply(q: q.map(Float.init), k: k.map(Float.init),
+                                           v: v.map(Float.init),
+                                           headDim: 512, numQHeads: 16, numKVHeads: 2,
+                                           seqLen: seqLen, window: nil, scale: 1.0)
+        let grouped = run(grouped: true)
+        let exact = run(grouped: false)
+        let relGrouped = RelError.compute(actual: grouped, reference: reference)
+        let relExact = RelError.compute(actual: exact, reference: reference)
+        #expect(relGrouped < Tolerance.fp16ChainedReduction,
+                "grouped rel=\(relGrouped) exact rel=\(relExact) at seqLen=\(seqLen)")
     }
 }

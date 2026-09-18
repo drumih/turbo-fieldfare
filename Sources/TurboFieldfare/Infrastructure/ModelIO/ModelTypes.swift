@@ -25,6 +25,10 @@ public struct ArchConfig: Sendable, Equatable {
     public let attentionKEqV: Bool
     public let fullAttentionLayerMask: [UInt8]
     public let hiddenActivation: String
+    /// The checkpoint's `max_position_embeddings`. The one ceiling every
+    /// surface refuses above; not a manifest-compared field, so
+    /// `ManifestReader.validateArch` does not read it.
+    public let maxPositionEmbeddings: Int
 
     public init(
         hiddenSize: Int,
@@ -47,7 +51,8 @@ public struct ArchConfig: Sendable, Equatable {
         tieWordEmbeddings: Bool,
         attentionKEqV: Bool,
         fullAttentionLayerMask: [UInt8],
-        hiddenActivation: String
+        hiddenActivation: String,
+        maxPositionEmbeddings: Int = 262_144
     ) {
         self.hiddenSize = hiddenSize
         self.intermediateSize = intermediateSize
@@ -70,6 +75,7 @@ public struct ArchConfig: Sendable, Equatable {
         self.attentionKEqV = attentionKEqV
         self.fullAttentionLayerMask = fullAttentionLayerMask
         self.hiddenActivation = hiddenActivation
+        self.maxPositionEmbeddings = maxPositionEmbeddings
     }
 
     /// Canonical Gemma 4 26B-A4B baseline, checked against the installed
@@ -96,7 +102,8 @@ public struct ArchConfig: Sendable, Equatable {
         tieWordEmbeddings: true,
         attentionKEqV: true,
         fullAttentionLayerMask: Self.gemma4LayerMask(),
-        hiddenActivation: "gelu_pytorch_tanh"
+        hiddenActivation: "gelu_pytorch_tanh",
+        maxPositionEmbeddings: 262_144
     )
 
     private static func gemma4LayerMask() -> [UInt8] {
@@ -107,7 +114,7 @@ public struct ArchConfig: Sendable, Equatable {
 }
 
 /// Failure modes for the validation gates in `Model.load`.
-enum ModelError: Error, CustomStringConvertible, Equatable {
+public enum ModelError: Error, CustomStringConvertible, Equatable {
     case partialInstall(path: String)
     case notAGTurboDirectory
     case unsupportedVersion(major: Int, minor: Int)
@@ -122,6 +129,8 @@ enum ModelError: Error, CustomStringConvertible, Equatable {
     case indexCorrupt(detail: String)
     case posixFailed(call: String, errno: Int32)
     case trustedReceiptInvalid(detail: String)
+    case contextExceedsModel(requested: Int, maximum: Int)
+    case kvAllocationFailed(layer: Int, bytes: Int)
 
     public var description: String {
         switch self {
@@ -153,6 +162,10 @@ enum ModelError: Error, CustomStringConvertible, Equatable {
             return "\(c) failed with errno \(e)"
         case .trustedReceiptInvalid(let detail):
             return "trusted install receipt invalid: \(detail)"
+        case .contextExceedsModel(let requested, let maximum):
+            return "maxContext \(requested) exceeds the model's maximum position \(maximum)"
+        case .kvAllocationFailed(let layer, let bytes):
+            return "KV cache allocation of \(bytes) bytes for layer \(layer) failed"
         }
     }
 }

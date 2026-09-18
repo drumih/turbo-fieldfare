@@ -51,6 +51,21 @@ public func run(args: Args,
                 stdout: FileHandle = .standardOutput,
                 stderr: FileHandle = .standardError) async -> RunResult {
     do {
+        // The CLI is the diagnostic surface: it says what the context will cost
+        // and runs anyway, where the app hides the row and the server refuses.
+        // Not gated on --quiet, which suppresses the timing footer, not a
+        // warning that the run may swap or be killed.
+        let hostMemory = ContextAdmission.hostMemoryBytes
+        if case .needsMemory = ContextAdmission.availability(
+            config: ArchConfig.gemma4_26B_A4B,
+            maxContext: args.maxContext,
+            hostMemoryBytes: hostMemory) {
+            let need = ContextAdmission.needDescription(
+                config: ArchConfig.gemma4_26B_A4B,
+                maxContext: args.maxContext,
+                hostMemoryBytes: hostMemory)
+            stderr.write(Data("[memory: \(need) Continuing.]\n".utf8))
+        }
         let modelURL = URL(fileURLWithPath: args.model)
         let input = try parseInput(args: args)
         var selectedDevice: MTLDevice?

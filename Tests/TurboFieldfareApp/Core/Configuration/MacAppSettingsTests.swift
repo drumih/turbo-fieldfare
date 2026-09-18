@@ -225,6 +225,86 @@ import Testing
                 "if 4K ever becomes the default, this test is asking the wrong question")
     }
 
+    /// Why version 3 exists at all.
+    ///
+    /// 128K and 256K are new options. An older build's `isValid` checks the
+    /// stored context against the options *it* knows, so it rejects 262,144 —
+    /// and `loadOrCreate` deletes the file on that rejection, taking every
+    /// other setting with it. Stamping the file 3 makes that build take the
+    /// newer-version branch instead, which returns defaults and leaves the file
+    /// alone. The migration is version-only: a v2 file keeps the context its
+    /// owner chose.
+    @Test func versionTwoMigrationKeepsContext() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: model)
+        let stored = MacAppSettings(
+            version: 2,
+            contextTokens: 4_096,
+            expertCacheSlots: 24,
+            temperature: 0.4)
+        try JSONEncoder().encode(stored).write(to: fileURL)
+
+        let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
+        let persisted = try JSONDecoder().decode(
+            MacAppSettings.self, from: Data(contentsOf: fileURL))
+
+        #expect(settings.version == 3)
+        #expect(settings.contextTokens == 4_096,
+                "the version bump rewrote a deliberately chosen context")
+        #expect(settings.expertCacheSlots == 24)
+        #expect(settings.temperature == 0.4)
+        #expect(persisted == settings)
+    }
+
+    /// The hazard version 3 closes, seen from the other side: a file from a
+    /// build newer than this one carries a context this build's `isValid`
+    /// cannot admit. It must survive untouched rather than be deleted.
+    @Test func anewerFileWithAnUnknownContextIsLeftOnDisk() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: model)
+        let future = """
+        {
+          "version": \(MacAppSettings.currentVersion + 1),
+          "contextTokens": 999999,
+          "expertCacheSlots": 16,
+          "temperature": 0.2,
+          "topKEnabled": true,
+          "topK": 64,
+          "topPEnabled": true,
+          "topP": 0.95,
+          "prefillEnabled": true
+        }
+        """
+        try Data(future.utf8).write(to: fileURL)
+
+        let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
+
+        #expect(settings == MacAppSettings(),
+                "an unknown version should be run on defaults, not adopted")
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == future,
+                "a newer build's settings file was rewritten or deleted")
+    }
+
+    /// The new ceiling round-trips at this version: written, validated, read
+    /// back and still 262,144.
+    @Test func aversionThreeFileKeepsA256KContext() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let stored = MacAppSettings(contextTokens: 262_144)
+        #expect(stored.version == 3)
+
+        try MacAppSettingsFileStore.save(stored, forModelDirectory: model)
+        let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
+
+        #expect(settings == stored)
+        #expect(settings.contextTokens == 262_144)
+    }
+
     /// A v1 file at any other context is restamped untouched too — the version
     /// bump must not be a licence to edit values.
     @Test func versionOneMigrationOnlyRestampsTheVersion() throws {
@@ -417,11 +497,11 @@ import Testing
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: modelDirectory)
 
-        // A plausible version 3: `topP` became `topProbability`. Everything else
-        // this build knows is still present and still valid.
+        // A plausible next version: `topP` became `topProbability`. Everything
+        // else this build knows is still present and still valid.
         let newer = """
         {
-          "version": 3,
+          "version": \(MacAppSettings.currentVersion + 1),
           "contextTokens": 8192,
           "expertCacheSlots": 16,
           "temperature": 0.2,

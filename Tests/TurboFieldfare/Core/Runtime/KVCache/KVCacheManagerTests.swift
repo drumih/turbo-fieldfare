@@ -11,6 +11,7 @@ import Metal
 
     private func makeManager(maxContext: Int,
                              fp16RingEnabled: Bool = false,
+                             maxPrefillChunkTokens: Int = 128,
                              fp16RingCapacityOverride: Int? = nil) throws -> (MetalContext, KVCacheManager) {
         let ctx = try MetalContext()
         let kv = try KVCacheManager(device: ctx.device,
@@ -18,10 +19,15 @@ import Metal
                                     maxContext: maxContext,
                                     fp16RingEnabled: fp16RingEnabled,
                                     slidingWindow: config.slidingWindow,
-                                    maxPrefillChunkTokens: 128,
+                                    maxPrefillChunkTokens: maxPrefillChunkTokens,
                                     fp16RingCapacityOverride: fp16RingCapacityOverride)
         return (ctx, kv)
     }
+
+    /// The chunk floor `RealForwardRunner` applies in production, which is what
+    /// makes the ring 1,304 rows rather than the 1,152 a bare 128-token chunk
+    /// would give.
+    private var productionChunkTokens: Int { VisionConfig().maximumPooledTokens }
 
 
     @Test func strideAndBufferSizes_matchConfig() throws {
@@ -184,6 +190,37 @@ import Metal
         #expect(kv.position == 2)
     }
 
+    /// The ceiling is the checkpoint's `max_position_embeddings`, and it is
+    /// checked before the first `makeBuffer`: at 262,145 the allocation loop
+    /// would ask for 5.4 GiB of full-layer KV for positions the model has no
+    /// RoPE frequencies for.
+    @Test func contextAboveModelMaximumIsRefusedBeforeAllocation() throws {
+        do {
+            _ = try makeManager(maxContext: 262_145, fp16RingEnabled: true)
+            Issue.record("262,145 was accepted above the model maximum 262,144")
+        } catch let error as ModelError {
+            #expect(error == .contextExceedsModel(requested: 262_145, maximum: 262_144))
+            #expect(error.description.contains("262145"))
+            #expect(error.description.contains("262144"))
+        }
+    }
+
+    /// The model maximum itself constructs. Gated on host memory: the full
+    /// layers reserve 5.4 GiB of address space, which is not something CI or
+    /// the 8 GB dev Mac should be asked for.
+    @Test func modelMaximumContextAllocates() throws {
+        guard ProcessInfo.processInfo.physicalMemory >= 16 << 30 else { return }
+        let (_, kv) = try makeManager(maxContext: 262_144,
+                                      fp16RingEnabled: true,
+                                      maxPrefillChunkTokens: productionChunkTokens)
+        #expect(kv.capacity(layer: 5) == 262_144)
+        #expect(kv.capacity(layer: 0)
+                == ContextAdmission.productionSlidingRingRows(config: config,
+                                                              maxContext: 262_144))
+        #expect(kv.capacity(layer: 0) == 1_304)
+        #expect(kv.bufferLength(layer: 5) == 262_144 * 2_048)
+    }
+
     @Test func reset_clearsPosition() throws {
         let (_, kv) = try makeManager(maxContext: 128)
         for _ in 0..<100 { kv.advance() }
@@ -195,5 +232,6 @@ import Metal
         kv.advance()
         #expect(kv.position == 1)
     }
+
 
 }

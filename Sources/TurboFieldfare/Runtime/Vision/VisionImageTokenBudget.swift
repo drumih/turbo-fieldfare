@@ -20,6 +20,13 @@ public enum VisionImageTokenBudget {
         VisionConfig().maximumPooledTokens + markerTokensPerImage
     }
 
+    /// An absolute ceiling on one turn's attachments, on top of the
+    /// context-derived budget. The arithmetic alone is unbounded in the
+    /// context: a 262,144-token context would offer about 930 images in a
+    /// single message, each of which has to be decoded, preprocessed and
+    /// encoded before the turn produces a token.
+    public static let maximumAttachmentsPerTurn = 32
+
     public static func imageTokens(softTokenCounts: [Int]) -> Int {
         softTokenCounts.reduce(0) { $0 + $1 + markerTokensPerImage }
     }
@@ -61,6 +68,6 @@ public enum VisionImageTokenBudget {
             return 0
         }
         let available = maxContext - reservedTextTokens
-        return available / maximumTokensPerImage
+        return min(available / maximumTokensPerImage, maximumAttachmentsPerTurn)
     }
 }

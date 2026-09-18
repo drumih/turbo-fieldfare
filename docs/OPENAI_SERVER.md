@@ -244,7 +244,11 @@ The server supports one model and one choice. It does not support the Responses
 API, legacy Completions, embeddings, structured output,
 batching, log probabilities, or remote model switching.
 
-Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
+Context caps are 4K, 8K, 16K, 32K, 64K, 96K, 128K, 192K, and 256K.
+The default is 16K. The server checks host-memory admission before loading.
+The larger settings in this 0.9.0 draft still need retrieval and constrained-host
+validation; see the [long-context report](experiments/summaries/10-long-context.md).
+Larger FP16
 KV contexts use more memory. On an 8 GB Mac, run one model process at a time and
 watch memory pressure.
 

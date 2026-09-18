@@ -12,7 +12,7 @@ The Mac app and CLI expose these generation controls:
 | Control | Mac values | CLI flag | Default | Effect |
 | --- | --- | --- | --- | --- |
 | Maximum response | Automatic | `--max-new` | App: remaining context; CLI: 1,024 tokens | The app can use the context space left after the retained conversation and new turn. The CLI uses its explicit or default `--max-new` limit. |
-| Maximum context | 4K, 8K, 16K, 32K, 64K | `--max-context` | CLI and app: 8K; server: 16K | Sets conversation or prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. |
+| Maximum context | 4K, 8K, 16K, 32K, 64K, 128K, 256K (host-gated) | `--max-context` | CLI and app: 8K; server: 16K | Sets conversation or prompt plus response capacity, and 8K is what leaves room for an image and its prompt. The app shows the FP16 KV-memory delta. The server defaults higher still because agent clients routinely send prompts near 8K on their own. |
 | Temperature | 0...2 in 0.05 steps | `--temperature` | 0.2 | `0` is greedy; positive values sample. |
 | Top-K | Off or 1...256 | `--top-k` | 64 | Keeps at most K candidates. CLI `0` turns it off. |
 | Top-P | Off or 0.01...1 | `--top-p` | 0.95 | Applies nucleus truncation before Top-K and is effective only while Top-K is enabled. |
@@ -112,3 +112,16 @@ During chunked prefill, the phase label reports exact progress, for example
 `Prefill (128/514)`. Errors and unsupported configurations appear only when
 they occur. RDADVISE remains experimental and is off by default. A measured
 result is a data point, not a performance ceiling.
+
+## Larger contexts in the 0.9.0 draft
+
+The app hides context sizes that exceed the host-memory admission estimate.
+A saved unavailable size is clamped with a notice. The server refuses an
+unbacked context unless `TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT=1` is set for
+a diagnostic run; the CLI warns and proceeds. The model ceiling is 262,144
+positions. Image inputs are limited to 32 attachments per message, subject
+to the remaining context budget.
+
+The [110K attention comparison](experiments/summaries/10-long-context.md)
+measured a decode improvement with 32 cache slots. Defaults remain unchanged.
+Retrieval at 64K/128K/256K and the 128K memory check on 8 GB remain release gates.

@@ -88,6 +88,21 @@ struct ServerImageTokenBudgetTests {
             textTokens: 100, maxContext: 4_096))
     }
 
+    /// The shared budget the server and the app both answer from grew an
+    /// absolute per-turn cap when the context ceiling went to 262,144: the
+    /// context-derived figure alone would offer about 930 images in one
+    /// message. `fits` is unchanged — a request that fits still fits — but any
+    /// surface asking "how many may I attach" gets the capped answer.
+    @Test func theSharedCapacityIsBoundedAboveTheContextArithmetic() {
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: 262_144, reservedTextTokens: 0) == 32)
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: 65_536, reservedTextTokens: 0) == 32)
+        // Small contexts are still decided by the arithmetic, not the cap.
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: 4_096, reservedTextTokens: 0) == 14)
+    }
+
     @Test func rejectionNamesTheRealCostRatherThanACount() {
         let error = ServerImageTokenBudget.rejection(
             imageCount: 3, softTokenCounts: [280, 280, 280],

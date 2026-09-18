@@ -3,7 +3,7 @@ import TurboFieldfare
 
 struct MacAppSettings: Codable, Equatable, Sendable {
     static let fileName = "mac-app-settings.json"
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version: Int = currentVersion
     var contextTokens: Int = AppContextLengthOption.eightK.tokens

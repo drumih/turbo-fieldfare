@@ -299,8 +299,10 @@ struct InspectorView: View {
     private var memorySection: some View {
         Section("Memory") {
             LabeledContent("Context") {
+                // Only the sizes this Mac can back. Offering one it cannot
+                // would put a row in the menu that every load then refuses.
                 Picker("Context", selection: contextTokensBinding) {
-                    ForEach(AppContextLengthOption.allCases) { option in
+                    ForEach(model.contextOptions) { option in
                         Text(option.menuLabel).tag(option.tokens)
                     }
                 }
@@ -308,6 +310,13 @@ struct InspectorView: View {
                 .labelsHidden()
                 .fixedSize()
                 .accessibilityIdentifier(.inspectorContext)
+            }
+            // The clamp notice already carries the need it clamped for, so
+            // showing both would print the same sentence twice.
+            if let note = model.contextClampNotice ?? model.contextOptionsNote {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             LabeledContent("Slots") {
                 Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {

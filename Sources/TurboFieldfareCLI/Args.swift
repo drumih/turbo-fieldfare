@@ -82,6 +82,7 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
     case mutuallyExclusive(String, String)
     case modeMissing
     case imagePromptNeedsExpertCacheSlots(have: Int, need: Int)
+    case contextExceedsModel(requested: Int, maximum: Int)
 
     public var description: String {
         switch self {
@@ -97,6 +98,8 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
             return "--image requires chunked prefill, which needs at least \(need) "
                 + "expert-cache slots; --expert-cache-slots \(have) cannot serve it: "
                 + "raise --expert-cache-slots to \(need) or more, or drop --image"
+        case .contextExceedsModel(let requested, let maximum):
+            return "--max-context \(requested) exceeds the model's maximum position \(maximum)"
         }
     }
 }
@@ -131,7 +134,7 @@ extension Args {
 
     options:
       --max-new <int>            Generated-token limit (default 1024).
-      --max-context <int>        Context limit in tokens (default 8192).
+      --max-context <int>        Context limit in tokens (default 8192, max 262144).
       --temperature <float>      Sampling temperature (default 0.2; 0 = greedy).
       --top-k <int>              Top-k truncation, 1...256 (default 64; 0 = off).
       --top-p <float>            Nucleus truncation (default 0.95).
@@ -252,6 +255,10 @@ extension Args {
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value), parsed > 0 else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                let ceiling = ArchConfig.gemma4_26B_A4B.maxPositionEmbeddings
+                guard parsed <= ceiling else {
+                    throw ArgsError.contextExceedsModel(requested: parsed, maximum: ceiling)
                 }
                 maxContext = parsed
             case "--temperature":

@@ -16,6 +16,11 @@ public struct ServerArguments: Equatable, Sendable {
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
 
+    public static let allowedMaxContext = [
+        4_096, 8_192, 16_384, 32_768, 65_536, 98_304, 131_072, 196_608, 262_144,
+    ]
+    public static let unbackedContextOverrideVariable = "TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT"
+
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
@@ -25,7 +30,10 @@ public struct ServerArguments: Equatable, Sendable {
                                  Routed-expert residency during vision (default on-demand).
       --port <1...65535>         Loopback port (default 8080).
       --model-id <id>            API model identifier (default gemma-4-26b-a4b-it).
-      --max-context <tokens>     4096, 8192, 16384, 32768, or 65536 (default 16384).
+      --max-context <tokens>     4096, 8192, 16384, 32768, 65536, 98304,
+                                 131072, 196608, or 262144 (default 16384).
+                                 Contexts exceeding the host memory budget are refused.
+                                 TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT=1 overrides this.
       --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                                  Prompt KV reuse mode (default single-prefix).
@@ -80,7 +88,11 @@ public struct ServerArguments: Equatable, Sendable {
             forceLogitsHead: forceLogitsHead)
     }
 
-    public static func parse(_ input: [String]) throws -> ServerArguments {
+    public static func parse(
+        _ input: [String],
+        hostMemoryBytes: UInt64 = ContextAdmission.hostMemoryBytes,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> ServerArguments {
         var model: String?
         var port = 8080
         var modelID = "gemma-4-26b-a4b-it"
@@ -118,7 +130,7 @@ public struct ServerArguments: Equatable, Sendable {
                 modelID = value
             case "--max-context":
                 guard let parsed = Int(value),
-                      [4_096, 8_192, 16_384, 32_768, 65_536].contains(parsed) else {
+                      allowedMaxContext.contains(parsed) else {
                     throw ServerArgumentError.invalid("--max-context is not supported")
                 }
                 maxContext = parsed
@@ -193,6 +205,21 @@ public struct ServerArguments: Equatable, Sendable {
             }
         }
         guard let model else { throw ServerArgumentError.invalid("--model is required") }
+        // Refused here rather than at load: the KV allocation for a context the
+        // host cannot back fails deep inside the runtime, after the model has
+        // already started loading, with an allocator error that says nothing
+        // about how much memory the choice actually needs.
+        let config = ArchConfig.gemma4_26B_A4B
+        if case .needsMemory = ContextAdmission.availability(config: config,
+                                                             maxContext: maxContext,
+                                                             hostMemoryBytes: hostMemoryBytes),
+           environment[unbackedContextOverrideVariable] != "1" {
+            throw ServerArgumentError.invalid(
+                ContextAdmission.needDescription(config: config,
+                                                 maxContext: maxContext,
+                                                 hostMemoryBytes: hostMemoryBytes)
+                    + " Set \(unbackedContextOverrideVariable)=1 to start anyway.")
+        }
         return ServerArguments(model: model,
                                port: port,
                                modelID: modelID,

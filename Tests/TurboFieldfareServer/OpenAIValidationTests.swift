@@ -1062,6 +1062,112 @@ struct ServerArgumentTests {
         }
     }
 
+    /// A host large enough to back every rung, so these cases test the
+    /// allowlist rather than the machine the suite happens to run on.
+    private static let sixteenGigabyteHost: UInt64 = 17_179_869_184
+    private static let eightGigabyteHost: UInt64 = 8_589_934_592
+
+    @Test(arguments: ServerArguments.allowedMaxContext)
+    func everyAllowedContextParses(_ maxContext: Int) throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo", "--max-context", String(maxContext)],
+            hostMemoryBytes: Self.sixteenGigabyteHost,
+            environment: [:])
+        #expect(arguments.maxContext == maxContext)
+    }
+
+    /// The allowlist is the last thing between a request and the KV allocator,
+    /// so a rung above what the checkpoint's positions can address must not be
+    /// reachable through it — a 262,145-token context has no RoPE position.
+    @Test func everyAllowedContextFitsTheCheckpointCeiling() {
+        let ceiling = ArchConfig.gemma4_26B_A4B.maxPositionEmbeddings
+        #expect(ServerArguments.allowedMaxContext.allSatisfy { $0 <= ceiling })
+        #expect(ServerArguments.allowedMaxContext.max() == ceiling)
+        #expect(ServerArguments.allowedMaxContext == ServerArguments.allowedMaxContext.sorted())
+        // The help text is the only place an operator reads the list, so it
+        // must not drift from the list the parser enforces.
+        for context in ServerArguments.allowedMaxContext {
+            #expect(ServerArguments.usage.contains(String(context)), "context \(context)")
+        }
+    }
+
+    @Test(arguments: [262_145, 100_000])
+    func rejectsAContextOutsideTheAllowlist(_ maxContext: Int) throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse(
+                ["--model", "model.gturbo", "--max-context", String(maxContext)],
+                hostMemoryBytes: Self.sixteenGigabyteHost,
+                environment: [:])
+        }
+    }
+
+    /// Refused at argument parsing, before the model starts loading: a 256K KV
+    /// on an 8 GB Mac would otherwise fail inside the allocator with an error
+    /// that names neither the context nor the memory it needed.
+    @Test func aContextTheHostCannotBackIsRefusedWithItsMemoryNeed() throws {
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse(
+                ["--model", "model.gturbo", "--max-context", "262144"],
+                hostMemoryBytes: Self.eightGigabyteHost,
+                environment: [:])
+        }
+        do {
+            _ = try ServerArguments.parse(
+                ["--model", "model.gturbo", "--max-context", "262144"],
+                hostMemoryBytes: Self.eightGigabyteHost,
+                environment: [:])
+            Issue.record("a 256K context was admitted on an 8 GB host")
+        } catch let error as ServerArgumentError {
+            #expect(error.description.contains("262,144"))
+            #expect(error.description.contains("needs 16 GB"))
+            #expect(error.description.contains("this Mac has 8 GB"))
+            #expect(error.description.contains("TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT=1"))
+        }
+    }
+
+    @Test func theSameContextIsAdmittedOnAHostThatBacksIt() throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo", "--max-context", "262144"],
+            hostMemoryBytes: Self.sixteenGigabyteHost,
+            environment: [:])
+        #expect(arguments.maxContext == 262_144)
+    }
+
+    /// The override exists for measurement runs that deliberately exceed the
+    /// rule to record what actually happens; it must admit the exact context
+    /// the rule refused, not relax the rule generally.
+    @Test func theOverrideAdmitsAnUnbackedContext() throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo", "--max-context", "262144"],
+            hostMemoryBytes: Self.eightGigabyteHost,
+            environment: ["TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT": "1"])
+        #expect(arguments.maxContext == 262_144)
+    }
+
+    /// 128K projects to 2.75 GiB of KV plus the 2 GiB non-KV runtime plus the
+    /// 3 GiB host reserve: 8,320,122,880 bytes, which an 8 GB Mac clears by
+    /// 269,811,712. Whether that margin survives a real decode is what step 9
+    /// of the plan measures; the rule as written admits it, so this case pins
+    /// the arithmetic rather than the outcome of that measurement.
+    @Test func oneTwentyEightKIsAdmittedOnAnEightGigabyteHost() throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo", "--max-context", "131072"],
+            hostMemoryBytes: Self.eightGigabyteHost,
+            environment: [:])
+        #expect(arguments.maxContext == 131_072)
+    }
+
+    /// Admission must not move the default: the server still starts at 16,384
+    /// on a host that cannot back the new rungs.
+    @Test func theDefaultContextIsUnchangedAndAdmittedEverywhere() throws {
+        let arguments = try ServerArguments.parse(
+            ["--model", "model.gturbo"],
+            hostMemoryBytes: Self.eightGigabyteHost,
+            environment: [:])
+        #expect(arguments.maxContext == 16_384)
+        #expect(arguments.maxContext == 16_384)
+    }
+
     /// The integers a message names, in order. Comparing these against the
     /// array the guard tests catches a message that omits a legal value and one
     /// that names an illegal extra, and cannot be fooled the way a
