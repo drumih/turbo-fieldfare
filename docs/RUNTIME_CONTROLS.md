@@ -115,29 +115,30 @@ result is a data point, not a performance ceiling.
 
 ## Context length and memory
 
-The model supports up to 262,144 positions. A larger context allocates more
-FP16 KV-cache memory, even before the conversation fills it. The app offers
-the sizes listed above; the server also accepts 96K and 192K.
+Use the default context unless you need a longer conversation: 8K in the app
+and CLI, or 16K in the server.
 
-The memory estimate adds the FP16 KV cache to a 2 GiB runtime allowance for
-16 expert-cache slots, then leaves 3 GiB for macOS and the file cache.
-Selecting 24 or 32 slots adds about 0.75 or 1.50 GiB, respectively, across
-the model's 30 layers. On an 8 GB Mac, 128K exceeds the estimate with either
-larger cache.
+The model supports up to 256K tokens, but larger contexts need more RAM. The
+KV cache is allocated when the model loads, even if the conversation is empty.
+The server also offers 96K and 192K.
 
-The app hides sizes that exceed this estimate. If a saved size no longer
-fits, or you increase Slots beyond what the selected Context allows, the app
-reduces Context and displays a notice. The server rejects settings that
-exceed the estimate before loading; the CLI prints a warning and proceeds.
+The memory check includes the KV cache, 2 GiB for the runtime with 16
+expert-cache slots, and 3 GiB for macOS and the file cache. Choosing 24 or 32
+slots adds about 0.75 or 1.50 GiB. On an 8 GB Mac, neither leaves enough room
+for 128K under this estimate.
+
+When a setting exceeds the estimate:
+
+- The app hides it and lowers an incompatible saved setting, with a notice.
+- The server refuses to load.
+- The CLI warns but continues.
+
 For diagnostic runs, `TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT=1` bypasses the
 server check.
 
-This estimate uses your Mac's total RAM; other running apps can still cause
-memory pressure. Answer quality at 256K and 128K memory use on an 8 GB Mac
-have not been validated. See the
-[long-context report](experiments/summaries/10-long-context.md) for the tests
-completed so far. The defaults remain 8K for the app and CLI, 16K for the
-server, and 16 expert-cache slots.
+Passing the check doesn't guarantee enough free memory: it uses total RAM,
+and other apps need memory too. Answer quality at 256K and memory use at 128K
+on an 8 GB Mac still need testing. See the
+[long-context report](experiments/summaries/10-long-context.md).
 
-Image inputs allow up to 32 attachments per message, provided their tokens
-fit in the remaining context.
+The app allows up to 32 images per message. The remaining context may fit fewer.
