@@ -94,6 +94,16 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                 }
                 do {
                     let options = try appRuntimeOptions(request.runtimeOptions)
+                    if let refusal = DecodeLoadAdmission.refusal(
+                        maxContextTokens: request.maxContextTokens,
+                        hostMemoryBytes: ContextAdmission.hostMemoryBytes,
+                        environment: ProcessInfo.processInfo.environment,
+                        expertCacheSlots: options.expertCacheSlots) {
+                        try? write(DecodeServiceEvent(
+                            kind: .failed, generationID: request.requestID, error: refusal),
+                            to: handles.output)
+                        break
+                    }
                     // The session load already checks for cancellation between
                     // its stages; running it in a task is what gives the input
                     // thread something to cancel.

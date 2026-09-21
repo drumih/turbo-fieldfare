@@ -375,3 +375,86 @@ void attention_decode_combine(
         out_row[i] = half(acc * inv_d);
     }
 }
+
+[[kernel, max_total_threads_per_threadgroup(kAttnThreads)]]
+void attention_decode_full_grouped_vec_partial(
+    device const half*  Q             [[buffer(0)]],
+    device const half*  K             [[buffer(1)]],
+    device const half*  V             [[buffer(2)]],
+    device       float* m_out         [[buffer(3)]],   // [num_q_heads * num_chunks]
+    device       float* d_out         [[buffer(4)]],   // [num_q_heads * num_chunks]
+    device       float* o_out         [[buffer(5)]],   // [num_q_heads * num_chunks * head_dim]
+    constant     uint&  head_dim      [[buffer(6)]],
+    constant     uint&  num_q_heads   [[buffer(7)]],
+    constant     uint&  num_kv_heads  [[buffer(8)]],
+    constant     uint&  seq_len       [[buffer(9)]],
+    constant     uint&  kv_start      [[buffer(10)]],
+    constant     uint&  chunk_len     [[buffer(11)]],
+    constant     uint&  num_chunks    [[buffer(12)]],
+    constant     float& scale         [[buffer(13)]],
+    uint tg_id           [[threadgroup_position_in_grid]],
+    uint simd_lane_id    [[thread_index_in_simdgroup]],
+    uint simd_group_id   [[simdgroup_index_in_threadgroup]]
+) {
+    constexpr uint kGVHeadDim  = 512;
+    constexpr uint kGVQPerKV   = 8;
+    constexpr uint kGVPerLane  = kGVHeadDim / 32;   // 16 components per lane
+
+    const uint NC  = attn_fc_num_chunks(num_chunks);
+    const uint NKV = attn_fc_num_kv_heads(num_kv_heads);
+
+    const uint kv_head = tg_id / NC;
+    const uint chunk   = tg_id % NC;
+    const uint q_head  = kv_head * kGVQPerKV + simd_group_id;
+
+    const uint p_start = kv_start + chunk * chunk_len;
+    uint p_end = p_start + chunk_len;
+    if (p_end > seq_len) { p_end = seq_len; }
+
+    const uint component = simd_lane_id;
+
+    thread float q_reg[kGVPerLane];
+    thread float o_local[kGVPerLane];
+    device const half* Q_row = Q + q_head * kGVHeadDim + component;
+    for (uint i = 0; i < kGVPerLane; ++i) {
+        q_reg[i]   = float(Q_row[32 * i]);
+        o_local[i] = 0.0f;
+    }
+
+    float m_run = -INFINITY;
+    float d_run = 0.0f;
+    const float sc = attn_fc_scale(scale);
+
+    // An empty chunk (p_start past the range end) skips the loop and writes
+    // (-inf, 0, 0), which the combine weights to zero via e^{-inf}.
+    for (uint p = p_start; p < p_end; ++p) {
+        const uint kv_base = (p * NKV + kv_head) * kGVHeadDim + component;
+        device const half* K_row = K + kv_base;
+        device const half* V_row = V + kv_base;
+
+        float group_total = 0.0f;
+        for (uint g = 0; g < 8; ++g) {
+            const float partial = fma(q_reg[g + 8], float(K_row[32 * g + 256]),
+                                      fma(q_reg[g], float(K_row[32 * g]), 0.0f));
+            // Every lane participates before one lane retains the virtual sum.
+            const float reduced = simd_sum(partial);
+            if (simd_lane_id == g) { group_total = reduced; }
+        }
+        float s = simd_sum(group_total) * sc;
+
+        const float m_new = max(m_run, s);
+        const float alpha = attn_softmax_exp(m_run - m_new);
+        const float p_exp = attn_softmax_exp(s     - m_new);
+        d_run = d_run * alpha + p_exp;
+        for (uint i = 0; i < kGVPerLane; ++i) {
+            // Match production's contraction: round the new weighted value first.
+            o_local[i] = fma(o_local[i], alpha, p_exp * float(V_row[32 * i]));
+        }
+        m_run = m_new;
+    }
+
+    const uint base = q_head * NC + chunk;
+    if (simd_lane_id == 0) { m_out[base] = m_run; d_out[base] = d_run; }
+    device float* o_row = o_out + base * kGVHeadDim + component;
+    for (uint i = 0; i < kGVPerLane; ++i) { o_row[32 * i] = o_local[i]; }
+}

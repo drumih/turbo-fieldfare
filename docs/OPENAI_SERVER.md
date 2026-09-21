@@ -244,9 +244,15 @@ The server supports one model and one choice. It does not support the Responses
 API, legacy Completions, embeddings, structured output,
 batching, log probabilities, or remote model switching.
 
-Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
-KV contexts use more memory. On an 8 GB Mac, run one model process at a time and
-watch memory pressure.
+Context length can be 4K, 8K, 16K, 32K, 64K, 96K, 128K, 192K, or 256K.
+The default is 16K. Before loading the model, the server checks whether the
+selected context and expert cache fit its memory estimate for your Mac.
+Larger contexts need more memory for the FP16 KV cache. See
+[context length and memory](RUNTIME_CONTROLS.md#context-length-and-memory)
+for the calculation and diagnostic override, and the
+[long-context report](experiments/summaries/10-long-context.md) for measured
+results and validation limits. On an 8 GB Mac, run one model process at a
+time and watch memory pressure.
 
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not

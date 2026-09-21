@@ -61,6 +61,41 @@ import TurboFieldfare
         }
     }
 
+    /// The context-derived budget is unbounded in the context: at 262,144
+    /// tokens the arithmetic alone offers about 930 images in one message. The
+    /// absolute per-turn cap is what stops that, and it binds only once the
+    /// context is large enough for it to.
+    @Test func theperTurnCapBoundsWhatALargeContextWouldOffer() {
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: 262_144, reservedTextTokens: 0)
+            == VisionImageTokenBudget.maximumAttachmentsPerTurn)
+        #expect(VisionImageTokenBudget.maximumAttachmentsPerTurn == 32)
+
+        // One token below where the cap starts binding, the context is still
+        // the thing that decides.
+        let atTheCap = VisionImageTokenBudget.maximumTokensPerImage
+            * VisionImageTokenBudget.maximumAttachmentsPerTurn
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: atTheCap, reservedTextTokens: 0) == 32)
+        #expect(VisionImageTokenBudget.capacity(
+            maxContext: atTheCap - 1, reservedTextTokens: 0) == 31)
+    }
+
+    @MainActor
+    @Test func thecapReachesTheComposerMessageInsteadOfAdviceToRaiseTheContext() {
+        let capped = AppModel.imageCapacityMessage(
+            capacity: VisionImageTokenBudget.maximumAttachmentsPerTurn,
+            context: 262_144)
+        #expect(capped.contains("32"))
+        #expect(!capped.contains("Raise"),
+                "raising the context cannot lift the per-turn cap")
+        // Below the cap the context really is the reason, and saying so is how
+        // the user knows what to change.
+        let contextBound = AppModel.imageCapacityMessage(capacity: 10, context: 4_096)
+        #expect(contextBound.contains("4K"))
+        #expect(contextBound.contains("Raise"))
+    }
+
     @Test func unknownConversationPositionHasNoImageCapacity() {
         #expect(AppModel.imageAttachmentCapacity(
             maxContextTokens: AppContextLengthOption.fourK.tokens,

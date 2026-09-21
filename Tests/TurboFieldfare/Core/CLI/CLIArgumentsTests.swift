@@ -337,4 +337,36 @@ import TurboFieldfare
         }
     }
 
+    /// The CLI accepts the checkpoint's whole position range; nothing below
+    /// the model ceiling is the CLI's to refuse.
+    @Test func maxContextAtModelCeilingAccepted() throws {
+        let a = try Args.parse([
+            "--model", "m.gturbo",
+            "--prompt", "x",
+            "--max-context", "262144",
+        ])
+        #expect(a.maxContext == 262_144)
+        #expect(a.maxContext == ArchConfig.gemma4_26B_A4B.maxPositionEmbeddings)
+    }
+
+    /// One token past the ceiling is refused at parse time, naming both the
+    /// request and the maximum — before the model load that would otherwise
+    /// turn it into a KV allocation failure.
+    @Test func maxContextAboveModelCeilingRejected() {
+        do {
+            _ = try Args.parse([
+                "--model", "m.gturbo",
+                "--prompt", "x",
+                "--max-context", "262145",
+            ])
+            Issue.record("--max-context 262145 was accepted above the model ceiling")
+        } catch let error as ArgsError {
+            #expect(error == .contextExceedsModel(requested: 262_145, maximum: 262_144))
+            #expect(error.description.contains("262145"))
+            #expect(error.description.contains("262144"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
 }

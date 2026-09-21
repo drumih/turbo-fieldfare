@@ -183,6 +183,9 @@ all affect decode speed.
 | [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 61 / 516 | 22.256 tok/s | One submitted run |
 | [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 430 / 780 | 28.964 tok/s | One submitted run |
 | [dragonwang1019](https://github.com/dragonwang1019) · [issue #101](https://github.com/drumih/turbo-fieldfare/issues/101) | M4 Pro Mac mini | 24 GB | External NVMe SSD | 3,015 / 617 | 24.209 tok/s | One submitted run |
+| [r1tz](https://github.com/r1tz) · [issue #175](https://github.com/drumih/turbo-fieldfare/issues/175) | M4 Pro Mac mini | 24 GB | Not reported | 61 / 489 | 33.343 tok/s | One submitted run |
+| [r1tz](https://github.com/r1tz) · [issue #175](https://github.com/drumih/turbo-fieldfare/issues/175) | M4 Pro Mac mini | 24 GB | Not reported | 430 / 760 | 31.236 tok/s | One submitted run |
+| [r1tz](https://github.com/r1tz) · [issue #175](https://github.com/drumih/turbo-fieldfare/issues/175) | M4 Pro Mac mini | 24 GB | Not reported | 3,015 / 594 | 25.186 tok/s | One submitted run |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 61 / 516 | 34.060 tok/s | Automatic mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 430 / 780 | 30.954 tok/s | Automatic mode |
 | [Marcelo Barros](https://github.com/marcelopbarros) · [issue #67](https://github.com/drumih/turbo-fieldfare/issues/67) | M4 Pro MacBook Pro | 24 GB | Internal SSD | 3,015 / 617 | 25.292 tok/s | Automatic mode |
@@ -217,3 +220,11 @@ match.
 Each measured case ran in a fresh process with the sampling settings above;
 all three ended with `stop=endOfTurn`. The reporter reviewed the outputs and
 reported no loops, repeated blocks or protocol deviations.
+
+[Issue #175](https://github.com/drumih/turbo-fieldfare/issues/175) reports a
+12-core M4 Pro Mac mini (Mac16,11), macOS 26.6.2 (25G83), Swift 6.4, and commit
+`4c6db1e698ea861609109d4bc517410ff302af46`. The attached prompt hashes match
+the frozen community prompts. All three measured runs ended with
+`stop=endOfTurn`; the attached outputs finish without obvious loops or
+repeated blocks. Storage, energy mode and other active workloads were not
+reported. These are individual submitted runs, not repeated-run averages.

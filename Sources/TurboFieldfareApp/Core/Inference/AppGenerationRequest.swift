@@ -80,6 +80,16 @@ public struct AppGenerationRequest: Equatable, Sendable {
         guard maxContextTokens > 0 else {
             throw AppInferenceError.invalidRequest("Max context must be greater than zero.")
         }
+        // The checkpoint's `max_position_embeddings`. Above it the model is
+        // being asked for a position it was never trained to address, which no
+        // amount of memory makes valid, so this is refused here rather than
+        // discovered as a KV allocation the runtime then throws on.
+        let modelCeiling = ArchConfig.gemma4_26B_A4B.maxPositionEmbeddings
+        guard maxContextTokens <= modelCeiling else {
+            throw AppInferenceError.invalidRequest(
+                "Max context \(maxContextTokens) is above the model's "
+                    + "\(modelCeiling)-token limit.")
+        }
         guard conversationTokens >= 0, conversationTokens <= maxContextTokens else {
             throw AppInferenceError.invalidRequest(
                 "Conversation tokens must be between zero and the max context.")

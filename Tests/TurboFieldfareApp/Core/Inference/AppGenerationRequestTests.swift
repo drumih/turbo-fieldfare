@@ -186,6 +186,30 @@ import TurboFieldfare
         }
     }
 
+    /// The model's `max_position_embeddings`. A context above it is not a
+    /// memory question — no machine makes a position the model was never
+    /// trained to address valid — so it is refused here rather than surfacing
+    /// as a KV allocation the runtime throws on.
+    @Test func acontextAboveTheModelCeilingIsRejectedNamingBothNumbers() throws {
+        let ceiling = ArchConfig.gemma4_26B_A4B.maxPositionEmbeddings
+        #expect(ceiling == 262_144)
+
+        try AppGenerationRequest(
+            modelDirectory: existingDirectory, prompt: "hello",
+            maxContextTokens: ceiling).validate()
+
+        do {
+            try AppGenerationRequest(
+                modelDirectory: existingDirectory, prompt: "hello",
+                maxContextTokens: ceiling + 1).validate()
+            Issue.record("a context above the model ceiling was accepted")
+        } catch let error as AppInferenceError {
+            let message = "\(error)"
+            #expect(message.contains("262145"))
+            #expect(message.contains("262144"))
+        }
+    }
+
     @Test func invalidContextCannotOverflowImageCapacity() {
         let request = AppGenerationRequest(
             modelDirectory: existingDirectory,

@@ -73,6 +73,13 @@ public final class KVCacheManager {
                 fp16RingCapacityOverride: Int? = nil) throws {
         precondition(maxContext > 0, "maxContext must be positive")
         precondition(maxPrefillChunkTokens > 0, "maxPrefillChunkTokens must be positive")
+        // Refused before a single `makeBuffer`: a context past the checkpoint's
+        // position ceiling has no valid RoPE positions, and allocating 5+ GiB
+        // of KV before saying so is the expensive way to learn it.
+        guard maxContext <= config.maxPositionEmbeddings else {
+            throw ModelError.contextExceedsModel(requested: maxContext,
+                                                 maximum: config.maxPositionEmbeddings)
+        }
         self.config = config
         self.maxContext = maxContext
         let ringEnabled = fp16RingEnabled
@@ -103,13 +110,13 @@ public final class KVCacheManager {
             let length = capacity * stride
 
             guard let kBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
-                throw ModelError.residentBufferWrapFailed
+                throw ModelError.kvAllocationFailed(layer: layer, bytes: length)
             }
             kBuf.label = "kv.K.layer\(layer)"
             ks.append(kBuf)
 
             guard let vBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
-                throw ModelError.residentBufferWrapFailed
+                throw ModelError.kvAllocationFailed(layer: layer, bytes: length)
             }
             vBuf.label = "kv.V.layer\(layer)"
             vs.append(vBuf)
@@ -234,11 +241,15 @@ public final class KVCacheManager {
         position = newPosition
     }
 
-    /// Drop all cached positions and return physical pages to the OS.
+    /// Drop all cached positions and advise the pages away.
     ///
     /// No buffer zeroing — the attention kernels read only `[0, validTokenCount]`,
-    /// and `validTokenCount` is now 0. `MADV_DONTNEED` on the page-aligned span
-    /// releases resident memory between turns; pages fault back in on next write.
+    /// and `validTokenCount` is now 0. The `MADV_DONTNEED` is advisory only:
+    /// measured on macOS 26 (M5 Pro, 2026-08-28), `phys_footprint` did not move
+    /// after advising a fully written 262,144-row cache, and a single attention
+    /// bind had already charged each bound buffer in full. Sizing decisions
+    /// must therefore treat the KV as resident at its allocated size for as
+    /// long as the runner lives; see `ContextAdmission`.
     public func reset() {
         position = 0
         highWaterPosition = 0

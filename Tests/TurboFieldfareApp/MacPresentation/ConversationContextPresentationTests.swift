@@ -12,6 +12,17 @@ import Testing
                 == "\u{2014}", "an unknown window must not read as a full one")
     }
 
+    /// The K here is decimal, deliberately: 65,536 has always printed as "66K"
+    /// in this gauge, so the model's native ceiling prints as "262K" rather
+    /// than the "256K" the Context menu labels it with. Changing it would move
+    /// every existing reading, so it is pinned instead.
+    @Test func thefullNativeWindowReadsInTheSameDecimalKAsEveryOtherSize() {
+        #expect(ConversationContextPresentation.gauge(kvTokens: 65_536, maxContext: 65_536)
+                == "66K/66K")
+        #expect(ConversationContextPresentation.gauge(kvTokens: 262_144, maxContext: 262_144)
+                == "262K/262K")
+    }
+
     /// The committed count only moves when a turn finishes, so a gauge reading
     /// it sits still through the whole run and then jumps. These pin the live
     /// figure through each phase of a turn.
