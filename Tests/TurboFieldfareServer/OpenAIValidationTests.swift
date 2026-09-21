@@ -1021,20 +1021,20 @@ struct ServerArgumentTests {
     @Test func runtimeFlagsReachTheResolvedConfiguration() throws {
         let arguments = try ServerArguments.parse([
             "--model", "model.gturbo",
-            "--expert-cache-slots", "32",
+            "--expert-cache-slots", "24",
             "--expert-cache-policy", "lru",
             "--prefill", "on",
             "--prefill-chunk-tokens", "64",
             "--rdadvise", "adaptive",
         ])
-        #expect(arguments.expertCacheSlots == 32)
+        #expect(arguments.expertCacheSlots == 24)
         #expect(arguments.expertCachePolicy == .lru)
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 64)
         #expect(arguments.rdadvisePolicy == .adaptive)
 
         let configuration = try arguments.resolvedRuntimeConfiguration()
-        #expect(configuration.expertCacheSlots == 32)
+        #expect(configuration.expertCacheSlots == 24)
         #expect(configuration.expertCachePolicy == .lru)
         #expect(configuration.prefillPolicy == .chunked)
         #expect(configuration.prefillChunkTokens == 64)
