@@ -307,9 +307,13 @@ swift build -c release --product TurboFieldfareServer
 ```
 
 It listens on `http://127.0.0.1:8080/v1` and supports Chat Completions,
-streaming, function tools, and single-prefix prompt reuse. The client must
-authorize and run every tool call. Keep the server on loopback; it has no
-remote authentication or TLS.
+streaming, function tools, and prompt reuse. The client must authorize and run
+every tool call. Keep the server on loopback; it has no remote authentication or
+TLS.
+
+One conversation keeps its KV prefix by default, so two clients sharing a
+server evict each other on every call. `--prompt-cache-slots` retains several,
+and a client may send `prompt_cache_key` to reserve one.
 
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.

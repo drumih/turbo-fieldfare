@@ -8,6 +8,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let maxContext: Int
     public let queueLimit: Int
     public let promptCacheMode: ServerPromptCacheMode
+    public let promptCacheSlots: Int
     public let expertCacheSlots: Int
     public let expertCachePolicy: RuntimeExpertCachePolicy
     public let prefillPolicy: RuntimePrefillPolicy
@@ -20,6 +21,15 @@ public struct ServerArguments: Equatable, Sendable {
         4_096, 8_192, 16_384, 32_768, 65_536, 98_304, 131_072, 196_608, 262_144,
     ]
     public static let unbackedContextOverrideVariable = "TURBO_FIELDFARE_ALLOW_UNBACKED_CONTEXT"
+    /// How many conversations may keep a KV prefix at once.
+    ///
+    /// Capped at four because a slot is not bookkeeping: it is a whole KV
+    /// lineage, allocating about 575 MiB at the default 16,384-token context
+    /// and four times that at 65,536, so an unbounded count would let one flag
+    /// exhaust a 16 GB Mac. The startup log reports the per-slot figure for the
+    /// context actually configured, as the ceiling it is — a slot goes resident
+    /// only as far as the conversation in it reaches.
+    public static let allowedPromptCacheSlots = [1, 2, 3, 4]
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
@@ -37,6 +47,18 @@ public struct ServerArguments: Equatable, Sendable {
       --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                                  Prompt KV reuse mode (default single-prefix).
+      --prompt-cache-slots <n>   Conversations whose KV prefix is retained at
+                                 once: \(RuntimeConfiguration.allowedValueList(ServerArguments.allowedPromptCacheSlots)) (default 1). One slot is
+                                 the historical behavior: a second caller's
+                                 request replaces the first's prefix, so two
+                                 interleaved conversations each prefill in full.
+                                 Each slot holds its own KV, so raising this
+                                 costs memory; the startup log reports the
+                                 per-slot ceiling, which a slot reaches only if
+                                 its conversation fills the context. Slots past
+                                 the first are allocated when a conversation
+                                 first uses them. Clients may send
+                                 prompt_cache_key to reserve a slot.
       --expert-cache-slots <n>   Expert-cache slots: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertCacheSlots)) (default 16).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
@@ -99,6 +121,7 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var promptCacheSlots = 1
         var visionPack: String?
         var visionResidency: VisionResidencyPolicy = .onDemand
         var expertCacheSlots = 16
@@ -145,6 +168,14 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--prompt-cache-slots":
+                guard let parsed = Int(value),
+                      Self.allowedPromptCacheSlots.contains(parsed) else {
+                    throw ServerArgumentError.notAllowed(
+                        flag: flag,
+                        allowed: Self.allowedPromptCacheSlots)
+                }
+                promptCacheSlots = parsed
             case "--vision-pack":
                 visionPack = value
             case "--vision-residency":
@@ -210,15 +241,29 @@ public struct ServerArguments: Equatable, Sendable {
         // already started loading, with an allocator error that says nothing
         // about how much memory the choice actually needs.
         let config = ArchConfig.gemma4_26B_A4B
+        // Retained lineages are charged here too: `--prompt-cache-slots 4` at a
+        // large context asks for several times the KV a single cache needs, and
+        // admitting on the one-lineage figure would let exactly the combination
+        // that cannot fit start and then fail in the allocator.
         if case .needsMemory = ContextAdmission.availability(config: config,
                                                              maxContext: maxContext,
-                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots),
+                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                             promptCacheSlots: promptCacheSlots),
            environment[unbackedContextOverrideVariable] != "1" {
             throw ServerArgumentError.invalid(
                 ContextAdmission.needDescription(config: config,
                                                  maxContext: maxContext,
-                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
+                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                 promptCacheSlots: promptCacheSlots)
                     + " Set \(unbackedContextOverrideVariable)=1 to start anyway.")
+        }
+        // Refused rather than coerced: `off` retains nothing, so slots have
+        // nothing to hold, and silently running one would let an operator
+        // believe retention was configured when the mode had turned it off.
+        guard promptCacheMode != .off || promptCacheSlots == 1 else {
+            throw ServerArgumentError.invalid(
+                "--prompt-cache-slots \(promptCacheSlots) requires "
+                    + "--prompt-cache-mode single-prefix")
         }
         return ServerArguments(model: model,
                                port: port,
@@ -226,6 +271,7 @@ public struct ServerArguments: Equatable, Sendable {
                                maxContext: maxContext,
                                queueLimit: queueLimit,
                                promptCacheMode: promptCacheMode,
+                               promptCacheSlots: promptCacheSlots,
                                expertCacheSlots: expertCacheSlots,
                                expertCachePolicy: expertCachePolicy,
                                prefillPolicy: prefillPolicy,

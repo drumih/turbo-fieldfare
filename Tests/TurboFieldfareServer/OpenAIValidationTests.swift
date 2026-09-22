@@ -573,7 +573,6 @@ struct OpenAIValidationTests {
         ("store", #""store":false"#),
         ("metadata", #""metadata":{"run":"7"}"#),
         ("service_tier", #""service_tier":"auto""#),
-        ("prompt_cache_key", #""prompt_cache_key":"cache-1""#),
         ("safety_identifier", #""safety_identifier":"user-hash""#),
     ])
     func toleratedBookkeepingFieldsDecode(_ key: String, _ field: String) throws {
@@ -587,6 +586,170 @@ struct OpenAIValidationTests {
         // of the key, so nothing downstream can act on it.
         let encoded = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         #expect(!encoded.contains("\"\(key)\":"))
+    }
+
+    /// `prompt_cache_key` was tolerated-and-ignored before the cache had slots
+    /// to reserve. It is a real field now, which is why it left the list above:
+    /// a caller already sending one gets the same 200 it always did, and now
+    /// the value reaches the cache instead of being dropped.
+    @Test func promptCacheKeyDecodesIntoTheValidatedRequest() throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_key":"extraction"}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        #expect(request.promptCacheKey == "extraction")
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.promptCacheKey == "extraction")
+    }
+
+    @Test func absentPromptCacheKeyStaysNil() throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}]}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.promptCacheKey == nil)
+    }
+
+    /// An empty key is refused rather than read as "unkeyed": the two ask for
+    /// different slots, and silently treating one as the other would put a
+    /// caller that thinks it reserved a lineage into the shared pool.
+    @Test func emptyOrOversizedPromptCacheKeyIsRejected() throws {
+        for value in ["", String(repeating: "k", count: 129)] {
+            let data = Data("""
+            {"model":"m","messages":[{"role":"user","content":"x"}],
+             "prompt_cache_key":"\(value)"}
+            """.utf8)
+            let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            do {
+                _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+                Issue.record("prompt_cache_key \(value.count) bytes was accepted")
+            } catch let error as ServerRequestError {
+                guard case .invalid(_, let param, let code) = error else {
+                    Issue.record("unexpected error \(error)")
+                    return
+                }
+                #expect(param == "prompt_cache_key")
+                #expect(code == "invalid_value")
+            }
+        }
+        // The bound is inclusive, so the longest legal key still passes.
+        let longest = String(repeating: "k", count: 128)
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_key":"\(longest)"}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        #expect(try OpenAIRequestValidator.validate(request, modelID: "m")
+            .promptCacheKey == longest)
+    }
+
+    /// The override is spelled in the flag's own vocabulary, so a caller who
+    /// read `--prompt-cache-mode` already knows the values.
+    @Test(arguments: [("off", ServerPromptCacheMode.off),
+                      ("single-prefix", ServerPromptCacheMode.singlePrefix)])
+    func promptCacheModeDecodesIntoTheValidatedRequest(
+        _ raw: String, _ expected: ServerPromptCacheMode
+    ) throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_mode":"\(raw)"}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        #expect(request.promptCacheMode == raw)
+        #expect(try OpenAIRequestValidator.validate(request, modelID: "m")
+            .promptCacheMode == expected)
+    }
+
+    @Test func absentPromptCacheModeLeavesTheServerModeStanding() throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}]}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        #expect(try OpenAIRequestValidator.validate(request, modelID: "m")
+            .promptCacheMode == nil)
+    }
+
+    /// A value outside the vocabulary is refused rather than falling back to
+    /// the server's mode. `"none"` is a caller who believes caching is off for
+    /// that request; answering 200 with caching on is the shape of bug
+    /// `unknown_parameter` exists to stop, one level down.
+    @Test(arguments: ["none", "single_prefix", "OFF", "", "true"])
+    func unknownPromptCacheModeIsRefusedNotCoerced(_ raw: String) throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_mode":"\(raw)"}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        do {
+            _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+            Issue.record("prompt_cache_mode \(raw) was accepted")
+        } catch let error as ServerRequestError {
+            guard case .invalid(let message, let param, let code) = error else {
+                Issue.record("unexpected error \(error)")
+                return
+            }
+            #expect(param == "prompt_cache_mode")
+            #expect(code == "invalid_value")
+            // The message names the values the guard tests, as every other
+            // bounded field here does.
+            #expect(message.contains("off"))
+            #expect(message.contains("single-prefix"))
+        }
+    }
+
+    /// A key asks to reserve a lineage and `off` asks not to have one. Refused
+    /// as the contradiction it is: either silent winner leaves the caller
+    /// believing the opposite of what happened.
+    @Test func aKeyCombinedWithOffIsRefused() throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_key":"extraction","prompt_cache_mode":"off"}
+        """.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        do {
+            _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+            Issue.record("a key alongside off was accepted")
+        } catch let error as ServerRequestError {
+            guard case .invalid(_, let param, let code) = error else {
+                Issue.record("unexpected error \(error)")
+                return
+            }
+            #expect(param == "prompt_cache_mode")
+            #expect(code == "invalid_value")
+        }
+
+        // A key alongside the mode it already implies is not a contradiction.
+        let agreeing = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_key":"extraction","prompt_cache_mode":"single-prefix"}
+        """.utf8)
+        let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: agreeing)
+        let validated = try OpenAIRequestValidator.validate(decoded, modelID: "m")
+        #expect(validated.promptCacheKey == "extraction")
+        #expect(validated.promptCacheMode == .singlePrefix)
+    }
+
+    /// #171 made an undeclared top-level field a 400, so the override had to be
+    /// a declared field rather than something smuggled past the key sweep.
+    /// This is what that would have looked like.
+    @Test func aMisspeltPromptCacheModeIsAnUnknownParameterNotIgnored() throws {
+        let data = Data("""
+        {"model":"m","messages":[{"role":"user","content":"x"}],
+         "prompt_cache_modes":"off"}
+        """.utf8)
+        do {
+            _ = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+            Issue.record("a misspelt field decoded")
+        } catch let error as ServerRequestError {
+            guard case .invalid(_, let param, let code) = error else {
+                Issue.record("unexpected error \(error)")
+                return
+            }
+            #expect(param == "prompt_cache_modes")
+            #expect(code == "unknown_parameter")
+        }
     }
 
     @Test func responseFormatTextValidates() throws {
@@ -938,6 +1101,75 @@ struct ServerArgumentTests {
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)
         #expect(arguments.rdadvisePolicy == .off)
+        // One slot is the historical single-prefix behavior. Retention is
+        // memory, so more of it is asked for, never assumed.
+        #expect(arguments.promptCacheSlots == 1)
+    }
+
+    @Test func parsesPromptCacheSlots() throws {
+        for value in ServerArguments.allowedPromptCacheSlots {
+            let arguments = try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--prompt-cache-slots", String(value),
+            ])
+            #expect(arguments.promptCacheSlots == value)
+        }
+    }
+
+    /// The rejection names the values the guard actually tests, the way every
+    /// other bounded flag here does.
+    @Test func promptCacheSlotsRejectionNamesTheAllowedValues() {
+        for value in ["0", "5", "-1", "many"] {
+            do {
+                _ = try ServerArguments.parse([
+                    "--model", "model.gturbo",
+                    "--prompt-cache-slots", value,
+                ])
+                Issue.record("--prompt-cache-slots \(value) was accepted")
+            } catch let error as ServerArgumentError {
+                #expect(error.description == "--prompt-cache-slots must be "
+                    + RuntimeConfiguration.allowedValueList(
+                        ServerArguments.allowedPromptCacheSlots))
+            } catch {
+                Issue.record("unexpected error \(error)")
+            }
+        }
+    }
+
+    /// `off` retains nothing, so slots would have nothing to hold. Refused
+    /// rather than quietly coerced to one, which would let an operator believe
+    /// retention was configured when the mode had turned it off.
+    @Test func promptCacheSlotsRequireAModeThatRetains() {
+        do {
+            _ = try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--prompt-cache-mode", "off",
+                "--prompt-cache-slots", "2",
+            ])
+            Issue.record("slots were accepted alongside a mode that retains nothing")
+        } catch let error as ServerArgumentError {
+            #expect(error.description
+                == "--prompt-cache-slots 2 requires --prompt-cache-mode single-prefix")
+        } catch {
+            Issue.record("unexpected error \(error)")
+        }
+        // One slot is what `off` already implies, so the pair is not an error.
+        #expect(throws: Never.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--prompt-cache-mode", "off",
+                "--prompt-cache-slots", "1",
+            ])
+        }
+    }
+
+    /// The usage text lists the values the parser takes. It is generated from
+    /// the same array the guard tests, so the two cannot drift — the bug fixed
+    /// in #165 for the other bounded flags.
+    @Test func usageListsThePromptCacheSlotValues() {
+        #expect(ServerArguments.usage.contains(
+            RuntimeConfiguration.allowedValueList(
+                ServerArguments.allowedPromptCacheSlots)))
     }
 
     /// The server rejected `--prefill-chunk-tokens auto` while the CLI accepted
@@ -1258,6 +1490,7 @@ struct ServerArgumentTests {
                                         maxContext: 16_384,
                                         queueLimit: 4,
                                         promptCacheMode: .singlePrefix,
+                                        promptCacheSlots: 1,
                                         expertCacheSlots: 12,
                                         expertCachePolicy: .lfu,
                                         prefillPolicy: .off,
@@ -1274,6 +1507,7 @@ struct ServerArgumentTests {
                                         maxContext: 16_384,
                                         queueLimit: 4,
                                         promptCacheMode: .singlePrefix,
+                                        promptCacheSlots: 1,
                                         expertCacheSlots: 16,
                                         expertCachePolicy: .lfu,
                                         prefillPolicy: .off,

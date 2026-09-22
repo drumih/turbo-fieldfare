@@ -21,6 +21,11 @@ public actor TurboFieldfareHTTPServer {
     private let coordinator: ServerCoordinator
     private let heartbeatInterval: TimeAmount
     private let visionCapability: String
+    /// Reported at `/health` because a client cannot otherwise tell a server
+    /// that reserves a slot per `prompt_cache_key` from one that accepts the
+    /// field and ignores it, which is what every earlier version did. Both
+    /// answer 200.
+    private let promptCacheSlots: Int
     private let attachmentRoot: URL
     private let idleTimeout: TimeAmount
     private let childChannels = ChildChannelRegistry()
@@ -32,6 +37,7 @@ public actor TurboFieldfareHTTPServer {
                 backend: any ServerInferenceBackend,
                 heartbeatInterval: TimeAmount = .seconds(5),
                 visionCapability: String = "missing",
+                promptCacheSlots: Int = 1,
                 attachmentRoot: URL = ServerAttachmentDirectory.root,
                 idleTimeout: TimeAmount = TurboFieldfareHTTPServer.idleTimeout,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
@@ -41,6 +47,7 @@ public actor TurboFieldfareHTTPServer {
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
         self.heartbeatInterval = heartbeatInterval
         self.visionCapability = visionCapability
+        self.promptCacheSlots = promptCacheSlots
         self.attachmentRoot = attachmentRoot
         self.idleTimeout = idleTimeout
         ServerAttachmentDirectory.sweepAbandoned(in: attachmentRoot)
@@ -53,6 +60,7 @@ public actor TurboFieldfareHTTPServer {
         let heartbeatInterval = self.heartbeatInterval
         let childChannels = self.childChannels
         let visionCapability = self.visionCapability
+        let promptCacheSlots = self.promptCacheSlots
         let attachmentRoot = self.attachmentRoot
         let idleTimeout = self.idleTimeout
         let bootstrap = ServerBootstrap(group: group)
@@ -78,6 +86,7 @@ public actor TurboFieldfareHTTPServer {
                         coordinator: coordinator,
                         heartbeatInterval: heartbeatInterval,
                         visionCapability: visionCapability,
+                        promptCacheSlots: promptCacheSlots,
                         attachmentRoot: attachmentRoot,
                         childChannels: childChannels))
                 }
@@ -149,6 +158,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let heartbeatInterval: TimeAmount
     private let childChannels: ChildChannelRegistry
     private let visionCapability: String
+    private let promptCacheSlots: Int
     private let attachmentRoot: URL
     private var bodyParser: StreamingChatRequestBody?
     private var bodyError: (any Error)?
@@ -168,6 +178,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
          coordinator: ServerCoordinator,
          heartbeatInterval: TimeAmount,
          visionCapability: String,
+         promptCacheSlots: Int,
          attachmentRoot: URL,
          childChannels: ChildChannelRegistry) {
         self.modelID = modelID
@@ -175,6 +186,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         self.coordinator = coordinator
         self.heartbeatInterval = heartbeatInterval
         self.visionCapability = visionCapability
+        self.promptCacheSlots = promptCacheSlots
         self.attachmentRoot = attachmentRoot
         self.childChannels = childChannels
     }
@@ -300,6 +312,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             writeJSON(context, status: .ok, object: [
                 "status": "ok",
                 "vision": visionCapability,
+                "prompt_cache_slots": promptCacheSlots,
             ])
         case (.GET, "/v1/models"):
             let response = OpenAIModelList(

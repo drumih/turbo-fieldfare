@@ -50,6 +50,17 @@ enum ServerPromptCacheMissReason: String, Sendable, Equatable {
     case imagesDiverged = "images-diverged"
 }
 
+/// Which retained lineage a request resolved to, and what it can do with it.
+///
+/// A slot is always named, hit or miss: a miss still has to prefill somewhere,
+/// and where it prefills is what it overwrites.
+struct ServerPromptCacheResolution: Sendable, Equatable {
+    let slot: Int
+    let match: ServerPromptCacheMatch
+
+    var missReason: ServerPromptCacheMissReason? { match.missReason }
+}
+
 enum ServerPromptCacheMatch: Sendable, Equatable {
     case miss(ServerPromptCacheMissReason)
     case hit(effectivePromptIDs: [Int32], cachedPromptTokens: Int)
@@ -69,13 +80,150 @@ enum ServerPromptCacheMatch: Sendable, Equatable {
 }
 
 struct ServerPromptCache: Sendable {
-    private(set) var entry: ServerPromptCacheEntry?
+    /// One retained lineage.
+    ///
+    /// `key` is the client-supplied `prompt_cache_key` this slot answers for.
+    /// It governs eviction only: a keyed request looks at its own slot and
+    /// nowhere else, and unkeyed traffic looks only at slots no key has
+    /// claimed. So a caller that names its conversation cannot have it thrown
+    /// away by a caller that does not — which is the whole difference between
+    /// two clients sharing a server and two clients fighting over it.
+    struct Slot: Sendable {
+        var entry: ServerPromptCacheEntry?
+        var key: String?
+        /// Tick of the last request to use this slot; the LRU order.
+        var lastUsed: UInt64 = 0
+    }
 
-    var kvBackedTokenIDs: [Int32]? { entry?.kvBackedTokenIDs }
-    var inputMessageCount: Int? { entry?.inputMessages.count }
+    private(set) var slots: [Slot]
+    private var clock: UInt64 = 0
 
-    mutating func invalidate() {
-        entry = nil
+    init(slotCount: Int = 1) {
+        precondition(slotCount > 0, "slotCount must be positive")
+        self.slots = Array(repeating: Slot(), count: slotCount)
+    }
+
+    var slotCount: Int { slots.count }
+
+    /// The historical single-prefix view: slot 0. Kept because a one-slot cache
+    /// is exactly what this was before slots existed, and the suite that proves
+    /// so reads through here.
+    var entry: ServerPromptCacheEntry? { slots[0].entry }
+
+    func kvBackedTokenIDs(slot: Int) -> [Int32]? { slots[slot].entry?.kvBackedTokenIDs }
+    func inputMessageCount(slot: Int) -> Int? { slots[slot].entry?.inputMessages.count }
+    func key(slot: Int) -> String? { slots[slot].key }
+
+    /// How many slots hold a reusable prefix. Reported at completion so an
+    /// operator can see retention working without reading token counts.
+    var occupiedSlotCount: Int { slots.count(where: { $0.entry != nil }) }
+
+    mutating func invalidate(slot: Int) {
+        slots[slot].entry = nil
+    }
+
+    /// The slot a request runs in, and whether that slot can continue it.
+    ///
+    /// Selection never decides correctness. Every hit returned here has been
+    /// verified by `match` against that entry's own domain, tools, history and
+    /// images, so choosing the wrong slot can cost a prefill and can never
+    /// serve a prefix the caller did not send. That is what makes guessing by
+    /// recency safe.
+    mutating func resolve(
+        domain: ServerPromptCacheDomain,
+        request: ValidatedChatRequest,
+        renderedPromptIDs: [Int32]?,
+        tokenizer: GFTokenizer
+    ) -> ServerPromptCacheResolution {
+        clock &+= 1
+        let candidates = candidateSlots(for: request.promptCacheKey)
+        var reported: ServerPromptCacheMissReason?
+        for slot in candidates where slots[slot].entry != nil {
+            let match = match(
+                slot: slot,
+                domain: domain,
+                request: request,
+                renderedPromptIDs: renderedPromptIDs,
+                tokenizer: tokenizer)
+            guard let reason = match.missReason else {
+                slots[slot].lastUsed = clock
+                return ServerPromptCacheResolution(slot: slot, match: match)
+            }
+            // Searching several slots produces several refusals, and reporting
+            // whichever came last would bury the informative one: every slot
+            // holding an unrelated conversation says `historyDiverged`, so a
+            // bridge that failed to render on the slot the request actually
+            // belongs to would never be seen. Keep the most specific.
+            if let current = reported {
+                if Self.diagnosticRank(reason) > Self.diagnosticRank(current) {
+                    reported = reason
+                }
+            } else {
+                reported = reason
+            }
+        }
+        let victim = victimSlot(for: request.promptCacheKey)
+        slots[victim].lastUsed = clock
+        return ServerPromptCacheResolution(
+            slot: victim,
+            match: .miss(reported ?? .noEntry))
+    }
+
+    /// How much a miss reason says. `noEntry` and `historyDiverged` are what
+    /// every slot holding somebody else's conversation answers; the rest name
+    /// something specific about this request or this prefix, and are worth
+    /// more than a truthful shrug from the slot next door.
+    private static func diagnosticRank(_ reason: ServerPromptCacheMissReason) -> Int {
+        switch reason {
+        case .noEntry: 0
+        case .historyDiverged: 1
+        case .unusableEntry: 2
+        default: 3
+        }
+    }
+
+    /// Which slots a request may reuse, most recently used first, ties broken
+    /// by index so the search order never depends on how a sort happened to
+    /// arrange equal keys.
+    ///
+    /// A keyed request sees the slot bearing its key and nothing else: the key
+    /// names a lineage, so there is no question of which one it meant. An
+    /// unkeyed request sees every slot no key has claimed.
+    private func candidateSlots(for key: String?) -> [Int] {
+        let eligible: [Int]
+        if let key {
+            eligible = slots.indices.filter { slots[$0].key == key }
+        } else {
+            eligible = slots.indices.filter { slots[$0].key == nil }
+        }
+        return eligible.sorted {
+            slots[$0].lastUsed == slots[$1].lastUsed
+                ? $0 < $1
+                : slots[$0].lastUsed > slots[$1].lastUsed
+        }
+    }
+
+    /// The slot a miss overwrites.
+    ///
+    /// A key claims its own slot and keeps it. Where it has none yet, and for
+    /// unkeyed traffic, an empty slot is taken before an occupied one and the
+    /// least recently used before the rest. A key prefers to take from the
+    /// unkeyed pool before it takes from another key, so two named
+    /// conversations do not evict each other while unnamed traffic sits on a
+    /// slot.
+    private func victimSlot(for key: String?) -> Int {
+        if let key, let claimed = slots.indices.first(where: { slots[$0].key == key }) {
+            return claimed
+        }
+        let unkeyed = slots.indices.filter { slots[$0].key == nil }
+        // An unkeyed request never takes a named slot while any unnamed one is
+        // free to take; with every slot named it falls back to the whole pool,
+        // because a request still has to prefill somewhere.
+        let preferred = unkeyed.isEmpty ? Array(slots.indices) : unkeyed
+        if let empty = preferred.first(where: { slots[$0].entry == nil }) {
+            return empty
+        }
+        return preferred.min { slots[$0].lastUsed < slots[$1].lastUsed } ?? 0
     }
 
     /// Per-message image identity, or nil when a multimodal request did not
@@ -99,6 +247,51 @@ struct ServerPromptCache: Sendable {
         result: RawDecodeResult,
         stopStringFiltered: Bool = false
     ) {
+        publish(slot: 0,
+                domain: domain,
+                request: request,
+                content: content,
+                calls: calls,
+                result: result,
+                stopStringFiltered: stopStringFiltered)
+    }
+
+    /// Records what the completion in `slot` left behind, and binds the slot to
+    /// the request's key.
+    ///
+    /// The key is taken even when the turn itself is unpublishable: the
+    /// completion has already overwritten that lineage's KV, so the slot is
+    /// spent either way, and leaving it unclaimed would let the next unkeyed
+    /// request take the slot this caller is in the middle of using.
+    mutating func publish(
+        slot: Int,
+        domain: ServerPromptCacheDomain,
+        request: ValidatedChatRequest,
+        content: String,
+        calls: [ParsedToolCall],
+        result: RawDecodeResult,
+        stopStringFiltered: Bool = false
+    ) {
+        slots[slot].key = request.promptCacheKey
+        publishEntry(
+            slot: slot,
+            domain: domain,
+            request: request,
+            content: content,
+            calls: calls,
+            result: result,
+            stopStringFiltered: stopStringFiltered)
+    }
+
+    private mutating func publishEntry(
+        slot: Int,
+        domain: ServerPromptCacheDomain,
+        request: ValidatedChatRequest,
+        content: String,
+        calls: [ParsedToolCall],
+        result: RawDecodeResult,
+        stopStringFiltered: Bool
+    ) {
         guard result.kvPosition == result.kvBackedTokenIDs.count,
               !result.kvBackedTokenIDs.isEmpty,
               result.uncommittedBoundaryTokenIDs.count == 1,
@@ -106,7 +299,7 @@ struct ServerPromptCache: Sendable {
               result.reason == .endOfTurn
                 || result.reason == .toolCalls
                 || result.reason == .maxTokens else {
-            entry = nil
+            slots[slot].entry = nil
             return
         }
         let historicalCalls = calls.map {
@@ -120,10 +313,10 @@ struct ServerPromptCache: Sendable {
             content: calls.isEmpty ? content : nil,
             toolCalls: historicalCalls)
         guard let identities = Self.identities(for: request) else {
-            entry = nil
+            slots[slot].entry = nil
             return
         }
-        entry = ServerPromptCacheEntry(
+        slots[slot].entry = ServerPromptCacheEntry(
             domain: domain,
             inputMessages: request.messages,
             inputImageIdentities: identities,
@@ -145,7 +338,24 @@ struct ServerPromptCache: Sendable {
         renderedPromptIDs: [Int32]?,
         tokenizer: GFTokenizer
     ) -> ServerPromptCacheMatch {
-        guard let entry,
+        match(slot: 0,
+              domain: domain,
+              request: request,
+              renderedPromptIDs: renderedPromptIDs,
+              tokenizer: tokenizer)
+    }
+
+    /// Whether the prefix in one slot can serve this request. Which slots are
+    /// asked, and in what order, is `resolve`'s business; this answers only for
+    /// the one named, and answers on content alone.
+    func match(
+        slot: Int,
+        domain: ServerPromptCacheDomain,
+        request: ValidatedChatRequest,
+        renderedPromptIDs: [Int32]?,
+        tokenizer: GFTokenizer
+    ) -> ServerPromptCacheMatch {
+        guard let entry = slots[slot].entry,
               entry.domain == domain,
               entry.tools == request.tools,
               entry.kvPosition == entry.kvBackedTokenIDs.count,

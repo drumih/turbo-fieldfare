@@ -787,10 +787,570 @@ struct ServerPromptCacheTests {
         #expect(other.missReason == .imagesDiverged)
     }
 
+    // MARK: - Slots
+
+    /// The measured case this exists for.
+    ///
+    /// Two conversations interleave: a background extraction that runs on a
+    /// cadence, and an assistant a person is typing into. With one slot each
+    /// one's request destroys the other's prefix, so neither ever continues —
+    /// a 62-minute meeting kept continuation on 6 of 19 calls. With two, both
+    /// continue across the other's traffic.
+    @Test func twoInterleavedConversationsBothKeepTheirPrefix() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var single = ServerPromptCache(slotCount: 1)
+        var paired = ServerPromptCache(slotCount: 2)
+
+        var extraction = [GFTokenizer.Message(role: .user, content: "chunk 1")]
+        var assistant = [GFTokenizer.Message(role: .user, content: "what was decided?")]
+        var singleHits = 0
+        var pairedHits = 0
+
+        for turn in 1...4 {
+            for (label, messages) in [("extraction", extraction),
+                                      ("assistant", assistant)] {
+                let request = request(messages: messages)
+                let rendered = tokenizer.encode(
+                    try tokenizer.applyChatTemplate(messages), addBOS: false)
+
+                if case .hit = single.match(
+                    domain: domain, request: request,
+                    renderedPromptIDs: rendered, tokenizer: tokenizer) {
+                    singleHits += 1
+                }
+                single.publish(
+                    domain: domain, request: request,
+                    content: "\(label) \(turn)", calls: [],
+                    result: rawResult(
+                        prompt: rendered,
+                        kvBacked: rendered + tokenizer.encode(
+                            "\(label) \(turn)", addBOS: false),
+                        boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+
+                let resolution = paired.resolve(
+                    domain: domain, request: request,
+                    renderedPromptIDs: rendered, tokenizer: tokenizer)
+                if case .hit = resolution.match { pairedHits += 1 }
+                paired.publish(
+                    slot: resolution.slot,
+                    domain: domain, request: request,
+                    content: "\(label) \(turn)", calls: [],
+                    result: rawResult(
+                        prompt: rendered,
+                        kvBacked: rendered + tokenizer.encode(
+                            "\(label) \(turn)", addBOS: false),
+                        boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+
+                let reply = GFTokenizer.Message(
+                    role: .assistant, content: "\(label) \(turn)")
+                let next = GFTokenizer.Message(
+                    role: .user, content: "\(label) follow \(turn)")
+                if label == "extraction" {
+                    extraction += [reply, next]
+                } else {
+                    assistant += [reply, next]
+                }
+            }
+        }
+
+        // One slot: every request is preceded by the other conversation's, so
+        // nothing ever continues. This is the bug, asserted rather than
+        // described.
+        #expect(singleHits == 0)
+        // Two slots: turn 1 is cold for each conversation, every later turn
+        // continues. Six of eight against none.
+        #expect(pairedHits == 6)
+    }
+
+    /// A slot is chosen by recency, but a hit is decided by content. The two
+    /// conversations here are the same length and shape, so only the history
+    /// comparison can tell them apart — a slot picked wrongly must miss, never
+    /// hand over the other conversation's prefix.
+    @Test func aSlotGuessNeverServesTheWrongConversation() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 2)
+        var lineages: [[GFTokenizer.Message]] = [
+            [GFTokenizer.Message(role: .user, content: "alpha")],
+            [GFTokenizer.Message(role: .user, content: "bravo")],
+        ]
+        var kvByLineage: [[Int32]] = [[], []]
+
+        for index in 0..<2 {
+            let request = request(messages: lineages[index])
+            let rendered = tokenizer.encode(
+                try tokenizer.applyChatTemplate(lineages[index]), addBOS: false)
+            let kv = rendered + tokenizer.encode("reply \(index)", addBOS: false)
+            kvByLineage[index] = kv
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: rendered, tokenizer: tokenizer)
+            #expect(resolution.missReason != nil)
+            cache.publish(
+                slot: resolution.slot, domain: domain, request: request,
+                content: "reply \(index)", calls: [],
+                result: rawResult(prompt: rendered, kvBacked: kv,
+                                  boundary: tokenizer.endOfTurnID,
+                                  reason: .endOfTurn))
+            lineages[index] += [
+                GFTokenizer.Message(role: .assistant, content: "reply \(index)"),
+                GFTokenizer.Message(role: .user, content: "again \(index)"),
+            ]
+        }
+
+        // Each continuation resumes onto the KV its own history produced, not
+        // the other's, whichever slot recency happened to offer first.
+        for index in 0..<2 {
+            let request = request(messages: lineages[index])
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: nil, tokenizer: tokenizer)
+            guard case .hit(let effective, let cached) = resolution.match else {
+                Issue.record("lineage \(index) lost its prefix")
+                return
+            }
+            #expect(cached == kvByLineage[index].count)
+            #expect(Array(effective.prefix(cached)) == kvByLineage[index])
+        }
+    }
+
+    /// An unkeyed single-shot caller — a summariser that never continues — is
+    /// what evicted the conversations in the measured case. A key stops it: the
+    /// named lineages survive while the unnamed traffic recycles the slot left
+    /// for it.
+    @Test func aKeyedConversationSurvivesUnkeyedTraffic() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 3)
+
+        func run(_ messages: [GFTokenizer.Message],
+                 key: String?,
+                 reply: String) -> ServerPromptCacheResolution {
+            let request = request(messages: messages, promptCacheKey: key)
+            let rendered = (try? tokenizer.applyChatTemplate(messages))
+                .map { tokenizer.encode($0, addBOS: false) } ?? []
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: rendered, tokenizer: tokenizer)
+            cache.publish(
+                slot: resolution.slot, domain: domain, request: request,
+                content: reply, calls: [],
+                result: rawResult(
+                    prompt: rendered,
+                    kvBacked: rendered + tokenizer.encode(reply, addBOS: false),
+                    boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+            return resolution
+        }
+
+        var extraction = [GFTokenizer.Message(role: .user, content: "chunk 1")]
+        var chat = [GFTokenizer.Message(role: .user, content: "question 1")]
+        let extractionSlot = run(extraction, key: "extraction", reply: "e1").slot
+        let chatSlot = run(chat, key: "assistant", reply: "a1").slot
+        #expect(extractionSlot != chatSlot)
+
+        // Four unrelated single-shot calls, none of which ever continues. Each
+        // one is a fresh conversation, so each misses; all four share the one
+        // slot no key claimed.
+        for index in 1...4 {
+            let summary = run(
+                [GFTokenizer.Message(role: .user, content: "summarise \(index)")],
+                key: nil,
+                reply: "s\(index)")
+            #expect(summary.slot != extractionSlot)
+            #expect(summary.slot != chatSlot)
+        }
+
+        // Both named conversations continue, after all of that.
+        extraction += [
+            GFTokenizer.Message(role: .assistant, content: "e1"),
+            GFTokenizer.Message(role: .user, content: "chunk 2"),
+        ]
+        chat += [
+            GFTokenizer.Message(role: .assistant, content: "a1"),
+            GFTokenizer.Message(role: .user, content: "question 2"),
+        ]
+        let resumedExtraction = run(extraction, key: "extraction", reply: "e2")
+        let resumedChat = run(chat, key: "assistant", reply: "a2")
+        #expect(resumedExtraction.slot == extractionSlot)
+        #expect(resumedChat.slot == chatSlot)
+        guard case .hit = resumedExtraction.match, case .hit = resumedChat.match else {
+            Issue.record("a keyed conversation was evicted by unkeyed traffic")
+            return
+        }
+    }
+
+    /// A key names one lineage, so a keyed request looks at its own slot and
+    /// nowhere else — including when a different key's slot happens to hold a
+    /// conversation that would match.
+    @Test func aKeyLooksOnlyAtItsOwnSlot() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 2)
+        let opening = [GFTokenizer.Message(role: .user, content: "first")]
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(opening), addBOS: false)
+        let kv = rendered + tokenizer.encode("answer", addBOS: false)
+        let published = request(messages: opening, promptCacheKey: "one")
+        let resolution = cache.resolve(
+            domain: domain, request: published,
+            renderedPromptIDs: rendered, tokenizer: tokenizer)
+        cache.publish(
+            slot: resolution.slot, domain: domain, request: published,
+            content: "answer", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        #expect(cache.key(slot: resolution.slot) == "one")
+
+        let follow = opening + [
+            GFTokenizer.Message(role: .assistant, content: "answer"),
+            GFTokenizer.Message(role: .user, content: "second"),
+        ]
+        // The same conversation under a different name is a different lineage:
+        // it takes the free slot rather than the one "one" holds.
+        let other = cache.resolve(
+            domain: domain,
+            request: request(messages: follow, promptCacheKey: "two"),
+            renderedPromptIDs: nil, tokenizer: tokenizer)
+        #expect(other.slot != resolution.slot)
+        #expect(other.missReason == .noEntry)
+
+        // Under its own name it continues.
+        let same = cache.resolve(
+            domain: domain,
+            request: request(messages: follow, promptCacheKey: "one"),
+            renderedPromptIDs: nil, tokenizer: tokenizer)
+        #expect(same.slot == resolution.slot)
+        guard case .hit = same.match else {
+            Issue.record("a keyed conversation did not continue in its own slot")
+            return
+        }
+    }
+
+    /// The two halves of what a key means, which are easy to conflate.
+    ///
+    /// A key selects a *slot*, not a history. So reusing a name over time is
+    /// the intended lifecycle — a conversation that ends and is replaced under
+    /// the same name recycles its own slot and disturbs nothing else — while
+    /// two conversations alive at once under one name resolve to that same
+    /// single slot and overwrite each other on every call, leaving the other
+    /// slots idle.
+    ///
+    /// The second half is the one way a client is worse off for sending a key
+    /// than for sending none, so it is pinned here rather than left to the
+    /// prose. It was also written wrongly first in
+    /// `ServerPromptCacheSlotModelTests`, where giving both conversations one
+    /// key looked like a product bug for a minute.
+    @Test func oneKeyHoldsOneConversationAtATime() async throws {
+        let tokenizer = try await GFTokenizer.load()
+
+        func publish(into cache: inout ServerPromptCache,
+                     _ text: String,
+                     key: String?) -> ServerPromptCacheResolution {
+            let messages = [GFTokenizer.Message(role: .user, content: text)]
+            let request = request(messages: messages, promptCacheKey: key)
+            let rendered = (try? tokenizer.applyChatTemplate(messages))
+                .map { tokenizer.encode($0, addBOS: false) } ?? []
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: rendered, tokenizer: tokenizer)
+            cache.publish(
+                slot: resolution.slot, domain: domain, request: request,
+                content: "reply", calls: [],
+                result: rawResult(
+                    prompt: rendered,
+                    kvBacked: rendered + tokenizer.encode("reply", addBOS: false),
+                    boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+            return resolution
+        }
+
+        // Sequential reuse: each run is a new conversation under one stable
+        // name, and each recycles the same slot without touching the others.
+        var sequential = ServerPromptCache(slotCount: 3)
+        _ = publish(into: &sequential, "neighbour", key: nil)
+        let firstRun = publish(into: &sequential, "run 1", key: "nightly")
+        for run in 2...5 {
+            let later = publish(into: &sequential, "run \(run)", key: "nightly")
+            #expect(later.slot == firstRun.slot,
+                    "a stable name must keep recycling its own slot")
+        }
+        // The unkeyed neighbour is still there, untouched by five runs.
+        #expect(sequential.occupiedSlotCount == 2)
+
+        // Concurrent reuse: three live conversations sharing one name collapse
+        // onto a single slot while the other two sit idle.
+        var concurrent = ServerPromptCache(slotCount: 3)
+        var slotsUsed: Set<Int> = []
+        for conversation in 1...3 {
+            slotsUsed.insert(
+                publish(into: &concurrent, "conversation \(conversation)",
+                        key: "shared").slot)
+        }
+        #expect(slotsUsed.count == 1, "one name cannot hold three lineages")
+        #expect(concurrent.occupiedSlotCount == 1,
+                "the other slots are left idle, which is the cost")
+
+        // The same three conversations without a name spread across the slots
+        // and all three are retained. This is the comparison that makes the
+        // shared key worse than no key at all.
+        var unkeyed = ServerPromptCache(slotCount: 3)
+        for conversation in 1...3 {
+            _ = publish(into: &unkeyed, "conversation \(conversation)", key: nil)
+        }
+        #expect(unkeyed.occupiedSlotCount == 3)
+    }
+
+    /// With every slot named and a new name arriving, something has to go. The
+    /// least recently used name goes, and the slot is renamed on publish rather
+    /// than answering for two conversations at once.
+    @Test func aNewKeyRecyclesTheLeastRecentlyUsedSlot() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 2)
+
+        func run(_ text: String, key: String) -> Int {
+            let messages = [GFTokenizer.Message(role: .user, content: text)]
+            let request = request(messages: messages, promptCacheKey: key)
+            let rendered = (try? tokenizer.applyChatTemplate(messages))
+                .map { tokenizer.encode($0, addBOS: false) } ?? []
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: rendered, tokenizer: tokenizer)
+            cache.publish(
+                slot: resolution.slot, domain: domain, request: request,
+                content: "reply", calls: [],
+                result: rawResult(
+                    prompt: rendered,
+                    kvBacked: rendered + tokenizer.encode("reply", addBOS: false),
+                    boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+            return resolution.slot
+        }
+
+        let a = run("a", key: "a")
+        let b = run("b", key: "b")
+        #expect(a != b)
+        // "a" is touched again, so "b" becomes the least recently used name.
+        _ = run("a again", key: "a")
+        let c = run("c", key: "c")
+        #expect(c == b, "a new key must recycle the least recently used one")
+        #expect(cache.key(slot: c) == "c")
+        #expect(cache.key(slot: a) == "a")
+        // Only two slots exist, so three names cannot all be held: "b" is gone
+        // and comes back cold rather than answering from "c"'s lineage.
+        #expect(!cache.slots.contains { $0.key == "b" })
+    }
+
+    /// Every slot spent means the count is the ceiling on retained
+    /// conversations, not a hint. A third lineage on a two-slot cache costs the
+    /// older of the two.
+    @Test func slotCountIsTheCeilingOnRetainedConversations() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 2)
+        var lineages: [[GFTokenizer.Message]] = []
+
+        func publish(_ messages: [GFTokenizer.Message]) -> Int {
+            let request = request(messages: messages)
+            let rendered = (try? tokenizer.applyChatTemplate(messages))
+                .map { tokenizer.encode($0, addBOS: false) } ?? []
+            let resolution = cache.resolve(
+                domain: domain, request: request,
+                renderedPromptIDs: rendered, tokenizer: tokenizer)
+            cache.publish(
+                slot: resolution.slot, domain: domain, request: request,
+                content: "reply", calls: [],
+                result: rawResult(
+                    prompt: rendered,
+                    kvBacked: rendered + tokenizer.encode("reply", addBOS: false),
+                    boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+            return resolution.slot
+        }
+
+        for index in 0..<3 {
+            var messages = [GFTokenizer.Message(
+                role: .user, content: "lineage \(index)")]
+            _ = publish(messages)
+            messages += [
+                GFTokenizer.Message(role: .assistant, content: "reply"),
+                GFTokenizer.Message(role: .user, content: "more \(index)"),
+            ]
+            lineages.append(messages)
+        }
+        #expect(cache.occupiedSlotCount == 2)
+
+        // The two most recent lineages continue; the oldest was evicted to make
+        // room for the third and misses.
+        var hits = 0
+        for messages in lineages {
+            let resolution = cache.resolve(
+                domain: domain, request: request(messages: messages),
+                renderedPromptIDs: nil, tokenizer: tokenizer)
+            if case .hit = resolution.match { hits += 1 }
+        }
+        #expect(hits == 2)
+    }
+
+    /// A one-slot cache must behave exactly as the single-prefix cache did,
+    /// down to which request evicts which. The default is one, so this is what
+    /// every existing deployment gets.
+    @Test func oneSlotIsTheHistoricalSinglePrefixBehavior() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 1)
+        let opening = [GFTokenizer.Message(role: .user, content: "first")]
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(opening), addBOS: false)
+        let kv = rendered + tokenizer.encode("answer", addBOS: false)
+        cache.publish(
+            slot: 0, domain: domain, request: request(messages: opening),
+            content: "answer", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+
+        // An unrelated request takes the only slot, exactly as it always did.
+        let interloper = request(
+            messages: [GFTokenizer.Message(role: .user, content: "unrelated")])
+        let taken = cache.resolve(
+            domain: domain, request: interloper,
+            renderedPromptIDs: nil, tokenizer: tokenizer)
+        #expect(taken.slot == 0)
+        cache.publish(
+            slot: 0, domain: domain, request: interloper,
+            content: "other", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+
+        let follow = request(messages: opening + [
+            GFTokenizer.Message(role: .assistant, content: "answer"),
+            GFTokenizer.Message(role: .user, content: "second"),
+        ])
+        #expect(cache.resolve(
+            domain: domain, request: follow,
+            renderedPromptIDs: nil, tokenizer: tokenizer).missReason != nil)
+    }
+
+    /// Searching several slots produces several refusals, and the one reported
+    /// has to be the informative one. Every slot holding somebody else's
+    /// conversation answers `historyDiverged`, so picking by search order would
+    /// let a neighbouring slot's truthful shrug bury what the request's own
+    /// slot had to say.
+    @Test func aMissReportsTheMostSpecificReasonNotTheNearestSlots() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var cache = ServerPromptCache(slotCount: 2)
+        let messages = [GFTokenizer.Message(role: .user, content: "shared")]
+        let rendered = tokenizer.encode(
+            try tokenizer.applyChatTemplate(messages), addBOS: false)
+        let kv = rendered + tokenizer.encode("answer", addBOS: false)
+
+        // Slot 0 holds this conversation with an image; slot 1 holds something
+        // unrelated and is the more recently used of the two.
+        cache.publish(
+            slot: 0, domain: domain,
+            request: request(messages: messages, imageIdentities: [["image-a"]]),
+            content: "answer", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        cache.publish(
+            slot: 1, domain: domain,
+            request: request(messages: [
+                GFTokenizer.Message(role: .user, content: "unrelated"),
+            ]),
+            content: "other", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+
+        // The same conversation continued with a different image. Slot 0 can
+        // say so; slot 1 can only say the history diverged.
+        let follow = request(
+            messages: messages + [
+                GFTokenizer.Message(role: .assistant, content: "answer"),
+                GFTokenizer.Message(role: .user, content: "again"),
+            ],
+            imageIdentities: [["image-b"], [], []])
+        let resolution = cache.resolve(
+            domain: domain, request: follow,
+            renderedPromptIDs: nil, tokenizer: tokenizer)
+        #expect(resolution.missReason == .imagesDiverged)
+
+        // And the reverse arrangement gives the same answer, so this is the
+        // reason winning on its merits rather than on where it sat.
+        var reversed = ServerPromptCache(slotCount: 2)
+        reversed.publish(
+            slot: 1, domain: domain,
+            request: request(messages: messages, imageIdentities: [["image-a"]]),
+            content: "answer", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        reversed.publish(
+            slot: 0, domain: domain,
+            request: request(messages: [
+                GFTokenizer.Message(role: .user, content: "unrelated"),
+            ]),
+            content: "other", calls: [],
+            result: rawResult(prompt: rendered, kvBacked: kv,
+                              boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        #expect(reversed.resolve(
+            domain: domain, request: follow,
+            renderedPromptIDs: nil, tokenizer: tokenizer).missReason
+            == .imagesDiverged)
+    }
+
+    /// What a slot costs, checked against the architecture rather than trusted.
+    ///
+    /// The figure the flag's help text and the startup log quote is this one,
+    /// and it is the whole reason the slot count is capped: a slot is a KV
+    /// lineage, not bookkeeping. Derived here from Gemma 4's own shape so the
+    /// claim moves if the architecture does.
+    ///
+    ///   25 SWA layers  x 2 (K and V) x 1,304 tokens x 8 heads  x 256 dims x 2 B
+    ///    5 full layers x 2           x context     x 2 heads x 512 dims x 2 B
+    ///
+    /// The SWA capacity is the sliding window plus the largest prefill chunk,
+    /// which is the vision pooled-token cap (280) rather than the 256-token
+    /// text chunk.
+    @Test func aSlotCostsOneWholeKVLineage() {
+        let config = ArchConfig.gemma4_26B_A4B
+        let ringCapacity = config.slidingWindow + 280
+        let swa = 25 * 2 * ringCapacity * config.numKVHeads * config.headDim * 2
+        let full = 5 * 2 * 16_384 * config.numFullKVHeads * config.fullHeadDim * 2
+
+        let measured = KVCacheManager.storageBytes(
+            config: config,
+            maxContext: 16_384,
+            fp16RingEnabled: true,
+            slidingWindow: config.slidingWindow,
+            maxPrefillChunkTokens: 280)
+        #expect(measured == swa + full)
+        // ~575 MiB per slot at the default context: the number the help text
+        // quotes, and the reason four is the cap rather than sixteen.
+        #expect(measured / (1_024 * 1_024) == 574)
+
+        // What a slot actually holds is smaller, because the buffers fault in
+        // on write: the ring-capped SWA layers are reached early and the linear
+        // full-attention layers grow with position. The server doc quotes
+        // ~333 MiB for a 4,000-token conversation; deriving it here means the
+        // doc breaks with the architecture rather than quietly going stale.
+        let resident = swa + full * 4_000 / 16_384
+        #expect(Int((Double(resident) / (1_024 * 1_024)).rounded()) == 333)
+
+        // Note what the split implies: the early-reached ring is the larger
+        // half, so the saving is real but not dramatic at ordinary prompt
+        // sizes — 58% of the ceiling at a quarter of the context, not 25%. A
+        // conversation has to be short to be cheap, and one long enough to be
+        // worth caching is most of the way to the ceiling already.
+        #expect(resident * 100 / measured == 57)
+        #expect(swa > full * 4_000 / 16_384)
+
+        // Only the full-attention layers scale with the context; the ring caps
+        // the other twenty-five. Quadrupling the context does not quadruple the
+        // slot, and an operator sizing a machine needs that to be true.
+        let larger = KVCacheManager.storageBytes(
+            config: config,
+            maxContext: 65_536,
+            fp16RingEnabled: true,
+            slidingWindow: config.slidingWindow,
+            maxPrefillChunkTokens: 280)
+        #expect(larger == swa + full * 4)
+    }
+
     private func request(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition] = [],
-        imageIdentities: [[String]] = []
+        imageIdentities: [[String]] = [],
+        promptCacheKey: String? = nil
     ) -> ValidatedChatRequest {
         ValidatedChatRequest(
             messages: messages,
@@ -799,7 +1359,8 @@ struct ServerPromptCacheTests {
             stream: false,
             includeUsage: false,
             generationConfig: GenerationConfig(maxNewTokens: 16, temperature: 0),
-            maximumCompletionTokens: 16)
+            maximumCompletionTokens: 16,
+            promptCacheKey: promptCacheKey)
     }
 
     private func rawResult(

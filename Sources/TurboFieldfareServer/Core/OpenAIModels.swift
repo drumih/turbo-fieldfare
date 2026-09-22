@@ -189,9 +189,38 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// value of any other shape has to reach the validator as a request error
     /// rather than reading as malformed JSON.
     public let responseFormat: JSONValue?
+    /// Names the conversation this request belongs to, so its retained KV
+    /// prefix is not the one evicted when an unrelated caller arrives. Accepted
+    /// and ignored before slots existed, which is why honouring it now cannot
+    /// break a client that was already sending it.
+    public let promptCacheKey: String?
+    /// This request's prompt-cache participation, overriding
+    /// `--prompt-cache-mode` downward for one request.
+    ///
+    /// Spelled with the flag's own vocabulary — `off` and `single-prefix` —
+    /// because it is that flag, scoped to a request. A caller reading the
+    /// server's help has already learned the values.
+    ///
+    /// Rejected alternatives, on the record:
+    ///
+    /// - **An empty `prompt_cache_key`.** Free to add, and wrong: an empty key
+    ///   is a caller that built a name from an empty string, which is a bug
+    ///   worth a 400 rather than a second meaning silently attached to it. It
+    ///   also cannot express "do not cache" for a caller that wants both a
+    ///   name and no caching, and it makes one field mean two unrelated things.
+    /// - **A bare boolean** (`prompt_cache: false`). Reads fine at the call
+    ///   site and then cannot grow: the server flag already has two named
+    ///   modes and may gain a third, at which point a boolean is either
+    ///   replaced or paired with a second field that contradicts it.
+    /// - **An OpenAI-namespaced field.** Nothing in the OpenAI API means this,
+    ///   so borrowing a name there would imply a compatibility this server does
+    ///   not have, and a future upstream field of that name would collide.
+    public let promptCacheMode: String?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
+        case promptCacheKey = "prompt_cache_key"
+        case promptCacheMode = "prompt_cache_mode"
         case streamOptions = "stream_options"
         case topP = "top_p"
         case maxTokens = "max_tokens"
@@ -215,7 +244,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         "store",
         "metadata",
         "service_tier",
-        "prompt_cache_key",
         "safety_identifier",
     ]
 
@@ -327,6 +355,10 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
             Float.self, forKey: .frequencyPenalty)
         responseFormat = try container.decodeIfPresent(
             JSONValue.self, forKey: .responseFormat)
+        promptCacheKey = try container.decodeIfPresent(
+            String.self, forKey: .promptCacheKey)
+        promptCacheMode = try container.decodeIfPresent(
+            String.self, forKey: .promptCacheMode)
     }
 }
 
@@ -426,6 +458,13 @@ public struct ValidatedChatRequest: Sendable {
     public let includeUsage: Bool
     public let generationConfig: GenerationConfig
     public let maximumCompletionTokens: Int
+    /// The conversation this request named, if it named one. The prompt cache
+    /// reserves a slot per key, so a caller that names its conversation is not
+    /// evicted by one that does not.
+    public let promptCacheKey: String?
+    /// This request's prompt-cache participation, when it asked for one.
+    /// Nil means the server's configured mode stands.
+    public let promptCacheMode: ServerPromptCacheMode?
     /// Every staging directory this request's image files live in. The parser
     /// and the validator's store each stage under their own lease, and a
     /// request may carry files from both, so dropping either would delete
@@ -441,7 +480,9 @@ public struct ValidatedChatRequest: Sendable {
         stream: Bool,
         includeUsage: Bool,
         generationConfig: GenerationConfig,
-        maximumCompletionTokens: Int
+        maximumCompletionTokens: Int,
+        promptCacheKey: String? = nil,
+        promptCacheMode: ServerPromptCacheMode? = nil
     ) {
         self.messages = messages
         self.multimodalMessages = multimodalMessages
@@ -452,6 +493,8 @@ public struct ValidatedChatRequest: Sendable {
         self.includeUsage = includeUsage
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
+        self.promptCacheKey = promptCacheKey
+        self.promptCacheMode = promptCacheMode
         self.attachmentLeases = []
     }
 
@@ -465,6 +508,8 @@ public struct ValidatedChatRequest: Sendable {
         includeUsage: Bool,
         generationConfig: GenerationConfig,
         maximumCompletionTokens: Int,
+        promptCacheKey: String?,
+        promptCacheMode: ServerPromptCacheMode?,
         attachmentLeases: [ServerAttachmentLease]
     ) {
         self.messages = messages
@@ -476,7 +521,68 @@ public struct ValidatedChatRequest: Sendable {
         self.includeUsage = includeUsage
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
+        self.promptCacheKey = promptCacheKey
+        self.promptCacheMode = promptCacheMode
         self.attachmentLeases = attachmentLeases
+    }
+}
+
+/// The `prompt_cache_key` bound.
+///
+/// A key is held for the life of the server and decides which conversation
+/// survives eviction, so it is stored state a caller writes: it needs a length
+/// bound like any other, and an empty string has to be refused rather than
+/// silently meaning "unkeyed", which is a different thing. The value is never
+/// logged — it is the caller's name for its own conversation, not ours.
+enum OpenAIPromptCacheKey {
+    static let maximumLength = 128
+
+    static func validated(_ key: String?) throws -> String? {
+        guard let key else { return nil }
+        let bytes = key.utf8.count
+        guard bytes > 0, bytes <= maximumLength else {
+            throw ServerRequestError.invalid(
+                message: "prompt_cache_key must contain 1 to \(maximumLength) UTF-8 bytes",
+                param: "prompt_cache_key",
+                code: "invalid_value")
+        }
+        return key
+    }
+
+    /// The request's prompt-cache mode, refused rather than coerced.
+    ///
+    /// Two refusals, both because the alternative is a silent reinterpretation
+    /// of what the caller asked for:
+    ///
+    /// A value outside the flag's vocabulary is a 400 rather than a fallback to
+    /// the server's mode. `prompt_cache_mode: "none"` is a caller that believes
+    /// caching is off for that request; answering 200 with caching on is the
+    /// shape of bug `unknown_parameter` was added to stop, one level down.
+    ///
+    /// A key alongside `off` is a contradiction, not a precedence question:
+    /// one asks to reserve a lineage and the other asks not to have one. Either
+    /// silent winner leaves a caller believing the opposite of what happened.
+    static func validatedMode(
+        _ raw: String?,
+        key: String?
+    ) throws -> ServerPromptCacheMode? {
+        guard let raw else { return nil }
+        guard let mode = ServerPromptCacheMode(rawValue: raw) else {
+            throw ServerRequestError.invalid(
+                message: "prompt_cache_mode must be "
+                    + "\(ServerPromptCacheMode.off.rawValue) or "
+                    + "\(ServerPromptCacheMode.singlePrefix.rawValue)",
+                param: "prompt_cache_mode",
+                code: "invalid_value")
+        }
+        if mode == .off, key != nil {
+            throw ServerRequestError.invalid(
+                message: "prompt_cache_key cannot be combined with "
+                    + "prompt_cache_mode \(ServerPromptCacheMode.off.rawValue)",
+                param: "prompt_cache_mode",
+                code: "invalid_value")
+        }
+        return mode
     }
 }
 
@@ -601,6 +707,9 @@ public enum OpenAIRequestValidator {
                           "tool_choice", "unsupported_value")
         }
 
+        let promptCacheKey = try OpenAIPromptCacheKey.validated(request.promptCacheKey)
+        let promptCacheMode = try OpenAIPromptCacheKey.validatedMode(
+            request.promptCacheMode, key: promptCacheKey)
         let tools = try (includeTools ? request.tools ?? [] : []).map(validateTool)
         let validatedMessages = try validateMessages(
             request.messages,
@@ -622,6 +731,8 @@ public enum OpenAIRequestValidator {
                                     includeUsage: request.streamOptions?.includeUsage ?? false,
                                     generationConfig: config,
                                     maximumCompletionTokens: maximum,
+                                    promptCacheKey: promptCacheKey,
+                                    promptCacheMode: promptCacheMode,
                                     attachmentLeases: validatedMessages.leases)
     }
 
