@@ -34,6 +34,51 @@ import Foundation
                 == ContextAdmission.projectedFootprintBytes(config: config, maxContext: 131_072))
     }
 
+    /// One retained slot is the lineage `fp16KVBytes` already charges, so the
+    /// default must leave every figure in this file exactly where it was
+    /// before retention existed. An accidental charge here would move a server
+    /// refusal and a menu row for operators who never touched the flag.
+    @Test(arguments: [4_096, 16_384, 65_536, 262_144])
+    func oneRetainedSlotLeavesAdmissionUnchanged(context: Int) {
+        #expect(ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: context,
+                                                        promptCacheSlots: 1)
+                == ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: context))
+    }
+
+    /// Each slot past the first is a whole KV lineage, so it is charged at the
+    /// same rate as the first one.
+    @Test(arguments: [2, 3, 4])
+    func retainedSlotsAreChargedAtTheAdmissionBoundary(slots: Int) {
+        let baseline = ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: 16_384)
+        let expected = baseline
+            + UInt64(slots - 1) * ContextAdmission.fp16KVBytes(config: config, maxContext: 16_384)
+        #expect(ContextAdmission.minimumHostMemoryBytes(config: config, maxContext: 16_384,
+                                                        promptCacheSlots: slots) == expected)
+        #expect(ContextAdmission.availability(config: config, maxContext: 16_384,
+                                              hostMemoryBytes: expected - 1, promptCacheSlots: slots)
+                == .needsMemory(minimumHostBytes: expected))
+        #expect(ContextAdmission.availability(config: config, maxContext: 16_384,
+                                              hostMemoryBytes: expected, promptCacheSlots: slots) == .available)
+    }
+
+    /// The combination the charge exists to catch: every rung is available on
+    /// a 16 GB Mac at one slot, but four slots at the top rung is four times
+    /// the KV and has to be refused rather than failing in the allocator.
+    @Test func fourSlotsAtTheTopRungIsRefusedOnASixteenGigabyteHost() {
+        #expect(ContextAdmission.availability(config: config, maxContext: 262_144,
+                                              hostMemoryBytes: sixteenGigabyteHost,
+                                              promptCacheSlots: 1) == .available)
+        #expect(ContextAdmission.availability(config: config, maxContext: 262_144,
+                                              hostMemoryBytes: sixteenGigabyteHost,
+                                              promptCacheSlots: 4)
+                == .needsMemory(minimumHostBytes: 27_911_782_400))
+        // Four slots at the default context still fits an 8 GB Mac: the charge
+        // scales with the context, so it does not foreclose the common case.
+        #expect(ContextAdmission.availability(config: config, maxContext: 16_384,
+                                              hostMemoryBytes: eightGigabyteHost,
+                                              promptCacheSlots: 4) == .available)
+    }
+
 
     private let config = ArchConfig.gemma4_26B_A4B
     private let eightGigabyteHost: UInt64 = 8_589_934_592

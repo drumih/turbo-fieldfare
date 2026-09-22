@@ -241,14 +241,20 @@ public struct ServerArguments: Equatable, Sendable {
         // already started loading, with an allocator error that says nothing
         // about how much memory the choice actually needs.
         let config = ArchConfig.gemma4_26B_A4B
+        // Retained lineages are charged here too: `--prompt-cache-slots 4` at a
+        // large context asks for several times the KV a single cache needs, and
+        // admitting on the one-lineage figure would let exactly the combination
+        // that cannot fit start and then fail in the allocator.
         if case .needsMemory = ContextAdmission.availability(config: config,
                                                              maxContext: maxContext,
-                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots),
+                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                             promptCacheSlots: promptCacheSlots),
            environment[unbackedContextOverrideVariable] != "1" {
             throw ServerArgumentError.invalid(
                 ContextAdmission.needDescription(config: config,
                                                  maxContext: maxContext,
-                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
+                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                 promptCacheSlots: promptCacheSlots)
                     + " Set \(unbackedContextOverrideVariable)=1 to start anyway.")
         }
         // Refused rather than coerced: `off` retains nothing, so slots have
