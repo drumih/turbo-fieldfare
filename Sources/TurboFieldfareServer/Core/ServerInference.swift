@@ -3,12 +3,14 @@ import Foundation
 import TurboFieldfare
 
 public enum ServerInferenceEvent: Equatable, Sendable {
+    case thought(String)
     case content(String)
     case toolCall(ParsedToolCall)
 }
 
 public struct ServerCompletion: Equatable, Sendable {
     public let content: String
+    public let reasoningContent: String?
     public let toolCalls: [ParsedToolCall]
     public let finishReason: String
     public let usage: OpenAIUsage
@@ -21,12 +23,14 @@ public struct ServerCompletion: Equatable, Sendable {
     public let decodeSeconds: Double
 
     public init(content: String,
+                reasoningContent: String? = nil,
                 toolCalls: [ParsedToolCall],
                 finishReason: String,
                 usage: OpenAIUsage,
                 prefillSeconds: Double = 0,
                 decodeSeconds: Double = 0) {
         self.content = content
+        self.reasoningContent = reasoningContent
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
@@ -804,7 +808,8 @@ public actor ServerModelSession: ServerInferenceBackend {
             with: imagePreprocessor(visionRuntime),
             checkCancellation: { try Task.checkCancellation() })
         let bridge = try tokenizer.encodeMultimodalUserContinuation(
-            textAndImages: parts, imageTokenCounts: images.map(\.softTokenCount))
+            textAndImages: parts, imageTokenCounts: images.map(\.softTokenCount),
+            enableThinking: request.enableThinking)
         var spans: [MultimodalImageSpan] = []
         for (range, image) in zip(bridge.imageTokenRanges, images) {
             try Task.checkCancellation()
@@ -856,7 +861,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                 messages: messages,
                 featuresByID: features,
                 tokenizer: tokenizer,
-                tools: request.tools)
+                tools: request.tools,
+                enableThinking: request.enableThinking)
         } catch let error as MultimodalPromptRendererError {
             throw Self.clientError(for: error) ?? error
         }
@@ -988,13 +994,16 @@ public actor ServerModelSession: ServerInferenceBackend {
             maxContext - effectivePromptIDs.count)
         config.stopStrings = []
 
-        let decoder = needsToolTemplate
+        let needsStructuredDecoder = needsToolTemplate || request.enableThinking
+        let decoder = needsStructuredDecoder
             ? StructuredAssistantDecoder(
                 tokenizer: tokenizer,
-                allowedTools: Set(request.tools.map(\.name)))
+                allowedTools: Set(request.tools.map(\.name)),
+                emitThought: request.enableThinking)
             : nil
         var stopMatcher = StreamingStopMatcher(stops: request.generationConfig.stopStrings)
         var content = ""
+        var reasoningContent = ""
         var calls: [ParsedToolCall] = []
         var decodingError: Error?
         var shouldStop = false
@@ -1016,6 +1025,9 @@ public actor ServerModelSession: ServerInferenceBackend {
                     func handle(_ events: [StructuredAssistantEvent]) {
                         for event in events {
                             switch event {
+                            case .thought(let text):
+                                reasoningContent += text
+                                onEvent(.thought(text))
                             case .content(let text):
                                 let visible = stopMatcher.push(text)
                                 if !visible.isEmpty {
@@ -1064,7 +1076,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                 kind: kind,
                 cause: cause,
                 diagnostics: StructuredOutputFailureDiagnostics(
-                    renderedPromptIDs: renderedPromptIDs ?? effectivePromptIDs,
+                    renderedPromptIDs: renderedPromptIDs,
                     effectivePromptIDs: effectivePromptIDs,
                     result: result,
                     maxCompletionTokens: config.maxNewTokens,
@@ -1118,14 +1130,22 @@ public actor ServerModelSession: ServerInferenceBackend {
                 stopStringFiltered: stopMatcher.isStopped)
         }
         completed = true
+        let finalReasoning = reasoningContent.isEmpty ? nil : reasoningContent
+        let reasoningTokens = decoder?.reasoningTokens ?? 0
+        let usageDetails: OpenAIUsage.CompletionTokensDetails? =
+            (request.enableThinking || reasoningTokens > 0)
+                ? OpenAIUsage.CompletionTokensDetails(reasoningTokens: reasoningTokens)
+                : nil
         return ServerCompletion(
             content: content,
+            reasoningContent: finalReasoning,
             toolCalls: calls,
             finishReason: reason,
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
                                totalTokens: result.prefillTokens + result.newTokens,
-                               cachedTokens: result.cachedPromptTokens),
+                               cachedTokens: result.cachedPromptTokens,
+                               completionTokensDetails: usageDetails),
             prefillSeconds: result.prefillSeconds,
             decodeSeconds: result.decodeSeconds)
     }
@@ -1135,9 +1155,12 @@ public actor ServerModelSession: ServerInferenceBackend {
         if usesToolTemplate(request) {
             promptIDs = try tokenizer.encodeToolChat(
                 messages: request.messages,
-                tools: request.tools)
+                tools: request.tools,
+                enableThinking: request.enableThinking)
         } else {
-            let rendered = try tokenizer.applyChatTemplate(request.messages)
+            let rendered = try tokenizer.applyChatTemplate(
+                request.messages,
+                enableThinking: request.enableThinking)
             promptIDs = tokenizer.encode(rendered, addBOS: false)
         }
         guard promptIDs.count < maxContext else {

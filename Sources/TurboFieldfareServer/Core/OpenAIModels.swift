@@ -78,11 +78,13 @@ public struct OpenAIChatMessage: Codable, Equatable, Sendable {
     public let toolCalls: [OpenAIToolCall]?
     public let toolCallID: String?
     public let name: String?
+    public let reasoningContent: String?
 
     enum CodingKeys: String, CodingKey {
         case role, content, name
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case reasoningContent = "reasoning_content"
     }
 }
 
@@ -189,6 +191,10 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// value of any other shape has to reach the validator as a request error
     /// rather than reading as malformed JSON.
     public let responseFormat: JSONValue?
+    public let reasoningEffort: String?
+    public let chatTemplateKwargs: JSONValue?
+    public let thinking: JSONValue?
+    public let reasoning: JSONValue?
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
@@ -203,6 +209,10 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
         case responseFormat = "response_format"
+        case reasoningEffort = "reasoning_effort"
+        case chatTemplateKwargs = "chat_template_kwargs"
+        case thinking
+        case reasoning
     }
 
     /// Top-level keys accepted and ignored because they are caller-side
@@ -228,7 +238,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     static let unsupportedKeys: Set<String> = [
         "logit_bias",
         "top_logprobs",
-        "reasoning_effort",
         "verbosity",
         "modalities",
         "audio",
@@ -327,6 +336,14 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
             Float.self, forKey: .frequencyPenalty)
         responseFormat = try container.decodeIfPresent(
             JSONValue.self, forKey: .responseFormat)
+        reasoningEffort = try container.decodeIfPresent(
+            String.self, forKey: .reasoningEffort)
+        chatTemplateKwargs = try container.decodeIfPresent(
+            JSONValue.self, forKey: .chatTemplateKwargs)
+        thinking = try container.decodeIfPresent(
+            JSONValue.self, forKey: .thinking)
+        reasoning = try container.decodeIfPresent(
+            JSONValue.self, forKey: .reasoning)
     }
 }
 
@@ -343,26 +360,44 @@ public struct OpenAIUsage: Codable, Equatable, Sendable {
         }
     }
 
+    public struct CompletionTokensDetails: Codable, Equatable, Sendable {
+        public let reasoningTokens: Int
+
+        enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
+
+        public init(reasoningTokens: Int) {
+            self.reasoningTokens = reasoningTokens
+        }
+    }
+
     public let promptTokens: Int
     public let completionTokens: Int
     public let totalTokens: Int
     public let promptTokensDetails: PromptTokensDetails
+    public let completionTokensDetails: CompletionTokensDetails?
 
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
         case promptTokensDetails = "prompt_tokens_details"
+        case completionTokensDetails = "completion_tokens_details"
     }
 
     public init(promptTokens: Int,
                 completionTokens: Int,
                 totalTokens: Int,
-                cachedTokens: Int = 0) {
+                cachedTokens: Int = 0,
+                reasoningTokens: Int = 0,
+                completionTokensDetails: CompletionTokensDetails? = nil) {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
         self.promptTokensDetails = PromptTokensDetails(cachedTokens: cachedTokens)
+        self.completionTokensDetails = completionTokensDetails
+            ?? (reasoningTokens > 0 ? CompletionTokensDetails(reasoningTokens: reasoningTokens) : nil)
     }
 }
 
@@ -426,6 +461,7 @@ public struct ValidatedChatRequest: Sendable {
     public let includeUsage: Bool
     public let generationConfig: GenerationConfig
     public let maximumCompletionTokens: Int
+    public let enableThinking: Bool
     /// Every staging directory this request's image files live in. The parser
     /// and the validator's store each stage under their own lease, and a
     /// request may carry files from both, so dropping either would delete
@@ -441,7 +477,8 @@ public struct ValidatedChatRequest: Sendable {
         stream: Bool,
         includeUsage: Bool,
         generationConfig: GenerationConfig,
-        maximumCompletionTokens: Int
+        maximumCompletionTokens: Int,
+        enableThinking: Bool = false
     ) {
         self.messages = messages
         self.multimodalMessages = multimodalMessages
@@ -452,6 +489,7 @@ public struct ValidatedChatRequest: Sendable {
         self.includeUsage = includeUsage
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
+        self.enableThinking = enableThinking
         self.attachmentLeases = []
     }
 
@@ -465,6 +503,7 @@ public struct ValidatedChatRequest: Sendable {
         includeUsage: Bool,
         generationConfig: GenerationConfig,
         maximumCompletionTokens: Int,
+        enableThinking: Bool,
         attachmentLeases: [ServerAttachmentLease]
     ) {
         self.messages = messages
@@ -476,6 +515,7 @@ public struct ValidatedChatRequest: Sendable {
         self.includeUsage = includeUsage
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
+        self.enableThinking = enableThinking
         self.attachmentLeases = attachmentLeases
     }
 }
@@ -503,16 +543,19 @@ private enum OpenAIToolName {
 
 public enum OpenAIRequestValidator {
     public static func validate(_ request: OpenAIChatRequest,
-                                modelID: String) throws -> ValidatedChatRequest {
+                                modelID: String,
+                                thinkingPolicy: ServerThinkingPolicy = .auto) throws -> ValidatedChatRequest {
         try validate(
             request,
             modelID: modelID,
+            thinkingPolicy: thinkingPolicy,
             preStagedImages: [:],
             attachmentLease: nil)
     }
 
     static func validate(_ request: OpenAIChatRequest,
                          modelID: String,
+                         thinkingPolicy: ServerThinkingPolicy = .auto,
                          preStagedImages: [String: ServerStagedImage],
                          attachmentLease: ServerAttachmentLease?) throws -> ValidatedChatRequest {
         guard request.model == modelID else { throw ServerRequestError.unknownModel }
@@ -531,6 +574,42 @@ public enum OpenAIRequestValidator {
         guard request.parallelToolCalls != false else {
             throw invalid("parallel_tool_calls=false is not supported",
                           "parallel_tool_calls", "unsupported_value")
+        }
+        if let effort = request.reasoningEffort {
+            let allowed = ["low", "medium", "high", "none", "default"]
+            guard allowed.contains(effort) else {
+                throw invalid("reasoning_effort must be low, medium, high, default, or none",
+                              "reasoning_effort", "invalid_value")
+            }
+        }
+        if let chatTemplateKwargs = request.chatTemplateKwargs {
+            guard case .object = chatTemplateKwargs else {
+                throw invalid("chat_template_kwargs must be an object",
+                              "chat_template_kwargs", "invalid_value")
+            }
+        }
+        if let thinking = request.thinking {
+            guard case .object = thinking else {
+                throw invalid("thinking must be an object",
+                              "thinking", "invalid_value")
+            }
+        }
+        if let reasoning = request.reasoning {
+            guard case .object(let obj) = reasoning else {
+                throw invalid("reasoning must be an object",
+                              "reasoning", "invalid_value")
+            }
+            if let effortVal = obj["effort"] {
+                guard case .string(let effort) = effortVal else {
+                    throw invalid("reasoning.effort must be a string",
+                                  "reasoning.effort", "invalid_value")
+                }
+                let allowed = ["low", "medium", "high", "none", "default"]
+                guard allowed.contains(effort) else {
+                    throw invalid("reasoning.effort must be low, medium, high, default, or none",
+                                  "reasoning.effort", "invalid_value")
+                }
+            }
         }
         switch request.responseFormat {
         case nil:
@@ -601,6 +680,41 @@ public enum OpenAIRequestValidator {
                           "tool_choice", "unsupported_value")
         }
 
+        var requestedThinking: Bool?
+        if let effort = request.reasoningEffort {
+            requestedThinking = (effort != "none")
+        }
+        if let reasoning = request.reasoning,
+           case .object(let obj) = reasoning {
+            if case .some(.string(let effort)) = obj["effort"] {
+                requestedThinking = (effort != "none")
+            } else if case .some(.string(let type)) = obj["type"] {
+                if type == "enabled" { requestedThinking = true }
+                else if type == "disabled" { requestedThinking = false }
+            }
+        }
+        if let chatTemplateKwargs = request.chatTemplateKwargs,
+           case .object(let kwargs) = chatTemplateKwargs,
+           case .some(.bool(let flag)) = kwargs["enable_thinking"] {
+            requestedThinking = flag
+        }
+        if let thinkingObj = request.thinking,
+           case .object(let obj) = thinkingObj,
+           case .some(.string(let type)) = obj["type"] {
+            if type == "enabled" { requestedThinking = true }
+            else if type == "disabled" { requestedThinking = false }
+        }
+
+        let enableThinking: Bool
+        switch thinkingPolicy {
+        case .off:
+            enableThinking = false
+        case .on:
+            enableThinking = requestedThinking ?? true
+        case .auto:
+            enableThinking = requestedThinking ?? false
+        }
+
         let tools = try (includeTools ? request.tools ?? [] : []).map(validateTool)
         let validatedMessages = try validateMessages(
             request.messages,
@@ -622,6 +736,7 @@ public enum OpenAIRequestValidator {
                                     includeUsage: request.streamOptions?.includeUsage ?? false,
                                     generationConfig: config,
                                     maximumCompletionTokens: maximum,
+                                    enableThinking: enableThinking,
                                     attachmentLeases: validatedMessages.leases)
     }
 
@@ -840,7 +955,8 @@ public enum OpenAIRequestValidator {
                                               content: content,
                                               toolCalls: calls,
                                               toolCallID: message.toolCallID,
-                                              name: message.name))
+                                              name: message.name,
+                                              reasoningContent: message.reasoningContent))
             if orderedContent.isEmpty, let content {
                 orderedContent = [.text(content)]
             }

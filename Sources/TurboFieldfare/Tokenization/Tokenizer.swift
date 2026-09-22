@@ -57,6 +57,7 @@ public struct GFTokenizer: @unchecked Sendable {
     public let toolResponseEndID: Int32
     public let channelStartID: Int32
     public let channelEndID: Int32
+    public let thinkID: Int32
     public let stopTokenIDs: Set<Int32>
     public let vocabSize: Int
     /// The channel/tool markers that structure assistant output. Streaming
@@ -219,6 +220,7 @@ public struct GFTokenizer: @unchecked Sendable {
         self.toolResponseEndID = try Self.requireTokenID(tokenizer, "<tool_response|>")
         self.channelStartID = try Self.requireTokenID(tokenizer, "<|channel>")
         self.channelEndID = try Self.requireTokenID(tokenizer, "<channel|>")
+        self.thinkID = try Self.requireTokenID(tokenizer, "<|think|>")
         // The image markers are compile-time constants on the renderer because
         // prompt layout code references them without a tokenizer in hand, but
         // they must still describe THIS vocabulary: a tokenizer revision that
@@ -301,6 +303,7 @@ public struct GFTokenizer: @unchecked Sendable {
         public let toolCalls: [HistoricalToolCall]
         public let toolCallID: String?
         public let name: String?
+        public let reasoningContent: String?
 
         public init(role: Role, content: String) {
             self.role = role
@@ -308,30 +311,37 @@ public struct GFTokenizer: @unchecked Sendable {
             self.toolCalls = []
             self.toolCallID = nil
             self.name = nil
+            self.reasoningContent = nil
         }
 
         public init(role: Role,
                     content: String?,
                     toolCalls: [HistoricalToolCall] = [],
                     toolCallID: String? = nil,
-                    name: String? = nil) {
+                    name: String? = nil,
+                    reasoningContent: String? = nil) {
             self.role = role
             self.content = content
             self.toolCalls = toolCalls
             self.toolCallID = toolCallID
             self.name = name
+            self.reasoningContent = reasoningContent
         }
     }
 
     /// Text-only, no-tool rendering of the pinned IT checkpoint's bundled
-    /// `chat_template.jinja`, with thinking disabled. Keeping this narrow makes
-    /// unsupported tool/media behavior explicit instead of approximating it.
+    /// `chat_template.jinja`. Keeping this narrow makes unsupported tool/media
+    /// behavior explicit instead of approximating it.
     private static let turnOpen    = "<|turn>"
     private static let turnClose   = "<turn|>"
     private static let bosMark     = "<bos>"
 
-    public func applyChatTemplate(_ messages: [Message]) throws -> String {
+    public func applyChatTemplate(_ messages: [Message], enableThinking: Bool = false) throws -> String {
         var s = Self.bosMark
+        let hasSystem = messages.first?.role == .system
+        if enableThinking && !hasSystem {
+            s += Self.turnOpen + "system\n<|think|>\n" + Self.turnClose + "\n"
+        }
         for (index, message) in messages.enumerated() {
             guard let rawContent = message.content else {
                 throw GFTokenizerError.invalidChatTemplate("text-only messages require content")
@@ -341,14 +351,23 @@ public struct GFTokenizer: @unchecked Sendable {
                 throw GFTokenizerError.invalidChatTemplate("system message must be first")
             }
             let role = message.role == .assistant ? "model" : message.role.rawValue
-            s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
+            if message.role == .system && enableThinking {
+                s += Self.turnOpen + "system\n<|think|>\n" + content + Self.turnClose + "\n"
+            } else {
+                s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
+            }
         }
-        s += Self.turnOpen + "model\n<|channel>thought\n<channel|>"
+        if enableThinking {
+            s += Self.turnOpen + "model\n"
+        } else {
+            s += Self.turnOpen + "model\n<|channel>thought\n<channel|>"
+        }
         return s
     }
 
     public func encodeToolChat(messages: [Message],
-                               tools: [FunctionDefinition]) throws -> [Int32] {
+                               tools: [FunctionDefinition],
+                               enableThinking: Bool = false) throws -> [Int32] {
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
         }
@@ -357,6 +376,9 @@ public struct GFTokenizer: @unchecked Sendable {
                 "role": message.role.rawValue,
                 "content": message.content,
             ]
+            if let reasoning = message.reasoningContent {
+                value["reasoning_content"] = reasoning
+            }
             if !message.toolCalls.isEmpty {
                 value["tool_calls"] = try message.toolCalls.map { call -> [String: any Sendable] in
                     [
@@ -390,15 +412,16 @@ public struct GFTokenizer: @unchecked Sendable {
             truncation: false,
             maxLength: nil,
             tools: upstreamTools,
-            additionalContext: ["enable_thinking": false]
+            additionalContext: ["enable_thinking": enableThinking]
         ).map(Int32.init)
     }
 
-    public func encodeTextContinuation(userContent: String) -> [Int32] {
+    public func encodeTextContinuation(userContent: String, enableThinking: Bool = false) -> [Int32] {
         let content = userContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffix = enableThinking ? "" : "<|channel>thought\n<channel|>"
         return [endOfTurnID] + encode(
             "\n\(Self.turnOpen)user\n\(content)\(Self.turnClose)\n"
-                + "\(Self.turnOpen)model\n<|channel>thought\n<channel|>",
+                + "\(Self.turnOpen)model\n\(suffix)",
             addBOS: false)
     }
 
@@ -415,7 +438,8 @@ public struct GFTokenizer: @unchecked Sendable {
     public func encodeMultimodalUserContinuation(
         textAndImages: [MultimodalContinuationPart],
         imageTokenCounts: [Int],
-        openingConversation: Bool = false
+        openingConversation: Bool = false,
+        enableThinking: Bool = false
     ) throws -> MultimodalContinuationTokens {
         var text = ""
         var expected = 0
@@ -445,12 +469,13 @@ public struct GFTokenizer: @unchecked Sendable {
             // first turn of a conversation is identical whether or not it
             // carries an image.
             template = encode(
-                try applyChatTemplate([Message(role: .user, content: content)]),
+                try applyChatTemplate([Message(role: .user, content: content)], enableThinking: enableThinking),
                 addBOS: false)
         } else {
+            let suffix = enableThinking ? "" : "<|channel>thought\n<channel|>"
             template = [endOfTurnID] + encode(
                 "\n\(Self.turnOpen)user\n\(content)\(Self.turnClose)\n"
-                    + "\(Self.turnOpen)model\n<|channel>thought\n<channel|>",
+                    + "\(Self.turnOpen)model\n\(suffix)",
                 addBOS: false)
         }
         // Count the placeholders the tokenizer actually produced before indexing
@@ -499,12 +524,17 @@ public struct GFTokenizer: @unchecked Sendable {
         cachedMessages: [Message],
         assistant: Message,
         incomingMessages: [Message],
-        tools: [FunctionDefinition]
+        tools: [FunctionDefinition],
+        enableThinking: Bool = false
     ) throws -> [Int32] {
         let prefix = try encodeToolChat(
             messages: cachedMessages + [assistant],
-            tools: tools)
-        let full = try encodeToolChat(messages: incomingMessages, tools: tools)
+            tools: tools,
+            enableThinking: enableThinking)
+        let full = try encodeToolChat(
+            messages: incomingMessages,
+            tools: tools,
+            enableThinking: enableThinking)
         let callCount = assistant.toolCalls.count
         let starts = prefix.indices.filter { prefix[$0] == toolCallStartID }
         guard callCount > 0, starts.count >= callCount,
