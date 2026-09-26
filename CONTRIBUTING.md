@@ -17,6 +17,8 @@ Run the release build, serial tests, and Markdown link check:
 ```bash
 swift build -c release
 Scripts/test.sh
+ruby Scripts/check_swiftui_macros.rb --self-test
+ruby Scripts/tests/swift_macro_probe_test.rb
 ruby Scripts/check_markdown_links.rb
 ```
 

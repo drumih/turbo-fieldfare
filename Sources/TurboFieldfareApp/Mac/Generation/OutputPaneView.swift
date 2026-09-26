@@ -6,7 +6,7 @@ import SwiftUI
 
 struct OutputPaneView: View {
     let model: AppModel
-    @State private var responseCopyFeedbackID: UUID?
+    @StoredState private var responseCopyFeedbackID: UUID?
 
     var body: some View {
         Group {
@@ -181,7 +181,7 @@ struct OutputPaneView: View {
 struct SubmittedImageThumbnail: View {
     let attachment: ChatImage
     let maximumSize: CGSize
-    @State private var image: NSImage?
+    @StoredState private var image: NSImage?
 
     init(
         attachment: ChatImage,
@@ -282,7 +282,7 @@ private struct EmptyPlaceholderIcon: View {
 
 private struct LoadingModelText: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var animationStart = Date()
+    @StoredState private var animationStart = Date()
 
     var body: some View {
         if reduceMotion {
@@ -900,47 +900,65 @@ private struct TranscriptPreview: View {
     }
 }
 
-#Preview("Empty") {
-    VStack(spacing: 8) {
-        Image(systemName: "cube.transparent")
-            .font(.title2)
-            .foregroundStyle(.quaternary)
-        Text("Start a chat, or choose a predefined example.")
-            .font(.headline)
-        Text("Each message keeps the ones before it in context.")
-            .foregroundStyle(.secondary)
+private struct EmptyOutputPreview: PreviewProvider {
+    static var previews: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "cube.transparent")
+                .font(.title2)
+                .foregroundStyle(.quaternary)
+            Text("Start a chat, or choose a predefined example.")
+                .font(.headline)
+            Text("Each message keeps the ones before it in context.")
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 720, height: 420)
+        .previewDisplayName("Empty")
     }
-    .frame(width: 720, height: 420)
 }
 
-#Preview("Streaming") {
-    TranscriptPreview(
-        response: "A response arriving one readable piece at a time...",
-        isTerminal: false)
+private struct StreamingOutputPreview: PreviewProvider {
+    static var previews: some View {
+        TranscriptPreview(
+            response: "A response arriving one readable piece at a time...",
+            isTerminal: false)
+            .previewDisplayName("Streaming")
+    }
 }
 
-#Preview("Prefilling") {
-    TranscriptPreview(
-        response: "",
-        isTerminal: false,
-        showsPrefillPlaceholder: true)
+private struct PrefillingOutputPreview: PreviewProvider {
+    static var previews: some View {
+        TranscriptPreview(
+            response: "",
+            isTerminal: false,
+            showsPrefillPlaceholder: true)
+            .previewDisplayName("Prefilling")
+    }
 }
 
-#Preview("Completed prose") {
-    TranscriptPreview(
-        response: "# A clear answer\n\nHere is a concise explanation with **useful emphasis**.\n\n- First point\n- Second point",
-        isTerminal: true)
+private struct CompletedProseOutputPreview: PreviewProvider {
+    static var previews: some View {
+        TranscriptPreview(
+            response: "# A clear answer\n\nHere is a concise explanation with **useful emphasis**.\n\n- First point\n- Second point",
+            isTerminal: true)
+            .previewDisplayName("Completed prose")
+    }
 }
 
-#Preview("Completed code") {
-    TranscriptPreview(
-        response: "Use `fibonacci(7)`:\n\n```python\ndef fibonacci(n: int) -> list[int]:\n    return []\n```",
-        isTerminal: true)
+private struct CompletedCodeOutputPreview: PreviewProvider {
+    static var previews: some View {
+        TranscriptPreview(
+            response: "Use `fibonacci(7)`:\n\n```python\ndef fibonacci(n: int) -> list[int]:\n    return []\n```",
+            isTerminal: true)
+            .previewDisplayName("Completed code")
+    }
 }
 
-#Preview("Incomplete Markdown fallback") {
-    TranscriptPreview(
-        response: "The partial answer remains readable.\n\n```python\nprint('unfinished')",
-        isTerminal: true)
+private struct IncompleteMarkdownFallbackOutputPreview: PreviewProvider {
+    static var previews: some View {
+        TranscriptPreview(
+            response: "The partial answer remains readable.\n\n```python\nprint('unfinished')",
+            isTerminal: true)
+            .previewDisplayName("Incomplete Markdown fallback")
+    }
 }
 #endif

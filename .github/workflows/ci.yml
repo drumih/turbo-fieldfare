@@ -39,18 +39,32 @@ jobs:
           sudo xcode-select -s "$app"
       - name: Report the toolchain
         run: swift --version
+      - name: Check SwiftUI macro independence
+        run: |
+          ruby Scripts/check_swiftui_macros.rb --self-test
+          ruby Scripts/tests/swift_macro_probe_test.rb
       - name: Build release products
         run: swift build -c release
+      - name: Build debug and test state compatibility
+        run: Scripts/test.sh --filter 'StoredStateTests|AppModelTests|DecodeServiceLaunchPolicyTests'
 
   test:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    runs-on: macos-26
+    # macos-26's default SDK does not exercise the new State macro.
+    # Official preview runner: actions/runner-images#14404.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v4
       - name: Report the toolchain
         run: swift --version
-      - name: Build release products
-        run: swift build -c release
+      - name: Check SwiftUI macro independence
+        run: |
+          ruby Scripts/check_swiftui_macros.rb --self-test
+          ruby Scripts/tests/swift_macro_probe_test.rb --require-sdk-27
+      - name: Build release without SwiftUI platform plugins
+        run: ruby Scripts/tests/swift_macro_probe_test.rb --require-sdk-27 --build release
+      - name: Build debug without SwiftUI platform plugins
+        run: ruby Scripts/tests/swift_macro_probe_test.rb --require-sdk-27 --build debug
       - name: Run serial tests
         run: Scripts/test.sh
       - name: Check for tracked symlinks

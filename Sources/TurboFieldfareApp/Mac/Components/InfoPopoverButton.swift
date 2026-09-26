@@ -1,3 +1,4 @@
+import TurboFieldfareMacPresentation
 import SwiftUI
 
 /// An `info.circle` that both hovers and clicks: the tooltip alone was
@@ -7,7 +8,7 @@ struct InfoPopoverButton: View {
     let subject: String
     let text: String
     var arrowEdge: Edge = .trailing
-    @State private var isShowingPopover = false
+    @StoredState private var isShowingPopover = false
 
     var body: some View {
         Button {

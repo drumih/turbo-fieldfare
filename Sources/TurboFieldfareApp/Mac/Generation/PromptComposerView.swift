@@ -9,8 +9,8 @@ struct PromptComposerView: View {
     @Bindable var model: AppModel
     var availableHeight: CGFloat = .infinity
     @FocusState private var promptFocused: Bool
-    @State private var showingImagePicker = false
-    @State private var isImageDropTargeted = false
+    @StoredState private var showingImagePicker = false
+    @StoredState private var isImageDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

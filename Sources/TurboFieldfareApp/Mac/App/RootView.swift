@@ -4,7 +4,7 @@ import SwiftUI
 
 struct RootView: View {
     let model: AppModel
-    @State private var conversationChromeHeight: CGFloat = 0
+    @StoredState private var conversationChromeHeight: CGFloat = 0
 
     var body: some View {
         // Three columns in one HStack, not a NavigationSplitView. The split

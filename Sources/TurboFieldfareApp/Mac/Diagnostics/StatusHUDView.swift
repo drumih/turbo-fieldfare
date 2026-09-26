@@ -243,7 +243,7 @@ private struct StripControlButton: View {
     let help: String
     let identifier: AccessibilityID
     let action: () -> Void
-    @State private var isHovering = false
+    @StoredState private var isHovering = false
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {

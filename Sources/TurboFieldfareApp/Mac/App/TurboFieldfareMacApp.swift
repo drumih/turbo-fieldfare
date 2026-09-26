@@ -85,14 +85,14 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct TurboFieldfareMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
-    @State private var model: AppModel
+    @StoredState private var model: AppModel
 
     init() {
         let model = AppModel(
             client: DecodeServiceInferenceClient(),
             visionRuntimeSupported: AppModel.currentDeviceSupportsVisionRuntime,
             settingsPersistenceEnabled: true)
-        _model = State(initialValue: model)
+        _model = StoredState(initialValue: model)
         MainActor.assumeIsolated { ForegroundAppDelegate.model = model }
     }
 
