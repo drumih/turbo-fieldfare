@@ -55,9 +55,62 @@ enum ServerLog {
             + "finish=\(completion.finishReason)"
     }
 
+    /// What retention costs at worst, said once at load.
+    ///
+    /// Reported because nothing else can say it: per-slot KV is not in the
+    /// model manifest and not in any existing line, so sizing a server meant
+    /// deriving it from the architecture by hand.
+    ///
+    /// Named a ceiling because that is what it is. The figure is what a slot
+    /// allocates, and a slot goes resident only as far as the conversation in
+    /// it reaches: the sliding-window ring is fully touched within the first
+    /// ~1,300 tokens, while the full-attention layers fault in proportionally.
+    /// `reset()` madvises the pages back when a lineage is dropped. Reporting
+    /// it bare invited an operator to check Activity Monitor, find a smaller
+    /// number, and conclude the line was lying.
+    ///
+    /// The gap is narrower than it sounds, because the ring is the larger half
+    /// and is reached early: a quarter of the context is 57% of the ceiling,
+    /// not a quarter of it. Size for the ceiling on a machine that must not
+    /// swap.
+    static func promptCacheSlots(count: Int,
+                                 bytesPerSlot: Int,
+                                 mode: ServerPromptCacheMode) {
+        let mib = Double(bytesPerSlot) / (1_024 * 1_024)
+        write("prompt cache mode=\(mode.rawValue) slots=\(count) "
+            + "kv_per_slot_max=\(String(format: "%.1f", mib))MiB "
+            + "kv_total_max=\(String(format: "%.1f", mib * Double(count)))MiB "
+            + "(ceiling; a slot goes resident as far as its conversation reaches)")
+    }
+
+    /// Which lineage a request resolved to, and why it could not continue one
+    /// when it could not.
+    ///
     /// The session is an actor, so generation is serialized: this line always
     /// belongs to the request between the preceding `generating` and the
-    /// following `completed`. Carries a reason code only, never prompt content.
+    /// following `completed`. Carries a reason code only, never prompt content,
+    /// and never the caller's `prompt_cache_key` — the slot index says which
+    /// lineage without repeating the name the caller gave it.
+    static func promptCacheResolved(slot: Int,
+                                    slotCount: Int,
+                                    occupied: Int,
+                                    reason: ServerPromptCacheMissReason?) {
+        write("prompt cache slot=\(slot) of \(slotCount) occupied=\(occupied) "
+            + "outcome=\(reason?.rawValue ?? "hit")")
+    }
+
+    /// A request that asked not to participate in the cache.
+    ///
+    /// Reported alongside the occupancy it did not disturb, because that is the
+    /// claim being made: opting out costs a prefill and costs nobody else their
+    /// prefix. Without the line the two cases are indistinguishable in a log —
+    /// a request that opted out and one that missed both show `cached=0`.
+    static func promptCacheOptedOut(lineage: Int,
+                                    slotCount: Int,
+                                    occupied: Int) {
+        write("prompt cache opted-out lineage=\(lineage) "
+            + "slots=\(slotCount) occupied=\(occupied) outcome=not-cached")
+    }
 
     static func visionPackInvalid(at url: URL, error: Error) {
         write("vision pack at \(url.path) is invalid: \(String(reflecting: error))")

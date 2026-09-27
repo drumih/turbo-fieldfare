@@ -172,16 +172,173 @@ request.
 
 ## Prompt reuse
 
-Single-prefix KV reuse is on by default. Send the complete message history with
-every request. When a request continues the retained conversation exactly, the
-server reuses the verified KV prefix and reports the number of reused tokens in:
+KV reuse is on by default. Send the complete message history with every
+request. When a request continues a retained conversation exactly, the server
+reuses the verified KV prefix and reports the number of reused tokens in:
 
 ```text
 usage.prompt_tokens_details.cached_tokens
 ```
 
-The server retains one prefix. A different or incompatible history replaces
-it. Use `--prompt-cache-mode off` to disable reuse.
+Reuse serves conversation **continuations**. Two independent requests that
+share a long prefix do not reuse it however much text they have in common; a
+request that continues a conversation the server still holds does.
+
+### How many conversations are retained
+
+By default the server retains **one**, and any other caller's request replaces
+it. Two conversations interleaving on one server therefore evict each other on
+every call, and neither ever continues — including a single-shot request, such
+as a summary, that will never continue anything itself but still takes the slot.
+Nothing in the response distinguishes this from a client sending a history that
+does not match; `cached_tokens` is 0 either way.
+
+`--prompt-cache-slots` raises the number retained:
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --prompt-cache-slots 3
+```
+
+A slot is a whole KV lineage, not bookkeeping: it allocates about 575 MiB at the
+default 16,384-token context. The startup log reports the figure for the context
+configured.
+
+```text
+prompt cache mode=single-prefix slots=3 kv_per_slot_max=574.6MiB kv_total_max=1723.9MiB
+  (ceiling; a slot goes resident as far as its conversation reaches)
+```
+
+**That is a ceiling, not a prediction.** The buffers fault in on write, so a
+slot holds only what its conversation has reached, and dropping a lineage
+returns the pages. The two halves behave differently:
+
+| layers | storage | residency |
+|---|---|---|
+| 25 sliding-window | ~255 MiB | reached within the first ~1,300 tokens |
+| 5 full-attention | ~320 MiB at 16K | grows with position |
+
+So a 4,000-token conversation holds roughly 255 + 320 × 4,000/16,384 ≈ **333
+MiB**, not 575. Three slots carrying prompts that size sit near 1.0 GiB rather
+than the 1.7 GiB ceiling.
+
+The gap is narrower than it looks, though: the ring is the larger half and is
+reached early, so a quarter of the context costs 57% of the ceiling rather than
+a quarter of it. A conversation has to be short to be cheap, and one long enough
+to be worth caching is most of the way up already. Size for the ceiling if the
+machine must never swap, and expect the smaller number in Activity Monitor.
+
+Only the five full-attention layers scale with `--max-context`; the ring caps
+the other twenty-five, so a four-times-larger context is not a four-times-larger
+slot. Slots past the first are allocated when a conversation first uses one, so
+a server configured for more than its clients open pays for the ones they do.
+
+A request reuses a slot only when that slot's history, tools, images and
+runtime identity all match, so raising the count can cost a prefill and can
+never return a prefix a caller did not send.
+
+### Reserving a slot
+
+Without a key, requests share the slots and the least recently used one is
+evicted when a new conversation needs room. Send `prompt_cache_key` to name a
+conversation and reserve a slot for it:
+
+```json
+{
+  "model": "gemma-4-26b-a4b-it",
+  "messages": [{"role": "user", "content": "..."}],
+  "prompt_cache_key": "extraction"
+}
+```
+
+A key names one lineage. A keyed request looks at its own slot and nowhere
+else, and unkeyed traffic uses only the slots no key has claimed — so a caller
+that names its conversation cannot be evicted by one that does not. The key is
+opaque to the server, is never logged, and must be 1 to 128 UTF-8 bytes.
+
+**One key, one conversation at a time.** Because the key selects a slot rather
+than a history, reusing a name *over time* is the intended lifecycle: when a
+conversation ends and a new one takes its place under the same name, the new one
+misses, claims the slot that name already holds, and disturbs nothing else. A
+periodic job that starts a fresh conversation each run should keep one stable
+key for exactly this reason.
+
+Two conversations alive *at the same time* under one name is the case to avoid.
+They resolve to the same slot and overwrite each other on every call, so they
+never continue — and unlike unkeyed traffic they cannot spread across the
+remaining slots, which sit unused:
+
+```text
+three live conversations, three slots, one shared key
+  A → claims slot 0        B → overwrites slot 0      C → overwrites slot 0
+  A → overwrites slot 0    ...                        slots 1 and 2 idle
+```
+
+That is the one way sending a key leaves a client worse off than sending none.
+Derive the key from whatever identifies the conversation — a thread or session
+id, not the calling surface — whenever more than one can be open at once.
+
+Earlier versions accepted `prompt_cache_key` and ignored it, so a client already
+sending one needs no change — but both versions answer 200, so the field alone
+cannot tell them apart. `GET /health` reports the count:
+
+```json
+{"status": "ok", "vision": "ready", "prompt_cache_slots": 3}
+```
+
+A server without the field ignores the key; one reporting `1` honours it but has
+a single slot to give.
+
+Size the count for the conversations that run at once. Single-shot traffic —
+a summary or a classification that will never be continued — should send
+`prompt_cache_mode: off` instead of being budgeted a slot; see below.
+
+More names than slots is allowed: a new key recycles the least recently used
+one, which then starts cold. Use `--prompt-cache-mode off` to disable reuse
+entirely; it retains nothing, so it cannot be combined with more than one slot.
+
+### Opting out for one request
+
+A caller that will never continue a conversation still has to prefill
+somewhere, and prefilling into a slot destroys the conversation in it. So a
+single-shot request costs someone else their prefix just by running, even
+though it can never benefit from the cache itself.
+
+`prompt_cache_mode` overrides `--prompt-cache-mode` for one request, in the
+flag's own vocabulary:
+
+```json
+{
+  "model": "gemma-4-26b-a4b-it",
+  "messages": [{"role": "user", "content": "..."}],
+  "prompt_cache_mode": "off"
+}
+```
+
+Such a request reuses nothing, publishes nothing, and leaves every slot as it
+found it — it prefills into a lineage kept aside for exactly this, allocated
+the first time one is used. A server no client opts out of never pays for it.
+
+The override only narrows. `single-prefix` on a server started with
+`--prompt-cache-mode off` is accepted and changes nothing, because no lineage
+is retained for the request to join. Any other value is a 400 rather than a
+fall back to the server's mode: `"none"` is a caller who believes caching is
+off, and answering 200 with it on is the failure `unknown_parameter` exists to
+prevent. Sending `prompt_cache_key` together with `prompt_cache_mode: off` is
+also a 400 — one asks to reserve a lineage and the other asks not to have one,
+and either silent winner leaves the caller believing the opposite of what
+happened.
+
+Each request reports which it took:
+
+```text
+prompt cache slot=1 of 3 occupied=2 outcome=hit
+prompt cache opted-out lineage=3 slots=3 occupied=2 outcome=not-cached
+```
+
+The second line is worth having because a request that opted out and one that
+simply missed both report `cached_tokens` 0, and only the log separates them.
 
 ## Tool calls
 
@@ -224,7 +381,8 @@ Chat Completions supports JSON and Server-Sent Events responses. Set
 Requests may contain system, developer, user, assistant, and tool messages.
 Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
-`max_completion_tokens`, and function-tool fields.
+`max_completion_tokens`, `prompt_cache_key`, `prompt_cache_mode`, and
+function-tool fields.
 
 Unknown top-level request fields return HTTP 400 with `code`
 `unknown_parameter` and the field name in `param`, so a misspelled option is
@@ -234,8 +392,13 @@ refused rather than silently ignored. `response_format` is accepted only as
 `verbosity`, `modalities`, `audio`, `prediction`, `web_search_options`, and
 the legacy `functions` and `function_call`. `response_format` must be an object; any
 other JSON value returns `invalid_value`. `user`, `store`, `metadata`,
-`service_tier`, `prompt_cache_key`, and `safety_identifier` are accepted and
-ignored. A top-level field set to `null` is treated as absent. Fields inside
+`service_tier`, and `safety_identifier` are accepted and ignored.
+`prompt_cache_key` reserves a prompt-cache slot (see
+[Prompt reuse](#prompt-reuse)) and must be 1 to 128 UTF-8 bytes; an empty or
+longer one returns `invalid_value`. Earlier versions accepted and ignored it,
+so honouring it cannot break a client already sending one.
+`prompt_cache_mode` takes `off` or `single-prefix`; any other value, or `off`
+alongside a `prompt_cache_key`, returns `invalid_value`. A top-level field set to `null` is treated as absent. Fields inside
 `messages`, `tools`, and `stream_options` are not checked for extras. Inside
 `stream_options` only `include_usage` is read, so a misspelled key there is
 ignored rather than refused.
@@ -256,7 +419,16 @@ time and watch memory pressure.
 
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not
-prompt text, tool arguments, headers, or request bodies.
+prompt text, tool arguments, headers, or request bodies. Each request also
+reports which prompt-cache slot it resolved to and whether it continued one:
+
+```text
+prompt cache slot=1 of 3 occupied=2 outcome=hit
+prompt cache slot=2 of 3 occupied=3 outcome=history-diverged
+```
+
+The slot index says which lineage without repeating the `prompt_cache_key` the
+caller chose, which is never logged.
 
 ## Images
 

@@ -518,7 +518,11 @@ public actor ServerModelSession: ServerInferenceBackend {
     private let maxContext: Int
     private let promptCacheMode: ServerPromptCacheMode
     private let promptCacheDomain: ServerPromptCacheDomain
-    private var promptCache = ServerPromptCache()
+    private var promptCache: ServerPromptCache
+    /// The lineage a request that opted out of the cache prefills into, so it
+    /// never overwrites a retained conversation. Nil when the server retains
+    /// nothing anyway, where opting out costs nothing and changes nothing.
+    private let uncachedLineage: Int?
     public nonisolated let visionCapability: String
     private let visionRuntime: VisionRuntime?
     private let visionResidencyPolicy: VisionResidencyPolicy
@@ -553,6 +557,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                             visionPackURL: URL? = nil,
                             visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
                             promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+                            promptCacheSlots: Int = 1,
                             runtimeConfiguration: RuntimeConfiguration) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
@@ -571,10 +576,27 @@ public actor ServerModelSession: ServerInferenceBackend {
             streamingMode: .pread(slotCount: runtime.expertCacheSlots),
             expertCachePolicy: runtime.modelExpertCachePolicy,
             integrityPolicy: .fullSha256)
+        // Off means nothing is retained between requests, so one lineage is all
+        // the runner can ever be asked for.
+        let slotCount = promptCacheMode == .off ? 1 : promptCacheSlots
+        // One lineage past the slots, for requests that opt out of the cache.
+        //
+        // A request still has to prefill somewhere, and prefilling into a slot
+        // destroys the conversation in it — so an opted-out request that shared
+        // the pool would evict a conversation while explicitly asking not to
+        // participate, which is the opposite of what it asked for. It is
+        // allocated on first use like every slot past the first, so a server
+        // no client opts out of never pays for it.
+        let lineageCount = promptCacheMode == .off ? 1 : slotCount + 1
         let runner = try RealForwardRunner(model: model,
                                            context: context,
                                            maxContext: maxContext,
-                                           runtimeConfiguration: runtime)
+                                           runtimeConfiguration: runtime,
+                                           kvSlotCount: lineageCount)
+        ServerLog.promptCacheSlots(
+            count: slotCount,
+            bytesPerSlot: runner.kvSlotStorageBytes,
+            mode: promptCacheMode)
         let scratch = try RawCompletionScratch(context: context, vocab: model.config.vocabSize)
         let templateDigest = SHA256.hash(data: try Data(contentsOf: templateURL))
             .map { String(format: "%02x", $0) }
@@ -640,6 +662,9 @@ public actor ServerModelSession: ServerInferenceBackend {
                                   prefillConfig: runtime.prefillConfig,
                                   maxContext: maxContext,
                                   promptCacheMode: promptCacheMode,
+                                  promptCacheSlots: slotCount,
+                                  uncachedLineage: promptCacheMode == .off
+                                    ? nil : slotCount,
                                   promptCacheDomain: promptCacheDomain,
                                   visionRuntime: visionRuntime,
                                   visionCapability: visionCapability,
@@ -670,6 +695,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                  prefillConfig: PrefillRuntimeConfig,
                  maxContext: Int,
                  promptCacheMode: ServerPromptCacheMode,
+                 promptCacheSlots: Int,
+                 uncachedLineage: Int?,
                  promptCacheDomain: ServerPromptCacheDomain,
                  visionRuntime: VisionRuntime?,
                  visionCapability: String,
@@ -682,6 +709,8 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.prefillConfig = prefillConfig
         self.maxContext = maxContext
         self.promptCacheMode = promptCacheMode
+        self.promptCache = ServerPromptCache(slotCount: promptCacheSlots)
+        self.uncachedLineage = uncachedLineage
         self.promptCacheDomain = promptCacheDomain
         self.visionRuntime = visionRuntime
         self.visionResidencyPolicy = visionResidencyPolicy
@@ -893,14 +922,20 @@ public actor ServerModelSession: ServerInferenceBackend {
         let request = prepared.request
         var completionStarted = false
         var completed = false
+        // Two indices, deliberately separate. `lineage` is the runner's KV,
+        // which includes the extra one kept for opted-out requests; `cacheSlot`
+        // is the prompt cache's, which does not. Carrying one index for both
+        // read the uncached lineage's number off the end of the slot array.
+        var lineage = 0
+        var cacheSlot: Int? = 0
         defer {
             // Rendering, planning and image encoding touch no KV state, so a
             // request that fails or is cancelled before the completion starts
-            // leaves the cache exactly as the last completed request left it.
+            // leaves every slot exactly as the last completed request left it.
             // Image encoding is seconds long, so this window is not rare.
             if completionStarted, !completed {
-                promptCache.invalidate()
-                runner.reset()
+                if let cacheSlot { promptCache.invalidate(slot: cacheSlot) }
+                runner.resetKVSlot(lineage)
             }
         }
         let needsToolTemplate = usesToolTemplate(request)
@@ -916,14 +951,42 @@ public actor ServerModelSession: ServerInferenceBackend {
         // re-encoded; only a full-prefill miss needs them.
         let renderedTextIDs: [Int32]? = isMultimodal
             ? nil : try (prepared.promptIDs ?? renderPrompt(request))
+        // The request may narrow the server's mode but never widen it: with the
+        // flag off no lineage is retained for a request to join, so honouring
+        // `single-prefix` per request would promise a reuse the server is not
+        // configured to provide.
+        let effectiveMode: ServerPromptCacheMode =
+            promptCacheMode == .off ? .off : (request.promptCacheMode ?? .singlePrefix)
         var cacheMatch: ServerPromptCacheMatch = .miss
-        if promptCacheMode == .singlePrefix {
-            cacheMatch = promptCache.match(
+        if effectiveMode == .off, let uncachedLineage {
+            // Opted out: prefill into the lineage kept for exactly this, so no
+            // retained conversation is disturbed. Nothing is matched and
+            // nothing is published, so the slots are untouched either way.
+            lineage = uncachedLineage
+            cacheSlot = nil
+            ServerLog.promptCacheOptedOut(
+                lineage: uncachedLineage,
+                slotCount: promptCache.slotCount,
+                occupied: promptCache.occupiedSlotCount)
+        } else if effectiveMode == .singlePrefix {
+            let resolution = promptCache.resolve(
                 domain: promptCacheDomain,
                 request: request,
                 renderedPromptIDs: renderedTextIDs,
                 tokenizer: tokenizer)
+            lineage = resolution.slot
+            cacheSlot = resolution.slot
+            cacheMatch = resolution.match
+            ServerLog.promptCacheResolved(
+                slot: resolution.slot,
+                slotCount: promptCache.slotCount,
+                occupied: promptCache.occupiedSlotCount,
+                reason: resolution.missReason)
         }
+        // Before the completion, never during: the transient prefill state the
+        // switch drops describes the slot being left. A hit resumes on the KV
+        // this makes active, and a miss overwrites it.
+        try runner.activateKVSlot(lineage)
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
         var multimodalInput: MultimodalPrefillInput?
@@ -940,8 +1003,10 @@ public actor ServerModelSession: ServerInferenceBackend {
             do {
                 let bridge = try await multimodalContinuation(
                     request: request,
-                    cachedMessageCount: promptCache.inputMessageCount ?? 0)
-                effectivePromptIDs = (promptCache.kvBackedTokenIDs ?? [])
+                    cachedMessageCount: cacheSlot
+                        .flatMap { promptCache.inputMessageCount(slot: $0) } ?? 0)
+                effectivePromptIDs = (cacheSlot
+                    .flatMap { promptCache.kvBackedTokenIDs(slot: $0) } ?? [])
                     + bridge.effectiveTokenIDs
                 multimodalInput = bridge
                 completionStart = .resume(cachedPromptTokens: cached)
@@ -951,14 +1016,14 @@ public actor ServerModelSession: ServerInferenceBackend {
                 throw CancellationError()
             } catch {
                 ServerLog.promptCacheBridgeFailed(error: error)
-                promptCache.invalidate()
+                if let cacheSlot { promptCache.invalidate(slot: cacheSlot) }
                 let rendered = try await renderMultimodal(request)
                 effectivePromptIDs = rendered.effectiveTokenIDs
                 multimodalInput = rendered
                 completionStart = .reset
             }
         case .miss:
-            promptCache.invalidate()
+            if let cacheSlot { promptCache.invalidate(slot: cacheSlot) }
             if let renderedTextIDs {
                 effectivePromptIDs = renderedTextIDs
                 multimodalInput = nil
@@ -1108,8 +1173,9 @@ public actor ServerModelSession: ServerInferenceBackend {
         // image identity: a later turn whose images differ is refused by
         // `imagesDiverged` rather than resumed onto a KV built from a different
         // picture.
-        if promptCacheMode == .singlePrefix {
+        if effectiveMode == .singlePrefix, let cacheSlot {
             promptCache.publish(
+                slot: cacheSlot,
                 domain: promptCacheDomain,
                 request: request,
                 content: content,

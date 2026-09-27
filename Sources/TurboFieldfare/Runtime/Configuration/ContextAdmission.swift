@@ -27,6 +27,31 @@ public enum ContextAdmission {
         return UInt64(max(0, slots - 16)) * UInt64(config.numLayers) * UInt64(slotBytes)
     }
 
+    /// KV bytes the retained prompt-cache lineages add on top of the single
+    /// lineage `fp16KVBytes` already accounts for.
+    ///
+    /// `--prompt-cache-slots N` configures `N + 1` lineages: N that retain a
+    /// conversation's prefix, plus one that serves requests sending
+    /// `prompt_cache_mode: "off"`, so an opted-out request cannot evict a
+    /// conversation while explicitly asking not to participate. Slot 0 is the
+    /// lineage `fp16KVBytes` already charges, so only slots past the first are
+    /// added here — at the default of 1 this is zero and admission is exactly
+    /// the arithmetic it was before retention existed.
+    ///
+    /// The opt-out lineage is deliberately NOT charged, and that is the one
+    /// judgement in this file worth disagreeing with. It is allocated on first
+    /// use like every lineage past slot 0, and only a client that sends the
+    /// `prompt_cache_mode` field can open it, so charging it would make every
+    /// operator pay for a lineage most deployments never allocate. The
+    /// omission is real rather than negligible at the top of the range — one
+    /// lineage at 262,144 is 5.25 GiB, well past `hostReserveBytes` — so it is
+    /// named here instead of buried.
+    private static func additionalPromptCacheBytes(config: ArchConfig,
+                                                   maxContext: Int,
+                                                   slots: Int) -> UInt64 {
+        UInt64(max(0, slots - 1)) * fp16KVBytes(config: config, maxContext: maxContext)
+    }
+
     /// Headroom left to the OS and to a minimum routed-expert page cache. A
     /// host that satisfied only the projected footprint would run with every
     /// expert read faulting against a cold cache.
@@ -67,20 +92,26 @@ public enum ContextAdmission {
     }
 
     /// What the process is expected to occupy at this context.
-    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
+    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16,
+                                               promptCacheSlots: Int = 1) -> UInt64 {
         fp16KVBytes(config: config, maxContext: maxContext) + nonKVRuntimeFootprintBytes
             + additionalExpertCacheBytes(config: config, slots: expertCacheSlots)
+            + additionalPromptCacheBytes(config: config, maxContext: maxContext, slots: promptCacheSlots)
     }
 
     /// The smallest host memory that admits this context.
-    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
-        projectedFootprintBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots) + hostReserveBytes
+    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16,
+                                              promptCacheSlots: Int = 1) -> UInt64 {
+        projectedFootprintBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                promptCacheSlots: promptCacheSlots) + hostReserveBytes
     }
 
     public static func availability(config: ArchConfig,
                                     maxContext: Int,
-                                    hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> Availability {
-        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots)
+                                    hostMemoryBytes: UInt64, expertCacheSlots: Int = 16,
+                                    promptCacheSlots: Int = 1) -> Availability {
+        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                             promptCacheSlots: promptCacheSlots)
         return hostMemoryBytes >= minimum ? .available : .needsMemory(minimumHostBytes: minimum)
     }
 
@@ -90,9 +121,11 @@ public enum ContextAdmission {
     /// refusal, a hidden menu row's caption or a CLI warning.
     public static func needDescription(config: ArchConfig,
                                        maxContext: Int,
-                                       hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> String {
+                                       hostMemoryBytes: UInt64, expertCacheSlots: Int = 16,
+                                       promptCacheSlots: Int = 1) -> String {
         let need = marketingGigabytesRoundedUp(
-            minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots))
+            minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                   promptCacheSlots: promptCacheSlots))
         let have = marketingGigabytesNearest(hostMemoryBytes)
         return "A \(grouped(maxContext))-token context needs \(need) GB of memory; this Mac has \(have) GB."
     }
