@@ -923,6 +923,9 @@ public actor ServerModelSession: ServerInferenceBackend {
                 request: request,
                 renderedPromptIDs: renderedTextIDs,
                 tokenizer: tokenizer)
+            if let reason = cacheMatch.missReason {
+                ServerLog.promptCacheMiss(reason: reason)
+            }
         }
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
