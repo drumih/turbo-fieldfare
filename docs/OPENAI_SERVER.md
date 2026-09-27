@@ -230,7 +230,7 @@ Unknown top-level request fields return HTTP 400 with `code`
 `unknown_parameter` and the field name in `param`, so a misspelled option is
 refused rather than silently ignored. `response_format` is accepted only as
 `{"type": "text"}`; `json_object` and `json_schema` return
-`unsupported_value`, as do `logit_bias`, `top_logprobs`, `reasoning_effort`,
+`unsupported_value`, as do `logit_bias`, `top_logprobs`,
 `verbosity`, `modalities`, `audio`, `prediction`, `web_search_options`, and
 the legacy `functions` and `function_call`. `response_format` must be an object; any
 other JSON value returns `invalid_value`. `user`, `store`, `metadata`,
@@ -239,6 +239,10 @@ ignored. A top-level field set to `null` is treated as absent. Fields inside
 `messages`, `tools`, and `stream_options` are not checked for extras. Inside
 `stream_options` only `include_usage` is read, so a misspelled key there is
 ignored rather than refused.
+
+The server supports thinking and reasoning controls via `reasoning_effort`,
+`chat_template_kwargs.enable_thinking`, and `thinking.type`. See
+[Thinking and reasoning](#thinking-and-reasoning) below.
 
 The server supports one model and one choice. It does not support the Responses
 API, legacy Completions, embeddings, structured output,
@@ -277,3 +281,107 @@ newer. Text requests remain available.
 
 Choose the pack and the residency policy with `--vision-pack <dir>` and
 `--vision-residency on-demand|keep-ready`.
+
+## Thinking and reasoning
+
+Gemma 4 natively supports reasoning via internal channel tokens. When thinking
+is enabled, prompt templates inject `<|think|>` into the system guidance and
+leave the model turn open, prompting the model to emit reasoning tokens inside
+`<|channel>thought\n...<channel|>` before outputting visible responses or calling
+tools. When thinking is disabled, the prompt closes the thought channel
+immediately (`<|channel>thought\n<channel|>`), suppressing internal reasoning.
+
+### Server thinking policy
+
+Configure the server's thinking policy with `--thinking <auto|on|off>`:
+
+```bash
+.build/release/TurboFieldfareServer \
+  --model scratch/gemma4.gturbo \
+  --thinking auto
+```
+
+- `auto` (default): Thinking is enabled only when explicitly requested by the
+  client (e.g., via `reasoning_effort`, `chat_template_kwargs`, or `thinking`).
+- `on`: Thinking is enabled by default for all requests, unless explicitly
+  disabled by a request parameter (`reasoning_effort: "none"`, etc.).
+- `off`: Thinking is disabled for all requests, overriding any client request.
+
+### Client parameters
+
+The server supports standard OpenAI and open-weight reasoning controls:
+
+1. **`reasoning_effort`**:
+   Accepted values: `"low"`, `"medium"`, `"high"`, `"default"`, and `"none"`.
+   Values other than `"none"` enable thinking.
+
+   ```json
+   {
+     "model": "gemma-4-26b-a4b-it",
+     "messages": [{"role": "user", "content": "How many r's are in strawberry?"}],
+     "reasoning_effort": "high"
+   }
+   ```
+
+2. **`chat_template_kwargs.enable_thinking`**:
+   Accepts a boolean (`true` or `false`), matching Hugging Face / vLLM client conventions:
+
+   ```json
+   {
+     "model": "gemma-4-26b-a4b-it",
+     "messages": [{"role": "user", "content": "Solve this puzzle..."}],
+     "chat_template_kwargs": {"enable_thinking": true}
+   }
+   ```
+
+3. **`thinking.type`**:
+   Accepts `{"type": "enabled"}` or `{"type": "disabled"}`.
+
+### Response format
+
+- **Streaming (`stream: true`)**:
+  Reasoning deltas stream under `delta.reasoning_content`:
+
+  ```json
+  data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"Let's count the letters..."}}]}
+  data: {"id":"chatcmpl-...","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"There are 3 'r's."}}]}
+  ```
+
+- **Non-streaming**:
+  The full thought process is returned in `choices[0].message.reasoning_content`:
+
+  ```json
+  {
+    "id": "chatcmpl-...",
+    "object": "chat.completion",
+    "choices": [{
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "reasoning_content": "Let's count the letters in strawberry:\ns-t-r-a-w-b-e-r-r-y...",
+        "content": "There are 3 'r's in strawberry."
+      },
+      "finish_reason": "stop"
+    }],
+    "usage": {
+      "prompt_tokens": 15,
+      "completion_tokens": 85,
+      "total_tokens": 100,
+      "prompt_tokens_details": {"cached_tokens": 0},
+      "completion_tokens_details": {"reasoning_tokens": 62}
+    }
+  }
+  ```
+
+- **Usage reporting**:
+  When reasoning tokens are generated, `usage.completion_tokens_details.reasoning_tokens`
+  reports the exact count of tokens spent in the reasoning channel.
+
+### Tool calls and prompt cache
+
+Thinking works seamlessly alongside tool calls: the model can deliberate inside
+the thought channel before invoking tools or producing the visible answer. The
+decoder parses thought tokens and routes them cleanly without leaking control
+markers into visible content or tool call arguments. Single-prefix prompt
+caching matches continuation turns with identical thinking states.
+
