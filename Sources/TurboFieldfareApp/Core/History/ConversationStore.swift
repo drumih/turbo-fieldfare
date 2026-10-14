@@ -93,8 +93,7 @@ struct ConversationStoreListOperations: Sendable {
     let beforeList: @Sendable () async -> Void
 }
 
-/// The conversation store: a directory of plain-text conversations beside the
-/// settings and the model.
+/// The conversation store: plain-text conversations under the stable app-data root.
 ///
 /// One directory per conversation, because that makes delete an `rm -rf`, makes
 /// a corrupt conversation one skippable directory rather than a broken store,
@@ -217,6 +216,11 @@ public actor ConversationStore {
             }
         }
         return nil
+    }
+
+    func importLegacyHistory(from source: URL) throws {
+        try requireWritable()
+        try ConversationStoreImport.run(from: source, to: rootURL, destinationAlreadyLocked: true)
     }
 
     public var isReadOnly: Bool { lock == nil }

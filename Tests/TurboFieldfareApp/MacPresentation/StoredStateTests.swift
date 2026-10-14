@@ -128,6 +128,7 @@ import TurboFieldfareAppCore
         }
         let delegateModel = AppModel(
             modelDirectory: directory.appendingPathComponent("missing.gturbo"),
+            appDataDirectory: directory.appendingPathComponent("app-data"),
             client: NoGenerationClient(), visionRuntimeSupported: false,
             settingsPersistenceEnabled: true)
         defer { delegateModel.shutdownForTermination() }

@@ -78,7 +78,7 @@ import TurboFieldfare
         try installVisionCompanion(forTextModel: directory)
         let attachments = AppImageAttachmentStore(
             directoryURL: root.appendingPathComponent("staged", isDirectory: true))
-        let model = AppModel(modelDirectory: directory, client: client,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: client,
                              attachmentStore: attachments,
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path

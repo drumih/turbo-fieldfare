@@ -26,7 +26,7 @@ import Testing
         #expect(decoded == MacAppSettings())
     }
 
-    @Test func malformedFileIsReplacedWithDefaults() throws {
+    @Test func malformedFileIsPreserved() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
@@ -36,13 +36,10 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
-        let decoded = try JSONDecoder().decode(
-            MacAppSettings.self,
-            from: Data(contentsOf: fileURL))
-        #expect(decoded == MacAppSettings())
+        #expect(try Data(contentsOf: fileURL) == Data("not json".utf8))
     }
 
-    @Test func invalidValuesAreReplacedWithDefaults() throws {
+    @Test func invalidValuesArePreserved() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
@@ -129,7 +126,7 @@ import Testing
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("model.gturbo", isDirectory: true)
-        let model = AppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), settingsPersistenceEnabled: true)
 
         model.setMaxContextTokens(4_096)
 
@@ -250,7 +247,7 @@ import Testing
         let persisted = try JSONDecoder().decode(
             MacAppSettings.self, from: Data(contentsOf: fileURL))
 
-        #expect(settings.version == 3)
+        #expect(settings.version == MacAppSettings.currentVersion)
         #expect(settings.contextTokens == 4_096,
                 "the version bump rewrote a deliberately chosen context")
         #expect(settings.expertCacheSlots == 24)
@@ -296,7 +293,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let stored = MacAppSettings(contextTokens: 262_144)
-        #expect(stored.version == 3)
+        #expect(stored.version == MacAppSettings.currentVersion)
 
         try MacAppSettingsFileStore.save(stored, forModelDirectory: model)
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
@@ -397,6 +394,7 @@ import Testing
 
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
         #expect(model.maxContextTokens == 8_192)
         #expect(model.runtimeOptions.expertCacheSlots == 24)
@@ -437,6 +435,7 @@ import Testing
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
 
         model.setNewlineShortcut(.shiftReturn)
@@ -453,6 +452,7 @@ import Testing
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
 
         model.setShowPromptExamples(false)
@@ -463,7 +463,7 @@ import Testing
     }
 
     @MainActor
-    @Test func changingModelDirectoryLoadsItsNewlineShortcut() throws {
+    @Test func changingModelDirectoryPreservesItsNewlineShortcut() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
@@ -474,14 +474,14 @@ import Testing
         try MacAppSettingsFileStore.save(
             MacAppSettings(newlineShortcut: .shiftReturn, showPromptExamples: false),
             forModelDirectory: second)
-        let model = AppModel(modelDirectory: first, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(), settingsPersistenceEnabled: true)
         #expect(model.newlineShortcut == .return)
         #expect(model.showPromptExamples)
 
-        model.setModelURL(second)
+        await model.setModelURL(second)
 
-        #expect(model.newlineShortcut == .shiftReturn)
-        #expect(!model.showPromptExamples)
+        #expect(model.newlineShortcut == .return)
+        #expect(model.showPromptExamples)
     }
 
     /// Phase D item 15. The newer-version branch says "Every key decodes with
@@ -559,7 +559,7 @@ import Testing
     }
 
     @MainActor
-    @Test func changingModelDirectoryStillReleasesTheImageTower() throws {
+    @Test func changingModelDirectoryStillReleasesTheImageTower() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
@@ -570,10 +570,12 @@ import Testing
         try MacAppSettingsFileStore.save(
             MacAppSettings(visionResidencyPolicy: .keepReady),
             forModelDirectory: second)
-        let model = AppModel(modelDirectory: first, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: first,
+                             appDataDirectory: root.appendingPathComponent("app-data"),
+                             settingsPersistenceEnabled: true)
         #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand)
 
-        model.setModelURL(second)
+        await model.setModelURL(second)
 
         #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand,
                 "a persisted keep-ready came back through the model path change")

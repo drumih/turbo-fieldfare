@@ -10,6 +10,17 @@ import TurboFieldfareAppCore
 /// `Scripts/check_app_case_coverage.rb` fails when one has no case in the
 /// `mac-app-acceptance` skill, so a new control cannot land without its case.
 public enum AccessibilityID: String, CaseIterable, Sendable {
+    case modelChooseDownload = "model.chooseDownload"
+    case modelLocationMenu = "model.locationMenu"
+    case modelUseExisting = "model.useExisting"
+    case modelChangeLocation = "model.changeLocation"
+    case modelReviewPicker = "model.reviewPicker"
+    case modelReviewConfirm = "model.reviewConfirm"
+    case modelReviewCancel = "model.reviewCancel"
+    case modelReveal = "model.reveal"
+    case historyImportLegacy = "history.importLegacy"
+    case settingsReveal = "settings.reveal"
+    case settingsRecover = "settings.recover"
     case settingsTextSize = "settings.textSize"
     case settingsTextSizeStandard = "settings.textSize.standard"
     case settingsTextSizeLarge = "settings.textSize.large"
@@ -93,6 +104,7 @@ public enum AccessibilityID: String, CaseIterable, Sendable {
         case historyRowMenu = "history.row.menu."
         case composerRemove = "composer.remove."
         case example = "examples."
+        case modelCandidate = "model.candidate."
     }
 
     public static func row(_ id: UUID) -> String { Prefix.historyRow.rawValue + id.uuidString }

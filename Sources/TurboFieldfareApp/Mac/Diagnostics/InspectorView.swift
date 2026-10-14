@@ -94,8 +94,8 @@ struct InspectorView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else if case .unsupportedLayout = model.visionInstallationStatus {
-                Text("Image support needs a model directory named "
-                    + "“<name>.gturbo”, which is where the companion pack lives.")
+                Text("Image support needs a text model named “<name>.gturbo” "
+                    + "with “<name>.vision.gturbo” beside it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if case .failed(let message) = model.visionInstallReadiness,
@@ -227,8 +227,10 @@ struct InspectorView: View {
                     .buttonStyle(.borderless)
                     .help("Copy model path")
                     .accessibilityIdentifier(.inspectorCopyPath)
+                    ModelLocationMenu(model: model)
                 }
             }
+            ModelLocationNotices(model: model)
             if model.canUnloadModel {
                 Button("Unload Model", action: model.unloadModel)
                     .accessibilityIdentifier(.inspectorUnload)
@@ -280,8 +282,6 @@ struct InspectorView: View {
                 }
             }
         }
-        .disabled(model.isRunning || model.isInstallingModel
-            || model.isVisionFilesystemMutationInProgress)
     }
 
     /// The context is settable only through the model, because changing it has

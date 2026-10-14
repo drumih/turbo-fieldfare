@@ -13,9 +13,10 @@ public enum ModelRevealPolicy {
     // the menu item exists to answer.
     public static func target(forModelPath path: String,
                               fileExists: (String) -> Bool) -> ModelRevealTarget {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return .unavailable }
-        let url = URL(fileURLWithPath: trimmed, isDirectory: true).standardizedFileURL
+        guard !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .unavailable
+        }
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         if fileExists(url.path) { return .selectItem(url) }
         let container = url.deletingLastPathComponent().standardizedFileURL
         if container.path != url.path, fileExists(container.path) {

@@ -51,6 +51,7 @@ struct PromptComposerView: View {
             newlineShortcut: model.newlineShortcut,
             canRun: model.canRun,
             canAcceptImages: model.isImageInputAvailable
+                && !model.isChangingModelLocation
                 && !model.isTurnInFlight
                 && !model.isAddingImages,
             onSubmit: model.send,
@@ -106,7 +107,7 @@ struct PromptComposerView: View {
                         .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.borderless)
-                .disabled(model.isTurnInFlight || model.isAddingImages
+                .disabled(model.isChangingModelLocation || model.isTurnInFlight || model.isAddingImages
                     || model.imageAttachments.count
                         >= model.maximumImageAttachments)
                 .help(model.maximumImageAttachments == 0

@@ -37,7 +37,7 @@ import Testing
         let root = try makeSettingsRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("model.gturbo")
-        let model = AppModel(modelDirectory: directory, client: MockLifecycleInferenceClient(),
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true, hostMemoryBytes: 8 << 30)
         model.setMaxContextTokens(131_072)
         model.setExpertCacheSlots(24)
@@ -52,7 +52,7 @@ import Testing
         #expect(model.maxContextTokens == 65_536)
     }
 
-    @MainActor @Test func storedCacheGrowthClampsOnLaunchAndModelChange() throws {
+    @MainActor @Test func storedCacheGrowthClampsOnLaunchAndModelChange() async throws {
         let root = try makeSettingsRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo")
@@ -62,11 +62,11 @@ import Testing
                                                             expertCacheSlots: 24),
                                              forModelDirectory: directory)
         }
-        let model = AppModel(modelDirectory: first, client: MockLifecycleInferenceClient(),
+        let model = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(), client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true, hostMemoryBytes: 8 << 30)
         #expect(model.maxContextTokens == 65_536)
         #expect(model.contextClampNotice != nil)
-        model.setModelURL(second)
+        await model.setModelURL(second)
         #expect(model.maxContextTokens == 65_536)
         #expect(model.contextClampNotice != nil)
     }
@@ -438,7 +438,7 @@ import Testing
     }
 
     @MainActor
-    @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() {
+    @Test func changingModelPathInvalidatesLoadedStateAndDiagnostics() async {
         let model = AppModel(client: MockInferenceClient(),
                              installer: MockModelInstallerClient())
         let testDirectory = FileManager.default.temporaryDirectory
@@ -457,7 +457,7 @@ import Testing
             runtimeOptions: AppRuntimeOptions())
         model.error = .unknown("old error")
 
-        model.setModelURL(newURL)
+        await model.setModelURL(newURL)
 
         #expect(model.modelPathText == newURL.standardizedFileURL.path)
         #expect(model.loadState == .notLoaded)
@@ -480,7 +480,7 @@ import Testing
         try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
                                          forModelDirectory: modelDirectory)
 
-        let model = AppModel(modelDirectory: modelDirectory,
+        let model = AppModel(modelDirectory: modelDirectory, appDataDirectory: modelDirectory.deletingLastPathComponent(),
                              client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true,
                              hostMemoryBytes: 8_589_934_592)
@@ -509,7 +509,7 @@ import Testing
     /// to survive being set — assigning the context clears it, so an
     /// assignment made after the notice would wipe it.
     @MainActor
-    @Test func achangedModelDirectoryClampsItsStoredContextToo() throws {
+    @Test func changingModelDirectoryPreservesCentralContext() async throws {
         let root = try makeSettingsRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
@@ -518,17 +518,16 @@ import Testing
                                          forModelDirectory: first)
         try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
                                          forModelDirectory: second)
-        let model = AppModel(modelDirectory: first,
+        let model = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(),
                              client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true,
                              hostMemoryBytes: 8_589_934_592)
         try #require(model.contextClampNotice == nil)
 
-        model.setModelURL(second)
+        await model.setModelURL(second)
 
-        #expect(model.maxContextTokens == 131_072)
-        #expect(model.contextClampNotice?.contains("262,144") == true,
-                "the clamp on the settings-apply path said nothing")
+        #expect(model.maxContextTokens == 8_192)
+        #expect(model.contextClampNotice == nil)
     }
 
     @MainActor
@@ -539,7 +538,7 @@ import Testing
         try MacAppSettingsFileStore.save(MacAppSettings(contextTokens: 262_144),
                                          forModelDirectory: modelDirectory)
 
-        let model = AppModel(modelDirectory: modelDirectory,
+        let model = AppModel(modelDirectory: modelDirectory, appDataDirectory: modelDirectory.deletingLastPathComponent(),
                              client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true,
                              hostMemoryBytes: 25_769_803_776)

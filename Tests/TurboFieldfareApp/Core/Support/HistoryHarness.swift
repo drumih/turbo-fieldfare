@@ -117,7 +117,7 @@ final class HistoryHarness {
         attachmentStore = AppImageAttachmentStore(
             directoryURL: root.appendingPathComponent(
                 "staged-\(UUID().uuidString)", isDirectory: true))
-        let model = AppModel(modelDirectory: modelDirectory, client: client,
+        let model = AppModel(modelDirectory: modelDirectory, appDataDirectory: modelDirectory.deletingLastPathComponent(), client: client,
                              attachmentStore: attachmentStore,
                              settingsPersistenceEnabled: true)
         model.modelPathText = modelDirectory.path

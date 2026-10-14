@@ -1,12 +1,5 @@
 import Foundation
 
-/// Where conversations live: beside the settings file and the model, one
-/// directory per conversation.
-///
-/// The same derivation as `mac-app-settings.json`, deliberately. One location
-/// rule is the whole point: an installed app puts both under Application
-/// Support, a dev checkout puts both under `scratch/`, and moving the model with
-/// `TURBO_FIELDFARE_MODEL_PATH` moves both together.
 public enum ConversationStoreLocation {
     public static let directoryName = "conversations"
 
@@ -14,6 +7,14 @@ public enum ConversationStoreLocation {
         modelDirectory.standardizedFileURL
             .deletingLastPathComponent()
             .appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    public static func url(forAppDataDirectory root: URL) -> URL {
+        root.standardizedFileURL.appendingPathComponent(directoryName, isDirectory: true)
+    }
+
+    public static func contains(_ fileURL: URL, forAppDataDirectory appDataDirectory: URL) -> Bool {
+        contains(fileURL, root: url(forAppDataDirectory: appDataDirectory))
     }
 
     /// Whether `fileURL` names something inside the store for this model.
@@ -25,10 +26,13 @@ public enum ConversationStoreLocation {
     /// a strict path-component prefix, so `.../conversations-elsewhere` cannot
     /// pass as `.../conversations`.
     public static func contains(_ fileURL: URL, forModelDirectory modelDirectory: URL) -> Bool {
+        contains(fileURL, root: url(forModelDirectory: modelDirectory))
+    }
+
+    private static func contains(_ fileURL: URL, root: URL) -> Bool {
         guard fileURL.isFileURL else { return false }
         let resolved = fileURL.standardizedFileURL.resolvingSymlinksInPath()
-        let root = url(forModelDirectory: modelDirectory)
-            .standardizedFileURL.resolvingSymlinksInPath()
+        let root = root.standardizedFileURL.resolvingSymlinksInPath()
         let fileComponents = resolved.pathComponents
         let rootComponents = root.pathComponents
         guard fileComponents.count > rootComponents.count else { return false }

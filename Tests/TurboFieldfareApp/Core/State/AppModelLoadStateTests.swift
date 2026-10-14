@@ -210,24 +210,26 @@ import Testing
         let model = AppModel(modelDirectory: oldURL, client: client)
         model.loadState = .ready(modelDirectory: oldURL, loadSeconds: 1)
 
-        model.setModelURL(newURL)
+        let switchTask = Task { await model.setModelURL(newURL) }
         await client.waitForUnloadStart()
         model.loadModel()
 
         #expect(client.ensureLoadedCallCount() == 0)
         client.releaseUnloads()
+        await switchTask.value
+        model.loadModel()
         await client.waitForEnsureLoadedCallCount(1)
         #expect(client.ensureLoadedCallCount() == 1)
     }
 
     @MainActor
-    @Test func staleReadyStateForOldModelPathIsIgnored() {
+    @Test func staleReadyStateForOldModelPathIsIgnored() async {
         let model = AppModel(client: MockInferenceClient())
         let oldURL = URL(fileURLWithPath: "/tmp/old.gturbo")
         let newURL = URL(fileURLWithPath: "/tmp/new.gturbo")
         model.modelPathText = oldURL.path
 
-        model.setModelURL(newURL)
+        await model.setModelURL(newURL)
         model.applyLoadState(.ready(modelDirectory: oldURL, loadSeconds: 0))
 
         #expect(model.loadState == .notLoaded)

@@ -14,13 +14,25 @@ enum DecodeServiceError: Error, CustomStringConvertible {
         case .attachmentOutsideStore(let path):
             "image attachment is not a staged attachment: \(path)"
         case .replayImageOutsideStore(let path):
-            "replay image is not inside this model's conversation store: \(path)"
+            "replay image is not inside the app's conversation store: \(path)"
         }
     }
 }
 
 @main enum TurboFieldfareDecodeServiceMain {
     static func main() async {
+        if CommandLine.arguments.contains("--check-resources") {
+            do {
+                try AppBundledResources.verify()
+                print("PASS decode helper resources: prompts and Metal shaders")
+                Foundation.exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("Decode helper resource check failed: \(error)\n".utf8))
+                Foundation.exit(1)
+            }
+        }
+        let appDataDirectory = argument(after: "--app-data-directory")
+            .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? AppDataLocation.resolve(environment: [:])
         let socketPath = argument(after: "--socket")
         let launchLabel = argument(after: "--launch-label")
         let handles: (input: FileHandle, output: FileHandle)
@@ -153,7 +165,7 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                     return
                 }
             case .restoreConversation(let request):
-                guard let modelDirectory else {
+                guard modelDirectory != nil else {
                     // Not `try?`: the app waits out the whole restore deadline
                     // for a terminal event that never lands. A lost write is an
                     // EOF the client rebuilds from, the same as below.
@@ -176,7 +188,7 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                 // free to send turns onto a lineage that does not exist.
                 do {
                     let lineage = try restoreLineage(
-                        request, modelDirectory: modelDirectory)
+                        request, appDataDirectory: appDataDirectory)
                     let options = try appRuntimeOptions(request.runtimeOptions)
                     // Progress goes straight out: the writer thread belongs to a
                     // generation, and a restore has none. The loop is awaiting
@@ -377,17 +389,17 @@ enum DecodeServiceError: Error, CustomStringConvertible {
     ///
     /// Same trust boundary as an image attachment: these paths arrive over a
     /// socket and this process opens and hashes whatever they name. Without the
-    /// check a peer could use the service to read any file the user can, and a
-    /// store rooted on the loaded model is the only place a stored conversation
-    /// can legitimately live.
-    private static func restoreLineage(
+    /// check a peer could use the service to read any file the user can, and
+    /// the app-data root supplied at launch is the only place a stored
+    /// conversation can legitimately live, even when model weights move.
+    static func restoreLineage(
         _ request: DecodeRestoreConversationRequest,
-        modelDirectory: URL
+        appDataDirectory: URL
     ) throws -> AppConversationLineage {
         let images = try request.images.map { image -> AppConversationReplayImage in
             let url = URL(fileURLWithPath: image.path)
             guard ConversationStoreLocation.contains(
-                url, forModelDirectory: modelDirectory) else {
+                url, forAppDataDirectory: appDataDirectory) else {
                 throw DecodeServiceError.replayImageOutsideStore(path: image.path)
             }
             return AppConversationReplayImage(

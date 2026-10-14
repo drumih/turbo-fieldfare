@@ -30,6 +30,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public static let conversationRestoreTimeout: Duration = .seconds(1_800)
 
     private let connection = Mutex(Connection())
+    private let appDataDirectory: URL
     private let serviceURL: URL
     private let testConnection: (@Sendable () throws -> (input: FileHandle, output: FileHandle))?
     private let inferenceMemory = Mutex<UInt64?>(nil)
@@ -44,13 +45,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         inferenceTowerMemory.withLock { $0 }
     }
 
-    public init(serviceURL: URL? = nil) {
+    public init(serviceURL: URL? = nil, appDataDirectory: URL = AppDataLocation.resolve()) {
+        self.appDataDirectory = appDataDirectory.standardizedFileURL
         self.serviceURL = serviceURL ?? Self.defaultServiceURL()
         self.testConnection = nil
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
     }
 
     init(testInput: FileHandle, responseOutput: FileHandle) {
+        self.appDataDirectory = AppDataLocation.resolve()
         self.serviceURL = Self.defaultServiceURL()
         self.testConnection = nil
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
@@ -66,6 +69,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     }
 
     init(testConnection: @escaping @Sendable () throws -> (input: FileHandle, output: FileHandle)) {
+        self.appDataDirectory = AppDataLocation.resolve()
         self.serviceURL = Self.defaultServiceURL()
         self.testConnection = testConnection
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
@@ -449,6 +453,10 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         return try launchIndependentService()
     }
 
+    static func appDataArguments(_ root: URL) -> [String] {
+        ["--app-data-directory", root.standardizedFileURL.path]
+    }
+
     private func launchIndependentService() throws
         -> (input: FileHandle, responses: DecodeServiceResponseRouter) {
         guard FileManager.default.isExecutableFile(atPath: serviceURL.path) else {
@@ -467,7 +475,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 serviceURL.path,
                 "--socket", socketPath,
                 "--launch-label", label,
-            ],
+            ] + Self.appDataArguments(appDataDirectory),
             "RunAtLoad": true,
             "KeepAlive": false,
             "ProcessType": "Interactive",

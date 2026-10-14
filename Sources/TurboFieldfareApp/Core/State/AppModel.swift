@@ -24,6 +24,26 @@ public final class AppModel {
         case rewound
     }
 
+    public let appDataDirectory: URL
+    public let isModelLocationOverridden: Bool
+    public private(set) var isModelChoiceRequired: Bool
+    public private(set) var settingsDiagnostic: String?
+    public let canResetSettings: Bool
+    public private(set) var isChangingModelLocation = false
+    public var existingModelReview: ExistingModelReview?
+    public private(set) var isInspectingModelLocation = false
+    public private(set) var modelLocationDiagnostic: String? {
+        didSet {
+            if let message = modelLocationDiagnostic {
+                error = .invalidRequest(message)
+            } else if let oldValue, error == .invalidRequest(oldValue) {
+                error = nil
+            }
+        }
+    }
+    private var settingsWritesAllowed: Bool
+    private var savedModelPath: String?
+    private var migratedHistorySources: [String]
     public var modelPathText: String
     public var promptText: String = ""
     public private(set) var imageAttachments: [StagedImage] = []
@@ -221,6 +241,8 @@ public final class AppModel {
     }
 
     public init(modelDirectory: URL? = nil,
+                appDataDirectory: URL? = nil,
+                environment: [String: String] = ProcessInfo.processInfo.environment,
                 client: any AppInferenceClient = RealInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(),
                 visionInstaller: any AppVisionPackInstallerClient = RepackVisionPackInstallerClient(),
@@ -235,11 +257,30 @@ public final class AppModel {
                     ConversationStore(rootURL: $0)
                 },
                 hostMemoryBytes: UInt64 = ContextAdmission.hostMemoryBytes) {
-        let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
+        let dataRoot = AppDataLocation.resolve(explicitURL: appDataDirectory, environment: environment)
+        let defaultModel = environment["TURBO_FIELDFARE_APP_DATA_PATH"] != nil
+            ? dataRoot.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+            : AppModelLocation.defaultURL(environment: environment)
+        let legacy = (modelDirectory ?? defaultModel).standardizedFileURL
+        let bootstrap = AppDataBootstrap(root: dataRoot, legacyModel: legacy,
+                                         environment: environment, modelOverride: modelDirectory != nil, enabled: settingsPersistenceEnabled)
+        let settings = bootstrap.settings
+        let directory: URL
+        if let modelDirectory { directory = modelDirectory.standardizedFileURL }
+        else if let override = environment["TURBO_FIELDFARE_MODEL_PATH"], !override.isEmpty {
+            directory = URL(fileURLWithPath: override, isDirectory: true).standardizedFileURL
+        } else if let saved = settings.selectedModelPath {
+            directory = URL(fileURLWithPath: saved, isDirectory: true).standardizedFileURL
+        } else { directory = defaultModel.standardizedFileURL }
+        self.appDataDirectory = dataRoot
+        self.isModelLocationOverridden = modelDirectory != nil || !(environment["TURBO_FIELDFARE_MODEL_PATH"] ?? "").isEmpty
+        self.isModelChoiceRequired = bootstrap.modelChoiceRequired
+        self.settingsDiagnostic = bootstrap.failure
+        self.canResetSettings = settingsPersistenceEnabled && bootstrap.canResetSettings
+        self.settingsWritesAllowed = bootstrap.failure == nil
+        self.savedModelPath = settings.selectedModelPath
+        self.migratedHistorySources = settings.migratedHistorySources
         let installETAClock = SuspendingClock()
-        let settings = settingsPersistenceEnabled
-            ? MacAppSettingsFileStore.loadOrCreate(forModelDirectory: directory)
-            : MacAppSettings()
         self.modelPathText = directory.path
         // The app always releases the image tower after each image. Keeping it
         // resident saves a few hundred milliseconds on a run of images and
@@ -299,6 +340,7 @@ public final class AppModel {
             }
             conversationBinding = ConversationStoreBinding(
                 modelDirectory: directory,
+                appDataDirectory: dataRoot,
                 identity: identity,
                 generation: conversationBindingGeneration,
                 storeProvider: conversationStoreProvider)
@@ -376,7 +418,8 @@ public final class AppModel {
     // message it was carrying, and queued behind the prefill on the service
     // until the load timeout killed the connection.
     public var canLoadModel: Bool {
-        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
+        if isChangingModelLocation || isModelChoiceRequired { return false }
+        return isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && (loadState == .notLoaded || loadState.isFailed)
     }
 
@@ -386,12 +429,12 @@ public final class AppModel {
     }
 
     public var canReloadModel: Bool {
-        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
+        !isChangingModelLocation && isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && loadState.isReady && hasStaleLoadedRuntime
     }
 
     public var canUnloadModel: Bool {
-        isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
+        !isChangingModelLocation && isModelInstalled && !isTurnInFlight && !isVisionFilesystemMutationInProgress
             && loadState.isReady
     }
 
@@ -408,6 +451,7 @@ public final class AppModel {
     public var isInstallingModel: Bool { installState.isInstalling }
 
     public var canInstallModel: Bool {
+        if isChangingModelLocation || isModelChoiceRequired || !isModelLocationAvailable { return false }
         guard case .ready = installReadiness else { return false }
         return !isRunning && !loadState.isLoading && !isInstallingModel
             && !isVisionCompanionOperationInProgress
@@ -439,7 +483,7 @@ public final class AppModel {
     /// Pack activation, repair and removal mutate the runtime's files and need
     /// an unloaded model. Payload download does not use this gate.
     public var canBeginVisionCompanionOperation: Bool {
-        !isRunning && !loadState.isLoading && !loadState.isReady
+        !isChangingModelLocation && !isRunning && !loadState.isLoading && !loadState.isReady
             && !isInstallingModel && !isVisionCompanionOperationInProgress
     }
 
@@ -449,6 +493,7 @@ public final class AppModel {
     }
 
     public var canInstallVisionPack: Bool {
+        if isChangingModelLocation { return false }
         guard isVisionRuntimeSupported else { return false }
         // A layout with nowhere to put a companion cannot be repaired by
         // downloading one, so do not offer to.
@@ -567,6 +612,7 @@ public final class AppModel {
     }
 
     public var canRun: Bool {
+        if isChangingModelLocation { return false }
         // Staging copies the files a request will carry. Starting a run while
         // it is in flight sent a request without those images and then landed
         // them on the next message instead.
@@ -576,7 +622,7 @@ public final class AppModel {
         // second replay, and whichever finished last defined the epoch, so the
         // first one's request came back rejected as belonging to a conversation
         // that was no longer open.
-        !isTurnInFlight && conversationDeletionTask == nil
+        return !isTurnInFlight && conversationDeletionTask == nil
             && !isAddingImages && isModelAvailable && !loadState.isLoading
             && !isVisionFilesystemMutationInProgress
             && !hasStaleLoadedRuntime
@@ -816,58 +862,169 @@ public final class AppModel {
         temperature != 0
     }
 
-    public func setModelURL(_ url: URL) {
-        // Rebinding replaces the screen machine outright, so a replay in
-        // flight would lose the message it is carrying.
-        guard !isTurnInFlight else { return }
-        let path = url.standardizedFileURL.path
-        guard path != modelPathText else { return }
+    public var isModelLocationAvailable: Bool {
+        AppModelLocation.isVolumeAvailable(for: URL(fileURLWithPath: modelPathText))
+    }
 
-        modelPathText = path
-        clearImages()
-        applyPersistedSettings(
-            forModelDirectory: URL(fileURLWithPath: path, isDirectory: true))
-        loadGeneration &+= 1
-        loadTask?.cancel()
-        loadTask = nil
-        installGeneration &+= 1
-        installTask?.cancel()
-        installer.cancel()
-        installTask = nil
-        visionInstallGeneration &+= 1
-        visionInstallCancellationRequested = false
-        visionInstallTask?.cancel()
-        visionInstaller.cancel()
-        visionInstallTask = nil
-        resetInstallETA()
-        installState = .idle
-        visionInstallState = .idle
-        pendingExplicitLoadRuntimeKey = nil
-        activeRunRuntimeKey = nil
+    public var canChangeModelLocation: Bool {
+        !isModelLocationOverridden && settingsWritesAllowed && !isChangingModelLocation && !isInspectingModelLocation
+            && !isTurnInFlight && !isInstallingModel && !isVisionCompanionOperationInProgress
+            && loadTask == nil && unloadTask == nil && !loadState.isLoading && !isAddingImages
+            && conversationDeletionTask == nil
+    }
+
+    public enum ModelLocationIntent: Sendable { case download, existing }
+
+    public func reviewExistingModelLocation(_ folder: URL) async {
+        guard canChangeModelLocation, existingModelReview == nil else { return }
+        isInspectingModelLocation = true
+        do {
+            let review = try await Task.detached { try ExistingModelSelection.inspect(folder) }.value
+            isInspectingModelLocation = false
+            guard canChangeModelLocation else {
+                modelLocationDiagnostic = "The model became busy. Try choosing the folder again when it finishes."
+                return
+            }
+            let valid = review.candidates.filter(\.canSelect)
+            guard !valid.isEmpty else {
+                let reasons = review.candidates.map { "\($0.textURL.lastPathComponent): \($0.textSummary)" }
+                modelLocationDiagnostic = "No usable text model found. " + reasons.joined(separator: "\n")
+                return
+            }
+            modelLocationDiagnostic = nil
+            if valid.count == 1 {
+                await selectModelLocation(valid[0].textURL, intent: .existing)
+            } else {
+                existingModelReview = review
+            }
+        } catch {
+            isInspectingModelLocation = false
+            modelLocationDiagnostic = "Could not inspect model folder: \(error)"
+        }
+    }
+
+    public func confirmExistingModelSelection(_ candidate: ExistingModelCandidate) async -> Bool {
+        guard canChangeModelLocation, let review = existingModelReview,
+              review.candidates.contains(candidate), candidate.canSelect else { return false }
+        do {
+            let current = try ExistingModelSelection.candidate(at: candidate.textURL)
+            guard current == candidate else {
+                existingModelReview = try ExistingModelSelection.inspect(review.folder)
+                modelLocationDiagnostic = "The model files changed while you were choosing. Review their status again."
+                return false
+            }
+            await selectModelLocation(candidate.textURL, intent: .existing)
+            guard modelLocationDiagnostic == nil,
+                  AppModelLocation.canonicalURL(URL(fileURLWithPath: modelPathText)) == candidate.textURL else { return false }
+            existingModelReview = nil
+            return true
+        } catch {
+            modelLocationDiagnostic = "Could not select model: \(error)"
+            return false
+        }
+    }
+
+    public func selectModelLocation(_ url: URL, intent: ModelLocationIntent) async {
+        guard canChangeModelLocation else { return }
+        let candidate = intent == .download
+            ? url.appendingPathComponent("gemma4.gturbo", isDirectory: true) : url
+        do {
+            try AppModelLocation.validate(candidate, intent: intent)
+            modelLocationDiagnostic = nil
+            await changeModelURL(candidate, persistSelection: true)
+        } catch {
+            modelLocationDiagnostic = "Could not select model location: \(error)"
+        }
+    }
+
+    /// Internal callers already validated their candidate; UI uses selectModelLocation.
+    public func setModelURL(_ url: URL) async {
+        guard !isTurnInFlight && !isInstallingModel && !isVisionCompanionOperationInProgress
+                && loadTask == nil && unloadTask == nil && !loadState.isLoading
+                && conversationDeletionTask == nil && !isChangingModelLocation else { return }
+        await changeModelURL(url, persistSelection: !isModelLocationOverridden)
+    }
+
+    private func changeModelURL(_ url: URL, persistSelection: Bool) async {
+        let directory = AppModelLocation.canonicalURL(url)
+        let sameDirectory = directory.path == AppModelLocation.canonicalURL(URL(fileURLWithPath: modelPathText)).path
+        let needsSelectionCommit = persistSelection && settingsPersistenceEnabled && savedModelPath == nil
+        guard !sameDirectory || needsSelectionCommit || isModelChoiceRequired else {
+            recheckModelAtCurrentLocation()
+            return
+        }
+        isChangingModelLocation = true
+        defer { isChangingModelLocation = false }
+        guard await awaitPendingPersistence(timeout: .seconds(30)) else {
+            modelLocationDiagnostic = "Pending chat writes did not settle. Retry when saving finishes."
+            return
+        }
+        if persistSelection, settingsPersistenceEnabled {
+            do {
+                var settings = currentSettings()
+                settings.selectedModelPath = directory.path
+                try MacAppSettingsFileStore.save(settings, at: AppDataLocation.settingsURL(in: appDataDirectory))
+                savedModelPath = directory.path
+                settingsDiagnostic = nil
+            } catch {
+                modelLocationDiagnostic = "Could not save model location; previous selection retained: \(error)"
+                return
+            }
+        }
+        // A rejected settings write must leave the active runtime and chat intact.
+        if let lifecycle = client as? AppModelLifecycleClient { await lifecycle.unload() }
         loadedRuntimeKey = nil
         loadState = .notLoaded
         endConversationForReleasedKV()
+        modelPathText = directory.path
+        runIdentity &+= 1
+        isModelChoiceRequired = false
+        clearImages()
+        loadGeneration &+= 1
+        installGeneration &+= 1
+        visionInstallGeneration &+= 1
+        installState = .idle
+        visionInstallState = .idle
+        resetInstallETA()
         diagnostics = nil
         error = nil
         phase = .idle
-        installationStatus = AppModelInstallationProbe.status(at: URL(fileURLWithPath: path))
-        visionInstallationStatus = AppVisionPackInstallationProbe.status(
-            at: URL(fileURLWithPath: path))
+        modelLocationDiagnostic = nil
+        installationStatus = AppModelInstallationProbe.status(at: directory)
+        visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
         refreshInstallReadiness()
         refreshVisionInstallReadiness()
-        replaceConversationBinding(
-            for: URL(fileURLWithPath: path, isDirectory: true),
-            reason: "the model location changed")
+        replaceConversationBinding(for: directory, reason: "the model location changed")
+    }
 
-        if let lifecycle = client as? AppModelLifecycleClient {
-            unloadGeneration &+= 1
-            let generation = unloadGeneration
-            let task = Task { [weak self, lifecycle] in
-                await lifecycle.unload()
-                self?.clearUnloadTask(generation: generation)
-            }
-            unloadTask = task
+    public func importLegacyHistory(from modelDirectory: URL) async {
+        guard canChangeModelLocation, let store = conversationStore else { return }
+        isChangingModelLocation = true
+        defer { isChangingModelLocation = false }
+        guard await awaitPendingPersistence(timeout: .seconds(30)) else {
+            modelLocationDiagnostic = "Pending chat writes did not settle. Retry when saving finishes."
+            return
         }
+        let source = ConversationStoreLocation.url(forModelDirectory: modelDirectory)
+        do {
+            try await store.importLegacyHistory(from: source)
+            if !migratedHistorySources.contains(source.path) { migratedHistorySources.append(source.path) }
+            persistSettings()
+            await refreshHistory()
+        } catch { modelLocationDiagnostic = "Could not import history: \(error)" }
+    }
+
+    public func resetSettingsAfterBackingUp() {
+        guard canResetSettings else { return }
+        do {
+            let url = AppDataLocation.settingsURL(in: appDataDirectory)
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.copyItem(at: url, to: url.appendingPathExtension("backup-" + UUID().uuidString))
+            }
+            try MacAppSettingsFileStore.save(currentSettings(), at: url)
+            settingsWritesAllowed = true
+            settingsDiagnostic = nil
+        } catch { settingsDiagnostic = "Could not recover settings: \(error)" }
     }
 
     public func loadModel() {
@@ -991,7 +1148,7 @@ public final class AppModel {
     /// the menu item can be disabled rather than silently doing nothing, plus
     /// the installer: there is no chat to start before a model exists.
     public var canStartNewChat: Bool {
-        !isTurnInFlight && !requiresModelInstallation
+        !isChangingModelLocation && !isTurnInFlight && !requiresModelInstallation
     }
 
 
@@ -1070,7 +1227,6 @@ public final class AppModel {
     /// takes its own copy — so it must not outlive the staging that consumed
     /// it, which is exactly how it leaked.
     public func addImages(_ urls: [URL], discardingSourceDirectory: URL? = nil) {
-        recheckVisionPackAtCurrentLocation()
         // Every early return has to discard the promise directory itself. The
         // staging task's `defer` below owns it only once that task exists, so a
         // return above it strands the full-size copies with nothing left to
@@ -1080,6 +1236,12 @@ public final class AppModel {
                 try? FileManager.default.removeItem(at: discardingSourceDirectory)
             }
         }
+        guard !isChangingModelLocation else {
+            imageAttachmentError = "Wait for the model location change to finish before attaching images."
+            discardSource()
+            return
+        }
+        recheckVisionPackAtCurrentLocation()
         guard isImageInputAvailable, !urls.isEmpty else {
             if !isImageInputAvailable {
                 recordVisionAvailabilityError(
@@ -1142,6 +1304,10 @@ public final class AppModel {
     /// of another app arrives on the pasteboard as data, and a drag from an app
     /// that has not written the file yet arrives as a promise.
     public func addImageData(_ data: Data, displayName: String) {
+        guard !isChangingModelLocation else {
+            imageAttachmentError = "Wait for the model location change to finish before attaching images."
+            return
+        }
         recheckVisionPackAtCurrentLocation()
         guard isImageInputAvailable else {
             recordVisionAvailabilityError(
@@ -1653,7 +1819,14 @@ public final class AppModel {
             modelStorageMetrics = nil
             modelStorageMetricsError = "installed storage could not be measured: \(error)"
         }
-        guard !isModelInstalled else { return }
+        guard !isModelInstalled else {
+            installReadiness = .installed
+            return
+        }
+        guard AppModelLocation.isVolumeAvailable(for: outputDirectory) else {
+            installReadiness = .failed("The selected volume is unavailable. Reconnect it and check again, or choose another location.")
+            return
+        }
         installReadiness = .checking
         do {
             let requirement = try installer.checkInstallRequirement(
@@ -1694,7 +1867,10 @@ public final class AppModel {
             visionInstallReadiness = .failed("Install the text model first")
             return
         }
-        guard !isVisionPackInstalled else { return }
+        guard !isVisionPackInstalled else {
+            visionInstallReadiness = .installed
+            return
+        }
         if visionInstaller.preparedInstallIsValid(
             textModelDirectory: textModelDirectory) {
             let output = try? VisionPackLocation.companionURL(
@@ -2031,44 +2207,10 @@ public final class AppModel {
         installETAText = DownloadETAFormatter.string(for: presentation)
     }
 
-    private func applyPersistedSettings(forModelDirectory modelDirectory: URL) {
-        guard settingsPersistenceEnabled else { return }
-        let settings = MacAppSettingsFileStore.loadOrCreate(
-            forModelDirectory: modelDirectory)
-        runtimeOptions = AppRuntimeOptions(
-            expertCacheSlots: settings.expertCacheSlots,
-            prefillEnabled: settings.prefillEnabled,
-            rdadvisePolicy: settings.rdadvisePolicy,
-            // Pinned for the same reason as `init`: the app always releases the
-            // image tower. Reading the persisted value here would let a
-            // `keepReady` written by an older build resurrect ~1 GB of resident
-            // tower on a machine with no control that shows or clears it.
-            visionResidencyPolicy: .onDemand)
-        // Clamped for the same reason as `init`: another model directory can
-        // carry a context this Mac cannot back, and adopting it would leave
-        // the app on a setting the loader refuses. Assigned before the notice
-        // because the assignment clears it.
-        let admitted = Self.admittedContext(settings.contextTokens,
-                                            hostMemoryBytes: hostMemoryBytes,
-                                            expertCacheSlots: settings.expertCacheSlots)
-        maxContextTokens = admitted.tokens
-        contextClampNotice = admitted.notice
-        temperature = settings.temperature
-        topKEnabled = settings.topKEnabled
-        topK = settings.topK
-        topPEnabled = settings.topPEnabled
-        topP = settings.topP
-        newlineShortcut = settings.newlineShortcut
-        showPromptExamples = settings.showPromptExamples
-        textSize = settings.textSize
-        isSidebarVisible = settings.sidebarVisible
-        isInspectorVisible = settings.inspectorVisible
-        loadModelOnLaunch = settings.loadModelOnLaunch
-    }
-
-    func persistSettings() {
-        guard settingsPersistenceEnabled else { return }
-        let settings = MacAppSettings(
+    private func currentSettings() -> MacAppSettings {
+        MacAppSettings(
+            selectedModelPath: savedModelPath,
+            migratedHistorySources: migratedHistorySources,
             contextTokens: maxContextTokens,
             expertCacheSlots: runtimeOptions.expertCacheSlots,
             temperature: temperature,
@@ -2085,12 +2227,17 @@ public final class AppModel {
             visionResidencyPolicy: runtimeOptions.visionResidencyPolicy,
             rdadvisePolicy: runtimeOptions.rdadvisePolicy,
             loadModelOnLaunch: loadModelOnLaunch)
-        let modelDirectory = URL(fileURLWithPath: modelPathText, isDirectory: true)
+    }
+
+    func persistSettings() {
+        guard settingsPersistenceEnabled, settingsWritesAllowed else { return }
         do {
-            try MacAppSettingsFileStore.save(settings, forModelDirectory: modelDirectory)
+            try MacAppSettingsFileStore.save(currentSettings(), at: AppDataLocation.settingsURL(in: appDataDirectory))
+            settingsDiagnostic = nil
         } catch {
-            FileHandle.standardError.write(Data(
-                "Saving Mac app settings failed: \(error)\n".utf8))
+            let message = "Saving Mac app settings failed: \(error)"
+            settingsDiagnostic = message
+            self.error = .unknown(message)
         }
     }
 
@@ -2260,7 +2407,7 @@ public final class AppModel {
         // sent; starting an empty chat under it left the window on the new chat
         // and the model on the old one, and whichever landed last defined what
         // the next turn was numbered against.
-        guard !isTurnInFlight else { return }
+        guard !isChangingModelLocation, !isTurnInFlight else { return }
         quarantinedPersistenceLineages.removeAll()
         pendingServiceRecoveryConversationID = nil
         // The empty chat is not written until its first send, so it takes no

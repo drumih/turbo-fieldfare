@@ -236,3 +236,23 @@ import TurboFieldfareDecodeProtocol
         #expect(!ConversationStoreLocation.contains(store, forModelDirectory: model))
     }
 }
+
+@Suite struct DecodeReplayImageAppDataTrustTests {
+    @Test func appDataContainmentExcludesModelVolumeAndSimilarPrefixes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("trusted-replay-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let images = root.appendingPathComponent("conversations/\(UUID())/images", isDirectory: true)
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let inside = images.appendingPathComponent("image.png")
+        try Data([0]).write(to: inside)
+        #expect(ConversationStoreLocation.contains(inside, forAppDataDirectory: root))
+        #expect(!ConversationStoreLocation.contains(root.appendingPathComponent("conversations-elsewhere/image.png"), forAppDataDirectory: root))
+        #expect(!ConversationStoreLocation.contains(root.appendingPathComponent("gemma4.gturbo/image.png"), forAppDataDirectory: root))
+        let outside = root.appendingPathComponent("outside.png")
+        try Data([1]).write(to: outside)
+        let escaped = images.appendingPathComponent("escaped.png")
+        try FileManager.default.createSymbolicLink(at: escaped, withDestinationURL: outside)
+        #expect(!ConversationStoreLocation.contains(escaped, forAppDataDirectory: root))
+        #expect(!ConversationStoreLocation.contains(images.appendingPathComponent("../../../outside.png"), forAppDataDirectory: root))
+    }
+}

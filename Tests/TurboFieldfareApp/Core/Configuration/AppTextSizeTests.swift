@@ -51,23 +51,23 @@ import Testing
         #expect(decoded.version == MacAppSettings.currentVersion)
     }
 
-    @MainActor @Test func selectionPersistsBeforeSendAndFollowsModelLocation() throws {
+    @MainActor @Test func selectionPersistsBeforeSendAndFollowsModelLocation() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo")
         let second = root.appendingPathComponent("second/model.gturbo")
         try MacAppSettingsFileStore.save(.init(textSize: .large), forModelDirectory: second)
-        let model = AppModel(modelDirectory: first, client: MockLifecycleInferenceClient(),
+        let model = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(), client: MockLifecycleInferenceClient(),
                              settingsPersistenceEnabled: true)
         model.setTextSize(.largest)
         model.setTextSize(.largest)
         #expect(MacAppSettingsFileStore.loadOrCreate(forModelDirectory: first).textSize == .largest)
-        let reopened = AppModel(modelDirectory: first, client: MockLifecycleInferenceClient(),
+        let reopened = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(), client: MockLifecycleInferenceClient(),
                                 settingsPersistenceEnabled: true)
         #expect(reopened.textSize == .largest)
-        model.setModelURL(second)
-        #expect(model.textSize == .large)
-        model.setModelURL(first)
+        await model.setModelURL(second)
+        #expect(model.textSize == .largest)
+        await model.setModelURL(first)
         #expect(model.textSize == .largest)
     }
 
