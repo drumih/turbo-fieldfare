@@ -389,15 +389,15 @@ struct InspectorView: View {
         Section("Runtime") {
             Toggle("Prefill", isOn: $model.runtimeOptions.prefillEnabled)
                 .accessibilityIdentifier(.inspectorPrefill)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("RDADVISE")
+            LabeledContent("RDADVISE") {
                 Picker("RDADVISE", selection: $model.runtimeOptions.rdadvisePolicy) {
                     ForEach(AppRDAdvicePolicy.allCases) { policy in
                         Text(policy.label).tag(policy)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 .labelsHidden()
+                .fixedSize()
                 .accessibilityIdentifier(.inspectorRDAdvise)
             }
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")

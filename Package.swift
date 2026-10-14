@@ -163,7 +163,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurboFieldfareMacPresentationTests",
-            dependencies: ["TurboFieldfareAppCore", "TurboFieldfareMacPresentation"],
+            dependencies: ["TurboFieldfareAppCore", "TurboFieldfareMacPresentation", "TurboFieldfareMac"],
             path: "Tests/TurboFieldfareApp/MacPresentation",
             resources: [.copy("Fixtures")]
         ),

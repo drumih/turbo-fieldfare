@@ -659,14 +659,11 @@ public final class AppModel {
     }
 
     public var hasOutputTranscript: Bool {
-        // Same split as `transcriptHistory`: while a stored copy is on screen,
-        // the live conversation belongs to another chat and is not what decides
-        // whether this one has anything to show. A stored chat with no readable
-        // turns has to fall through to the empty state rather than borrow the
-        // held conversation's.
+        // Keep the transcript layout during a disk read; a missing document
+        // is still loading, not an empty chat. Never borrow the held chat's turns.
         switch screen {
-        case .reading, .replaying:
-            return !transcriptHistory.isEmpty
+        case .reading(_, let document, _, _), .replaying(_, let document, _, _):
+            return document == nil || !transcriptHistory.isEmpty
         case .live, .unreadable:
             return !conversation.outOfContextPairs.isEmpty
                 || !conversation.isEmpty
