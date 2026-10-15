@@ -30,6 +30,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public static let conversationRestoreTimeout: Duration = .seconds(1_800)
 
     private let connection = Mutex(Connection())
+    private let commandWriteLock = NSLock()
     private let appDataDirectory: URL
     private let serviceURL: URL
     private let testConnection: (@Sendable () throws -> (input: FileHandle, output: FileHandle))?
@@ -91,9 +92,13 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         guard dead.input != nil || dead.launchLabel != nil else { return }
         let ownsService = dead.launchLabel != nil
         if let input = dead.input {
-            if ownsService {
+            // Never interleave shutdown with a partial frame or wait behind a
+            // writer blocked on a dead service. Socket shutdown and process
+            // termination below interrupt that writer instead.
+            if ownsService, commandWriteLock.try() {
                 try? input.write(contentsOf: DecodeFrameCodec.encode(
                     DecodeServiceCommand.shutdown))
+                commandWriteLock.unlock()
             }
             try? input.close()
         }
@@ -126,11 +131,28 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         }
     }
 
-    private func write(_ command: DecodeServiceCommand,
-                       to input: FileHandle,
-                       expecting responses: DecodeServiceResponseRouter) throws {
+    func write(_ command: DecodeServiceCommand,
+               to input: FileHandle,
+               expecting responses: DecodeServiceResponseRouter) throws {
         do {
-            try input.write(contentsOf: DecodeFrameCodec.encode(command))
+            try commandWriteLock.withLock {
+                let descriptor = try connection.withLock { state in
+                    guard state.responses === responses, state.input === input else {
+                        throw AppInferenceError.connectionLost(
+                            "the decode service connection was replaced before the request was written")
+                    }
+                    let descriptor = dup(input.fileDescriptor)
+                    guard descriptor >= 0 else {
+                        throw POSIXError(.init(rawValue: errno) ?? .EIO)
+                    }
+                    return descriptor
+                }
+                // Teardown may close the original immediately after the lock
+                // is released. Only this write owns the duplicate; shutdown
+                // still interrupts its socket I/O without closing its FileHandle.
+                let writer = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+                try writer.write(contentsOf: DecodeFrameCodec.encode(command))
+            }
         } catch {
             invalidateConnection(expecting: responses)
             throw AppInferenceError.connectionLost(
@@ -438,7 +460,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         invalidateConnection()
     }
 
-    private func ensureProcess() throws
+    func ensureProcess() throws
         -> (input: FileHandle, responses: DecodeServiceResponseRouter) {
         if let handles = currentHandles() { return handles }
         if let testConnection {

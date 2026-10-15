@@ -311,41 +311,32 @@ private final class FakeDecodeService: @unchecked Sendable {
                 "the service was torn down by a caller that stopped listening")
     }
 
-    @Test func aMuteServiceFailsTheRequestAndDropsTheConnection() async throws {
-        let options = AppRuntimeOptions()
-        let model = FileManager.default.temporaryDirectory
-            .appendingPathComponent("fake-model-\(UUID().uuidString)")
-        let path = "/private/tmp/turbofieldfare-mute-\(UUID().uuidString).sock"
-        // Accepts, then never answers.
-        let listener = Thread {
-            _ = try? DecodeUnixSocket.listenAndAccept(path: path)
-            while !Thread.current.isCancelled { usleep(50_000) }
+    @Test func cancellingALoadOnAMuteServiceKeepsTheConnection() async throws {
+        let socket = try DecodeServiceTestSocket()
+        let client = DecodeServiceInferenceClient(testConnection: { (socket.input, socket.output) })
+        defer { client.shutdownForTermination() }
+        let waiting = Task {
+            try await client.ensureLoaded(
+                modelDirectory: FileManager.default.temporaryDirectory,
+                maxContextTokens: 512, options: AppRuntimeOptions(),
+                forceLogitsHead: false, onState: { _ in })
         }
-        listener.start()
-        defer { listener.cancel(); unlink(path) }
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !FileManager.default.fileExists(atPath: path),
-              ContinuousClock.now < deadline {
-            usleep(5_000)
+        defer { waiting.cancel() }
+        // Retain the peer for the entire test and wait for the load frame.
+        // Discarding accepted handles simulated a disconnect, not a mute service.
+        guard case .load = try await socket.readCommand() else {
+            Issue.record("Expected the load command")
+            return
         }
-
-        let client = DecodeServiceInferenceClient(testConnection: {
-            let path = try #require(ProcessInfo.processInfo.environment["TURBO_FIELDFARE_DECODE_SOCKET_PATH"])
-            return try DecodeUnixSocket.connect(path: path)
-        })
-        await withSocketEnvironment(path) {
-            let waiting = Task {
-                try await client.ensureLoaded(
-                    modelDirectory: model, maxContextTokens: 512,
-                    options: options, forceLogitsHead: false, onState: { _ in })
-            }
-            try? await Task.sleep(for: .milliseconds(200))
-            waiting.cancel()
-            let started = ContinuousClock.now
-            await #expect(throws: (any Error).self) { try await waiting.value }
-            #expect(ContinuousClock.now - started < .seconds(10),
-                    "cancelling a load never reached the transport wait")
+        let router = try #require(client.installedRouter)
+        waiting.cancel()
+        await #expect(throws: CancellationError.self) { try await waiting.value }
+        guard case .cancel = try await socket.readCommand() else {
+            Issue.record("The cancellation did not reach the service")
+            return
         }
+        #expect(client.installedRouter === router)
+        #expect(!router.isTerminated)
     }
 
     /// Prefill is outside the load key, so changing it must not turn a
