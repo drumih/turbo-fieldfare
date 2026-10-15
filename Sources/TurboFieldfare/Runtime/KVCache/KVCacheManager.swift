@@ -64,6 +64,78 @@ public final class KVCacheManager {
 
     private static let fp16Size = 2
 
+    /// Per-layer bytes-per-token and token capacity, derived from the geometry
+    /// alone.
+    ///
+    /// Split out of `init` so a caller can size storage before allocating any:
+    /// a server retaining several KV lineages has to report what one costs
+    /// before it builds the second. Both the allocation below and
+    /// `storageBytes` read this, so the reported size cannot drift from the
+    /// allocated one.
+    static func layout(
+        config: ArchConfig,
+        maxContext: Int,
+        fp16RingEnabled: Bool,
+        slidingWindow: Int?,
+        maxPrefillChunkTokens: Int,
+        fp16RingCapacityOverride: Int?
+    ) -> (strides: [Int], capacities: [Int], kinds: [LayerKind]) {
+        let swaStride  = config.numKVHeads     * config.headDim     * Self.fp16Size
+        let fullStride = config.numFullKVHeads * config.fullHeadDim  * Self.fp16Size
+        let swaCapacity = min(maxContext,
+                              max(1, fp16RingCapacityOverride
+                                  ?? ((slidingWindow ?? config.slidingWindow) + maxPrefillChunkTokens)))
+        var strides: [Int] = []
+        var capacities: [Int] = []
+        var kinds: [LayerKind] = []
+        strides.reserveCapacity(config.numLayers)
+        capacities.reserveCapacity(config.numLayers)
+        kinds.reserveCapacity(config.numLayers)
+        for layer in 0..<config.numLayers {
+            let isFull = config.fullAttentionLayerMask[layer] != 0
+            strides.append(isFull ? fullStride : swaStride)
+            capacities.append(fp16RingEnabled && !isFull ? swaCapacity : maxContext)
+            kinds.append(isFull ? .full : .swa)
+        }
+        return (strides, capacities, kinds)
+    }
+
+    /// Bytes of K and V storage one lineage allocates, for the same arguments
+    /// `init` takes.
+    ///
+    /// Reported rather than measured because the number is wanted before the
+    /// buffers exist: retaining N lineages costs N times this, and an operator
+    /// choosing N on a 16 GB Mac needs the figure at startup rather than from a
+    /// memory graph afterwards.
+    ///
+    /// This is the allocation, which is a **ceiling on residency, not a
+    /// prediction of it**. Buffers are `storageModeShared` and fault in on
+    /// write, so a lineage holds only what its conversation has reached: the
+    /// ring-capped SWA layers are fully touched within the first
+    /// `slidingWindow + maxPrefillChunkTokens` tokens, while the linear
+    /// full-attention layers grow with position. `reset()` returns the pages.
+    /// At Gemma 4's shape and a 16,384-token context that is about 255 MiB
+    /// reached early plus 320 MiB approached linearly, so a 4,000-token
+    /// conversation sits near 333 MiB against a 575 MiB allocation.
+    public static func storageBytes(config: ArchConfig,
+                                    maxContext: Int,
+                                    fp16RingEnabled: Bool = false,
+                                    slidingWindow: Int? = nil,
+                                    maxPrefillChunkTokens: Int = 128,
+                                    fp16RingCapacityOverride: Int? = nil) -> Int {
+        let layout = Self.layout(
+            config: config,
+            maxContext: maxContext,
+            fp16RingEnabled: fp16RingEnabled,
+            slidingWindow: slidingWindow,
+            maxPrefillChunkTokens: maxPrefillChunkTokens,
+            fp16RingCapacityOverride: fp16RingCapacityOverride)
+        // Two buffers per layer: K and V never alias, including on the full
+        // layers that share the k_proj weight (gemma4-block.md §2.2).
+        return zip(layout.strides, layout.capacities)
+            .reduce(0) { $0 + 2 * $1.0 * $1.1 }
+    }
+
     public init(device: MTLDevice,
                 config: ArchConfig,
                 maxContext: Int,
@@ -85,29 +157,22 @@ public final class KVCacheManager {
         let ringEnabled = fp16RingEnabled
         self.fp16RingEnabled = ringEnabled
 
-        let swaStride  = config.numKVHeads     * config.headDim     * Self.fp16Size
-        let fullStride = config.numFullKVHeads * config.fullHeadDim  * Self.fp16Size
-        let swaCapacity = min(maxContext,
-                              max(1, fp16RingCapacityOverride
-                                  ?? ((slidingWindow ?? config.slidingWindow) + maxPrefillChunkTokens)))
+        let layout = Self.layout(
+            config: config,
+            maxContext: maxContext,
+            fp16RingEnabled: ringEnabled,
+            slidingWindow: slidingWindow,
+            maxPrefillChunkTokens: maxPrefillChunkTokens,
+            fp16RingCapacityOverride: fp16RingCapacityOverride)
         self.slidingWindowTokens = slidingWindow ?? config.slidingWindow
 
         var ks: [MTLBuffer] = []
         var vs: [MTLBuffer] = []
-        var st: [Int] = []
-        var kd: [LayerKind] = []
-        var caps: [Int] = []
         ks.reserveCapacity(config.numLayers)
         vs.reserveCapacity(config.numLayers)
-        st.reserveCapacity(config.numLayers)
-        kd.reserveCapacity(config.numLayers)
-        caps.reserveCapacity(config.numLayers)
 
         for layer in 0..<config.numLayers {
-            let isFull = config.fullAttentionLayerMask[layer] != 0
-            let stride = isFull ? fullStride : swaStride
-            let capacity = ringEnabled && !isFull ? swaCapacity : maxContext
-            let length = capacity * stride
+            let length = layout.capacities[layer] * layout.strides[layer]
 
             guard let kBuf = device.makeBuffer(length: length, options: .storageModeShared) else {
                 throw ModelError.kvAllocationFailed(layer: layer, bytes: length)
@@ -120,17 +185,13 @@ public final class KVCacheManager {
             }
             vBuf.label = "kv.V.layer\(layer)"
             vs.append(vBuf)
-
-            st.append(stride)
-            kd.append(isFull ? .full : .swa)
-            caps.append(capacity)
         }
 
         self.kBuffers = ks
         self.vBuffers = vs
-        self.strides  = st
-        self.kinds    = kd
-        self.capacityTokens = caps
+        self.strides  = layout.strides
+        self.kinds    = layout.kinds
+        self.capacityTokens = layout.capacities
     }
 
     public func layerKind(_ layer: Int) -> LayerKind { kinds[layer] }
