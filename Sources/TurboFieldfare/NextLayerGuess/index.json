@@ -1,0 +1,8 @@
+[
+  {
+    "modelID": "mlx-community/gemma-4-26b-a4b-it-4bit",
+    "sourceSnapshotHash": "sha256:bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13",
+    "file": "gemma-4-26b-a4b-it-4bit.bin",
+    "sha256": "b18242445534d452b7efb9c7d1c358884ef56637ad6003c187e5bced50dc3dcd"
+  }
+]
