@@ -1,6 +1,12 @@
 import Foundation
 import TurboFieldfare
 
+public enum ServerThinkingPolicy: String, Sendable, Equatable {
+    case auto
+    case on
+    case off
+}
+
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
     public let port: Int
@@ -15,6 +21,37 @@ public struct ServerArguments: Equatable, Sendable {
     public let rdadvisePolicy: RDAdvicePolicyMode
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
+    public let thinking: ServerThinkingPolicy
+
+    public init(model: String,
+                port: Int,
+                modelID: String,
+                maxContext: Int,
+                queueLimit: Int,
+                promptCacheMode: ServerPromptCacheMode,
+                expertCacheSlots: Int,
+                expertCachePolicy: RuntimeExpertCachePolicy,
+                prefillPolicy: RuntimePrefillPolicy,
+                prefillChunkTokens: Int,
+                rdadvisePolicy: RDAdvicePolicyMode,
+                visionPack: String?,
+                visionResidency: VisionResidencyPolicy,
+                thinking: ServerThinkingPolicy = .auto) {
+        self.model = model
+        self.port = port
+        self.modelID = modelID
+        self.maxContext = maxContext
+        self.queueLimit = queueLimit
+        self.promptCacheMode = promptCacheMode
+        self.expertCacheSlots = expertCacheSlots
+        self.expertCachePolicy = expertCachePolicy
+        self.prefillPolicy = prefillPolicy
+        self.prefillChunkTokens = prefillChunkTokens
+        self.rdadvisePolicy = rdadvisePolicy
+        self.visionPack = visionPack
+        self.visionResidency = visionResidency
+        self.thinking = thinking
+    }
 
     public static let allowedMaxContext = [
         4_096, 8_192, 16_384, 32_768, 65_536, 98_304, 131_072, 196_608, 262_144,
@@ -25,6 +62,7 @@ public struct ServerArguments: Equatable, Sendable {
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
       --model <dir>              Required model directory.
+      --thinking <auto|on|off>   Thinking mode policy: auto, on, or off (default auto).
       --vision-pack <dir>        Vision companion pack (default beside text model).
       --vision-residency <on-demand|keep-ready>
                                  Routed-expert residency during vision (default on-demand).
@@ -106,6 +144,7 @@ public struct ServerArguments: Equatable, Sendable {
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
         var rdadvisePolicy = RDAdvicePolicyMode.off
+        var thinking = ServerThinkingPolicy.auto
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -200,6 +239,16 @@ public struct ServerArguments: Equatable, Sendable {
                         "--rdadvise must be off, default, bounded, or adaptive")
                 }
                 rdadvisePolicy = parsed
+            case "--thinking":
+                if value == "default" {
+                    thinking = .auto
+                    break
+                }
+                guard let parsed = ServerThinkingPolicy(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--thinking must be default, auto, on, or off")
+                }
+                thinking = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -232,7 +281,8 @@ public struct ServerArguments: Equatable, Sendable {
                                prefillChunkTokens: prefillChunkTokens,
                                rdadvisePolicy: rdadvisePolicy,
                                visionPack: visionPack,
-                               visionResidency: visionResidency)
+                               visionResidency: visionResidency,
+                               thinking: thinking)
     }
 }
 

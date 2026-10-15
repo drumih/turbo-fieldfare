@@ -185,4 +185,78 @@ struct OpenAIRequestDecodingTests {
             Issue.record("decoding threw \(error) rather than a DecodingError")
         }
     }
+
+    @Test(arguments: ["low", "medium", "high", "none", "default"])
+    func validReasoningEffortValuesAreAccepted(_ effort: String) throws {
+        let validated = try OpenAIRequestValidator.validate(
+            try decode(request(#""reasoning_effort":"\#(effort)""#)),
+            modelID: "m")
+        if effort == "none" {
+            #expect(!validated.enableThinking)
+        } else {
+            #expect(validated.enableThinking)
+        }
+    }
+
+    @Test(arguments: ["maximum", "unlimited", "0", "true"])
+    func invalidReasoningEffortValuesAreRejected(_ effort: String) throws {
+        let refusal = try #require(
+            validationRejection(request(#""reasoning_effort":"\#(effort)""#)))
+        #expect(refusal.param == "reasoning_effort")
+        #expect(refusal.code == "invalid_value")
+    }
+
+    @Test func chatTemplateKwargsEnableThinkingSetsPolicy() throws {
+        let on = try OpenAIRequestValidator.validate(
+            try decode(request(#""chat_template_kwargs":{"enable_thinking":true}"#)),
+            modelID: "m")
+        #expect(on.enableThinking)
+
+        let off = try OpenAIRequestValidator.validate(
+            try decode(request(#""chat_template_kwargs":{"enable_thinking":false}"#)),
+            modelID: "m")
+        #expect(!off.enableThinking)
+    }
+
+    @Test func thinkingTypeSetsPolicy() throws {
+        let on = try OpenAIRequestValidator.validate(
+            try decode(request(#""thinking":{"type":"enabled"}"#)),
+            modelID: "m")
+        #expect(on.enableThinking)
+
+        let off = try OpenAIRequestValidator.validate(
+            try decode(request(#""thinking":{"type":"disabled"}"#)),
+            modelID: "m")
+        #expect(!off.enableThinking)
+    }
+
+    @Test func reasoningObjectSetsPolicy() throws {
+        let on = try OpenAIRequestValidator.validate(
+            try decode(request(#""reasoning":{"effort":"high"}"#)),
+            modelID: "m")
+        #expect(on.enableThinking)
+
+        let off = try OpenAIRequestValidator.validate(
+            try decode(request(#""reasoning":{"effort":"none"}"#)),
+            modelID: "m")
+        #expect(!off.enableThinking)
+
+        let typeOn = try OpenAIRequestValidator.validate(
+            try decode(request(#""reasoning":{"type":"enabled"}"#)),
+            modelID: "m")
+        #expect(typeOn.enableThinking)
+    }
+
+    @Test func serverThinkingPolicyOverridesOrDefaults() throws {
+        let req = try decode(request(""))
+        let autoDefault = try OpenAIRequestValidator.validate(req, modelID: "m", thinkingPolicy: .auto)
+        #expect(!autoDefault.enableThinking)
+
+        let forcedOn = try OpenAIRequestValidator.validate(req, modelID: "m", thinkingPolicy: .on)
+        #expect(forcedOn.enableThinking)
+
+        let requestedReq = try decode(request(#""reasoning_effort":"high""#))
+        let forcedOff = try OpenAIRequestValidator.validate(requestedReq, modelID: "m", thinkingPolicy: .off)
+        #expect(!forcedOff.enableThinking)
+    }
 }
