@@ -301,17 +301,23 @@ struct RemoteRedirectPolicy {
     private let originalRange: String?
     private let originalAuthorization: String?
     private let sourceHost: String?
+    private let allowedForwardHosts: Set<String>
     private let maximumRedirects: Int
     private var redirectCount = 0
     private var authorizationMayBeForwarded = true
 
-    init(originalRequest: URLRequest, maximumRedirects: Int) {
+    init(originalRequest: URLRequest,
+         maximumRedirects: Int,
+         allowedForwardHosts: Set<String> = RemoteRedirectPolicy.defaultForwardHosts) {
         self.originalRange = originalRequest.value(forHTTPHeaderField: "Range")
         self.originalAuthorization = originalRequest.value(
             forHTTPHeaderField: "Authorization")
         self.sourceHost = originalRequest.url?.host?.lowercased()
+        self.allowedForwardHosts = allowedForwardHosts
         self.maximumRedirects = maximumRedirects
     }
+
+    static let defaultForwardHosts: Set<String> = ["cdn-lfs.huggingface.co"]
 
     mutating func request(
         response: HTTPURLResponse,
@@ -329,17 +335,18 @@ struct RemoteRedirectPolicy {
                 detail: "only HTTPS redirects are allowed")
         }
         let targetHost = proposedRequest.url?.host?.lowercased()
-        if targetHost != sourceHost {
+        let isAllowedForward = targetHost.map(allowedForwardHosts.contains) ?? false
+        if targetHost != sourceHost && !isAllowedForward {
             authorizationMayBeForwarded = false
         }
         var redirected = proposedRequest
         redirected.httpMethod = "GET"
         redirected.setValue(originalRange, forHTTPHeaderField: "Range")
         redirected.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let shouldForward = authorizationMayBeForwarded
+            && (targetHost == sourceHost || isAllowedForward)
         redirected.setValue(
-            authorizationMayBeForwarded && targetHost == sourceHost
-                ? originalAuthorization
-                : nil,
+            shouldForward ? originalAuthorization : nil,
             forHTTPHeaderField: "Authorization")
         return redirected
     }
