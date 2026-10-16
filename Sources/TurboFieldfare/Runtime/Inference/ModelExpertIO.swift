@@ -123,6 +123,39 @@ extension Model {
         }
     }
 
+    /// Like `fetchRoutedExperts(plan:)`, but skips the misses at
+    /// `skippingMisses`, whose bytes an adopted early read supplies.
+    /// `beforeAdmitting` runs on the read thread after the plan's own reads and
+    /// must not return until the skipped misses' bytes are in place.
+    func fetchRoutedExperts(plan: RoutedExpertFetchPlan,
+                            skippingMisses: Set<Int>,
+                            beforeAdmitting: @escaping @Sendable () throws -> Void)
+        async throws -> [TensorView] {
+        let streamer = try routedExpertStreamer(layer: plan.layer)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let buffers = try streamer.executeExpertCachePlan(
+                        plan.cachePlan,
+                        skippingMisses: skippingMisses,
+                        beforeAdmitting: beforeAdmitting)
+                    continuation.resume(returning: Self.makeExpertViews(
+                        buffers,
+                        layer: plan.layer,
+                        experts: plan.experts))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// The per-layer streamer, opening the layer's file if needed.
+    func routedExpertStreamer(layer: Int) throws -> PreadExpertStreamer {
+        try ensureLayerOpened(layer)
+        return streamersQueue.sync { streamersBox.streamers[layer]! }
+    }
+
     public func fetchRoutedExperts(layer: Int, experts: [Int]) async throws -> [TensorView] {
         try ensureLayerOpened(layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[layer]! }

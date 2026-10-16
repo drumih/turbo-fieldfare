@@ -13,6 +13,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let prefillPolicy: RuntimePrefillPolicy
     public let prefillChunkTokens: Int
     public let rdadvisePolicy: RDAdvicePolicyMode
+    public let earlyExpertRead: RuntimeEarlyExpertRead
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
 
@@ -52,6 +53,8 @@ public struct ServerArguments: Equatable, Sendable {
                                  16.4 MB at 128.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
+      --early-expert-read <s>    Read one guessed expert of the next layer while
+                                 storage is idle: off or router (default router).
       --help                     Show this help.
     """
 
@@ -85,7 +88,8 @@ public struct ServerArguments: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy,
             prefillEnabled: prefillPolicy == .chunked,
             prefillChunkTokens: prefillChunkTokens,
-            forceLogitsHead: forceLogitsHead)
+            forceLogitsHead: forceLogitsHead,
+            earlyExpertRead: earlyExpertRead)
     }
 
     public static func parse(
@@ -106,6 +110,7 @@ public struct ServerArguments: Equatable, Sendable {
         var prefillPolicy = RuntimePrefillPolicy.chunked
         var prefillChunkTokens = 128
         var rdadvisePolicy = RDAdvicePolicyMode.off
+        var earlyExpertRead = RuntimeConfiguration.production.earlyExpertRead
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -200,6 +205,12 @@ public struct ServerArguments: Equatable, Sendable {
                         "--rdadvise must be off, default, bounded, or adaptive")
                 }
                 rdadvisePolicy = parsed
+            case "--early-expert-read":
+                guard let parsed = RuntimeEarlyExpertRead(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--early-expert-read must be off or router")
+                }
+                earlyExpertRead = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -231,6 +242,7 @@ public struct ServerArguments: Equatable, Sendable {
                                prefillPolicy: prefillPolicy,
                                prefillChunkTokens: prefillChunkTokens,
                                rdadvisePolicy: rdadvisePolicy,
+                               earlyExpertRead: earlyExpertRead,
                                visionPack: visionPack,
                                visionResidency: visionResidency)
     }
