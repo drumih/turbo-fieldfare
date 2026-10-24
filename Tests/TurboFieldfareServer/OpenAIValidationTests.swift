@@ -142,16 +142,45 @@ struct OpenAIValidationTests {
         #expect(validated.messages.map(\.role) == [.system, .developer, .user])
     }
 
-    @Test func rejectsLateDeveloperGuidance() throws {
+    @Test func syntheticOpenCodeLeadingSystemMessagesRender() async throws {
         let data = Data(#"""
-        {"model":"m","messages":[
-          {"role":"user","content":"hello"},
-          {"role":"developer","content":"late"}
+        {"model":"m","stream":true,"messages":[
+          {"role":"system","content":"You are a coding assistant."},
+          {"role":"system","content":"Be concise."},
+          {"role":"user","content":"Hello"}
         ]}
         """#.utf8)
         let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
-        #expect(throws: ServerRequestError.self) {
-            try OpenAIRequestValidator.validate(request, modelID: "m")
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        #expect(validated.stream)
+        #expect(validated.tools.isEmpty)
+        #expect(validated.messages.map(\.role) == [.system, .system, .user])
+        #expect(validated.messages.allSatisfy { $0.toolCalls.isEmpty && $0.toolCallID == nil })
+        #expect(validated.multimodalMessages == nil)
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = try tokenizer.applyChatTemplate(validated.messages)
+        #expect(rendered == "<bos><|turn>system\nYou are a coding assistant.<turn|>\n"
+                + "<|turn>system\nBe concise.<turn|>\n"
+                + "<|turn>user\nHello<turn|>\n<|turn>model\n<|channel>thought\n<channel|>")
+        let ids = tokenizer.encode(rendered, addBOS: false)
+        #expect(ids.first == tokenizer.bosID)
+        #expect(ids.filter { $0 == tokenizer.endOfTurnID }.count == 3)
+    }
+
+    @Test(arguments: ["system", "developer"], ["user", "assistant"])
+    func rejectsLateGuidance(guidance: String, role: String) throws {
+        let data = Data(#"""
+        {"model":"m","messages":[
+          {"role":"\#(role)","content":"hello"},
+          {"role":"\#(guidance)","content":"late"}
+        ]}
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        do {
+            _ = try OpenAIRequestValidator.validate(request, modelID: "m")
+            Issue.record("late guidance was accepted")
+        } catch let error as ServerRequestError {
+            #expect(error.envelope.error.code == "invalid_message")
         }
     }
 

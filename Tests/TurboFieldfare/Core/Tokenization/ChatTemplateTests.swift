@@ -54,11 +54,25 @@ struct ChatTemplateTests {
         #expect(sys.lowerBound < usr.lowerBound)
     }
 
-    @Test("System message after a user turn is rejected")
-    func misplacedSystemTurn() {
+    @Test("Consecutive leading system messages render in order", arguments: [2, 3])
+    func leadingSystemTurns(count: Int) throws {
+        let instructions = ["Be terse.", "Use plain text.", "Answer in English."]
+            .prefix(count)
+        let messages = instructions.map { Message(role: .system, content: " \($0)\n") }
+            + [Message(role: .user, content: " Hi \n")]
+        let p = try tok.applyChatTemplate(messages)
+        let expected = "<bos>"
+            + instructions.map { "<|turn>system\n\($0)<turn|>\n" }.joined()
+            + "<|turn>user\nHi<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+        #expect(p == expected)
+    }
+
+    @Test("System message after a conversation turn is rejected",
+          arguments: [GFTokenizer.Role.user, .assistant])
+    func misplacedSystemTurn(role: GFTokenizer.Role) {
         #expect(throws: GFTokenizerError.self) {
             _ = try tok.applyChatTemplate([
-                Message(role: .user, content: "Hi"),
+                Message(role: role, content: "Hi"),
                 Message(role: .system, content: "Too late"),
             ])
         }

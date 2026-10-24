@@ -332,13 +332,17 @@ public struct GFTokenizer: @unchecked Sendable {
 
     public func applyChatTemplate(_ messages: [Message]) throws -> String {
         var s = Self.bosMark
-        for (index, message) in messages.enumerated() {
+        var sawConversationMessage = false
+        for message in messages {
             guard let rawContent = message.content else {
                 throw GFTokenizerError.invalidChatTemplate("text-only messages require content")
             }
             let content = rawContent.trimmingCharacters(in: .whitespacesAndNewlines)
-            if message.role == .system && index != 0 {
+            if message.role == .system && sawConversationMessage {
                 throw GFTokenizerError.invalidChatTemplate("system message must be first")
+            }
+            if message.role != .system {
+                sawConversationMessage = true
             }
             let role = message.role == .assistant ? "model" : message.role.rawValue
             s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
