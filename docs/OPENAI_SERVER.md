@@ -183,6 +183,11 @@ usage.prompt_tokens_details.cached_tokens
 The server retains one prefix. A different or incompatible history replaces
 it. Use `--prompt-cache-mode off` to disable reuse.
 
+Cache misses and rejected prefix publication include a reason code in the
+server log, such as `history-diverged` or `stop-string-filtered`. These cache
+diagnostics contain no prompt, response, tool payload or image content. Cache
+diagnostics are silent when prompt reuse is disabled.
+
 ## Tool calls
 
 The server can return OpenAI-style function calls, but it cannot authorize or
@@ -222,6 +227,9 @@ Chat Completions supports JSON and Server-Sent Events responses. Set
 `"stream_options": {"include_usage": true}` to receive a final usage chunk.
 
 Requests may contain system, developer, user, assistant, and tool messages.
+Multiple leading system messages retain their order. System and developer
+guidance must precede the conversation; guidance inserted after a user,
+assistant or tool message is rejected.
 Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
 `max_completion_tokens`, and function-tool fields.

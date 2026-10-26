@@ -77,6 +77,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         let link: URL?
         let imageURL: URL?
         let block: Block
+        var syntheticCodeTerminator = false
     }
 
     private let typography: ConversationTypography
@@ -114,7 +115,8 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                 markdown: presentationSource,
                 options: .init(
                     interpretedSyntax: .full,
-                    failurePolicy: .returnPartiallyParsedIfPossible))
+                    failurePolicy: .returnPartiallyParsedIfPossible,
+                    appliesSourcePositionAttributes: true))
             guard !containsUnsupportedBlock(in: parsed) else { return fallback(source) }
 
             let items = Self.completingTables(parsed.runs.map { run in
@@ -128,7 +130,9 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                     inlineIntent: run.inlinePresentationIntent,
                     link: Self.openable(run.link),
                     imageURL: Self.openable(run.imageURL),
-                    block: block(for: run.presentationIntent))
+                    block: block(for: run.presentationIntent),
+                    syntheticCodeTerminator: TranscriptCodeBlock.hasSyntheticTerminator(
+                        position: run.markdownSourcePosition, source: presentationSource))
             })
 
             let output = NSMutableAttributedString()
@@ -568,6 +572,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
             appendCode(
                 items.map(\.text).joined(),
                 block: block,
+                syntheticTerminator: items.last?.syntheticCodeTerminator ?? false,
                 to: output,
                 decoration: decoration)
             return
@@ -766,12 +771,16 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
     private func appendCode(
         _ text: String,
         block: Block,
+        syntheticTerminator: Bool,
         to output: NSMutableAttributedString,
         decoration: BlockDecoration
     ) {
         var body = text
         if body.hasSuffix("\n") { body.removeLast() }
-        let attributes = codeAttributes(cell: decoration.codeCell(for: block.identity))
+        var attributes = codeAttributes(cell: decoration.codeCell(for: block.identity))
+        let codeBlock = TranscriptCodeBlock()
+        codeBlock.syntheticTerminator = syntheticTerminator || !text.hasSuffix("\n")
+        attributes[.transcriptCodeBlock] = codeBlock
         for line in body.components(separatedBy: "\n") {
             output.append(NSAttributedString(string: line + "\n", attributes: attributes))
         }
@@ -783,7 +792,9 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
     /// one cell when they carry the same block object, so a fresh dictionary
     /// per tick would draw a new box per line.
     public func streamingCodeAttributes() -> [NSAttributedString.Key: Any] {
-        codeAttributes(cell: BlockDecoration.codeCell(typography: typography))
+        var attributes = codeAttributes(cell: BlockDecoration.codeCell(typography: typography))
+        attributes[.transcriptCodeBlock] = TranscriptCodeBlock()
+        return attributes
     }
 
     private func codeAttributes(cell: NSTextTableBlock) -> [NSAttributedString.Key: Any] {
@@ -1125,7 +1136,9 @@ private final class BlockDecoration {
     static func codeCell(typography: ConversationTypography) -> NSTextTableBlock {
         let table = NSTextTable()
         table.numberOfColumns = 1
-        table.collapsesBorders = true
+        // A single cell has no shared borders. Collapsing shifts its right
+        // stroke beyond the text container, where NSTextView clips it away.
+        table.collapsesBorders = false
         let cell = NSTextTableBlock(
             table: table,
             startingRow: 0,
@@ -1134,6 +1147,7 @@ private final class BlockDecoration {
             columnSpan: 1)
         cell.setContentWidth(100, type: .percentageValueType)
         cell.setWidth(typography.scaled(8), type: .absoluteValueType, for: .padding)
+        cell.setWidth(typography.scaled(TranscriptCodeBlock.headerPadding), type: .absoluteValueType, for: .padding, edge: .minY)
         cell.setWidth(1, type: .absoluteValueType, for: .border)
         cell.setBorderColor(.separatorColor)
         cell.backgroundColor = .quaternarySystemFill

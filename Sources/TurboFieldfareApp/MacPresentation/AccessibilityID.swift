@@ -100,6 +100,7 @@ public enum AccessibilityID: String, CaseIterable, Sendable {
     /// Identifiers minted per item carry one of these prefixes, so a case can
     /// name the family and the driver can match one member exactly.
     public enum Prefix: String, CaseIterable, Sendable {
+        case transcriptCopyCode = "transcript.copyCode."
         case historyRow = "history.row."
         case historyRowMenu = "history.row.menu."
         case composerRemove = "composer.remove."

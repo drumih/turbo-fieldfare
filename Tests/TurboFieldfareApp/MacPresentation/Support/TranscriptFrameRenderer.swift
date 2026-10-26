@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+@testable import TurboFieldfareMacPresentation
 
 struct TranscriptFrameError: Error, CustomStringConvertible {
     let description: String
@@ -26,7 +27,7 @@ enum TranscriptFrameRenderer {
         width: CGFloat = defaultWidth,
         dark: Bool
     ) throws -> NSImage {
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
+        let textView = TranscriptTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = true
@@ -60,6 +61,7 @@ enum TranscriptFrameRenderer {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = textView
         window.layoutIfNeeded()
+        textView.refreshCodeCopyButtons()
 
         let bounds = textView.bounds
         guard let rep = NSBitmapImageRep(

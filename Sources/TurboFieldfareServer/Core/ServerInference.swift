@@ -950,14 +950,17 @@ public actor ServerModelSession: ServerInferenceBackend {
                 // the cached prefix is untouched and stays valid for the retry.
                 throw CancellationError()
             } catch {
-                ServerLog.promptCacheBridgeFailed(error: error)
+                ServerLog.promptCacheMiss(reason: .continuationBridgeUnavailable)
                 promptCache.invalidate()
                 let rendered = try await renderMultimodal(request)
                 effectivePromptIDs = rendered.effectiveTokenIDs
                 multimodalInput = rendered
                 completionStart = .reset
             }
-        case .miss:
+        case .miss(let reason):
+            if promptCacheMode == .singlePrefix {
+                ServerLog.promptCacheMiss(reason: reason)
+            }
             promptCache.invalidate()
             if let renderedTextIDs {
                 effectivePromptIDs = renderedTextIDs
@@ -1109,13 +1112,14 @@ public actor ServerModelSession: ServerInferenceBackend {
         // `imagesDiverged` rather than resumed onto a KV built from a different
         // picture.
         if promptCacheMode == .singlePrefix {
-            promptCache.publish(
+            let publication = promptCache.publish(
                 domain: promptCacheDomain,
                 request: request,
                 content: content,
                 calls: calls,
                 result: result,
                 stopStringFiltered: stopMatcher.isStopped)
+            ServerLog.promptCachePublication(publication)
         }
         completed = true
         return ServerCompletion(

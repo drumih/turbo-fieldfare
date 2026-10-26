@@ -15,6 +15,32 @@ struct ChatTemplateTests {
 
     private typealias Message = GFTokenizer.Message
 
+    // Validation accepted these requests, but rendering rejected their second
+    // system message before generation could begin.
+    @Test(arguments: 0...3)
+    func leadingSystemTurnsPreserveGuidanceOrder(_ count: Int) throws {
+        let instructions = ["  Be terse.\n", "\t", " Réponds en français. "]
+        let messages = instructions.prefix(count).map { Message(role: .system, content: $0) }
+            + [Message(role: .user, content: "Hi")]
+        let expected = "<bos>" + instructions.prefix(count).map {
+            "<|turn>system\n" + $0.trimmingCharacters(in: .whitespacesAndNewlines) + "<turn|>\n"
+        }.joined() + "<|turn>user\nHi<turn|>\n<|turn>model\n<|channel>thought\n<channel|>"
+        let rendered = try tok.applyChatTemplate(messages)
+        #expect(rendered == expected)
+        #expect(tok.encode(rendered, addBOS: false) == tok.encode(expected, addBOS: false))
+    }
+
+    @Test(arguments: [GFTokenizer.Role.user, .assistant, .tool])
+    func guidanceAfterConversationIsRejected(_ role: GFTokenizer.Role) {
+        #expect(throws: GFTokenizerError.self) {
+            try tok.applyChatTemplate([
+                Message(role: .system, content: "first"),
+                Message(role: role, content: "conversation"),
+                Message(role: .system, content: "late"),
+            ])
+        }
+    }
+
     @Test("Single user turn has the documented marker structure")
     func singleUserTurn() throws {
         let p = try tok.applyChatTemplate([Message(role: .user, content: "Hi")])

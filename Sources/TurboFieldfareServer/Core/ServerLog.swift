@@ -55,10 +55,6 @@ enum ServerLog {
             + "finish=\(completion.finishReason)"
     }
 
-    /// The session is an actor, so generation is serialized: this line always
-    /// belongs to the request between the preceding `generating` and the
-    /// following `completed`. Carries a reason code only, never prompt content.
-
     static func visionPackInvalid(at url: URL, error: Error) {
         write("vision pack at \(url.path) is invalid: \(String(reflecting: error))")
     }
@@ -72,12 +68,24 @@ enum ServerLog {
         write("vision runtime is unsupported: the image tower requires an M2 or newer Mac")
     }
 
-    /// A prefix that could not be continued because its bridge failed to
-    /// render. Carries the underlying error, because this miss means the
-    /// template and the cached turn disagree, which no other miss does.
-    static func promptCacheBridgeFailed(error: Error) {
-        write("prompt cache miss reason=bridge-render-failed "
-            + "error=\(String(reflecting: error))")
+    /// The session is an actor, so generation is serialized: this line always
+    /// belongs to the request between the preceding `generating` and the
+    /// following `completed`. Carries a reason code only, never prompt content.
+    static func promptCacheMiss(reason: ServerPromptCacheMissReason) {
+        write(promptCacheMissMessage(reason: reason))
+    }
+
+    static func promptCacheMissMessage(reason: ServerPromptCacheMissReason) -> String {
+        "prompt cache miss reason=\(reason.rawValue)"
+    }
+
+    static func promptCachePublication(_ result: ServerPromptCachePublishResult) {
+        if let message = promptCachePublicationMessage(result) { write(message) }
+    }
+
+    static func promptCachePublicationMessage(_ result: ServerPromptCachePublishResult) -> String? {
+        guard case .rejected(let reason) = result else { return nil }
+        return "prompt cache publication rejected reason=\(reason.rawValue)"
     }
 
     /// A request whose client stopped listening. Kept distinct from `failed`

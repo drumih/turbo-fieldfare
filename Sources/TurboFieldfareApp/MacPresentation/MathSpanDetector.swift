@@ -670,6 +670,13 @@ enum MathSpanDetector {
         return masked
     }
 
+    static func endsInCodeBlock(_ source: String) -> Bool {
+        let chars = scanUnits(source)
+        var masked = [Bool](repeating: false, count: chars.count)
+        maskBlocks(chars, into: &masked)
+        return masked.last == true
+    }
+
     private struct Line {
         let start: Int
         /// Index just past the last content character, excluding the newline.

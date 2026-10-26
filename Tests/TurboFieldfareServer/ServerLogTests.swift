@@ -6,6 +6,17 @@ import Testing
 /// left the request's last line as `generating` forever: reading the log, a
 /// running request, an abandoned one and a crashed one were indistinguishable.
 @Suite struct ServerLogTests {
+    @Test func cacheDiagnosticsContainOnlyBoundedReasonCodes() {
+        for reason in ServerPromptCacheMissReason.allCases {
+            #expect(ServerLog.promptCacheMissMessage(reason: reason) == "prompt cache miss reason=\(reason.rawValue)")
+        }
+        for reason in ServerPromptCachePublishRejection.allCases {
+            #expect(ServerLog.promptCachePublicationMessage(.rejected(reason)) ==
+                "prompt cache publication rejected reason=\(reason.rawValue)")
+        }
+        #expect(ServerLog.promptCachePublicationMessage(.published) == nil)
+    }
+
     private func completion(promptTokens: Int,
                             cachedTokens: Int,
                             completionTokens: Int,

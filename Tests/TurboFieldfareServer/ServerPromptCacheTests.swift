@@ -15,6 +15,53 @@ struct ServerPromptCacheTests {
         fp16RingEnabled: true,
         templateSHA256: "template")
 
+    @Test(arguments: ServerPromptCachePublishRejection.allCases)
+    func publicationExplainsRejectionAndInvalidatesPreviousEntry(_ reason: ServerPromptCachePublishRejection) {
+        let initial = request(messages: [.init(role: .user, content: "secret-prompt-sentinel")])
+        var cache = ServerPromptCache()
+        #expect(cache.publish(domain: domain, request: initial, content: "secret-output-sentinel",
+                              calls: [], result: rawResult(prompt: [2], kvBacked: [2, 3], boundary: 106,
+                                                          reason: .endOfTurn)) == .published)
+        let result = RawDecodeResult(
+            prefillTokens: 1, cachedPromptTokens: 0, computedPrefillTokens: 1,
+            prefillSeconds: 0, newTokens: 1, decodeSeconds: 0,
+            reason: reason == .unsupportedStopReason ? .eos : .endOfTurn,
+            kvPosition: reason == .invalidKVPosition ? 3 : (reason == .emptyKV ? 0 : 2),
+            kvBackedTokenIDs: reason == .emptyKV ? [] : [2, 3],
+            uncommittedBoundaryTokenIDs: reason == .invalidBoundaryCount ? [] : [106],
+            withheldTrailingKVTokens: 0)
+        let invalidIdentity = request(messages: initial.messages, imageIdentities: [[], ["secret-image"]])
+        let publication = cache.publish(
+            domain: domain, request: reason == .missingImageIdentity ? invalidIdentity : initial,
+            content: "secret-output-sentinel", calls: [], result: result,
+            stopStringFiltered: reason == .stopStringFiltered)
+        #expect(publication == .rejected(reason))
+        #expect(cache.entry == nil)
+        #expect(ServerLog.promptCachePublicationMessage(publication) ==
+            "prompt cache publication rejected reason=\(reason.rawValue)")
+    }
+
+    @Test func publicationRejectionPrecedenceIsDeterministic() {
+        let initial = request(messages: [.init(role: .user, content: "private")], imageIdentities: [[], []])
+        var cache = ServerPromptCache()
+        for (position, ids, boundary, filtered, stop, expected) in [
+            (1, [Int32](), [Int32](), true, StopReason.eos, ServerPromptCachePublishRejection.invalidKVPosition),
+            (0, [], [], true, .eos, .emptyKV),
+            (1, [2], [], true, .eos, .invalidBoundaryCount),
+            (1, [2], [106], true, .eos, .stopStringFiltered),
+            (1, [2], [106], false, .eos, .unsupportedStopReason),
+            (1, [2], [106], false, .endOfTurn, .missingImageIdentity),
+        ] {
+            let result = RawDecodeResult(
+                prefillTokens: 1, cachedPromptTokens: 0, computedPrefillTokens: 1,
+                prefillSeconds: 0, newTokens: 1, decodeSeconds: 0, reason: stop,
+                kvPosition: position, kvBackedTokenIDs: ids,
+                uncommittedBoundaryTokenIDs: boundary, withheldTrailingKVTokens: 0)
+            #expect(cache.publish(domain: domain, request: initial, content: "private", calls: [],
+                                  result: result, stopStringFiltered: filtered) == .rejected(expected))
+        }
+    }
+
     @Test func textContinuationUsesActualGeneratedHistoryAndOnlyPrefillsSuffix() async throws {
         let tokenizer = try await GFTokenizer.load()
         let initial = request(messages: [
@@ -59,6 +106,33 @@ struct ServerPromptCacheTests {
         #expect(effective == kvBacked + bridge)
         #expect(!rendered.prefix(kvBacked.count).elementsEqual(kvBacked))
         #expect(effective[cached] == tokenizer.endOfTurnID)
+    }
+
+    @Test func missDiagnosticsSeparateNoEntryDomainAndToolsBeforePrefixReuse() async throws {
+        // The public cache used one unusable-entry reason for all three. A
+        // matching token prefix must still never bypass domain or tool checks.
+        let tokenizer = try await GFTokenizer.load()
+        let initial = request(messages: [.init(role: .user, content: "first")])
+        let prefix: [Int32] = [2, 3]
+        var cache = ServerPromptCache()
+        #expect(cache.match(domain: domain, request: initial, renderedPromptIDs: prefix + [4],
+                            tokenizer: tokenizer).missReason == .noEntry)
+        cache.publish(domain: domain, request: initial, content: "answer", calls: [],
+                      result: rawResult(prompt: [2], kvBacked: prefix, boundary: 106, reason: .endOfTurn))
+        let otherDomain = ServerPromptCacheDomain(
+            modelID: domain.modelID, sourceSnapshotHash: domain.sourceSnapshotHash,
+            runtimeProfileHash: "different-runtime", maximumContext: domain.maximumContext,
+            kvStorage: domain.kvStorage, fp16RingEnabled: domain.fp16RingEnabled,
+            templateSHA256: domain.templateSHA256)
+        #expect(cache.match(domain: otherDomain, request: initial, renderedPromptIDs: prefix + [4],
+                            tokenizer: tokenizer).missReason == .domainChanged)
+        let tools = [GFTokenizer.FunctionDefinition(
+            name: "read", description: "Read a file.", parameters: .object(["type": .string("object")]))]
+        let changedTools = request(messages: initial.messages, tools: tools)
+        #expect(cache.match(domain: domain, request: changedTools, renderedPromptIDs: prefix + [4],
+                            tokenizer: tokenizer).missReason == .toolsChanged)
+        #expect(cache.match(domain: domain, request: initial, renderedPromptIDs: prefix + [4],
+                            tokenizer: tokenizer) == .hit(effectivePromptIDs: prefix + [4], cachedPromptTokens: 2))
     }
 
     @Test func capturedOpenCodeToolResultUsesFrozenToolBoundary() async throws {

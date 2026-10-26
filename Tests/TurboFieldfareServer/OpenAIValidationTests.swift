@@ -5,6 +5,16 @@ import Testing
 
 @Suite("OpenAI request validation")
 struct OpenAIValidationTests {
+    @Test func openCodeShapedLeadingGuidanceRendersAfterValidation() async throws {
+        let json = #"{"model":"m","stream":true,"messages":[{"role":"system","content":"You are a coding assistant."},{"role":"system","content":"Keep replies short."},{"role":"user","content":"Hi"}]}"#
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(json.utf8))
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = try tokenizer.applyChatTemplate(validated.messages)
+        #expect(rendered.hasPrefix("<bos><|turn>system\nYou are a coding assistant.<turn|>\n<|turn>system\nKeep replies short.<turn|>\n"))
+        #expect(tokenizer.encode(rendered, addBOS: false).filter { $0 == tokenizer.endOfTurnID }.count == 3)
+    }
+
     @Test func capturedOpenCodeInitialRequestValidates() throws {
         let request = try fixture("opencode-1.15.11-initial.json")
         let validated = try OpenAIRequestValidator.validate(

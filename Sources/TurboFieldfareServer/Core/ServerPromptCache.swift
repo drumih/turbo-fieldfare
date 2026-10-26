@@ -39,8 +39,10 @@ struct ServerPromptCacheEntry: Sendable, Equatable {
 /// Why a prefix could not be reused. Carried so a miss is diagnosable rather
 /// than indistinguishable from every other miss: a bridge that fails to render
 /// is a defect worth seeing, and a history that simply diverged is not.
-enum ServerPromptCacheMissReason: String, Sendable, Equatable {
+enum ServerPromptCacheMissReason: String, Sendable, Equatable, CaseIterable {
     case noEntry = "no-entry"
+    case domainChanged = "domain-changed"
+    case toolsChanged = "tools-changed"
     case unusableEntry = "unusable-entry"
     case historyDiverged = "history-diverged"
     case unsupportedContinuation = "unsupported-continuation"
@@ -48,6 +50,21 @@ enum ServerPromptCacheMissReason: String, Sendable, Equatable {
     case bridgeRenderFailed = "bridge-render-failed"
     case missingImageIdentity = "missing-image-identity"
     case imagesDiverged = "images-diverged"
+    case continuationBridgeUnavailable = "continuation-bridge-unavailable"
+}
+
+enum ServerPromptCachePublishRejection: String, Sendable, Equatable, CaseIterable {
+    case invalidKVPosition = "invalid-kv-position"
+    case emptyKV = "empty-kv"
+    case invalidBoundaryCount = "invalid-boundary-count"
+    case stopStringFiltered = "stop-string-filtered"
+    case unsupportedStopReason = "unsupported-stop-reason"
+    case missingImageIdentity = "missing-image-identity"
+}
+
+enum ServerPromptCachePublishResult: Sendable, Equatable {
+    case published
+    case rejected(ServerPromptCachePublishRejection)
 }
 
 enum ServerPromptCacheMatch: Sendable, Equatable {
@@ -91,6 +108,7 @@ struct ServerPromptCache: Sendable {
         return request.imageIdentities
     }
 
+    @discardableResult
     mutating func publish(
         domain: ServerPromptCacheDomain,
         request: ValidatedChatRequest,
@@ -98,16 +116,20 @@ struct ServerPromptCache: Sendable {
         calls: [ParsedToolCall],
         result: RawDecodeResult,
         stopStringFiltered: Bool = false
-    ) {
-        guard result.kvPosition == result.kvBackedTokenIDs.count,
-              !result.kvBackedTokenIDs.isEmpty,
-              result.uncommittedBoundaryTokenIDs.count == 1,
-              !stopStringFiltered,
-              result.reason == .endOfTurn
-                || result.reason == .toolCalls
-                || result.reason == .maxTokens else {
-            entry = nil
-            return
+    ) -> ServerPromptCachePublishResult {
+        // First-failure order is diagnostic policy. The old prefix must also
+        // go: its KV no longer belongs to us after this generation.
+        entry = nil
+        guard result.kvPosition == result.kvBackedTokenIDs.count else {
+            return .rejected(.invalidKVPosition)
+        }
+        guard !result.kvBackedTokenIDs.isEmpty else { return .rejected(.emptyKV) }
+        guard result.uncommittedBoundaryTokenIDs.count == 1 else {
+            return .rejected(.invalidBoundaryCount)
+        }
+        guard !stopStringFiltered else { return .rejected(.stopStringFiltered) }
+        guard result.reason == .endOfTurn || result.reason == .toolCalls || result.reason == .maxTokens else {
+            return .rejected(.unsupportedStopReason)
         }
         let historicalCalls = calls.map {
             GFTokenizer.HistoricalToolCall(
@@ -120,8 +142,7 @@ struct ServerPromptCache: Sendable {
             content: calls.isEmpty ? content : nil,
             toolCalls: historicalCalls)
         guard let identities = Self.identities(for: request) else {
-            entry = nil
-            return
+            return .rejected(.missingImageIdentity)
         }
         entry = ServerPromptCacheEntry(
             domain: domain,
@@ -134,6 +155,7 @@ struct ServerPromptCache: Sendable {
             kvBackedTokenIDs: result.kvBackedTokenIDs,
             uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs,
             kvPosition: result.kvPosition)
+        return .published
     }
 
     /// `renderedPromptIDs` is nil for multimodal requests, where the rendered
@@ -145,10 +167,10 @@ struct ServerPromptCache: Sendable {
         renderedPromptIDs: [Int32]?,
         tokenizer: GFTokenizer
     ) -> ServerPromptCacheMatch {
-        guard let entry,
-              entry.domain == domain,
-              entry.tools == request.tools,
-              entry.kvPosition == entry.kvBackedTokenIDs.count,
+        guard let entry else { return .miss(.noEntry) }
+        guard entry.domain == domain else { return .miss(.domainChanged) }
+        guard entry.tools == request.tools else { return .miss(.toolsChanged) }
+        guard entry.kvPosition == entry.kvBackedTokenIDs.count,
               entry.kvPosition > 0,
               entry.uncommittedBoundaryTokenIDs.count == 1 else {
             return .miss(.unusableEntry)
@@ -284,7 +306,6 @@ struct ServerPromptCache: Sendable {
                 incomingMessages: request.messages,
                 tools: request.tools)
         } catch {
-            ServerLog.promptCacheBridgeFailed(error: error)
             return .miss(.bridgeRenderFailed)
         }
         guard bridge.first == entry.uncommittedBoundaryTokenIDs.first else {
