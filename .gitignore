@@ -48,3 +48,6 @@ tmp/
 __pycache__/
 *.pyc
 .venv/
+
+# Graft local cache (directory or symlink)
+/graft
