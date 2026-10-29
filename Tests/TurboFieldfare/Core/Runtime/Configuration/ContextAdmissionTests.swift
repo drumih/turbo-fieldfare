@@ -70,6 +70,27 @@ import Foundation
         // A context below the ring size caps the ring at the context.
         #expect(ContextAdmission.productionSlidingRingRows(config: config, maxContext: 1_024)
                 == 1_024)
+        // Up to the 280-token image floor a larger chunk is free.
+        #expect(ContextAdmission.productionSlidingRingRows(config: config, maxContext: 8_192,
+                                                           prefillChunkTokens: 256)
+                == 1_304)
+        #expect(ContextAdmission.productionSlidingRingRows(config: config, maxContext: 8_192,
+                                                           prefillChunkTokens: 1_024)
+                == 2_048)
+    }
+
+    /// A wider chunk is paid in sliding-ring rows (25 layers at 8,192 B) and
+    /// in prefill scratch; the measured run put 1024 at about 245 MB over 128.
+    @Test func widerPrefillChunkRaisesTheProjectedFootprint() {
+        let baseline = ContextAdmission.projectedFootprintBytes(config: config, maxContext: 16_384)
+        let at256 = ContextAdmission.projectedFootprintBytes(config: config, maxContext: 16_384,
+                                                             prefillChunkTokens: 256)
+        let at1024 = ContextAdmission.projectedFootprintBytes(config: config, maxContext: 16_384,
+                                                              prefillChunkTokens: 1_024)
+        let ringDelta = UInt64((2_048 - 1_304) * 25 * 8_192)
+        #expect(at1024 - baseline > ringDelta)
+        #expect(at1024 - baseline < 300 << 20)
+        #expect(at256 - baseline < 32 << 20)
     }
 
     @Test func eightGigabyteHostBacks128KButNot256K() {

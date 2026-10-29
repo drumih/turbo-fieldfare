@@ -968,10 +968,10 @@ struct ServerArgumentTests {
 
         // Indistinguishable from the explicit cap, which is the whole claim:
         // the runtime identity is taken from the configuration, so a prefix
-        // built under `auto` is reusable by a run started at 256.
+        // built under `auto` is reusable by a run started at 2048.
         let explicitCap = try ServerArguments.parse([
             "--model", "model.gturbo",
-            "--prefill-chunk-tokens", "256",
+            "--prefill-chunk-tokens", "2048",
         ])
         #expect(try arguments.resolvedRuntimeConfiguration()
                 == (try explicitCap.resolvedRuntimeConfiguration()))
@@ -1077,7 +1077,7 @@ struct ServerArgumentTests {
         ["--expert-cache-slots", "12"],
         ["--expert-cache-policy", "mru"],
         ["--prefill", "maybe"],
-        ["--prefill-chunk-tokens", "512"],
+        ["--prefill-chunk-tokens", "4096"],
         ["--prefill-chunk-tokens", "automatic"],
         ["--rdadvise", "eager"],
     ])
@@ -1225,7 +1225,7 @@ struct ServerArgumentTests {
          namesAuto: false),
         (flag: "--prefill-chunk-tokens",
          allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
-         badValue: "512",
+         badValue: "4096",
          namesAuto: true),
         (flag: "--prefill-chunk-tokens",
          allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
@@ -1287,7 +1287,7 @@ struct ServerArgumentTests {
                                         expertCacheSlots: 16,
                                         expertCachePolicy: .lfu,
                                         prefillPolicy: .off,
-                                        prefillChunkTokens: 512,
+                                        prefillChunkTokens: 4096,
                                         rdadvisePolicy: .off,
                                         visionPack: nil,
                                         visionResidency: .onDemand),

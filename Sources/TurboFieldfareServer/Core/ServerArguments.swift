@@ -45,11 +45,11 @@ public struct ServerArguments: Equatable, Sendable {
                                  Prefill chunk size: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens, alsoAccepting: ["auto"]))
                                  (default 128). Each chunk re-reads the routed
                                  expert pool, so larger chunks read less; auto
-                                 runs at the cap, 256, which prefills every
+                                 runs at the cap, 2048, which prefills every
                                  prompt in the same spans a per-request size
-                                 would. Prefill scratch is sized from the chunk,
-                                 so the cap holds about 32.5 MB of it against
-                                 16.4 MB at 128.
+                                 would. The prefill scratch and the sliding KV
+                                 ring are sized from the chunk: 1024 costs about
+                                 245 MB more than 128, and 2048 about 585 MB.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.
@@ -212,12 +212,14 @@ public struct ServerArguments: Equatable, Sendable {
         let config = ArchConfig.gemma4_26B_A4B
         if case .needsMemory = ContextAdmission.availability(config: config,
                                                              maxContext: maxContext,
-                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots),
+                                                             hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                             prefillChunkTokens: prefillChunkTokens),
            environment[unbackedContextOverrideVariable] != "1" {
             throw ServerArgumentError.invalid(
                 ContextAdmission.needDescription(config: config,
                                                  maxContext: maxContext,
-                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots)
+                                                 hostMemoryBytes: hostMemoryBytes, expertCacheSlots: expertCacheSlots,
+                                                 prefillChunkTokens: prefillChunkTokens)
                     + " Set \(unbackedContextOverrideVariable)=1 to start anyway.")
         }
         return ServerArguments(model: model,
