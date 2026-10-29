@@ -40,6 +40,7 @@ let package = Package(
             path: "Sources/TurboFieldfare",
             resources: [
                 .copy("Metal"),
+                .copy("NextLayerGuess"),
             ]
         ),
         .target(
