@@ -23,6 +23,24 @@ public struct KVView: @unchecked Sendable {
     public let startSlot: Int
 }
 
+/// A copy of the KV a prompt prefix left behind, taken at `position` and
+/// restorable only into the manager that produced it. Sliding layers keep only
+/// the ring rows, so this is the one way back to a prefix that later tokens
+/// have already overwritten: `rewind` cannot reach past the ring slack.
+public struct KVPrefixSnapshot: @unchecked Sendable {
+    public let position: Int
+    let capacityTokens: [Int]
+    /// Physical row ranges copied per layer, in copy order: one range for a
+    /// linear layer, up to two for a sliding ring window that wraps.
+    let segmentsPerLayer: [[Range<Int>]]
+    let keyCopies: [MTLBuffer]
+    let valueCopies: [MTLBuffer]
+
+    public var byteCount: Int {
+        keyCopies.reduce(0) { $0 + $1.length } + valueCopies.reduce(0) { $0 + $1.length }
+    }
+}
+
 /// Per-layer FP16 K/V storage for the decode loop.
 ///
 /// One K buffer and one V buffer per layer, allocated once in `init` — the
@@ -239,6 +257,75 @@ public final class KVCacheManager {
         precondition(highWaterPosition - newPosition <= maxRewindTokens,
                      "rewind to \(newPosition) exceeds ring slack \(maxRewindTokens)")
         position = newPosition
+    }
+
+    /// The physical rows the current position depends on. A sliding ring
+    /// needs only its window, because every attention kernel reads
+    /// `[position - slidingWindow, position)` and never the ring slack.
+    private func dependentSegments(layer: Int) -> [Range<Int>] {
+        let capacity = capacityTokens[layer]
+        guard kinds[layer] == .swa, capacity < maxContext else {
+            return [0..<min(position, capacity)]
+        }
+        let rows = min(position, slidingWindowTokens)
+        let firstSlot = (position - rows) % capacity
+        let firstLength = min(rows, capacity - firstSlot)
+        let wrapped = rows - firstLength
+        return wrapped > 0
+            ? [firstSlot..<(firstSlot + firstLength), 0..<wrapped]
+            : [firstSlot..<(firstSlot + firstLength)]
+    }
+
+    /// Copy every row the current position depends on. Callers must have
+    /// waited for the GPU work that wrote them.
+    public func snapshotPrefix() throws -> KVPrefixSnapshot {
+        precondition(position > 0, "snapshot requires a non-empty KV")
+        var segmentsPerLayer: [[Range<Int>]] = []
+        var keyCopies: [MTLBuffer] = []
+        var valueCopies: [MTLBuffer] = []
+        for layer in 0..<config.numLayers {
+            let segments = dependentSegments(layer: layer)
+            let stride = strides[layer]
+            let length = segments.reduce(0) { $0 + $1.count } * stride
+            guard let keyCopy = kBuffers[layer].device.makeBuffer(length: length, options: .storageModeShared),
+                  let valueCopy = vBuffers[layer].device.makeBuffer(length: length, options: .storageModeShared) else {
+                throw ModelError.kvAllocationFailed(layer: layer, bytes: length)
+            }
+            var copied = 0
+            for segment in segments {
+                let bytes = segment.count * stride
+                memcpy(keyCopy.contents() + copied, kBuffers[layer].contents() + segment.lowerBound * stride, bytes)
+                memcpy(valueCopy.contents() + copied, vBuffers[layer].contents() + segment.lowerBound * stride, bytes)
+                copied += bytes
+            }
+            segmentsPerLayer.append(segments)
+            keyCopies.append(keyCopy)
+            valueCopies.append(valueCopy)
+        }
+        return KVPrefixSnapshot(position: position,
+                                capacityTokens: capacityTokens,
+                                segmentsPerLayer: segmentsPerLayer,
+                                keyCopies: keyCopies,
+                                valueCopies: valueCopies)
+    }
+
+    /// Put a prefix back exactly as `snapshotPrefix` found it. Ring rows land in
+    /// the same physical slots because the capacities must match.
+    public func restorePrefix(_ snapshot: KVPrefixSnapshot) {
+        precondition(snapshot.capacityTokens == capacityTokens,
+                     "snapshot was taken from a KV with different capacities")
+        for layer in 0..<config.numLayers {
+            let stride = strides[layer]
+            var copied = 0
+            for segment in snapshot.segmentsPerLayer[layer] {
+                let bytes = segment.count * stride
+                memcpy(kBuffers[layer].contents() + segment.lowerBound * stride, snapshot.keyCopies[layer].contents() + copied, bytes)
+                memcpy(vBuffers[layer].contents() + segment.lowerBound * stride, snapshot.valueCopies[layer].contents() + copied, bytes)
+                copied += bytes
+            }
+        }
+        position = snapshot.position
+        highWaterPosition = snapshot.position
     }
 
     /// Drop all cached positions and advise the pages away.

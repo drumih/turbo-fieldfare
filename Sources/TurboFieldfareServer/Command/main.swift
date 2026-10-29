@@ -36,6 +36,7 @@ do {
         },
         visionResidencyPolicy: arguments.visionResidency,
         promptCacheMode: arguments.promptCacheMode,
+        promptCheckpointEnabled: arguments.promptCheckpointEnabled,
         runtimeConfiguration: runtimeConfiguration)
     let server = TurboFieldfareHTTPServer(
         modelID: arguments.modelID,
@@ -43,7 +44,7 @@ do {
         backend: backend,
         visionCapability: backend.visionCapability)
     _ = try await server.start(port: arguments.port)
-    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue) vision=\(backend.visionCapability) vision_residency=\(arguments.visionResidency.rawValue)")
+    print("TurboFieldfareServer ready at http://127.0.0.1:\(arguments.port) model=\(arguments.modelID) context=\(arguments.maxContext) prompt_cache=\(arguments.promptCacheMode.rawValue) prompt_checkpoint=\(arguments.promptCheckpointEnabled ? "on" : "off") vision=\(backend.visionCapability) vision_residency=\(arguments.visionResidency.rawValue)")
 
     _ = await signals.wait()
     try await server.shutdown()

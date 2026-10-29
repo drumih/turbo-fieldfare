@@ -188,6 +188,19 @@ server log, such as `history-diverged` or `stop-string-filtered`. These cache
 diagnostics contain no prompt, response, tool payload or image content. Cache
 diagnostics are silent when prompt reuse is disabled.
 
+Agent clients such as OpenCode open every conversation with the same long
+system turn and tool list, and a new conversation always misses the
+single-prefix cache. `--prompt-checkpoint on` keeps a copy of the KV for the
+leading system turn, apart from the single-prefix entry, so a new conversation
+that opens with the same one restores it and prefills only the rest. On a
+10,822-token prompt with a 10,798-token system turn (M4 Pro, 24 GB), a new
+conversation went from 112 s to 2.2 s with identical output. The first
+conversation stores the checkpoint, and a different system turn replaces it.
+System turns under 1,024 tokens are not checkpointed. The copy costs about
+20 KB per system-turn token for the full-attention layers plus 210 MB for the
+1,024-row sliding window, about 0.4 GB for a 10K-token system turn. The server log reports
+`prompt checkpoint stored` and `prompt checkpoint restored` with token counts.
+
 ## Tool calls
 
 The server can return OpenAI-style function calls, but it cannot authorize or

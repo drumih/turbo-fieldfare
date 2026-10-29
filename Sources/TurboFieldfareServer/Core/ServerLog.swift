@@ -79,6 +79,14 @@ enum ServerLog {
         "prompt cache miss reason=\(reason.rawValue)"
     }
 
+    static func promptCheckpointStored(tokens: Int, bytes: Int, seconds: Double) {
+        write(String(format: "prompt checkpoint stored tokens=%d bytes=%d prefill=%.3fs", tokens, bytes, seconds))
+    }
+
+    static func promptCheckpointRestored(tokens: Int) {
+        write("prompt checkpoint restored tokens=\(tokens)")
+    }
+
     static func promptCachePublication(_ result: ServerPromptCachePublishResult) {
         if let message = promptCachePublicationMessage(result) { write(message) }
     }
