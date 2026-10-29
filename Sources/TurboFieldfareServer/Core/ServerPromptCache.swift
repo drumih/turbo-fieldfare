@@ -53,6 +53,33 @@ enum ServerPromptCacheMissReason: String, Sendable, Equatable, CaseIterable {
     case continuationBridgeUnavailable = "continuation-bridge-unavailable"
 }
 
+/// The tokens the runner's KV actually holds, kept apart from the published
+/// entry. A miss whose prompt shares a long token prefix with them can rewind
+/// to that prefix instead of prefilling from zero: an agent client that
+/// re-renders its last turn, appends an extra message to a tool result, or
+/// retries a request whose tool call failed to parse differs only at the end.
+struct ServerKVLineage: Sendable, Equatable {
+    /// Below this the prefill a rewind saves is not worth bypassing the
+    /// message-level checks for.
+    static let minimumSharedTokens = 256
+
+    let tokenIDs: [Int32]
+
+    static func sharedPrefixLength(_ lhs: [Int32], _ rhs: [Int32]) -> Int {
+        zip(lhs, rhs).prefix { $0 == $1 }.count
+    }
+
+    /// The position to rewind to and resume from, or nil when the shared
+    /// prefix is too short, covers the whole prompt, or lies beyond `canRewind`.
+    func rewindTarget(promptIDs: [Int32], canRewind: (Int) -> Bool) -> Int? {
+        let shared = Self.sharedPrefixLength(tokenIDs, promptIDs)
+        // Resume needs at least one prompt token left to prefill.
+        let target = min(shared, promptIDs.count - 1)
+        guard target >= Self.minimumSharedTokens, canRewind(target) else { return nil }
+        return target
+    }
+}
+
 enum ServerPromptCachePublishRejection: String, Sendable, Equatable, CaseIterable {
     case invalidKVPosition = "invalid-kv-position"
     case emptyKV = "empty-kv"

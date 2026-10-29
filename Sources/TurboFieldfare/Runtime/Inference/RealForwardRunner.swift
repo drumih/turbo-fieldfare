@@ -405,6 +405,14 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         kv?.position ?? 0
     }
 
+    /// Whether `rewind(to:)` would accept `position` without reaching into
+    /// sliding-ring slots that later tokens have reused.
+    public func canRewind(to position: Int) -> Bool {
+        guard let kv else { return false }
+        return position > 0 && position <= kv.position
+            && kv.highWaterPosition - position <= kv.maxRewindTokens
+    }
+
     public func prepareForContinuation(expectedPosition: Int) throws {
         guard let kv else {
             throw PrefillError.prefillCursorMismatch(
