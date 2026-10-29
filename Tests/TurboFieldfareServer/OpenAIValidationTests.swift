@@ -948,6 +948,7 @@ struct ServerArgumentTests {
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)
         #expect(arguments.rdadvisePolicy == .off)
+        #expect(arguments.earlyExpertRead == .router)
     }
 
     /// The server rejected `--prefill-chunk-tokens auto` while the CLI accepted
@@ -1036,6 +1037,7 @@ struct ServerArgumentTests {
             "--prefill", "on",
             "--prefill-chunk-tokens", "64",
             "--rdadvise", "adaptive",
+            "--early-expert-read", "off",
         ])
         #expect(arguments.expertCacheSlots == 24)
         #expect(arguments.expertCachePolicy == .lru)
@@ -1049,6 +1051,7 @@ struct ServerArgumentTests {
         #expect(configuration.prefillPolicy == .chunked)
         #expect(configuration.prefillChunkTokens == 64)
         #expect(configuration.rdadvisePolicy == .adaptive)
+        #expect(configuration.earlyExpertRead == .off)
     }
 
     @Test func prefillOffIsResolvableBelowTheChunkedPrefillSlotFloor() throws {
@@ -1080,6 +1083,7 @@ struct ServerArgumentTests {
         ["--prefill-chunk-tokens", "512"],
         ["--prefill-chunk-tokens", "automatic"],
         ["--rdadvise", "eager"],
+        ["--early-expert-read", "next-layer"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {
         #expect(throws: ServerArgumentError.self) {
@@ -1273,6 +1277,7 @@ struct ServerArgumentTests {
                                         prefillPolicy: .off,
                                         prefillChunkTokens: 128,
                                         rdadvisePolicy: .off,
+                                        earlyExpertRead: .router,
                                         visionPack: nil,
                                         visionResidency: .onDemand),
              allowed: RuntimeConfiguration.allowedExpertCacheSlots,
@@ -1289,6 +1294,7 @@ struct ServerArgumentTests {
                                         prefillPolicy: .off,
                                         prefillChunkTokens: 512,
                                         rdadvisePolicy: .off,
+                                        earlyExpertRead: .router,
                                         visionPack: nil,
                                         visionResidency: .onDemand),
              allowed: RuntimeConfiguration.allowedPrefillChunkTokens,

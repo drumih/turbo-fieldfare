@@ -19,6 +19,13 @@ public enum RuntimeExpertCachePolicy: String, Codable, Sendable {
     case lru
 }
 
+/// What scores the next layer's experts for the decode early read, or `off`.
+/// `router` uses the next layer's own router. See `NextLayerExpertPrefetcher`.
+public enum RuntimeEarlyExpertRead: String, Codable, Sendable, CaseIterable {
+    case off
+    case router
+}
+
 public struct RuntimeConfiguration: Sendable, Equatable {
     public static let allowedExpertCacheSlots = [8, 16, 24, 32]
     public static let allowedPrefillChunkTokens = PrefillRuntimeConfig.allowedChunkTokens
@@ -54,6 +61,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     public let prefillChunkTokens: Int
     public let prefillAttentionPath: RuntimePrefillAttentionPath
     public let headPath: RuntimeHeadPath
+    public let earlyExpertRead: RuntimeEarlyExpertRead
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: RuntimeExpertCachePolicy = .lfu,
@@ -61,7 +69,8 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 prefillEnabled: Bool = true,
                 prefillChunkTokens: Int = 128,
                 prefillAttentionPath: RuntimePrefillAttentionPath = .fullTensorOps2DPreferred,
-                forceLogitsHead: Bool = false) {
+                forceLogitsHead: Bool = false,
+                earlyExpertRead: RuntimeEarlyExpertRead = .router) {
         precondition(Self.allowedExpertCacheSlots.contains(expertCacheSlots),
                      "unsupported expert-cache slot count")
         precondition(Self.allowedPrefillChunkTokens.contains(prefillChunkTokens),
@@ -73,6 +82,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         self.prefillChunkTokens = prefillChunkTokens
         self.prefillAttentionPath = prefillAttentionPath
         self.headPath = forceLogitsHead ? .logits : .fusedRows
+        self.earlyExpertRead = earlyExpertRead
     }
 
     public static var production: RuntimeConfiguration {
