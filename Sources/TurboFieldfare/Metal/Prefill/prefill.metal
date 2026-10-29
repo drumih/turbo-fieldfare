@@ -23,6 +23,17 @@ static inline float prefill_gelu_pytorch_tanh(float x) {
     inner = clamp(inner, -20.0f, 20.0f);
     return 0.5f * x * (1.0f + tanh(inner));
 }
+kernel void prefill_gelu_mul_rows(
+    device const half* gate [[buffer(0)]],
+    device const half* up   [[buffer(1)]],
+    device half* act        [[buffer(2)]],
+    constant uint& count    [[buffer(3)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= count) return;
+    act[id] = half(prefill_gelu_pytorch_tanh(float(gate[id])) * float(up[id]));
+}
+
 kernel void prefill_embed_lookup_int4_block(
     device const uint8_t* table     [[buffer(0)]],
     device const bfloat*  scales    [[buffer(1)]],
@@ -593,6 +604,32 @@ kernel void prefill_moe_reduce_token_major(
                   acc);
     }
     h2[t * D + d] = half(acc);
+}
+
+// Rows of the routed tile laid out contiguously in sorted-pair order, so each
+// expert's tokens form one matrix the grouped GEMM can tile.
+kernel void prefill_routed_gather_rows(
+    device const half*                                 hidden       [[buffer(0)]],
+    device const PrefillTokenExpertPairMSL*            sorted_pairs [[buffer(1)]],
+    device half*                                       gathered     [[buffer(2)]],
+    constant PrefillGroupedRoutedMoEStreamedParamsMSL& p            [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= p.D || gid.y >= p.pair_count) return;
+    const PrefillTokenExpertPairMSL pair = sorted_pairs[p.pair_start + gid.y];
+    gathered[gid.y * p.D + gid.x] = hidden[pair.token * p.hidden_stride_elements + gid.x];
+}
+
+kernel void prefill_routed_scatter_rows(
+    device const half*                                 down           [[buffer(0)]],
+    device const PrefillTokenExpertPairMSL*            sorted_pairs   [[buffer(1)]],
+    device half*                                       route_partials [[buffer(2)]],
+    constant PrefillGroupedRoutedMoEStreamedParamsMSL& p              [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]]
+) {
+    if (gid.x >= p.D || gid.y >= p.pair_count) return;
+    const PrefillTokenExpertPairMSL pair = sorted_pairs[p.pair_start + gid.y];
+    route_partials[(pair.token * p.top_k + pair.rank) * p.D + gid.x] = down[gid.y * p.D + gid.x];
 }
 
 kernel void prefill_grouped_routed_moe_batched_phase1(
@@ -1174,6 +1211,368 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
                     : half(0.0f);
         }
     }
+}
+
+constant constexpr int kRoutedTileM = 64;
+constant constexpr int kRoutedTileN = 32;
+constant constexpr int kRoutedTileK = 64;
+
+struct PrefillRoutedSegmentsMSL {
+    uint start[kPrefillMaxTileExperts];
+    uint count[kPrefillMaxTileExperts];
+};
+
+struct PrefillRoutedMatrixMSL {
+    uint N;
+    uint K;
+    uint weight_off;
+    uint scale_off;
+    uint bias_off;
+};
+
+// One INT4 projection for every expert of a routed tile: grid z is the local
+// expert slot, and each slot multiplies its own contiguous run of gathered rows.
+// Weights are dequantized one 32x64 tile at a time into threadgroup memory, as
+// in mpp_prefill_affine_threadgroup_f16.
+kernel void prefill_routed_grouped_int4_mpp(
+    device const PrefillStreamedRoutedBlobsMSL& routed      [[buffer(0)]],
+    device half*                                activations [[buffer(1)]],
+    device half*                                output      [[buffer(2)]],
+    constant PrefillRoutedSegmentsMSL&          segments    [[buffer(3)]],
+    constant PrefillRoutedMatrixMSL&            matrix      [[buffer(4)]],
+    uint3 tgid    [[threadgroup_position_in_grid]],
+    uint3 lid3    [[thread_position_in_threadgroup]],
+    uint3 threads3 [[threads_per_threadgroup]]
+) {
+    const uint slot = tgid.z;
+    const uint row_start = segments.start[slot];
+    const uint row_count = segments.count[slot];
+    if (tgid.y * uint(kRoutedTileM) >= row_count) return;
+
+    constexpr auto descriptor = matmul2d_descriptor(
+        kRoutedTileM, kRoutedTileN, kRoutedTileK, false, true, false);
+    matmul2d<descriptor, execution_simdgroups<4>> operation;
+    using device_half_tensor = tensor<device half, dextents<int32_t, 2>, tensor_inline>;
+    using threadgroup_half_tensor = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>;
+
+    const uint N = matrix.N;
+    const uint K = matrix.K;
+    device const uint8_t* blob = routed.blob[slot];
+    device const uint8_t* packed_weights = blob + matrix.weight_off;
+    device const bfloat* scales = reinterpret_cast<device const bfloat*>(blob + matrix.scale_off);
+    device const bfloat* biases = reinterpret_cast<device const bfloat*>(blob + matrix.bias_off);
+    device half* rows = activations + row_start * K;
+
+    threadgroup half weight_tile[kRoutedTileN * kRoutedTileK];
+    threadgroup_half_tensor tile_b(
+        weight_tile,
+        dextents<int32_t, 2>(kRoutedTileK, kRoutedTileN),
+        array<int32_t, 2>({1, kRoutedTileK}));
+    device_half_tensor first_a(
+        rows,
+        dextents<int32_t, 2>(kRoutedTileK, int32_t(row_count)),
+        array<int32_t, 2>({1, int32_t(K)}));
+    auto first_tile_a = first_a.slice(0, int32_t(tgid.y) * kRoutedTileM);
+    auto accumulator = operation.get_destination_cooperative_tensor<
+        decltype(first_tile_a), decltype(tile_b), float>();
+    auto group_product = operation.get_destination_cooperative_tensor<
+        decltype(first_tile_a), decltype(tile_b), float>();
+    for (int element = 0; element < accumulator.get_capacity(); ++element) {
+        accumulator[element] = 0.0f;
+    }
+
+    const uint row_bytes = K / 2u;
+    const uint groups_per_row = K / kPrefillGroupSize;
+    const uint lid = lid3.x;
+    const uint threads = threads3.x;
+    for (uint group = 0; group < groups_per_row; ++group) {
+        for (int element = 0; element < group_product.get_capacity(); ++element) {
+            group_product[element] = 0.0f;
+        }
+        for (uint linear = lid; linear < uint(kRoutedTileN * kRoutedTileK); linear += threads) {
+            const uint local_n = linear / uint(kRoutedTileK);
+            const uint local_k = linear % uint(kRoutedTileK);
+            const uint global_n = tgid.x * uint(kRoutedTileN) + local_n;
+            if (global_n < N) {
+                const uint global_k = group * uint(kRoutedTileK) + local_k;
+                const uint8_t byte = packed_weights[global_n * row_bytes + (global_k >> 1)];
+                const uint q = (global_k & 1u) == 0u ? uint(byte & 0x0fu) : uint(byte >> 4);
+                const float scale = float(scales[global_n * groups_per_row + group]);
+                const float bias = float(biases[global_n * groups_per_row + group]);
+                weight_tile[linear] = half(fma(float(q), scale, bias));
+            } else {
+                weight_tile[linear] = half(0.0f);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        device_half_tensor group_a(
+            rows + group * uint(kRoutedTileK),
+            dextents<int32_t, 2>(kRoutedTileK, int32_t(row_count)),
+            array<int32_t, 2>({1, int32_t(K)}));
+        auto tile_a = group_a.slice(0, int32_t(tgid.y) * kRoutedTileM);
+        operation.run(tile_a, tile_b, group_product);
+        for (int element = 0; element < accumulator.get_capacity(); ++element) {
+            accumulator[element] += group_product[element];
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int element = 0; element < accumulator.get_capacity(); ++element) {
+        if (!accumulator.is_valid_element(element)) continue;
+        const auto position = accumulator.get_multidimensional_index(element);
+        const uint global_n = tgid.x * uint(kRoutedTileN) + uint(position[0]);
+        const uint local_m = tgid.y * uint(kRoutedTileM) + uint(position[1]);
+        if (local_m < row_count && global_n < N) {
+            output[(row_start + local_m) * N + global_n] = half(accumulator[element]);
+        }
+    }
+}
+
+constant constexpr int kPrefillSwaRows = 8;
+constant constexpr int kPrefillSwaQueriesPerGroup = 4;
+constant constexpr int kPrefillSwaHeadsPerKV = 2;
+constant constexpr int kPrefillSwaHeadDim = 256;
+
+// Sliding-window layers share each KV head between two query heads, so one
+// threadgroup takes four consecutive queries times those two heads as its
+// eight rows. Rows have their own window start and causal end, and key tiles
+// never cross the ring's physical wrap: a slice past the extent reads zero.
+static inline void attention_prefill_swa_tensorops_impl(
+    device const half* Q,
+    device half* K,
+    device half* V,
+    device half* O,
+    constant PrefillAttentionParams& p,
+    uint3 tg,
+    uint lid,
+    uint threads,
+    threadgroup half* query_tile,
+    threadgroup float* score_tile,
+    threadgroup float* weight_tile,
+    threadgroup float* row_max,
+    threadgroup float* row_sum,
+    threadgroup float* row_old_scale,
+    threadgroup uint* row_first,
+    threadgroup uint* row_last
+) {
+    constexpr auto qk_desc = matmul2d_descriptor(
+        kPrefillSwaRows,
+        kPrefillTensorOpsKeys,
+        kPrefillSwaHeadDim,
+        false, true, false);
+    constexpr auto pv_desc = matmul2d_descriptor(
+        kPrefillSwaRows,
+        kPrefillSwaHeadDim,
+        kPrefillTensorOpsKeys,
+        false, false, false);
+    matmul2d<qk_desc, execution_simdgroups<4>> qk_op;
+    matmul2d<pv_desc, execution_simdgroups<4>> pv_op;
+
+    using device_half_tensor =
+        tensor<device half, dextents<int32_t, 2>, tensor_inline>;
+    using threadgroup_half_tensor =
+        tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>;
+    using threadgroup_float_tensor =
+        tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>;
+
+    const uint query_base = tg.x * uint(kPrefillSwaQueriesPerGroup);
+    const uint kvh = tg.y;
+    const uint ring_capacity =
+        (is_function_constant_defined(FC_PREFILL_KV_RING_CAP) &&
+         FC_PREFILL_KV_RING_CAP != 0u) ? FC_PREFILL_KV_RING_CAP : 0u;
+
+    for (uint linear = lid;
+         linear < uint(kPrefillSwaRows * kPrefillSwaHeadDim);
+         linear += threads) {
+        const uint row = linear / uint(kPrefillSwaHeadDim);
+        const uint d = linear % uint(kPrefillSwaHeadDim);
+        const uint query = query_base + row / uint(kPrefillSwaHeadsPerKV);
+        const uint qh = kvh * uint(kPrefillSwaHeadsPerKV) + row % uint(kPrefillSwaHeadsPerKV);
+        query_tile[linear] = query < p.queryCount
+            ? Q[query * p.qTokenStrideElements + qh * p.headDim + d]
+            : half(0.0f);
+    }
+    if (lid < uint(kPrefillSwaRows)) {
+        const uint query = query_base + lid / uint(kPrefillSwaHeadsPerKV);
+        if (query < p.queryCount) {
+            const uint abs_q = p.startPosition + query;
+            row_first[lid] = (p.slidingWindow != 0u && abs_q + 1u > p.slidingWindow)
+                ? abs_q + 1u - p.slidingWindow : 0u;
+            row_last[lid] = prefill_attention_last_exclusive(p, abs_q);
+        } else {
+            row_first[lid] = 0xFFFFFFFFu;
+            row_last[lid] = 0u;
+        }
+        row_max[lid] = -INFINITY;
+        row_sum[lid] = 0.0f;
+        row_old_scale[lid] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    uint block_first = 0xFFFFFFFFu;
+    uint block_last = 0u;
+    for (uint row = 0u; row < uint(kPrefillSwaRows); ++row) {
+        if (row_last[row] > row_first[row]) {
+            block_first = min(block_first, row_first[row]);
+            block_last = max(block_last, row_last[row]);
+        }
+    }
+
+    threadgroup_half_tensor query_tensor(
+        query_tile,
+        dextents<int32_t, 2>(kPrefillSwaHeadDim, kPrefillSwaRows),
+        array<int32_t, 2>({1, kPrefillSwaHeadDim}));
+    threadgroup_float_tensor weight_tensor(
+        weight_tile,
+        dextents<int32_t, 2>(kPrefillTensorOpsKeys, kPrefillSwaRows),
+        array<int32_t, 2>({1, kPrefillTensorOpsKeys}));
+    const int32_t key_rows = int32_t(ring_capacity != 0u ? ring_capacity : p.kvValidCount);
+    device_half_tensor key_tensor(
+        K + kvh * p.headDim,
+        dextents<int32_t, 2>(int32_t(p.headDim), key_rows),
+        array<int32_t, 2>({1, int32_t(p.kvTokenStrideElements)}));
+    device_half_tensor value_tensor(
+        V + kvh * p.headDim,
+        dextents<int32_t, 2>(int32_t(p.headDim), key_rows),
+        array<int32_t, 2>({1, int32_t(p.kvTokenStrideElements)}));
+
+    auto query_slice = query_tensor.slice(0, 0);
+    auto first_value_slice = value_tensor.slice(0, 0);
+    auto output_accumulator =
+        pv_op.get_destination_cooperative_tensor<
+            decltype(weight_tensor), decltype(first_value_slice), float>();
+    #pragma clang loop unroll(full)
+    for (int element = 0; element < output_accumulator.get_capacity(); ++element) {
+        if (output_accumulator.is_valid_element(element)) {
+            output_accumulator[element] = 0.0f;
+        }
+    }
+
+    uint key_start = block_first;
+    while (key_start < block_last) {
+        const uint physical_start = ring_capacity != 0u ? key_start % ring_capacity : key_start;
+        uint tile_keys = min(uint(kPrefillTensorOpsKeys), block_last - key_start);
+        if (ring_capacity != 0u) {
+            tile_keys = min(tile_keys, ring_capacity - physical_start);
+        }
+
+        auto key_slice = key_tensor.slice(0, int32_t(physical_start));
+        auto score_product =
+            qk_op.get_destination_cooperative_tensor<
+                decltype(query_slice), decltype(key_slice), float>();
+        #pragma clang loop unroll(full)
+        for (int element = 0; element < score_product.get_capacity(); ++element) {
+            if (score_product.is_valid_element(element)) {
+                score_product[element] = 0.0f;
+            }
+        }
+        qk_op.run(query_slice, key_slice, score_product);
+        #pragma clang loop unroll(full)
+        for (int element = 0; element < score_product.get_capacity(); ++element) {
+            if (!score_product.is_valid_element(element)) continue;
+            const auto position = score_product.get_multidimensional_index(element);
+            score_tile[uint(position[1]) * uint(kPrefillTensorOpsKeys) + uint(position[0])] =
+                score_product[element] * p.scale;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (lid < uint(kPrefillSwaRows)) {
+            const uint row = lid;
+            const uint first = row_first[row];
+            const uint last = row_last[row];
+            float tile_max = -INFINITY;
+            for (uint key = 0u; key < tile_keys; ++key) {
+                const uint logical = key_start + key;
+                if (logical >= first && logical < last) {
+                    tile_max = max(tile_max, score_tile[row * uint(kPrefillTensorOpsKeys) + key]);
+                }
+            }
+            const float next_max = max(row_max[row], tile_max);
+            const float old_scale = row_sum[row] > 0.0f
+                ? fast::exp(row_max[row] - next_max)
+                : 0.0f;
+            float tile_sum = 0.0f;
+            for (uint key = 0u; key < uint(kPrefillTensorOpsKeys); ++key) {
+                const uint logical = key_start + key;
+                const bool visible = key < tile_keys && logical >= first && logical < last;
+                const float weight = visible
+                    ? fast::exp(score_tile[row * uint(kPrefillTensorOpsKeys) + key] - next_max)
+                    : 0.0f;
+                weight_tile[row * uint(kPrefillTensorOpsKeys) + key] = weight;
+                tile_sum += weight;
+            }
+            row_old_scale[row] = old_scale;
+            row_sum[row] = row_sum[row] * old_scale + tile_sum;
+            row_max[row] = next_max;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        auto value_slice = value_tensor.slice(0, int32_t(physical_start));
+        auto output_product =
+            pv_op.get_destination_cooperative_tensor<
+                decltype(weight_tensor), decltype(value_slice), float>();
+        #pragma clang loop unroll(full)
+        for (int element = 0; element < output_product.get_capacity(); ++element) {
+            if (output_product.is_valid_element(element)) {
+                output_product[element] = 0.0f;
+            }
+        }
+        pv_op.run(weight_tensor, value_slice, output_product);
+        #pragma clang loop unroll(full)
+        for (int element = 0; element < output_accumulator.get_capacity(); ++element) {
+            if (!output_accumulator.is_valid_element(element)
+                || !output_product.is_valid_element(element)) {
+                continue;
+            }
+            const auto position = output_accumulator.get_multidimensional_index(element);
+            const uint row = uint(position[1]);
+            output_accumulator[element] =
+                fma(1.0f, output_product[element], output_accumulator[element] * row_old_scale[row]);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        key_start += tile_keys;
+    }
+
+    #pragma clang loop unroll(full)
+    for (int element = 0; element < output_accumulator.get_capacity(); ++element) {
+        if (!output_accumulator.is_valid_element(element)) continue;
+        const auto position = output_accumulator.get_multidimensional_index(element);
+        const uint d = uint(position[0]);
+        const uint row = uint(position[1]);
+        const uint query = query_base + row / uint(kPrefillSwaHeadsPerKV);
+        if (query < p.queryCount) {
+            const uint qh = kvh * uint(kPrefillSwaHeadsPerKV) + row % uint(kPrefillSwaHeadsPerKV);
+            const float denominator = row_sum[row];
+            O[query * p.oTokenStrideElements + qh * p.headDim + d] = denominator > 0.0f
+                ? half(output_accumulator[element] / denominator)
+                : half(0.0f);
+        }
+    }
+}
+
+kernel void attention_prefill_swa_tensorops(
+    device const half* Q [[buffer(0)]],
+    device half* K [[buffer(1)]],
+    device half* V [[buffer(2)]],
+    device half* O [[buffer(3)]],
+    constant PrefillAttentionParams& p [[buffer(4)]],
+    uint3 tg [[threadgroup_position_in_grid]],
+    uint lid [[thread_index_in_threadgroup]],
+    uint3 threads3 [[threads_per_threadgroup]]
+) {
+    threadgroup half query_tile[kPrefillSwaRows * kPrefillSwaHeadDim];
+    threadgroup float score_tile[kPrefillSwaRows * kPrefillTensorOpsKeys];
+    threadgroup float weight_tile[kPrefillSwaRows * kPrefillTensorOpsKeys];
+    threadgroup float row_max[kPrefillSwaRows];
+    threadgroup float row_sum[kPrefillSwaRows];
+    threadgroup float row_old_scale[kPrefillSwaRows];
+    threadgroup uint row_first[kPrefillSwaRows];
+    threadgroup uint row_last[kPrefillSwaRows];
+    attention_prefill_swa_tensorops_impl(
+        Q, K, V, O, p, tg, lid, threads3.x,
+        query_tile, score_tile, weight_tile,
+        row_max, row_sum, row_old_scale, row_first, row_last);
 }
 
 kernel void attention_prefill_full_tensorops_2d_validity_v2(

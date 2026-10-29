@@ -1264,6 +1264,23 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         }
                         tileCB.label =
                             "prefill start=\(startPosition) count=\(t) layer=\(L) phase=routed_tile"
+                        if prefillGroupedMoE.groupedMPPAvailable,
+                           let segments = PrefillGroupedRoutedMoE.expertSegments(
+                            sortedPairs: routes.sortedPairs,
+                            pairStart: Int(tile.pairStart),
+                            pairCount: Int(tile.pairCount),
+                            expertIDs: fetch.binding.expertIDs) {
+                            try prefillGroupedMoE.encodeStreamedGroupedMPP(
+                                commandBuffer: tileCB,
+                                device: ctx.device,
+                                hidden: scratch.routedX,
+                                sortedPairs: metadata.sortedPairs,
+                                routePartials: scratch.routePartials,
+                                argumentBuffer: argumentBuffer,
+                                binding: fetch.binding,
+                                params: streamedParams,
+                                segments: segments)
+                        } else {
                         _ = prefillGroupedMoE.encodeStreamedBatched(
                             commandBuffer: tileCB,
                             hidden: scratch.routedX,
@@ -1275,6 +1292,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                             binding: fetch.binding,
                             params: streamedParams,
                             pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
+                        }
                         tileCB.commit()
                         pendingTiles.append(PendingPrefillTile(tileIndex: tileIndex,
                                                                commandBuffer: tileCB,

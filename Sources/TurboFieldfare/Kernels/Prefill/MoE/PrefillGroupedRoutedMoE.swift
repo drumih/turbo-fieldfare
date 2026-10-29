@@ -340,6 +340,123 @@ final class PrefillGroupedRoutedMoE {
     private let batchedPhase1PSO: MTLComputePipelineState
     private let batchedDownPSO: MTLComputePipelineState
     private let streamedArgEncoder: MTLArgumentEncoder
+    private let groupedMPP: (gather: MTLComputePipelineState, scatter: MTLComputePipelineState,
+                             gemm: MTLComputePipelineState, gelu: MTLComputePipelineState)?
+    private var groupedScratch: (gathered: MTLBuffer, gate: MTLBuffer, up: MTLBuffer,
+                                 act: MTLBuffer, down: MTLBuffer, rows: Int)?
+
+    var groupedMPPAvailable: Bool { groupedMPP != nil }
+
+    /// Each live slot's contiguous run of rows within the tile's sorted pairs,
+    /// or nil when the pairs of one expert are not contiguous.
+    static func expertSegments(sortedPairs: [PrefillTokenExpertPair],
+                               pairStart: Int,
+                               pairCount: Int,
+                               expertIDs: [Int]) -> (start: [UInt32], count: [UInt32])? {
+        var starts = [UInt32](repeating: 0, count: 16)
+        var counts = [UInt32](repeating: 0, count: 16)
+        var slotByExpert: [Int: Int] = [:]
+        for (slot, expert) in expertIDs.enumerated() { slotByExpert[expert] = slot }
+        var previousSlot = -1
+        var seen = Set<Int>()
+        for row in 0..<pairCount {
+            guard let slot = slotByExpert[Int(sortedPairs[pairStart + row].expert)] else { return nil }
+            if slot != previousSlot {
+                guard seen.insert(slot).inserted else { return nil }
+                starts[slot] = UInt32(row)
+                previousSlot = slot
+            }
+            counts[slot] += 1
+        }
+        return (starts, counts)
+    }
+
+    private func ensureGroupedScratch(device: MTLDevice, rows: Int, d: Int, f: Int) throws
+        -> (gathered: MTLBuffer, gate: MTLBuffer, up: MTLBuffer, act: MTLBuffer, down: MTLBuffer) {
+        if let groupedScratch, groupedScratch.rows >= rows {
+            return (groupedScratch.gathered, groupedScratch.gate, groupedScratch.up,
+                    groupedScratch.act, groupedScratch.down)
+        }
+        let half = MemoryLayout<Float16>.stride
+        guard let gathered = device.makeBuffer(length: rows * d * half, options: .storageModePrivate),
+              let gate = device.makeBuffer(length: rows * f * half, options: .storageModePrivate),
+              let up = device.makeBuffer(length: rows * f * half, options: .storageModePrivate),
+              let act = device.makeBuffer(length: rows * f * half, options: .storageModePrivate),
+              let down = device.makeBuffer(length: rows * d * half, options: .storageModePrivate) else {
+            throw PrefillGroupedRoutedMoEError.allocationFailed("prefill grouped routed scratch for \(rows) rows")
+        }
+        groupedScratch = (gathered, gate, up, act, down, rows)
+        return (gathered, gate, up, act, down)
+    }
+
+    /// Gathers the tile's rows, runs gate, up and down as grouped INT4 matrix
+    /// multiplies over every live expert, and scatters the result into the
+    /// route partials the token-major reduce reads.
+    func encodeStreamedGroupedMPP(commandBuffer: MTLCommandBuffer,
+                                  device: MTLDevice,
+                                  hidden: MTLBuffer,
+                                  sortedPairs: MTLBuffer,
+                                  routePartials: MTLBuffer,
+                                  argumentBuffer: PrefillStreamedTileArgumentBuffer,
+                                  binding: PrefillStreamedTileBinding,
+                                  params: PrefillGroupedRoutedMoEStreamedParams,
+                                  segments: (start: [UInt32], count: [UInt32])) throws {
+        guard let groupedMPP, params.pairCount > 0 else { return }
+        let rows = Int(params.pairCount)
+        let d = Int(params.d)
+        let f = Int(params.routedIntermediate)
+        let scratch = try ensureGroupedScratch(device: device, rows: rows, d: d, f: f)
+        var p = params
+        var segmentBytes = segments.start + segments.count
+        let maxRows = Int(segments.count.max() ?? 0)
+
+        func encodeRows(_ pipeline: MTLComputePipelineState, _ buffers: [MTLBuffer]) {
+            guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+            enc.setComputePipelineState(pipeline)
+            for (index, buffer) in buffers.enumerated() { enc.setBuffer(buffer, offset: 0, index: index) }
+            enc.setBytes(&p, length: MemoryLayout<PrefillGroupedRoutedMoEStreamedParams>.stride, index: buffers.count)
+            enc.dispatchThreads(MTLSize(width: d, height: rows, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 64, height: 4, depth: 1))
+            enc.endEncoding()
+        }
+
+        func encodeGEMM(input: MTLBuffer, output: MTLBuffer, n: Int, k: Int,
+                        weightOff: UInt32, scaleOff: UInt32, biasOff: UInt32) {
+            guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+            enc.setComputePipelineState(groupedMPP.gemm)
+            enc.setBuffer(argumentBuffer.buffer, offset: 0, index: 0)
+            enc.setBuffer(input, offset: 0, index: 1)
+            enc.setBuffer(output, offset: 0, index: 2)
+            enc.setBytes(&segmentBytes, length: segmentBytes.count * MemoryLayout<UInt32>.stride, index: 3)
+            var matrix: [UInt32] = [UInt32(n), UInt32(k), weightOff, scaleOff, biasOff]
+            enc.setBytes(&matrix, length: matrix.count * MemoryLayout<UInt32>.stride, index: 4)
+            for view in binding.views { enc.useResource(view.buffer, usage: .read) }
+            enc.dispatchThreadgroups(
+                MTLSize(width: (n + 31) / 32, height: (maxRows + 63) / 64, depth: binding.views.count),
+                threadsPerThreadgroup: MTLSize(width: groupedMPP.gemm.threadExecutionWidth * 4, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+
+        encodeRows(groupedMPP.gather, [hidden, sortedPairs, scratch.gathered])
+        encodeGEMM(input: scratch.gathered, output: scratch.gate, n: f, k: d,
+                   weightOff: params.gateWOff, scaleOff: params.gateSOff, biasOff: params.gateBOff)
+        encodeGEMM(input: scratch.gathered, output: scratch.up, n: f, k: d,
+                   weightOff: params.upWOff, scaleOff: params.upSOff, biasOff: params.upBOff)
+        if let enc = commandBuffer.makeComputeCommandEncoder() {
+            enc.setComputePipelineState(groupedMPP.gelu)
+            enc.setBuffer(scratch.gate, offset: 0, index: 0)
+            enc.setBuffer(scratch.up, offset: 0, index: 1)
+            enc.setBuffer(scratch.act, offset: 0, index: 2)
+            var count = UInt32(rows * f)
+            enc.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 3)
+            enc.dispatchThreads(MTLSize(width: rows * f, height: 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            enc.endEncoding()
+        }
+        encodeGEMM(input: scratch.act, output: scratch.down, n: d, k: f,
+                   weightOff: params.downWOff, scaleOff: params.downSOff, biasOff: params.downBOff)
+        encodeRows(groupedMPP.scatter, [scratch.down, sortedPairs, routePartials])
+    }
 
     func makeStreamedArgumentBuffer(device: MTLDevice,
                                            binding: PrefillStreamedTileBinding) throws -> PrefillStreamedTileArgumentBuffer {
@@ -366,6 +483,20 @@ final class PrefillGroupedRoutedMoE {
         }
         self.streamedArgEncoder = streamedFn.makeArgumentEncoder(
             bufferIndex: PrefillGroupedRoutedMoEBufferIndex.expertArgumentState)
+        if ProcessInfo.processInfo.environment["TURBO_FIELDFARE_PREFILL_ROUTED_MPP"] != "0" {
+            do {
+                self.groupedMPP = (try context.pipeline("prefill_routed_gather_rows"),
+                                   try context.pipeline("prefill_routed_scatter_rows"),
+                                   try context.pipeline("prefill_routed_grouped_int4_mpp"),
+                                   try context.pipeline("prefill_gelu_mul_rows"))
+            } catch {
+                self.groupedMPP = nil
+                FileHandle.standardError.write(Data(
+                    "PrefillGroupedRoutedMoE: grouped MPP path unavailable: \(error)\n".utf8))
+            }
+        } else {
+            self.groupedMPP = nil
+        }
     }
 
     func makeStreamedMetadataBuffers(
