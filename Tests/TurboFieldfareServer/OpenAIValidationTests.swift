@@ -813,6 +813,24 @@ struct GemmaToolCallTests {
         #expect(parsed.argumentsJSON.contains(#""note":"a\b\f""#))
     }
 
+    /// Gemma's native string delimiters are special tokens, so the payload
+    /// between them is literal text. Decoding backslash escapes there corrupts
+    /// code-writing tool calls: a model writing `sys.stdout.write('\r')` had
+    /// the `\r` stored as a real carriage return in the target file.
+    @Test func gemmaStringsKeepCodeEscapeSequencesLiteral() throws {
+        let code = #"sys.stdout.write('\r' + current_display); sys.stdout.write('\n'); pattern = "\\d+""#
+        let parsed = try GemmaToolCallParser().parse(
+            #"call:write{path:<|"|>/tmp/x.py<|"|>,content:<|"|>sys.stdout.write('\r' + current_display); sys.stdout.write('\n'); pattern = "\\d+"<|"|>}"#,
+            allowedTools: ["write"],
+            id: "call_0123456789abcdef01234567")
+        #expect(parsed.arguments.objectValue?["content"] == .string(code))
+        #expect(parsed.argumentsJSON.contains(#"\\r"#))
+        #expect(parsed.argumentsJSON.contains(#"\\n"#))
+        #expect(try JSONDecoder().decode(
+            JSONValue.self,
+            from: Data(parsed.argumentsJSON.utf8)) == parsed.arguments)
+    }
+
     @Test func suppressesThoughtBlockAndExposesTextAfterChannelClose() async throws {
         let tokenizer = try await GFTokenizer.load()
         let decoder = StructuredAssistantDecoder(tokenizer: tokenizer, allowedTools: [])

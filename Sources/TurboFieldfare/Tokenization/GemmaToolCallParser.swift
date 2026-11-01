@@ -156,13 +156,12 @@ private struct Parser {
                 try consume("<|\"|>")
                 return result
             }
-            if characters[index] == "\\", index + 1 < characters.count {
-                index += 1
-                result += try escapedFragment()
-            } else {
-                result.append(characters[index])
-                index += 1
-            }
+            // `<|"|>` is a special token, so it cannot be escaped from inside
+            // the string. Everything between the delimiters is literal data;
+            // treating a backslash as a JSON escape turns source like
+            // `write('\r')` into a real carriage return in the written file.
+            result.append(characters[index])
+            index += 1
         }
         throw GemmaToolCallParserError.malformed
     }
