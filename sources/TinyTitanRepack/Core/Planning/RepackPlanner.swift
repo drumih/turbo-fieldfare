@@ -21,7 +21,7 @@ extension RepackPlanner {
         family: RepackModelFamily
     ) -> [(name: String, required: Bool, capBytes: UInt64)] {
         switch family {
-        case .qwen36, .qwen36MTP, .qwen38flashMTP:
+        case .qwen36, .qwen36MTP, .qwen38flashMTP, .qwen4flashMTP:
             // The draft needs no sidecar files of its own: it has no n-gram
             // block, and its embedding and head are the target's.
             return []
@@ -31,7 +31,7 @@ extension RepackPlanner {
             // other family's. K2-Horizon likewise carries only its tokenizer
             // and template.
             return []
-        case .qwen38flash:
+        case .qwen38flash, .qwen4flash:
             return [
                 // The PLE hash constants: multipliers, per-head offsets and
                 // prime vocabulary sizes. Without them the n-gram ids cannot
@@ -85,7 +85,7 @@ enum RepackPlanner {
             }
             return .unknown
         }
-        if family == .qwen38flashMTP {
+        if family == .qwen38flashMTP || family == .qwen4flashMTP {
             // Mirror image of the target's rule: this install is only the
             // `mtp.*` namespace, and everything else belongs to the model it
             // drafts for. The prefix is stripped so the sidecar reads as the
@@ -100,7 +100,7 @@ enum RepackPlanner {
             }
             return .lmResident
         }
-        if family == .qwen38flash {
+        if family == .qwen38flash || family == .qwen4flash {
             // The MTP draft rides in the target's index but is a separate
             // install; skip it here rather than folding a second model's
             // experts into this payload.

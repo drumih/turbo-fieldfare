@@ -40,7 +40,8 @@ package func defaultPrefillChunkTokens(family: ModelFamily, fallback: Int) -> In
     // 4,096 still wins for the long-prompt case it is chosen for: 56 s
     // of prefill on a 10k prompt against ~2 s of a 512-token generation.
     // A short-prompt, long-generation workload would want 2,048 back.
-    case .qwen38flash: return RuntimeConfiguration.qwenLongPrefillChunkTokens
+    case .qwen38flash, .qwen4flash:
+        return RuntimeConfiguration.qwenLongPrefillChunkTokens
     // The dense Qwen 3.5 family wants the long chunk as well, and for a second
     // reason: the ANE prefill sidecar is a fixed 4,096-token program, and
     // `eligibleChunk` routes a chunk to it only when the configured chunk is

@@ -56,7 +56,7 @@ enum RemoteSnapshotLoader {
         }
         var arch = try ArchInfo.load(configPath: metadata.configPath)
         if installDraftHead {
-            arch = try ArchInfo.qwen38FlashNextMTP(
+            arch = try ArchInfo.draftHead(
                 from: arch,
                 configPath: metadata.configPath)
         }

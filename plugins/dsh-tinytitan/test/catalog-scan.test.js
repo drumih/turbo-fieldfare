@@ -102,6 +102,12 @@ test("a folder is read the way the server reads it", () => {
   writeInstall(root, "kat_4Bit", { modelID: "kat-coder-v2.5-4bit", family: "qwen36", bits: 4 });
   // An id outside the display-name table is listed by its id.
   writeInstall(root, "custom_4Bit", { modelID: "custom-model", family: "qwen36", bits: 4 });
+  // The 4.0 Flash family lists like the 3.8 one, under its own name.
+  writeInstall(root, "qwen4_4Bit", {
+    modelID: "qwen4-omni-120b-think-4bit",
+    family: "qwen4flash",
+    bits: 4,
+  });
   // Not models, for one reason each.
   writeInstall(root, "mtp_4Bit", {
     modelID: "qwen3.8-flash-next-mtp",
@@ -143,12 +149,20 @@ test("a folder is read the way the server reads it", () => {
       ["kat-coder-v2.5_4-Bit", "gpu", 4, "gpu", "off,on"],
       ["qwen3.5-2b_4-Bit", "gpu", 4, "gpu,cpu", "off,on"],
       ["qwen3.5-2b_8-Bit", "gpu", 8, "gpu,cpu", "off,on"],
+      ["qwen4-omni-120b-think_4-Bit", "gpu", 4, "gpu", "off,low,medium,xhigh"],
       ["qwen3.5-9b", "cpu", 8, "cpu", "off,on"],
     ],
   );
   assert.deepEqual(
     models.map((model) => model.name),
-    ["custom-model", "KAT-Coder-V2.5-Dev 35B-A3B", "Qwen 3.5 2B", "Qwen 3.5 2B", "Qwen 3.5 9B"],
+    [
+      "custom-model",
+      "KAT-Coder-V2.5-Dev 35B-A3B",
+      "Qwen 3.5 2B",
+      "Qwen 3.5 2B",
+      "Qwen 4.0 Flash (Qwen4-Omni-120B-Think)",
+      "Qwen 3.5 9B",
+    ],
   );
   // Every directory that is not a model says why, so the caller can log it.
   assert.deepEqual(skipped.map((entry) => entry.path.split("/").pop()).sort(), [

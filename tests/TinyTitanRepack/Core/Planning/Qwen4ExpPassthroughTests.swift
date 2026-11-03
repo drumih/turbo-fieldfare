@@ -14,6 +14,9 @@ struct Qwen4ExpPassthroughTests {
         #expect(RepackPlanner.passthroughRequirements(family: .qwen36MTP).isEmpty)
         let flash = RepackPlanner.passthroughRequirements(family: .qwen38flash)
         #expect(flash.map(\.name) == ["ple_constants.json", "ngram_table.bin"])
+        let flash4 = RepackPlanner.passthroughRequirements(family: .qwen4flash)
+        #expect(flash4.map(\.name) == ["ple_constants.json", "ngram_table.bin"])
+        #expect(RepackPlanner.passthroughRequirements(family: .qwen4flashMTP).isEmpty)
     }
 
     @Test("The hash constants are required; the 102 GB table is not")
@@ -40,6 +43,7 @@ struct Qwen4ExpPassthroughTests {
     func verifierCapAdmitsEveryPassthroughFile() {
         let families: [RepackModelFamily] = [
             .qwen35Dense, .qwen36, .qwen36MTP, .qwen38flash, .qwen38flashMTP,
+            .qwen4flash, .qwen4flashMTP,
         ]
         for family in families {
             for requirement in RepackPlanner.passthroughRequirements(family: family) {

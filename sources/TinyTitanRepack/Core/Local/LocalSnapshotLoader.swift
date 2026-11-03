@@ -69,7 +69,7 @@ enum LocalSnapshotLoader {
         let metadata = try IndexLoader.load(snapshotDir: root)
         var arch = try ArchInfo.load(configPath: metadata.configPath)
         if draftHead {
-            arch = try ArchInfo.qwen38FlashNextMTP(
+            arch = try ArchInfo.draftHead(
                 from: arch,
                 configPath: metadata.configPath)
         }

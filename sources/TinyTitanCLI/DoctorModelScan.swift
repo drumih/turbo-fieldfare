@@ -93,7 +93,7 @@ enum DoctorModelScanner {
     /// server target links NIO and doctor deliberately does not.
     static func unsupportedInstallReason(_ family: ModelFamily) -> String? {
         switch family {
-        case .qwen36MTP, .qwen38flashMTP:
+        case .qwen36MTP, .qwen38flashMTP, .qwen4flashMTP:
             return "MTP draft head, served only beside its target"
         case .k2Horizon:
             return "K2-Horizon is not served by this CLI: the server's probe "
@@ -103,7 +103,7 @@ enum DoctorModelScanner {
             return "Laguna-S-2.1's decode probe is implemented; the serving "
                 + "graph is not, so the install validates but is not served "
                 + "(docs/plan-laguna-s-2.1.md)"
-        case .qwen36, .qwen38flash, .qwen35Dense:
+        case .qwen36, .qwen38flash, .qwen4flash, .qwen35Dense:
             return nil
         }
     }

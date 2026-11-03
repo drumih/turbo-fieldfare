@@ -154,4 +154,45 @@ extension ArchInfo {
                     + "Ornith-1.5-122B architecture contract")
         }
     }
+
+    /// Qwen 4.0 Flash's production contract.
+    ///
+    /// Copied from the 3.8 preview's check and kept separate: when the 4.0
+    /// checkpoint lands, a shape change is reconciled here and in
+    /// `ArchConfig.qwen4Flash` only, and cannot loosen the 3.8 gate. The
+    /// numbers are the preview's until the published config says otherwise.
+    static func crossCheckQwen4Flash(
+        _ a: ArchInfo,
+        configPath: String
+    ) throws {
+        guard a.hiddenSize == 2560, a.numLayers == 48 else { return }
+        var problems: [String] = []
+        func want(_ ok: Bool, _ what: String) { if !ok { problems.append(what) } }
+        want(a.numExperts == 512, "num_experts 512")
+        want(a.topKExperts == 10, "num_experts_per_tok 10")
+        want(a.moeIntermediateSize == 640, "moe_intermediate_size 640")
+        want(a.vocabSize == 248_320, "vocab_size 248320")
+        want(a.numHeads == 24 && a.numKVHeads == 2, "24 Q / 2 KV heads")
+        want(a.headDim == 256, "head_dim 256")
+        want(
+            a.linearNumKHeads == 16 && a.linearNumVHeads == 48,
+            "GDN 16 K / 48 V heads")
+        want(
+            a.hcCount == 4 && a.hcLowRank == 320,
+            "hyper-connections 4 x 320")
+        want(
+            a.indexerBudget == 2048 && a.indexerCompressRatio == 4,
+            "indexer budget 2048 / compress 4")
+        want(
+            a.fullAttentionLayerMask.filter { $0 == 1 }.count == 12,
+            "12 full-attention layers")
+        want(a.pleLayerIndices == [1], "ple_layer_ids [2] (1-based)")
+        guard problems.isEmpty else {
+            throw RepackError.configJsonInvalid(
+                path: configPath,
+                detail: "qwen4_omni config does not match the supported "
+                    + "Qwen 4.0 Flash contract: expected "
+                    + problems.joined(separator: ", "))
+        }
+    }
 }

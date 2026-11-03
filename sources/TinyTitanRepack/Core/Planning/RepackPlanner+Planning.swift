@@ -455,7 +455,7 @@ extension RepackPlanner {
         _ source: String,
         family: RepackModelFamily
     ) -> String {
-        if family == .qwen38flashMTP {
+        if family == .qwen38flashMTP || family == .qwen4flashMTP {
             // Strip `mtp.` and put the decoder layer under the target's own
             // prefix, so the draft's layer body reuses the family schema
             // verbatim. The fusion projections and their norms stay at the

@@ -237,7 +237,7 @@ public struct ModelCatalog: Sendable {
             return .failure(ProbeFailure(reason: "unreadable manifest.json: \(error)"))
         }
         switch identity.family {
-        case .qwen36MTP, .qwen38flashMTP:
+        case .qwen36MTP, .qwen38flashMTP, .qwen4flashMTP:
             // A draft head has no tokenizer and no layers of its own to run;
             // listing it would offer a model that fails on first use.
             return .failure(
@@ -245,7 +245,7 @@ public struct ModelCatalog: Sendable {
                     reason:
                         "an MTP draft head (\(identity.family.rawValue)), served only beside its target"
                 ))
-        case .qwen36, .qwen38flash, .qwen35Dense, .k2Horizon:
+        case .qwen36, .qwen38flash, .qwen4flash, .qwen35Dense, .k2Horizon:
             // K2-Horizon is served by `K2ProbeBackend`, not by the runner, and
             // that is a property of the loader rather than of the catalogue:
             // the entry is honest, and `ModelRouter` picks the backend by

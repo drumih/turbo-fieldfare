@@ -364,6 +364,42 @@ public struct Model {
             slot: quant.attention)
     }
 
+    /// The Qwen 4.0 Flash draft head's own tensors.
+    ///
+    /// Copied from the 3.8 draft check. The draft has no embedding, no head and
+    /// no n-gram block: it borrows the first two from the target it drafts for.
+    /// What is its own is the single decoder layer and the fusion pair.
+    static func validateQwen4DraftSchema(
+        checks: RuntimeSchemaChecks,
+        quant: ManifestQuant,
+        config: ArchConfig
+    ) throws {
+        let hcDim = config.hiddenSize * config.hyperConnections.count
+        try checks.requireBF16(
+            TensorSchema.schema(for: .qwen4flashMTP).finalNorm, count: hcDim)
+        try checks.requireBF16(
+            "model.language_model.layers.0.attn_hyper_connection.hc_norm",
+            count: hcDim)
+        try checks.requireBF16(
+            "model.language_model.layers.0.mlp_hyper_connection.hc_norm",
+            count: hcDim)
+        try checks.requireBF16("pre_fc_norm_hidden", count: hcDim)
+        try checks.requireBF16("pre_fc_norm_embedding", count: config.hiddenSize)
+        // Both projections are [D, D]: the wide residual is mean-collapsed to
+        // one stream before the hidden branch sees it. The tensor shape settles
+        // the reference prose's ambiguity, exactly as it did for the 3.8 draft.
+        try checks.requireAffine(
+            "fc_hidden.weight",
+            rows: config.hiddenSize,
+            columns: config.hiddenSize,
+            slot: quant.attention)
+        try checks.requireAffine(
+            "fc_embedding.weight",
+            rows: config.hiddenSize,
+            columns: config.hiddenSize,
+            slot: quant.attention)
+    }
+
     /// Attach a native MTP sidecar to a target without copying either large
     /// tensor. The returned model retains the target's Metal buffers and uses
     /// its actual 4/6/8-bit head kernels.
@@ -372,6 +408,7 @@ public struct Model {
         let familiesMatch =
             pairing == (.qwen36MTP, .qwen36)
             || pairing == (.qwen38flashMTP, .qwen38flash)
+            || pairing == (.qwen4flashMTP, .qwen4flash)
         guard familiesMatch,
             config.hiddenSize == target.config.hiddenSize,
             config.vocabSize == target.config.vocabSize,

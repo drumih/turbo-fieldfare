@@ -136,7 +136,7 @@ print(json.load(open('$model/manifest.json'))['arch']['family'])")" || {
   # prefilled on the ANE, so a sidecar for it would never be loaded.
   case "$family" in
     qwen36|qwen3_5_dense) ;;
-    qwen38flash)
+    qwen38flash|qwen4flash)
        echo "== $name: $family — the ANE is measured slower on this model; skipping (export explicitly to re-measure)"
        skipped+=("$name ($family: measured slower)"); continue ;;
     *)

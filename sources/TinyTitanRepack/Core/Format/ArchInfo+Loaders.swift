@@ -454,8 +454,4 @@ extension ArchInfo {
         return arch
     }
 
-    /// Qwen3.8-Flash-Next 125B-A6B contract (mirrors the runtime's
-    /// `ArchConfig.qwen38FlashNext`). A config claiming the production shape
-    /// must agree on the load-bearing geometry; anything else is a different
-    /// model wearing the same `model_type`.
 }

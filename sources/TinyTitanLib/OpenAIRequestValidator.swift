@@ -177,7 +177,7 @@ package enum OpenAIRequestValidator {
         // rather than from the one the model was loaded with.
         let effectiveSampling: GenerationDefaults.Sampling
         switch reasoningProfile.family {
-        case .qwen38flash, .qwen38flashMTP:
+        case .qwen38flash, .qwen38flashMTP, .qwen4flash, .qwen4flashMTP:
             effectiveSampling = GenerationDefaults.forFamily(
                 reasoningProfile.family, thinking: reasoning.thinkingMode == .on)
         default:

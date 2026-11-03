@@ -29,12 +29,14 @@ public final class StreamingMTPDecoder: LogitProducer, ContextWindowReporting,
         guard
             targetModel.config.family == .qwen36
                 || targetModel.config.family == .qwen38flash
+                || targetModel.config.family == .qwen4flash
         else {
             throw StreamingMTPError.targetMustBeQwen36
         }
         guard
             mtpSidecar.config.family == .qwen36MTP
                 || mtpSidecar.config.family == .qwen38flashMTP
+                || mtpSidecar.config.family == .qwen4flashMTP
         else {
             throw StreamingMTPError.sidecarMustBeQwen36MTP
         }
@@ -49,7 +51,9 @@ public final class StreamingMTPDecoder: LogitProducer, ContextWindowReporting,
         // concatenation against two projections that are summed -- so each
         // checks for its own tensors. Asking for the other's would fail here
         // on a sidecar that is perfectly sound.
-        if mtpSidecar.config.family == .qwen38flashMTP {
+        if mtpSidecar.config.family == .qwen38flashMTP
+            || mtpSidecar.config.family == .qwen4flashMTP
+        {
             _ = try mtpSidecar.mtpWideNorm()
             _ = try mtpSidecar.mtpTokenNorm()
             _ = try mtpSidecar.mtpHiddenProjection()

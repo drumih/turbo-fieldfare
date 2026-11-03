@@ -63,7 +63,7 @@ extension TensorSchema {
 /// Roles this family has and the Qwen3.5-MoE families do not. Kept separate
 /// from `TensorSchema` so the shared type does not grow optional fields for
 /// one family's subsystems; `Model` reaches for these only on this family.
-public enum Qwen38FlashTensors {
+public enum Qwen38FlashTensors: FlashTensorSet {
     private static func layer(_ l: Int, _ suffix: String) -> String {
         "model.language_model.layers.\(l).\(suffix)"
     }

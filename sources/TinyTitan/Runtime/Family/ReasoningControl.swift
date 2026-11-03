@@ -56,6 +56,11 @@ extension ModelFamily {
         case .qwen38flash, .qwen38flashMTP:
             return .thinkingWithEffortLevels(
                 defaultEffort: .xhigh, supported: [.low, .medium, .xhigh])
+        case .qwen4flash, .qwen4flashMTP:
+            // Same four-mode template as the 3.8 preview. Declared separately
+            // so a 4.0 template that adds or drops a level changes only here.
+            return .thinkingWithEffortLevels(
+                defaultEffort: .xhigh, supported: [.low, .medium, .xhigh])
         case .k2Horizon:
             return .effortOnly(
                 defaultEffort: .high, supported: [.low, .medium, .high])

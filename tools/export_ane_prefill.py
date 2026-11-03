@@ -86,7 +86,7 @@ EXPORT_VERSION = 1
 # records `selectionFolded` so the runtime refuses a sidecar that does not carry
 # the contract. `qwen38flash_mtp` is the one-layer MTP draft, which the runtime
 # never routes to the ANE.
-SUPPORTED_FAMILIES = ("qwen36", "qwen3_5_dense", "qwen38flash")
+SUPPORTED_FAMILIES = ("qwen36", "qwen3_5_dense", "qwen38flash", "qwen4flash")
 
 
 @dataclasses.dataclass(frozen=True)

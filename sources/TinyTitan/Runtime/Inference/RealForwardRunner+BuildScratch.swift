@@ -168,7 +168,8 @@ extension RealForwardRunner {
         }
         bp.sharedScalarGateBuf =
             cfg.sharedExpertGated ? try buf(1, label: "decode.sharedScalarGate") : nil
-        if cfg.family == .qwen36MTP || cfg.family == .qwen38flashMTP {
+        if cfg.family == .qwen36MTP || cfg.family == .qwen38flashMTP || cfg.family == .qwen4flashMTP
+        {
             guard
                 let tokenBlock = context.device.makeBuffer(
                     length: Self.mtpChunkCapacity * MemoryLayout<UInt32>.stride,

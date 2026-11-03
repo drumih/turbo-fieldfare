@@ -20,6 +20,21 @@ import Testing
                 weightBits: 8) == "ornith-1.5-35b-a3b_8-Bit")
     }
 
+    @Test func theQwen4FlashIdsNameTheModelAndItsWidth() {
+        #expect(
+            ServerModelIdentity.apiModelID(
+                manifestModelID: "qwen4-omni-120b-think-4bit",
+                family: .qwen4flash,
+                weightBits: 4) == "qwen4-omni-120b-think_4-Bit")
+        // Same rule as every other family: an id-less install still names the
+        // model, and the width comes from the manifest.
+        #expect(
+            ServerModelIdentity.apiModelID(
+                manifestModelID: "unknown/snapshot",
+                family: .qwen4flash,
+                weightBits: 8) == "qwen4-omni-120b-think_8-Bit")
+    }
+
     @Test func theManifestSuffixIsNotDuplicated() {
         // The id the manifest ships already spells the width one way; the
         // advertised id spells it another. Appending without stripping would

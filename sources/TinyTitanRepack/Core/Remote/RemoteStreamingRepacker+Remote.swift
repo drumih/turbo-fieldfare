@@ -317,7 +317,9 @@ extension RemoteStreamingRepacker {
         // draft layer. It shares tokenization, embedding and lm_head with the
         // target bundle, so copying tokenizer/config sidecars would be both
         // redundant and a misleading standalone-model contract.
-        if plan.arch.family != .qwen36MTP && plan.arch.family != .qwen38flashMTP {
+        if plan.arch.family != .qwen36MTP && plan.arch.family != .qwen38flashMTP
+            && plan.arch.family != .qwen4flashMTP
+        {
             try await copyRemoteMetadataSidecars(
                 snapshot: snapshot,
                 remote: remote,
