@@ -33,7 +33,7 @@ Two jobs, both at boot, both idempotent:
 
 ## Supported harness version
 
-This bundle supports **exactly one DeepSeek Harness release: `0.2.2-alpha.2`** —
+This bundle supports **exactly one DeepSeek Harness release: `0.2.2-alpha.3`** —
 not older, not newer, and not a build from `main`. Both jobs above are written
 against that release: the preset is generated from _its_ shipped `standard`
 composition (the `preset-standard` row of
