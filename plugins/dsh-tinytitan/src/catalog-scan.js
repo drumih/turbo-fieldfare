@@ -31,6 +31,7 @@ const DISPLAY_NAMES = Object.freeze({
   "qwen-agentworld": "Qwen AgentWorld 35B-A3B",
   "kat-coder-v2.5": "KAT-Coder-V2.5-Dev 35B-A3B",
   "qwen3.8-flash-next": "Qwen 3.8 Flash Next 125B-A6B",
+  "qwen4-omni-120b-think": "Qwen 4.0 Flash (Qwen4-Omni-120B-Think)",
   "qwen3.5-2b": "Qwen 3.5 2B",
   "qwen3.5-4b": "Qwen 3.5 4B",
   "qwen3.5-9b": "Qwen 3.5 9B",
@@ -42,14 +43,16 @@ const FAMILY_LEVELS = Object.freeze({
   qwen36_mtp: ["off", "on"],
   qwen38flash: ["off", "low", "medium", "xhigh"],
   qwen38flash_mtp: ["off", "low", "medium", "xhigh"],
+  qwen4flash: ["off", "low", "medium", "xhigh"],
+  qwen4flash_mtp: ["off", "low", "medium", "xhigh"],
   qwen3_5_dense: ["off", "on"],
 });
 
 /** A draft head has no tokenizer and no layers of its own to run. */
-const MTP_FAMILIES = new Set(["qwen36_mtp", "qwen38flash_mtp"]);
+const MTP_FAMILIES = new Set(["qwen36_mtp", "qwen38flash_mtp", "qwen4flash_mtp"]);
 
 /** Families the GPU engine lists (the MTP ones above are excluded). */
-const GPU_FAMILIES = new Set(["qwen36", "qwen38flash", "qwen3_5_dense"]);
+const GPU_FAMILIES = new Set(["qwen36", "qwen38flash", "qwen4flash", "qwen3_5_dense"]);
 
 /** The one family both engines implement, so its rows advertise both. */
 const DENSE_FAMILY = "qwen3_5_dense";
@@ -67,6 +70,8 @@ const FAMILY_BASE = Object.freeze({
   qwen36_mtp: "qwen3.6-35b-a3b-mtp",
   qwen38flash: "qwen3.8-flash-next",
   qwen38flash_mtp: "qwen3.8-flash-next-mtp",
+  qwen4flash: "qwen4-omni-120b-think",
+  qwen4flash_mtp: "qwen4-omni-120b-think-mtp",
   qwen3_5_dense: "qwen3.5-dense",
 });
 

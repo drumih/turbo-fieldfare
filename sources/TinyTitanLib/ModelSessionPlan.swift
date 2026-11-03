@@ -63,6 +63,8 @@ package enum ServerModelIdentity {
         case .qwen36MTP: return "qwen3.6-35b-a3b-mtp"
         case .qwen38flash: return "qwen3.8-flash-next"
         case .qwen38flashMTP: return "qwen3.8-flash-next-mtp"
+        case .qwen4flash: return "qwen4-omni-120b-think"
+        case .qwen4flashMTP: return "qwen4-omni-120b-think-mtp"
         // Reached only for an install whose manifest carries no model id; the
         // dense converter always writes one.
         case .qwen35Dense: return "qwen3.5-dense"

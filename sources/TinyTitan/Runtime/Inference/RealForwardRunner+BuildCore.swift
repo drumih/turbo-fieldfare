@@ -375,7 +375,7 @@ extension RealForwardRunner {
             : nil
         if cfg.ple.enabled {
             let constants = try PLEConstants.load(
-                directoryURL: model.directoryURL)
+                directoryURL: model.directoryURL, family: cfg.family)
             // Before anything derives buffer sizes or row addressing from the
             // sidecar. Its values are geometry, and `PLEBlock`'s embedding
             // buffer is sized from `cfg.ple.embedDim` while the gather width
@@ -401,7 +401,10 @@ extension RealForwardRunner {
             }
             bp.ngramTable = try NgramTableReader(
                 path: model.directoryURL.appendingPathComponent(
-                    constants.tableFile ?? Qwen38FlashTensors.ngramTableFile
+                    constants.tableFile
+                        ?? (cfg.family == .qwen4flash || cfg.family == .qwen4flashMTP
+                            ? Qwen4FlashTensors.ngramTableFile
+                            : Qwen38FlashTensors.ngramTableFile)
                 ).path,
                 rowDim: constants.pleHeadDim,
                 rowCount: try constants.tableRowCount(),

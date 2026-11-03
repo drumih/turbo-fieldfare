@@ -379,6 +379,8 @@ public struct ArchConfig: Sendable, Equatable {
         .qwen36MTP: .qwen36MTP,
         .qwen38flash: .qwen38FlashNext,
         .qwen38flashMTP: .qwen38FlashNextMTP,
+        .qwen4flash: .qwen4Flash,
+        .qwen4flashMTP: .qwen4FlashMTP,
         .laguna: .lagunaS21,
     ]
 

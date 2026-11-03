@@ -12,6 +12,7 @@ extension ModelCatalog {
         "qwen-agentworld": "Qwen AgentWorld 35B-A3B",
         "kat-coder-v2.5": "KAT-Coder-V2.5-Dev 35B-A3B",
         "qwen3.8-flash-next": "Qwen 3.8 Flash Next 125B-A6B",
+        "qwen4-omni-120b-think": "Qwen 4.0 Flash (Qwen4-Omni-120B-Think)",
         // The dense CPU models. Their snapshots carried these names in
         // `config.json -> display_name`, which only the snapshot probe reads;
         // the install probe has a manifest, and a manifest carries an id, not

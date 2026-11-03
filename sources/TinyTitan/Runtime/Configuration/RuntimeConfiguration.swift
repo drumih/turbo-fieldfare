@@ -131,6 +131,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
             // so it is still climbing at 96 where the 35B families have
             // flattened above 90% hit rate.
             return DecodeTuning(expertCacheBudgetBytes: 12 << 30, prefetchDepth: 1)
+        case (.qwen4flash, _), (.qwen4flashMTP, _):
+            // Same 512-expert/top-10 geometry until the 4.0 checkpoint measures otherwise.
+            return DecodeTuning(expertCacheBudgetBytes: 12 << 30, prefetchDepth: 1)
         case (.qwen36, 8), (.qwen36MTP, 8):
             return DecodeTuning(
                 expertCacheBudgetBytes: defaultExpertCacheBudgetBytes,

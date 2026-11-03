@@ -18,6 +18,22 @@ public enum ModelFamily: String, Sendable, Equatable {
     /// projections that combine the target's wide residual with the next
     /// token's embedding. Shares the target's embedding and head.
     case qwen38flashMTP = "qwen38flash_mtp"
+    /// Qwen 4.0 Flash (`Qwen4-Omni-120B-Think`), 120B-A?B: the Qwen4-generation
+    /// successor of Qwen3.8-Flash-Next. Its text contract is the same shape the
+    /// 3.8 preview uses -- 48 layers of (3x gated-DeltaNet -> 1x
+    /// sparse-indexed attention), 512 experts top-10, hyper-connection residual
+    /// streams, and a hashed n-gram block -- but it is a separate family so the
+    /// two ports can diverge. Text-only; the checkpoint's vision and audio
+    /// towers are never repacked.
+    ///
+    /// The family value is written into `manifest.arch.family`; it is TinyTitan's
+    /// own name for the path, not the checkpoint's `model_type`.
+    case qwen4flash = "qwen4flash"
+    /// The Qwen 4.0 Flash draft head: one full-attention layer with its own
+    /// experts, hyper-connection gates and indexer, plus the two fusion
+    /// projections that combine the target's wide residual with the next
+    /// token's embedding. Shares the target's embedding and head.
+    case qwen4flashMTP = "qwen4flash_mtp"
     /// Qwen 3.5's dense text models (2B, 4B, 9B), served by the CPU engine.
     ///
     /// Its own value rather than a reuse of `qwen36`: `ModelFamily` is what the

@@ -302,7 +302,14 @@ extension ServerModelSession {
         if let mtpModelDirectory {
             let sidecarFamily = try ManifestReader.peekFamily(
                 directoryURL: mtpModelDirectory)
-            guard let sidecarArch = ArchConfig.knownArchitectures[sidecarFamily] else {
+            // Resolved rather than looked up: a 4.0 draft derived from a
+            // differently-shaped target must come from its own manifest, the
+            // same way the target did.
+            let sidecarArch: ArchConfig
+            do {
+                sidecarArch = try ArchConfig.resolved(
+                    forFamily: sidecarFamily, directoryURL: mtpModelDirectory)
+            } catch {
                 throw ServerInferenceError.unsupportedModel(
                     "MTP sidecar declares family \(sidecarFamily.rawValue), "
                         + "which this runtime does not implement")

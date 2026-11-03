@@ -121,6 +121,25 @@ import Testing
         }
     }
 
+    @Test func qwen4FallsBackToItsOwnFamilyUntilItsRowsAreMeasured() {
+        // No ModelProfile row is claimed for a model with no install and no
+        // measurements; what is pinned is that the family defaults are the 4.0
+        // ones (12 GiB / depth 1 / the thinking row), not the 35B house values.
+        let p = ModelProfile.resolve(
+            modelID: "qwen4-omni-120b-think", family: .qwen4flash,
+            weightBits: 4, environment: [:])
+        #expect(!p.isTabled)
+        #expect(p.expertCacheBudgetBytes == 12 << 30)
+        #expect(p.prefetchDepth == 1)
+        #expect(p.sampling == GenerationDefaults.qwen4Thinking)
+
+        let draft = ModelProfile.resolve(
+            modelID: "qwen4-omni-120b-think-mtp", family: .qwen4flashMTP,
+            weightBits: 4, environment: [:])
+        #expect(!draft.isTabled)
+        #expect(draft.expertCacheBudgetBytes == 12 << 30)
+    }
+
     @Test func unknownModelFallsBackToItsFamily() {
         let p = ModelProfile.resolve(
             modelID: "qwen3.6-35b-a3b-mtp-4bit", family: .qwen36MTP, weightBits: 4, environment: [:]

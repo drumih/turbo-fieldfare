@@ -242,6 +242,10 @@ public enum ManifestReader {
             // uniform width (4 or 8 bits, group 32). The draft head is
             // quantized with the target, so it inherits the same rule.
             allowedRouterBits = [4, 8]
+        case .qwen4flash, .qwen4flashMTP:
+            // The 4.0 Flash path inherits the 3.8 preview's uniform router
+            // width until its checkpoint declares otherwise.
+            allowedRouterBits = [4, 8]
         case .qwen35Dense:
             // A dense model has no router tensor at all, so there is no width
             // to constrain. The slot still has to satisfy `validateQuant`'s

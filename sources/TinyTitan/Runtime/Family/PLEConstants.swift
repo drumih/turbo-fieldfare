@@ -71,9 +71,16 @@ public struct PLEConstants: Decodable, Sendable {
 
     public static func load(
         directoryURL: URL,
-        maxBytes: UInt64 = defaultMaxBytes
+        maxBytes: UInt64 = defaultMaxBytes,
+        family: ModelFamily = .qwen38flash
     ) throws -> PLEConstants {
-        let name = Qwen38FlashTensors.pleConstantsFile
+        let name: String
+        switch family {
+        case .qwen4flash, .qwen4flashMTP:
+            name = Qwen4FlashTensors.pleConstantsFile
+        default:
+            name = Qwen38FlashTensors.pleConstantsFile
+        }
         // Root-anchored and bounded before the allocation. `Data(contentsOf:)`
         // grows a buffer as it reads, so an uncapped read of a directory that
         // may have been copied off another machine is an unbounded allocation,

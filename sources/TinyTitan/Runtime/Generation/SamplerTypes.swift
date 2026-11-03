@@ -56,6 +56,19 @@ public enum GenerationDefaults {
         temperature: 0.7, topK: topK,
         topP: 0.80, presencePenalty: 1.5)
 
+    /// Qwen 4.0 Flash's two rows.
+    ///
+    /// The 4.0 card is not published yet, so these are the 3.8 preview's rows
+    /// copied as a starting contract (thinking is the default). They are
+    /// separate constants on purpose: the 4.0 checkpoint can change its
+    /// instruct penalty without touching the 3.8 model's behavior.
+    public static let qwen4Thinking = Sampling(
+        temperature: 1.0, topK: topK,
+        topP: 0.95)
+    public static let qwen4Instruct = Sampling(
+        temperature: 0.7, topK: topK,
+        topP: 0.80, presencePenalty: 1.5)
+
     /// Defaults for a family, used wherever the caller did not ask for a value.
     /// An explicit request always wins -- this only fills the gap.
     ///
@@ -66,6 +79,8 @@ public enum GenerationDefaults {
         switch family {
         case .qwen38flash, .qwen38flashMTP:
             return qwen38Thinking
+        case .qwen4flash, .qwen4flashMTP:
+            return qwen4Thinking
         case .qwen35Dense:
             // Qwen 3.5 is a Qwen 3.6-lineage card: 0.6 / top-p 0.95.
             return Sampling(temperature: 0.6, topK: topK, topP: 0.95)
@@ -86,6 +101,8 @@ public enum GenerationDefaults {
         switch family {
         case .qwen38flash, .qwen38flashMTP:
             return thinking ? qwen38Thinking : qwen38Instruct
+        case .qwen4flash, .qwen4flashMTP:
+            return thinking ? qwen4Thinking : qwen4Instruct
         default:
             return forFamily(family)
         }

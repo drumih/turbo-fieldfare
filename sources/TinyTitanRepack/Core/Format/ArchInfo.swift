@@ -7,6 +7,12 @@ enum RepackModelFamily: String, Sendable, Equatable {
     case qwen36MTP = "qwen36_mtp"
     case qwen38flash = "qwen38flash"
     case qwen38flashMTP = "qwen38flash_mtp"
+    /// Qwen 4.0 Flash (`qwen4-omni-120b-think`): the Qwen4-generation successor
+    /// of Qwen3.8-Flash-Next. A separate family on purpose -- the loader and
+    /// cross-check are copied so a 4.0 checkpoint can change shape without
+    /// touching the 3.8 port.
+    case qwen4flash = "qwen4flash"
+    case qwen4flashMTP = "qwen4flash_mtp"
     /// Qwen 3.5's dense text models (2B, 4B, 9B). A whole model, not a draft
     /// head, and the only family here whose weights carry no routed experts.
     case qwen35Dense = "qwen3_5_dense"
@@ -21,7 +27,7 @@ enum RepackModelFamily: String, Sendable, Equatable {
     /// its own.
     var isDraftHead: Bool {
         switch self {
-        case .qwen36MTP, .qwen38flashMTP: return true
+        case .qwen36MTP, .qwen38flashMTP, .qwen4flashMTP: return true
         default: return false
         }
     }
@@ -227,6 +233,18 @@ struct ArchInfo: Sendable, Equatable {
     /// exceed it, raise this one constant; the refusal names the size and the cap.
     static let maxConfigBytes: UInt64 = 8 * 1024 * 1024
 
+    /// `model_type` values that mean the Qwen 4.0 Flash text contract.
+    ///
+    /// Kept explicit rather than prefix-matched: `qwen4_exp` is the 3.8
+    /// preview's own contract, and a future `qwen4_*` variant with a different
+    /// tensor set must be a deliberate addition here rather than a config that
+    /// falls into this loader because its spelling looked close.
+    static let qwen4FlashModelTypes: Set<String> = [
+        "qwen4_omni_moe", "qwen4_omni", "qwen4_flash",
+        // A text-only export may state the inner spelling at the root.
+        "qwen4_omni_moe_text", "qwen4_omni_text", "qwen4_flash_text",
+    ]
+
     static func load(configPath: String, maxBytes: UInt64 = maxConfigBytes) throws -> ArchInfo {
         let data: Data
         do {
@@ -256,6 +274,16 @@ struct ArchInfo: Sendable, Equatable {
         if (root["model_type"] as? String) == "qwen4_exp" {
             return try loadQwen4Exp(configPath: configPath, tc: tc, root: root)
         }
+        // Qwen 4.0 Flash (`qwen4-omni-120b-think`). The spellings are the ones
+        // the published family uses (`qwen4_omni_moe`, following Qwen3-Omni's
+        // `qwen3_omni_moe`), plus the shorter forms a text-only export may
+        // declare. `qwen4_exp` is deliberately *not* here: it is the 3.8
+        // preview's model_type and stays on its own family.
+        if let modelType = root["model_type"] as? String,
+            Self.qwen4FlashModelTypes.contains(modelType)
+        {
+            return try loadQwen4Flash(configPath: configPath, tc: tc, root: root)
+        }
         if (root["model_type"] as? String) == "k2_horizon" {
             return try loadK2Horizon(configPath: configPath, tc: tc)
         }
@@ -265,7 +293,8 @@ struct ArchInfo: Sendable, Equatable {
         throw RepackError.configJsonInvalid(
             path: configPath,
             detail: "unsupported model_type (expected qwen3_5_moe, "
-                + "qwen3_5_mtp, qwen3_5_dense, qwen4_exp or k2_horizon)")
+                + "qwen3_5_mtp, qwen3_5_dense, qwen4_exp, qwen4_omni_moe, "
+                + "qwen4_omni, qwen4_flash or k2_horizon)")
     }
 
 }

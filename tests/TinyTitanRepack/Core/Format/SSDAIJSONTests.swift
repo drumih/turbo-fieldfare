@@ -18,7 +18,7 @@ import Testing
 struct SSDAIJSONTests {
 
     /// The pinned Qwen3.8-Flash-Next geometry, as `ArchInfo.load` reads it.
-    private static func flashNextArch() throws -> ArchInfo {
+    private static func flashNextArch(modelType: String = "qwen4_exp") throws -> ArchInfo {
         let text: [String: Any] = [
             "hidden_size": 2560, "num_hidden_layers": 48,
             "num_attention_heads": 24, "num_key_value_heads": 2,
@@ -48,7 +48,7 @@ struct SSDAIJSONTests {
             ],
         ]
         let root: [String: Any] = [
-            "model_type": "qwen4_exp",
+            "model_type": modelType,
             "text_config": text,
             "quantization": ["group_size": 64, "bits": 4, "mode": "affine"],
         ]
@@ -90,6 +90,28 @@ struct SSDAIJSONTests {
     }
 
     // MARK: - The extension-geometry block
+
+    @Test("A Qwen 4.0 Flash manifest declares its own family and geometry")
+    func qwen4TargetCarriesItsOwnFamily() throws {
+        let arch = try Self.flashNextArch(modelType: "qwen4_omni_moe")
+        #expect(arch.family == .qwen4flash)
+        let manifest = try Self.manifest(Self.plan(arch: arch))
+        let encoded = try Self.archDict(manifest)
+        #expect(encoded["family"] as? String == "qwen4flash")
+        #expect(encoded["hcCount"] as? Int == 4)
+        #expect(encoded["indexerBudget"] as? Int == 2048)
+        #expect(encoded["pleLayerIndices"] as? [Int] == [1])
+    }
+
+    @Test("A Qwen 4.0 draft is written as its own family with no n-gram block")
+    func qwen4DraftCarriesItsOwnFamily() throws {
+        let base = try Self.flashNextArch(modelType: "qwen4_omni_moe")
+        let draft = try ArchInfo.qwen4FlashMTP(from: base, configPath: "config.json")
+        let encoded = try Self.archDict(Self.manifest(Self.plan(arch: draft)))
+        #expect(encoded["family"] as? String == "qwen4flash_mtp")
+        #expect(encoded["hcCount"] as? Int == 4)
+        #expect(encoded["pleLayerIndices"] as? [Int] == [])
+    }
 
     @Test("A Qwen3.8-Flash-Next manifest carries the extension geometry")
     func targetCarriesExtensionGeometry() throws {

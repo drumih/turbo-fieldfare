@@ -84,7 +84,10 @@ struct ArchConfigManifestTests {
     @Test("A family with a preset never touches the disk")
     func presetShortCircuit() throws {
         let missing = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString)")
-        let presetFamilies: [ModelFamily] = [.qwen36, .qwen36MTP, .qwen38flash, .qwen38flashMTP]
+        let presetFamilies: [ModelFamily] = [
+            .qwen36, .qwen36MTP, .qwen38flash, .qwen38flashMTP,
+            .qwen4flash, .qwen4flashMTP,
+        ]
         for family in presetFamilies {
             let preset = try #require(ArchConfig.knownArchitectures[family])
             let got = try ArchConfig.resolved(forFamily: family, directoryURL: missing)
@@ -92,6 +95,42 @@ struct ArchConfigManifestTests {
             #expect(got.numLayers == preset.numLayers)
             #expect(got.hiddenSize == preset.hiddenSize)
             #expect(got.ple.ngramSize == preset.ple.ngramSize)
+        }
+    }
+
+    /// A 4.0 install whose shape differs from the preset is rebuilt from its
+    /// manifest, including the blocks a plain residual path would drop.
+    @Test("A qwen4 manifest supplies the Flash extension geometry")
+    func qwen4ResolutionRebuildsTheFlashBlocks() throws {
+        let arch = Self.denseArch(declare: [
+            "hcCount": 2, "hcLowRank": 8,
+            "indexerNumHeads": 2, "indexerNumKVHeads": 1,
+            "indexerHeadDim": 16, "indexerBudget": 32,
+            "indexerCompressRatio": 4,
+            "pleLayerIndices": [1], "pleEmbedDim": 64,
+            "pleConvKernelSize": 4, "pleNgramSize": 3,
+            "pleVocabSizeBase": 1000, "pleHeadsPerNgram": 2,
+            "pleVocabDivisor": 128, "routerNormTopK": true,
+            "quantGroupSize": 64,
+        ])
+        let config = try ArchConfig.from(
+            manifest: Self.decode(arch), family: .qwen4flash)
+        #expect(config.family == .qwen4flash)
+        #expect(config.linearAttention.outputGate == .sigmoid)
+        #expect(config.hyperConnections.count == 2)
+        #expect(config.hyperConnections.lowRank == 8)
+        #expect(config.sparseIndexer.budget == 32)
+        #expect(config.ple.layerIndices == [1])
+        #expect(config.ple.embedDim == 64)
+        #expect(config.routerNormTopK)
+    }
+
+    @Test("A qwen4 manifest that omits its Flash geometry is refused by name")
+    func qwen4OmittingExtensionsIsRefused() {
+        let arch = Self.denseArch()
+        #expect(throws: (any Error).self) {
+            _ = try ArchConfig.from(
+                manifest: Self.decode(arch), family: .qwen4flash)
         }
     }
 
@@ -103,7 +142,7 @@ struct ArchConfigManifestTests {
         // Laguna-S-2.1 has a checked preset, like the Qwen families; only the
         // dense Qwen 3.5 sizes need the manifest.
         #expect(ArchConfig.knownArchitectures[.laguna] == .lagunaS21)
-        #expect(ArchConfig.knownArchitectures.count == 5)
+        #expect(ArchConfig.knownArchitectures.count == 7)
     }
 
     @Test("Geometry, mask and conventions come from the manifest")

@@ -65,6 +65,19 @@ extension ArchConfig {
                 // gate, attention scale or layer mask.
                 return try from(manifest: manifest.arch, family: family)
             }
+            // The 4.0 checkpoint is not published yet, so its preset is the
+            // 3.8 preview's geometry. If the real model is a different width
+            // (the leaked name says 120B against the preview's 125B), its own
+            // manifest is the authority and `from` rebuilds every convention
+            // the kernels depend on -- including the hyper-connection, indexer
+            // and PLE blocks that the preset path would otherwise impose.
+            if family == .qwen4flash || family == .qwen4flashMTP,
+                let manifest = try? ManifestReader.read(directoryURL: directoryURL),
+                manifest.arch.hiddenSize != preset.hiddenSize
+                    || manifest.arch.numLayers != preset.numLayers
+            {
+                return try from(manifest: manifest.arch, family: family)
+            }
             return preset
         }
         // The families without a preset whose architecture is fully declared by
@@ -92,16 +105,65 @@ extension ArchConfig {
         // The Gated-DeltaNet geometry, on the same terms: the CPU engine reads
         // it from the snapshot config and the GPU path must read it from the
         // manifest rather than from a preset that describes another model.
+        let isFlash = family == .qwen4flash || family == .qwen4flashMTP
+        let isDraftFlash = family == .qwen4flashMTP
         let linear = LinearAttentionConfig(
             numKHeads: try required(arch.linearNumKHeads, "linearNumKHeads"),
             numVHeads: try required(arch.linearNumVHeads, "linearNumVHeads"),
             keyHeadDim: try required(arch.linearKeyHeadDim, "linearKeyHeadDim"),
             valueHeadDim: try required(arch.linearValueHeadDim, "linearValueHeadDim"),
             convKernelSize: try required(arch.linearConvKernelSize, "linearConvKernelSize"),
-            // Qwen 3.5 and 3.6 are the same lineage; Qwen3.8 is the family that
-            // states `sigmoid`. Declared here rather than defaulted from the
-            // other one, which is the point the config type makes.
-            outputGate: .silu)
+            // Qwen 3.5 and 3.6 are the same lineage; the Flash families state
+            // `sigmoid`. Declared here rather than defaulted from the other
+            // one, which is the point the config type makes.
+            outputGate: isFlash ? .sigmoid : .silu)
+        // The Flash extensions are required on this path: a 4.0 install whose
+        // manifest omits its hyper-connection, indexer or PLE geometry would
+        // otherwise load as a plain-residual model with no error. The draft
+        // carries the first two but has no n-gram block of its own.
+        let hyperConnections =
+            isFlash
+            ? HyperConnectionConfig(
+                count: try required(arch.hcCount, "hcCount"),
+                lowRank: try required(arch.hcLowRank, "hcLowRank"))
+            : HyperConnectionConfig(
+                count: arch.hcCount ?? 0, lowRank: arch.hcLowRank ?? 0)
+        let sparseIndexer =
+            isFlash
+            ? SparseIndexerConfig(
+                numHeads: try required(arch.indexerNumHeads, "indexerNumHeads"),
+                numKVHeads: try required(arch.indexerNumKVHeads, "indexerNumKVHeads"),
+                headDim: try required(arch.indexerHeadDim, "indexerHeadDim"),
+                budget: try required(arch.indexerBudget, "indexerBudget"),
+                compressRatio: try required(
+                    arch.indexerCompressRatio, "indexerCompressRatio"))
+            : (arch.indexerBudget.map {
+                SparseIndexerConfig(
+                    numHeads: arch.indexerNumHeads ?? 0,
+                    numKVHeads: arch.indexerNumKVHeads ?? 0,
+                    headDim: arch.indexerHeadDim ?? 0,
+                    budget: $0,
+                    compressRatio: arch.indexerCompressRatio ?? 0)
+            } ?? .none)
+        let ple: PLEConfig =
+            isFlash && !isDraftFlash
+            ? PLEConfig(
+                layerIndices: try required(arch.pleLayerIndices, "pleLayerIndices"),
+                embedDim: try required(arch.pleEmbedDim, "pleEmbedDim"),
+                convKernelSize: try required(
+                    arch.pleConvKernelSize, "pleConvKernelSize"),
+                ngramSize: try required(arch.pleNgramSize, "pleNgramSize"),
+                vocabSizeBase: try required(
+                    arch.pleVocabSizeBase, "pleVocabSizeBase"),
+                headsPerNgram: try required(
+                    arch.pleHeadsPerNgram, "pleHeadsPerNgram"),
+                vocabDivisor: try required(
+                    arch.pleVocabDivisor, "pleVocabDivisor"),
+                // The seed is not a manifest field; it is recorded for
+                // validation only and the shipped 4.0 table is read, not
+                // re-derived.
+                seed: 1234)
+            : .none
         let shape = try layerShape(manifest: arch, family: family)
         return ArchConfig(
             hiddenSize: arch.hiddenSize,
@@ -136,6 +198,9 @@ extension ArchConfig {
             sharedExpertGated: try required(arch.sharedExpertGated, "sharedExpertGated"),
             ropeNeoxSubdim: try required(arch.ropeNeoxSubdim, "ropeNeoxSubdim"),
             linearAttention: linear,
+            hyperConnections: hyperConnections,
+            sparseIndexer: sparseIndexer,
+            ple: ple,
             // K2 normalizes the selected sigmoid scores over the top-k
             // (`norm_topk_prob` is true in its config). See `layerShape`.
             routerNormTopK: shape.routerNormTopK,
@@ -175,6 +240,7 @@ extension ArchConfig {
             return value
         }
         let isK2 = family == .k2Horizon
+        let isFlash = family == .qwen4flash || family == .qwen4flashMTP
         func extensionValue<T>(
             _ value: T?, _ field: String, default fallback: @autoclosure () -> T
         ) throws -> T {
@@ -238,6 +304,6 @@ extension ArchConfig {
             // written into older K2 manifests, and defaulting it to false would
             // hand the router unnormalized scores -- a fluent, wrong mixture
             // rather than an error. An explicit declaration still wins.
-            routerNormTopK: arch.routerNormTopK ?? isK2)
+            routerNormTopK: arch.routerNormTopK ?? (isK2 || isFlash))
     }
 }

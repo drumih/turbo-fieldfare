@@ -166,21 +166,21 @@ def model_total_bytes(model: str) -> int:
 # sidecar for it is not recommended, which `missing_ane_reason` says below. The
 # one-layer MTP draft is not: the runtime verifies it rather than prefilling it
 # on the ANE.
-ANE_EXPORTABLE_FAMILIES = ("qwen36", "qwen3_5_dense", "qwen38flash")
+ANE_EXPORTABLE_FAMILIES = ("qwen36", "qwen3_5_dense", "qwen38flash", "qwen4flash")
 
 
 def missing_ane_reason(model: str, family: str | None) -> str:
     """Why no ANE number was recorded, in terms of what was observed."""
-    if family == "qwen38flash":
+    if family in ("qwen38flash", "qwen4flash"):
         return (
             f"the ANE prefill path does not pay for a {family} model: "
-            f"measured 0.72x against the GPU at 4,333 tokens, because the "
-            f"GPU already attends to only the indexer's ~2,051 selected keys "
-            f"while the ANE graph is dense over the context and its "
-            f"per-variant Core ML load is 7-14 s. A sidecar is exportable "
-            f"only to re-measure"
+            f"measured 0.72x against the GPU at 4,333 tokens on the 3.8 "
+            f"preview, because the GPU already attends to only the indexer's "
+            f"~2,051 selected keys while the ANE graph is dense over the "
+            f"context and its per-variant Core ML load is 7-14 s. A sidecar "
+            f"is exportable only to re-measure"
         )
-    if family == "qwen38flash_mtp":
+    if family in ("qwen38flash_mtp", "qwen4flash_mtp"):
         return (
             f"ANE prefill does not serve a {family} model: the one-layer "
             f"MTP draft is verified rather than prefilled on the ANE"

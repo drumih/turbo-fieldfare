@@ -44,7 +44,9 @@ extension RealForwardRunner {
     /// trimmable full-attention KV, so its logical cursor can move back without
     /// copying payload bytes; the next draft pass overwrites the stale row.
     func rewindMTP(to position: Int) throws {
-        guard cfg.family == .qwen36MTP || cfg.family == .qwen38flashMTP,
+        guard
+            cfg.family == .qwen36MTP || cfg.family == .qwen38flashMTP
+                || cfg.family == .qwen4flashMTP,
             let kv
         else {
             throw InferenceStateSnapshotError.invalidLayout
@@ -218,12 +220,14 @@ extension RealForwardRunner {
         onProgress: (Int) -> Void
     ) async throws -> MTPPrefillResult {
         defer { resetExpertUseCountsAfterPrefill() }
-        guard cfg.family == .qwen36 || cfg.family == .qwen38flash else {
+        guard cfg.family == .qwen36 || cfg.family == .qwen38flash || cfg.family == .qwen4flash
+        else {
             throw StreamingMTPError.targetMustBeQwen36
         }
         guard
             mtp.cfg.family == .qwen36MTP
                 || mtp.cfg.family == .qwen38flashMTP
+                || mtp.cfg.family == .qwen4flashMTP
         else {
             throw StreamingMTPError.sidecarMustBeQwen36MTP
         }

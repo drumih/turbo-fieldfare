@@ -186,6 +186,16 @@ extension Model {
             try Self.validateQwen38DraftSchema(
                 checks: checks, quant: quant,
                 config: config)
+        case .qwen4flash:
+            try Self.validateQwen4Schema(
+                checks: checks, config: config, quant: quant,
+                manifest: manifest)
+        case .qwen4flashMTP:
+            // The 4.0 draft's tensor set is the 3.8 draft's today; the call is
+            // separate so a 4.0-only tensor does not widen the 3.8 check.
+            try Self.validateQwen4DraftSchema(
+                checks: checks, quant: quant,
+                config: config)
         case .qwen36:
             try checks.requireAffine(
                 "language_model.model.embed_tokens.weight",
@@ -281,6 +291,61 @@ extension Model {
         guard manifest.files[Qwen38FlashTensors.pleConstantsFile] != nil else {
             throw ModelError.missingFile(
                 name: Qwen38FlashTensors.pleConstantsFile)
+        }
+    }
+
+    /// Qwen 4.0 Flash's own tensors.
+    ///
+    /// Copied from `validateQwen38Schema` rather than parameterised by family:
+    /// the two paths are expected to agree today, and the copy is what lets a
+    /// 4.0 checkpoint carry an extra (or renamed) tensor without weakening the
+    /// 3.8 check. The names resolve through `Qwen4FlashTensors`, so a rename is
+    /// one edit in that namespace.
+    private static func validateQwen4Schema(
+        checks: RuntimeSchemaChecks,
+        config: ArchConfig,
+        quant: ManifestQuant,
+        manifest: Manifest
+    ) throws {
+        try checks.requireAffine(
+            TensorSchema.schema(for: .qwen4flash).embedding,
+            rows: config.vocabSize,
+            columns: config.hiddenSize,
+            slot: quant.embedding)
+        // `lm_head` sits at the archive root in this family, not under the
+        // language-model prefix.
+        try checks.requireAffine(
+            TensorSchema.schema(for: .qwen4flash).lmHead,
+            rows: config.vocabSize,
+            columns: config.hiddenSize,
+            slot: quant.embedding)
+        // The hyper-connection residual is the family's defining feature: its
+        // absence would let a mis-repacked payload load and then compute a
+        // plain-residual model. Check the model-level mixer and one layer's
+        // worth of both sublayer gates.
+        let hcDim = config.hiddenSize * config.hyperConnections.count
+        try checks.requireBF16(
+            TensorSchema.schema(for: .qwen4flash).finalNorm,
+            count: hcDim)
+        for layer in 0..<config.numLayers {
+            try checks.requireBF16(
+                "model.language_model.layers.\(layer)."
+                    + "attn_hyper_connection.hc_norm", count: hcDim)
+            try checks.requireBF16(
+                "model.language_model.layers.\(layer)."
+                    + "mlp_hyper_connection.hc_norm", count: hcDim)
+        }
+        // The PLE block exists on exactly the configured layers, and its
+        // constants and table are passthrough files rather than tensors -- their
+        // presence is the manifest's business, checked below.
+        for layer in config.ple.layerIndices {
+            try checks.requireBF16(
+                Qwen4FlashTensors.pleConv(layer),
+                count: hcDim * config.ple.convKernelSize)
+        }
+        guard manifest.files[Qwen4FlashTensors.pleConstantsFile] != nil else {
+            throw ModelError.missingFile(
+                name: Qwen4FlashTensors.pleConstantsFile)
         }
     }
 

@@ -166,7 +166,10 @@ public actor Engine {
         // Qwen3.8 publishes a row per mode and the profile carries only the
         // thinking one, so the mode picks between them here — the same choice
         // the server makes during validation.
-        if let family, family == .qwen38flash || family == .qwen38flashMTP {
+        if let family,
+            family == .qwen38flash || family == .qwen38flashMTP
+                || family == .qwen4flash || family == .qwen4flashMTP
+        {
             return SamplingDefaults(
                 GenerationDefaults.forFamily(family, thinking: thinking))
         }
