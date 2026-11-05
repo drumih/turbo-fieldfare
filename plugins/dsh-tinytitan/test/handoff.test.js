@@ -144,11 +144,13 @@ function harness({
       },
     },
     subagents: {
-      start: (name, request) => {
-        starts.push({ name, request });
+      // 0.2.2-rc.1's startActivation(spec): provider/label/request/signal/
+      // delivery, returning the child identity and its settled result.
+      startActivation: (spec) => {
+        starts.push({ name: spec.provider, request: spec.request, signal: spec.signal });
         if (failFirst && starts.length === 1) return Promise.reject(new Error("loop inactive"));
         const id = `child-${++created}`;
-        const run = { id, localAgent: undefined, result: undefined, disposed: false };
+        const run = { childId: id, id, localAgent: undefined, result: undefined, disposed: false };
         if (child !== "remote") {
           const childAgent = { id, session: { id }, status: "running", options: route };
           agents.set(id, childAgent);
@@ -279,7 +281,7 @@ test("a turn is only handed on once the previous step spent the budget", async (
   assert.equal(starts[0].name, HANDOFF_PROVIDER);
   assert.equal(starts[0].request.parent.id, "session-1");
   assert.match(starts[0].request.prompt[0].text, /ship the parser/);
-  assert.ok(starts[0].request.signal, "start requires a cancellation signal");
+  assert.ok(starts[0].signal, "startActivation requires a cancellation signal");
   assert.ok(lines.some((line) => line.includes("hop 1/2 at 1000 tokens")));
 });
 

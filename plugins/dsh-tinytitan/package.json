@@ -1,6 +1,6 @@
 {
   "name": "dsh-tinytitan",
-  "version": "0.2.2-alpha.3",
+  "version": "0.2.2-rc.1",
   "description": "DeepSeek Harness route and quiet compaction for a local TinyTitan server",
   "type": "module",
   "license": "MIT",
@@ -36,11 +36,11 @@
     "format:check": "prettier --check ."
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "~4.0.6-alpha.2",
-    "@deepseek-ai/cordis-plugin-include": "~1.0.11-alpha.2",
-    "@deepseek-ai/dsh-agent-preset": "0.2.2-alpha.3",
-    "@deepseek-ai/dsh-compaction-basic": "0.2.2-alpha.3",
-    "@deepseek-ai/dsh-web-app": "0.2.2-alpha.3",
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/cordis-plugin-include": "~1.1.0",
+    "@deepseek-ai/dsh-agent-preset": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.2-rc.1",
+    "@deepseek-ai/dsh-web-app": "0.2.2-rc.1",
     "js-yaml": "^4.3.2"
   },
   "peerDependenciesMeta": {
@@ -67,7 +67,7 @@
     "local"
   ],
   "devDependencies": {
-    "@deepseek-ai/cordis-plugin-include": "~1.0.11-alpha.2",
+    "@deepseek-ai/cordis-plugin-include": "~1.1.0",
     "@eslint/js": "10.0.1",
     "eslint": "10.11.0",
     "globals": "17.12.0",

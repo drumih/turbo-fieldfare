@@ -243,25 +243,39 @@ export async function startHandoff({
   if (!agents || typeof agents.withInitiator !== "function") {
     return { started: false, reason: "no-agents-service" };
   }
-  if (!subagents || typeof subagents.start !== "function") {
+  if (!subagents || typeof subagents.startActivation !== "function") {
     return { started: false, reason: "no-subagents-service" };
   }
   if (!objective || !parent) return { started: false, reason: "no-objective" };
 
-  // `start` runs under an initiating Agent, and its provider requires the
-  // agent's loop to be active — which it is while a turn is running.
+  // `startActivation` runs under an initiating Agent, and its provider requires
+  // the agent's loop to be active — which it is while a turn is running.
   return agents.withInitiator(parent, async () => {
-    const run = await subagents.start(HANDOFF_PROVIDER, {
-      parent,
-      prompt: [{ type: "text", text: handoffPrompt(objective) }],
+    // 0.2.2-rc.1 replaced `start(provider, options)` with `startActivation(spec)`
+    // and dropped `SubagentRun.localAgent`: the activation carries the child id,
+    // and the live in-process Agent is read back from `agents` by that id. The
+    // adapter below keeps the rest of this driver on the fields it already
+    // tracks (id, result, dispose) instead of spreading the rename through it.
+    const activation = await subagents.startActivation({
+      provider: HANDOFF_PROVIDER,
       label: `handoff: ${objective.slice(0, 60)}`,
+      request: {
+        parent,
+        prompt: [{ type: "text", text: handoffPrompt(objective) }],
+      },
       signal: controller.signal,
+      // The handing-off session is about to be disarmed; a settled message in
+      // its inbox would wake work it no longer owns. The caller keeps the result.
+      delivery: "caller",
     });
-    // `SubagentRun.localAgent` is the published in-process Agent itself, not a
-    // wrapper: the first live run logged "(no live child agent reported)" under
-    // the old shape while the child was right there.
-    const child = run?.localAgent;
-    const childSession = run?.id ?? child?.id ?? child?.session?.id;
+    const child = agents.get?.(activation.childId);
+    const run = {
+      id: activation.childId,
+      localAgent: child,
+      result: activation.result,
+      dispose: () => activation.dispose(),
+    };
+    const childSession = run.id ?? child?.id ?? child?.session?.id;
     log(
       `dsh-tinytitan: handed the objective to child session ${childSession ?? "(unknown)"}` +
         `${child ? "" : " (remote run: no in-process child to arm)"}`,
@@ -326,10 +340,23 @@ export function installHandoff({ ctx, resolved, log = () => {} } = {}) {
     const resolving = new Set();
     const announced = new Set();
 
-    /** The route one agent uses, or `null` when it cannot be named. */
+    /**
+     * The route one agent uses, or `null` when it cannot be named.
+     *
+     * 0.2.2-rc.1 fixes the step's route through `agent.model.current()`; the
+     * live `agent.options` are only the fallback before a session records a
+     * selection. Read the durable accessor first so a model switched in the
+     * picker sizes this budget against the route the step actually uses.
+     */
     const routeOf = (agent) => {
-      const provider = agent?.options?.provider ?? resolved.provider;
-      const model = agent?.options?.model;
+      let selected;
+      try {
+        selected = agent?.model?.current?.();
+      } catch {
+        selected = undefined;
+      }
+      const provider = selected?.provider ?? agent?.options?.provider ?? resolved.provider;
+      const model = selected?.model ?? agent?.options?.model;
       if (typeof provider !== "string" || provider.length === 0) return null;
       if (typeof model !== "string" || model.length === 0) return null;
       return { provider, model, key: `${provider}/${model}` };

@@ -15,7 +15,7 @@ disabled and discussions enabled**, so all three are Discussions in *Ideas*:
 The patches are small enough to apply locally meanwhile.
 
 > **Status note, 2026-10-24: not re-verified since.** The harness this project's
-> plugins pin has moved to `0.2.2-alpha.3`; this project does not install a harness
+> plugins pin has moved to `0.2.2-rc.1`; this project does not install a harness
 > of its own, so the user's DSH is the one to read. Everything below — the line numbers, the quoted behaviour and the
 > two replies — was read on `0.1.6-alpha.2` and is left as the record of that
 > version. Ask 1 is the one 0.2.0 was most likely to change, because that release

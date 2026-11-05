@@ -28,7 +28,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, parse } from "node:path";
 
 /** The one DeepSeek Harness release this plugin is written and tested against. */
-export const SUPPORTED_DSH_VERSION = "0.2.2-alpha.3";
+export const SUPPORTED_DSH_VERSION = "0.2.2-rc.1";
 
 /** The package whose version is the harness's. */
 const HARNESS = "@deepseek-ai/dsh";
