@@ -191,6 +191,42 @@ is the P1 recipe above. The all-16-bit-except-experts build is a useful
 **quality upper bound** for the expert path, and the right first experiment to
 separate expert error from table/non-expert error.
 
+### Decode on the M3 24 GB: the smaller file is mostly cold data
+
+The measured baseline for the current 4-bit Qwen3.8 install on Mac15,3 (M3,
+24 GB) is **4.55 tok/s** at the shipped 64-slot / 8 GB expert cache, i.e.
+~220 ms/token, with **403 MB of expert demand per token** at 3.95 GB/s
+(`docs/qwen38-decode-12gb-measurements.md`, §5o). The install is ~174 GB:
+~102.4 GB PLE table + ~71.6 GB core. UD-Q4_K_XL is ~111 GB published
+(~122 GB by file sum): ~28.8 GB table + **~82.5 GB core** (or ~93 GB by file
+sum). The table got 73 GB smaller; the core got **10–22 GB larger**.
+
+Decode reads the table only 16 rows/token — about 5 KB — so shrinking it from
+102 GB to 29 GB removes ~0.001 ms of decode I/O. What decode actually reads is
+the core: the always-on projections every token and the top-10 experts from
+SSD. Copying Unsloth's Q4 allocation therefore makes the per-token path
+slightly larger, not smaller:
+
+| item | TinyTitan 4-bit | UD-Q4 allocation | effect per token |
+| --- | --- | --- | --- |
+| PLE table | 16 rows x 320 B = 5 KB | 16 x 100 B = 1.6 KB | ~0 ms |
+| always-on attention/GDN/shared/hyper | 4-bit, ~1.7 GB read | Q8, ~3.3 GB read | **+1.6 GB**, ~+23 ms at 70 GB/s |
+| expert demand | 403 MB | +~6% (down Q5_1/Q8) | +24 MB, ~+6 ms at 3.95 GB/s |
+
+Projected token time: 220 + 23 + 6 ≈ **249 ms → 4.0 tok/s**, a **~12% loss**
+(range −5% to −14% depending on whether attention is Q6 or Q8 and on the
+effective memory bandwidth). Keeping TinyTitan's 4-bit hot weights and
+quantizing only the table leaves decode at **4.55 tok/s (0%)** while removing
+~70 GB of disk.
+
+So the Unsloth *file* is smaller, but its *per-token* working set is not. The
+decode gain from Unsloth's stack comes from MTP and from generating fewer
+tokens, not from the 111 GB number. On the M3, a correct MTP path (a
+decode-native verify with sampling-correct acceptance, not the current
+−43% greedy-only implementation) is the only lever here that could plausibly
+add tens of percent; a 30–50% drop in generated tokens would make a task
+1.3–1.8x faster end-to-end even at a 12% lower tok/s.
+
 ## Implementation plan
 
 ### P0 — measure first
