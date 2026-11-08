@@ -132,6 +132,65 @@ Two size facts drive the plan:
   old 174 GB and inside a 128 GB machine; with group-64 and no other change it
   approaches 96 GB.
 
+## Would "bf16 everywhere except 4-bit experts" beat v3.1?
+
+This is the natural TinyTitan-shaped alternative: leave every non-expert tensor
+and the PLE table at the checkpoint's 16-bit dtype, and quantize only the routed
+experts, which are ~121B of the 125B backbone parameters. TinyTitan's 16-bit
+path is **bf16**, the checkpoint dtype; "fp16" here means unquantized 16-bit,
+and converting bf16 weights to fp16 is not a quality improvement. It is feasible — the
+bf16-dense Ornith build is the precedent — but the quality claim depends on
+which Unsloth quant it is compared with.
+
+Size first (decimal GB, TinyTitan's affine 4-bit group-64 is 4.5 bpw including
+scale/bias):
+
+| component | parameters | 16-bit | 4-bit |
+| --- | ---: | ---: | ---: |
+| routed experts | 120.8B | 241.6 GB | 68.0 GB |
+| non-expert backbone | 4.2B | 8.4 GB | 2.4 GB |
+| PLE table | 51.2B values | 102.4 GB | 28.8 GB (g64) |
+| **total, bf16 + 4-bit experts** | | | **178.8 GB** |
+| **total, all 4-bit** | | | **~99–103 GB** |
+
+Unsloth's published sizes for comparison: UD-Q4_K_XL 111.3 GB (the current
+file sum is ~122 GB), UD-Q5_K_XL 158.3 GB, UD-Q6_K_XL 169.2 GB, Q8_0 188.2 GB.
+The proposed build is therefore at or above **Q6_K_XL**'s footprint. At that
+size the fair comparison is Q6, not Q4.
+
+The error budget explains why size is not the whole story:
+
+- Experts are **96.6%** of the backbone parameters. Their quantization error
+  dominates the logit error; non-expert and table precision are second-order.
+- Unsloth Q4 does not use uniform 4-bit experts. Gate/up are Q4_K, down is
+  Q5_1 on 43 layers and Q8_0 on five sensitive layers, all fitted with a
+  45-chunk imatrix. That is roughly 4.7–5.0 effective bits on the expert path,
+  with the largest errors weighted down.
+- TinyTitan's uniform 4-bit affine min/max experts are 4.5 bpw, with no
+  imatrix and no per-layer down elevation. Per bit, that is weaker than
+  Unsloth's Q4 expert path, not stronger.
+- The bf16 non-expert gain is real but small: Unsloth already keeps those
+  tensors at Q8/Q6, whose error is already ~1/16 of a 4-bit step. Perfecting
+  3.4% of the parameters does not recover the error in the other 96.6%.
+- The fp16 PLE table is genuinely better than IQ4_NL, but Unsloth keeps the
+  table at 4 bits in every quant and still reaches 94.1% top-1 at Q8, so the
+  table is not the dominant error term.
+
+**Verdict.** Against **UD-Q4_K_XL**, the proposal is plausible and worth
+measuring: it has a 56–68 GB larger budget and removes all non-expert error, so
+it could land at or slightly above Q4 on some benchmarks. Against **Q5/Q6** at the
+same ~160–180 GB footprint it should lose, because those quants spend the bytes
+on the expert path where the error actually is, while this build spends them on
+a table and on non-experts that are already nearly lossless. It is not "on par
+or higher than the Unsloth 3.1 models" as a class.
+
+The way to make the claim true is not to leave everything at 16 bits; it is to
+copy the allocation: imatrix-weighted 4-bit experts, down projections one rank
+higher, sensitive layers elevated, and a 4-bit table to free the budget. That
+is the P1 recipe above. The all-16-bit-except-experts build is a useful
+**quality upper bound** for the expert path, and the right first experiment to
+separate expert error from table/non-expert error.
+
 ## Implementation plan
 
 ### P0 — measure first
