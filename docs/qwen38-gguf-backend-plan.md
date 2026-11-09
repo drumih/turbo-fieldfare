@@ -304,6 +304,30 @@ Two consequences:
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
 
+## Reference measurement: llama.cpp on this host (2026-11-09)
+
+The checkpoint runs today under llama.cpp, and the numbers say why this project
+exists. Build `7d7f028`, CPU-only (`GGML_METAL=OFF`), 8 threads, BLAS, 24 GiB
+machine:
+
+```bash
+llama-bench -m models/qwen3.8-flash-next-unsloth-iq3xxs/\
+Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00004.gguf -p 64 -n 16 -r 2 -t 8
+```
+
+| model | size | params | test | t/s |
+| --- | ---: | ---: | --- | ---: |
+| qwen4exp A3B IQ3_XXS - 3.0625 bpw | 77.87 GiB | 176.94 B | pp64 | 2.00 ± 0.38 |
+| qwen4exp A3B IQ3_XXS - 3.0625 bpw | 77.87 GiB | 176.94 B | tg16 | **0.09 ± 0.00** |
+
+Eleven seconds per token. llama.cpp has no expert cache: it mmaps 78 GiB and
+lets the OS page cache thrash, so nearly every expert read is a fault. The
+measured affine install on the same machine is **4.62 tok/s** (216 ms/token) —
+51x this — and the difference is the streaming expert cache and prefetch, not
+the file format. That is the case for the conversion, and also why a GGUF
+backend that merely dequantises on fetch (rejected in milestone 5) would not
+have helped.
+
 ## Route B, seventh probe: the PLE table does not fit today's format
 
 `GGUFConversionPlanner` sizes the whole install from the file. The numbers, with
