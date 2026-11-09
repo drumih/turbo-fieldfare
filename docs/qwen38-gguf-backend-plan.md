@@ -342,6 +342,24 @@ is 4.62 tok/s, and the difference is the cache, not the format.
 4. **PLE gather over IQ4_NL** — the table stays in its block format; only the
    gathered rows are decoded.
 
+**Expert GEMV fused with decode (2026-11-09).** `iq2s_gemv_simd` and
+`iq4nl_gemv_simd` read the gate/up (IQ2_S) and down (IQ4_NL) expert matrices in
+their GGUF blocks and write half results in one pass - one SIMD per row, no
+decoded matrix ever materialised. Verified against CPU decode-then-dot on the
+real blk.0 expert 0 matrices: worst relative error 4.6e-4 (IQ2_S) and 4.8e-4
+(IQ4_NL), both half output rounding.
+
+| operation | per matrix | per token | 
+| --- | ---: | ---: |
+| gate/up, 640x2560 IQ2_S | 0.33-0.49 ms | 317-470 ms (960 matrices) |
+| down, 2560x640 IQ4_NL | 0.41-0.49 ms | 197-235 ms (480 matrices) |
+| **expert compute** | | **514-705 ms -> 1.4-1.9 tok/s ceiling** |
+
+That is the as-is expert path's measured compute ceiling before I/O, against the
+4.62 tok/s affine baseline. It is correct and the shape is right; vectorised
+weight and x loads are the next optimisation, and the same harness measures any
+gain.
+
 **All seven block formats now decode on the GPU (2026-11-09).** Each kernel is
 element-for-element identical to `GGUFDequant`'s CPU decoder, which is bit-exact
 against ggml, and each writes bf16 tiles the existing `BF16GEMV` and gather

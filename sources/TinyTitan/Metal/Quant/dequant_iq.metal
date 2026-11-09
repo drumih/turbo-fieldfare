@@ -259,3 +259,35 @@ kernel void iq2s_gemv_simd(
     acc = simd_sum(acc);
     if (lane == 0) { y[row] = half(acc); }
 }
+
+// IQ4_NL GEMV: y[m] = sum_n W[m,n] * x[n], W in IQ4_NL blocks (32 values, 18
+// bytes). One SIMD per row; lane L owns value L of every block (byte L/2, low
+// nibble for even lanes, high for odd), so the 32 lanes cover one block.
+kernel void iq4nl_gemv_simd(
+    device const uchar* W     [[buffer(0)]],
+    device const half*  x     [[buffer(1)]],
+    device half*        y     [[buffer(2)]],
+    constant uint&      M     [[buffer(3)]],
+    constant uint&      N     [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 32u;
+    device const uchar* W_row = W + uint(row) * blocks * 18u;
+    float acc = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* block = W_row + b * 18u;
+        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        // ggml stores low nibbles as values 0...15 and high nibbles as 16...31.
+        const uchar packed = block[2u + (lane & 15u)];
+        const uint q = lane < 16u ? uint(packed & 0x0Fu) : uint(packed >> 4u);
+        acc = fma(d * float(kIQ4NLTable[q]), float(x[b * 32u + lane]), acc);
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}
