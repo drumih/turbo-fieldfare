@@ -233,12 +233,14 @@ real file and a commit:
 | `556bd588` | manifest: accepted by `ManifestReader.decode` against `qwen38FlashNext` |
 
 **Where it stands:** the expert payload, the layout and the manifest are proven.
-What remains is the **resident** half — `model_weights.bin` — and it is not a
-rename: the runtime composes `qProj` as `[query; gate]` while the GGUF keeps
-`attn_q` and `attn_gate` apart, so the writer must concatenate and reshape for
-the 12 full-attention layers, keep the fused `attn_qkv` for the 36 GDN layers,
-and handle the hyper-connection pairs and the PLE table. Then the full ~100 GB
-write, and KLD/top-1 against a llama.cpp run of the same GGUF.
+What remains is the **resident** half — `model_weights.bin`. Per-tensor it is a
+role map, not a composition: the GGUF already fuses `[query ; gate]` into
+`attn_q` for the 12 full-attention layers (12288 rows = 2·24·256), and on the 36
+GDN layers `attn_gate` (6144) is the linear attention's z gate, not an
+attention gate. A first reading here said "concatenate `attn_q` and
+`attn_gate`"; the shapes disproved it. Still to do: the role table for the
+hyper-connection pairs, the norms and the PLE, the width per role, then the full
+~100 GB write and KLD/top-1 against a llama.cpp run of the same GGUF.
 
 **Facts that shape it.** `CPUModelFamily` serves only `qwen3_5_dense`, so there
 is no CPU forward for this architecture; experts are affine-only in the engine

@@ -300,30 +300,32 @@ Two consequences:
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
 
-## Route B, fifth probe: resident tensors are not a rename
+## Route B, fifth probe: resident tensors map by role, with two traps
 
-The expert half converts one tensor at a time; the resident half does not. The
-GGUF and the runtime disagree on how attention tensors are composed, and the
-shapes say so:
+The first reading of this was wrong, and the shapes are what corrected it. What
+the GGUF actually holds, against the runtime's roles:
 
-| tensor | GGUF dims | runtime role |
+| GGUF tensor | dims | runtime role |
 | --- | --- | --- |
-| `blk.0.attn_qkv.weight` (GDN layers) | [2560, 10240] | `gdnQKV` |
-| `blk.3.attn_q/k/v.weight` (full-attention layers) | three tensors | `qProj`, `kProj`, `vProj` |
-| `blk.N.attn_gate.weight` (every layer) | [2560, 6144] | composed **into** `qProj` as its gate half |
+| `blk.0.attn_qkv.weight` (GDN layer) | [2560, 10240] | `gdnQKV` (2·16·128 + 48·128 = 10240) |
+| `blk.0.attn_gate.weight` (GDN layer) | [2560, 6144] | `gdnZ` — the z gate, 48·128 = 6144 |
+| `blk.0.ssm_out.weight` | [6144, 2560] | `gdnOut` |
+| `blk.3.attn_q.weight` (full-attention layer) | [2560, 12288] | `qProj`, already `[query ; gate]` per head (2·24·256) |
+| `blk.3.attn_k/v.weight` | [2560, 6144] | `kProj`, `vProj` |
 
-`attnOutputGate` means the runtime's q projection carries `[query; gate]` rows;
-the GGUF keeps the gate in its own tensor. A resident writer therefore has to
-**concatenate** `attn_q` and `attn_gate` (and reshape the result), not copy a
-tensor under a new name — and it has to do it only for the 12 full-attention
-layers, while the 36 GDN layers keep their fused `attn_qkv`. The hyper-connection
-pairs (`hc_*_up`/`hc_*_down` around a rank-320 bottleneck), the 557 F32 norms and
-the PLE table each have their own composition rule too.
+So the per-tensor conversion is a **role map**, not a composition: the gate that
+the runtime expects inside `q_proj` is already fused in the file for the 12
+full-attention layers, and on the 36 GDN layers `attn_gate` is not an attention
+gate at all but the linear attention's z projection. Concatenating `attn_q` and
+`attn_gate` — the first draft of this section — would have built a tensor of the
+wrong shape from the wrong pair.
 
-That is the resident writer's real job, and it is a design task before it is a
-coding task: get the composition wrong and the install loads, runs, and answers
-fluently with the wrong math. The mapping and the widths per role need a written
-design before bytes are written.
+What remains before the resident writer is a role table for the other families
+of tensors (hyper-connection up/down pairs, the F32 norms, PLE), the width each
+role gets (4-bit embedding/shared, 8-bit attention/router, bf16 norms), and then
+the bytes. The shape check above is the test that mapping must pass: a role
+whose dims disagree with the preset is a wrong map, and it fails at conversion
+rather than at generation.
 
 ## Route B, fourth probe: the manifest
 
