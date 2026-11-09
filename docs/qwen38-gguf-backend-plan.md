@@ -154,16 +154,29 @@ it with the read-window size.
      hyper-connection + PLE layers have no CPU implementation. A "load the
      non-expert path on the CPU" milestone therefore does not exist — the seam
      has to target the Metal runner.
-   - **The engine's weight contract is affine 4/8-bit.** `ManifestReader` accepts
-     only bits 4 and 8, expert entries carry `bits ∈ {4, 8}`, and the kernels are
-     `DequantInt4GEMV`/`DequantInt8GEMV`. There is no fp16 or bf16 **expert**
-     path. So a GGUF expert block cannot be handed to a kernel as it stands, and
-     the two candidates both need new work: kernels for the IQ block types, or a
-     decode-on-fetch stage whose output format a kernel already takes (none
-     does, today).
+   - **Experts are affine-only, but a bf16 GEMV exists.** `ManifestReader`
+     accepts only weight bits 4 and 8, expert entries carry `bits ∈ {4, 8}`, and
+     the expert kernels are `DequantInt4GEMV`/`DequantInt8GEMV`. Non-expert
+     tensors, however, run through `BF16GEMV`. So decode-on-fetch would not need
+     a *new* kernel format — it would need an expert dispatch path for bf16 —
+     and the question becomes arithmetic rather than architecture:
 
-   This is the largest piece and is now the project's decision point; milestone 5
-   is to measure the smallest kernel addition that lets one expert block run.
+     | quantity | value |
+     | --- | ---: |
+     | expert bytes read per token (IQ, no cache hits) | 982.3 MB |
+     | elements those cover | 2.359 G |
+     | same tile as bf16 | 4.72 GB |
+     | I/O budget at 3.95 GB/s | 249 ms |
+     | host decode rate needed to hide inside it | > 9.5 G elements/s |
+
+     Nine and a half billion elements a second on one core is not plausible, so
+     the estimate says host decode-on-fetch loses to the I/O it would hide
+     inside. That is a projection, not a measurement, and milestone 5's job is
+     to measure the real decode rate before choosing. If the measurement agrees,
+     the route is kernels for the IQ block types on the GPU, where the decode
+     runs beside the fetch instead of in front of it.
+
+   This is the largest piece and is now the project's decision point.
 5. **Verification.** There is no receipt for a GGUF. The honest checks are a
    content digest over the shard bytes, tokenizer parity, and generated-text
    comparison against a llama.cpp run on the same file — which this host does not
