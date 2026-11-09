@@ -342,8 +342,21 @@ is 4.62 tok/s, and the difference is the cache, not the format.
 4. **PLE gather over IQ4_NL** — the table stays in its block format; only the
    gathered rows are decoded.
 
-The first milestone is (1) for one format, with a GPU throughput measurement and
-a bit-exact comparison against `GGUFDequant`; everything else builds on it.
+**First kernel landed (2026-11-09).** `dequant_iq4nl_bf16` decodes a GGUF
+IQ4_NL block (fp16 scale + 16 nibble bytes) to 32 bf16 values the existing
+`BF16GEMV` and gather kernels already read. It is element-for-element identical
+to `GGUFDequant`'s CPU decoder and measures **5.14 G elements/s** on this M3
+(1.64 M elements x 20, warmed), against 0.21-0.36 G on the CPU - 14-24x. At that
+rate a token's 2.36 G expert elements would still cost ~460 ms, so vectorised
+stores and fewer launches are needed before the as-is path can approach the
+216 ms affine baseline; the kernel is the right shape, not yet the right speed.
+
+**ANE is measured not to pay for this model.** `benchmark/ane-prefill/README.md`
+records 197.5 s on the GPU against 273.5 s on the ANE for Qwen 3.8 125B-A6B
+4-bit - **0.72x** - because the GPU path attends only the indexer's ~2,051
+selected keys while the ANE graph is dense over the context. There is no ANE
+graph for the as-is GGUF path, and building one would start from a measured
+loss, so the as-is route targets the GPU.
 
 ## Reference measurement: llama.cpp on this host (2026-11-09)
 

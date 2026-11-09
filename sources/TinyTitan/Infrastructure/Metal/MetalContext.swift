@@ -111,6 +111,7 @@ public final class MetalContext: @unchecked Sendable {
         "gdn",
         "qsa",
         "bf16_gemv",
+        "dequant_iq",
         "nemotron",
     ]
 
@@ -121,6 +122,7 @@ public final class MetalContext: @unchecked Sendable {
         "dequant_int4": "Metal/Quant",
         "dequant_int8": "Metal/Quant",
         "dequant_affine": "Metal/Quant",
+        "dequant_iq": "Metal/Quant",
         "bf16_gemv": "Metal/Quant",
         "kv_cache_quantize": "Metal/Quant",
         "fused": "Metal/Fusions",
