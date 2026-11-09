@@ -197,7 +197,8 @@ it with the read-window size.
 | 7 | converter producing a real install | **landed 2026-11-09 (one layer)**: `GGUFExpertBlobWriter` writes a `.ssdai` expert blob and layout.json that the engine's reader accepts; weights read back equal the quantise→dequantise reference | yes (GGUF) |
 | 8a | full layout plan | **landed 2026-11-09**: 48 layers x 512 experts x 9 sub-tensors, `layout.json` 19.2 MB (under the 128 MiB cap), expert payload 68.05 GB | yes |
 | 8b | manifest | **landed 2026-11-09**: built from the GGUF + `qwen38FlashNext` preset, accepted by `ManifestReader.decode`, and refusing a file whose geometry disagrees | yes |
-| 8c | resident weights | `model_weights.bin` written at the widths the manifest declares; hashes filled in | yes |
+| 8c | resident role map | **landed 2026-11-09**: 44 roles over 1,080 resident tensors, every shape checked against the preset; a wrong dim is refused | yes |
+| 8d | resident weights | `model_weights.bin` written at the widths the manifest declares; hashes filled in | yes |
 | 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 8 is the converter proper: every layer through this writer, a
@@ -320,12 +321,20 @@ gate at all but the linear attention's z projection. Concatenating `attn_q` and
 `attn_gate` — the first draft of this section — would have built a tensor of the
 wrong shape from the wrong pair.
 
-What remains before the resident writer is a role table for the other families
-of tensors (hyper-connection up/down pairs, the F32 norms, PLE), the width each
-role gets (4-bit embedding/shared, 8-bit attention/router, bf16 norms), and then
-the bytes. The shape check above is the test that mapping must pass: a role
-whose dims disagree with the preset is a wrong map, and it fails at conversion
-rather than at generation.
+**That table is now code and verified.** `GGUFResidentRoleMap` maps all 44 roles
+over the 1,080 resident tensors and checks each against the shape the preset
+implies — `attn_qkv` against `2·numKHeads·keyHeadDim + numVHeads·valueHeadDim`,
+`attn_q` against `2·numHeads·headDim`, the hyper-connection pairs against
+`hcCount·hidden` and the rank-320 bottleneck, the PLE norms against
+`hcCount·hidden`, and so on. The counts land where the architecture says: 36 GDN
+qkv/z, 12 full-attention q/k/v sets, 48 routers and shared-expert triples, 1
+embedding/head/PLE table. A tensor whose dims disagree is refused by name, and
+the negative test mutates `attn_qkv`'s row count to prove it.
+
+What remains before the resident writer is the **width per role** (4-bit
+embedding/shared, 8-bit attention/router, bf16 norms), then the bytes — for
+which `ResidentWriter`-equivalent index encoding and the external storage are
+the open items.
 
 ## Route B, fourth probe: the manifest
 
