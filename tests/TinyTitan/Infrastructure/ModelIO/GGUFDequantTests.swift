@@ -14,9 +14,8 @@ import Testing
     /// `dequantize_row_*`. The bytes are in the file, so the Swift decoder is
     /// fed exactly the block the reference decoded.
     private static func vectors() throws -> [Vector] {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("GGUFDequantVectors.txt")
+        let url = try #require(
+            Bundle.module.url(forResource: "GGUFDequantVectors", withExtension: "txt"))
         let data = try Data(contentsOf: url)
         let text = try #require(String(data: data, encoding: .utf8))
         var vectors: [Vector] = []
@@ -65,8 +64,10 @@ import Testing
     /// the port rather than floating-point noise.
     @Test func matchesGGMLReferenceBitForBit() throws {
         let vectors = try Self.vectors()
-        #expect(vectors.count == 5, "fixture should carry five block types")
-        #expect(Set(vectors.map(\.type.name)) == ["Q6_K", "Q8_0", "Q2_0", "IQ4_NL", "IQ4_XS"])
+        #expect(vectors.count == 7, "fixture should carry seven block types")
+        #expect(
+            Set(vectors.map(\.type.name))
+                == ["Q6_K", "Q8_0", "Q2_0", "IQ4_NL", "IQ4_XS", "IQ2_S", "IQ3_XXS"])
         for vector in vectors {
             let got = try GGUFDequant.decode(type: vector.type, bytes: vector.bytes)
             #expect(
@@ -96,8 +97,8 @@ import Testing
         }
     }
 
-    @Test func refusesTheGridTypesUntilMilestone2b() throws {
-        for (type, bytes) in [(GGUFType.iq2S, 82), (.iq3XXS, 98)] {
+    @Test func refusesBlockTypesItDoesNotDecode() throws {
+        for (type, bytes) in [(GGUFType.q4K, 144), (.q5K, 176)] {
             #expect(throws: GGUFDequantError.unsupportedType(type.name)) {
                 try GGUFDequant.decode(type: type, bytes: [UInt8](repeating: 0, count: bytes))
             }

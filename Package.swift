@@ -243,6 +243,7 @@ let package = Package(
                 .copy("Tokenization/Fixtures"),
                 .copy("Runtime/qwen38_tensor_names.txt"),
                 .copy("Runtime/ple_golden.json"),
+                .copy("Infrastructure/ModelIO/GGUFDequantVectors.txt"),
             ],
             swiftSettings: tinytitanLanguageStandard
         ),

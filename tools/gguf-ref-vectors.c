@@ -74,6 +74,22 @@ int main(void) {
         dequantize_row_iq4_nl((const block_iq4_nl *)buf, y, 64);
         emit("iq4_nl", buf, sizeof buf, y, 64);
     }
+    { // iq2_s: 2 blocks, d at 0, qs/signs at 2, qh at 66, scales at 74
+        uint8_t buf[164];
+        for (int i = 0; i < 164; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.02f);
+        set_d(buf + 82, 0, -0.015f);
+        dequantize_row_iq2_s((const block_iq2_s *)buf, y, 512);
+        emit("iq2_s", buf, sizeof buf, y, 512);
+    }
+    { // iq3_xxs: 2 blocks, d at 0, qs at 2
+        uint8_t buf[196];
+        for (int i = 0; i < 196; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.012f);
+        set_d(buf + 98, 0, -0.009f);
+        dequantize_row_iq3_xxs((const block_iq3_xxs *)buf, y, 512);
+        emit("iq3_xxs", buf, sizeof buf, y, 512);
+    }
     { // iq4_xs: 2 blocks, d at 0, scales_h at 2, scales_l at 4, qs at 8
         uint8_t buf[272];
         for (int i = 0; i < 272; i++) buf[i] = pat(i);

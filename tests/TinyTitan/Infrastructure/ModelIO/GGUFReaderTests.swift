@@ -386,7 +386,10 @@ private struct GGUFWriter {
     func decodesRealBlocksAtTheirDirectoryOffsets() throws {
         let path = try #require(Self.realModelPath)
         let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
-        let names = ["output.weight", "blk.8.ffn_down_exps.weight", "per_layer_token_embd.weight"]
+        let names = [
+            "output.weight", "blk.8.ffn_down_exps.weight", "per_layer_token_embd.weight",
+            "blk.0.ffn_gate_exps.weight", "blk.14.ffn_gate_exps.weight",
+        ]
         for name in names {
             let location = try #require(model.tensor(named: name))
             let shard = model.shards[location.shardIndex]

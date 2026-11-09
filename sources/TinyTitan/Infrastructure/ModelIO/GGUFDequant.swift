@@ -95,6 +95,10 @@ package enum GGUFDequant {
             decodeIQ4NL(bytes, offset: offset, into: &values)
         case .iq4XS:
             decodeIQ4XS(bytes, offset: offset, into: &values)
+        case .iq2S:
+            decodeIQ2S(bytes, offset: offset, into: &values)
+        case .iq3XXS:
+            decodeIQ3XXS(bytes, offset: offset, into: &values)
         default:
             throw GGUFDequantError.unsupportedType(type.name)
         }
@@ -196,6 +200,65 @@ package enum GGUFDequant {
             }
         }
         values.replaceSubrange(start..<values.count, with: reordered)
+    }
+
+    /// IQ2_S: d, 32 quant indices, 32 sign bytes, 8 high-bit bytes, 8 scales.
+    /// Each 32-element sub-block takes two scales (low and high nibble) and four
+    /// 8-value grid entries; the 2 high bits per entry are in `qh`.
+    private static func decodeIQ2S(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        let scale = fp16(bytes, offset)
+        let qs = offset + 2
+        let qh = offset + 66
+        let scales = offset + 74
+        for sub in 0..<8 {
+            let packed = bytes[scales + sub]
+            let db0 = scale * (0.5 + Float(packed & 0x0F)) * 0.25
+            let db1 = scale * (0.5 + Float(packed >> 4)) * 0.25
+            for l in 0..<4 {
+                let dl = l < 2 ? db0 : db1
+                let index =
+                    Int(bytes[qs + sub * 4 + l])
+                    | ((Int(bytes[qh + sub]) << (8 - 2 * l)) & 0x300)
+                let signs = bytes[qs + 32 + sub * 4 + l]
+                let grid = GGUFIQTables.iq2sGrid[index]
+                for j in 0..<8 {
+                    let quant = Float(UInt8(truncatingIfNeeded: grid >> (8 * j)))
+                    let factor: Float = signs & GGUFIQTables.kmask[j] != 0 ? -1 : 1
+                    values.append(dl * quant * factor)
+                }
+            }
+        }
+    }
+
+    /// IQ3_XXS: d, 64 grid-index bytes, then 32 scale/sign words. Each 32-element
+    /// sub-block is one 32-bit word: top 4 bits are the scale, the other 28 are
+    /// four 7-bit indices into `ksigns` (a byte per 8 elements).
+    private static func decodeIQ3XXS(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        let scale = fp16(bytes, offset)
+        let qs = offset + 2
+        for sub in 0..<8 {
+            let aux = u32(bytes, qs + 64 + 4 * sub)
+            let db = scale * (0.5 + Float(aux >> 28)) * 0.5
+            for l in 0..<4 {
+                let signs = GGUFIQTables.ksigns[Int((aux >> UInt32(7 * l)) & 127)]
+                let first = GGUFIQTables.iq3xxsGrid[Int(bytes[qs + sub * 8 + 2 * l])]
+                let second = GGUFIQTables.iq3xxsGrid[Int(bytes[qs + sub * 8 + 2 * l + 1])]
+                for j in 0..<4 {
+                    let quant = Float(UInt8(truncatingIfNeeded: first >> (8 * j)))
+                    let factor: Float = signs & GGUFIQTables.kmask[j] != 0 ? -1 : 1
+                    values.append(db * quant * factor)
+                }
+                for j in 0..<4 {
+                    let quant = Float(UInt8(truncatingIfNeeded: second >> (8 * j)))
+                    let factor: Float = signs & GGUFIQTables.kmask[j + 4] != 0 ? -1 : 1
+                    values.append(db * quant * factor)
+                }
+            }
+        }
     }
 
     /// `kvalues_iq4nl` from ggml-common.h, in the order ggml uses.
