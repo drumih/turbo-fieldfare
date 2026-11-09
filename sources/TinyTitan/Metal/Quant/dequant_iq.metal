@@ -414,3 +414,93 @@ kernel void q2_0_gemv_simd(
     acc = simd_sum(acc);
     if (lane == 0) { y[row] = half(acc); }
 }
+
+// Q8_0 GEMV: 34-byte blocks (fp16 d + 32 signed bytes). Lane L owns 8
+// contiguous elements per 256-element chunk, inside one block.
+kernel void q8_0_gemv_simd(
+    device const uchar* W  [[buffer(0)]],
+    device const half*  x  [[buffer(1)]],
+    device half*        y  [[buffer(2)]],
+    constant uint&      M  [[buffer(3)]],
+    constant uint&      N  [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 32u;
+    device const uchar* W_row = W + uint(row) * blocks * 34u;
+    float acc = 0.0f;
+    for (uint chunk = 0u; chunk < N; chunk += 256u) {
+        const uint element = chunk + lane * 8u;
+        if (element >= N) break;
+        device const uchar* bp = W_row + (element / 32u) * 34u;
+        const ushort dBits = ushort(bp[0]) | (ushort(bp[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        device const uchar* qs = bp + 2u + (element % 32u);
+        device const half* xp = x + element;
+        for (uint j = 0u; j < 8u; ++j) {
+            acc = fma(float(as_type<char>(qs[j])) * d, float(xp[j]), acc);
+        }
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}
+
+// Q6_K GEMV: 210-byte blocks (128 low nibbles, 64 high-bit bytes, 16 int8
+// sub-scales, fp16 super-scale). Lane L owns 8 contiguous elements per 256
+// block; they sit in one 32-element group, whose q/scale recipe differs by
+// group (0..3) - the four outputs of one index are 32 apart in the decoder.
+kernel void q6k_gemv_simd(
+    device const uchar* W  [[buffer(0)]],
+    device const half*  x  [[buffer(1)]],
+    device half*        y  [[buffer(2)]],
+    constant uint&      M  [[buffer(3)]],
+    constant uint&      N  [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 256u;
+    device const uchar* W_row = W + uint(row) * blocks * 210u;
+    float acc = 0.0f;
+    for (uint chunk = 0u; chunk < N; chunk += 256u) {
+        const uint element = chunk + lane * 8u;
+        if (element >= N) break;
+        device const uchar* bp = W_row + (element / 256u) * 210u;
+        const ushort dBits = ushort(bp[208]) | (ushort(bp[209]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        const uint within = element % 256u;
+        const uint halfIndex = within / 128u;
+        const uint w = within % 128u;
+        const uint group = w / 32u;
+        const uint l = w % 32u;
+        device const uchar* ql = bp + halfIndex * 64u;
+        device const uchar* qh = bp + 128u + halfIndex * 32u;
+        device const uchar* sc = bp + 192u + halfIndex * 8u;
+        device const half* xp = x + element;
+        const uint is = l / 16u;
+        const float s = float(as_type<char>(sc[is + 2u * group]));
+        for (uint j = 0u; j < 8u; ++j) {
+            const uint ll = l + j;
+            int q = 0;
+            if (group == 0u) {
+                q = int((ql[ll] & 0x0Fu) | ((qh[ll] & 0x03u) << 4u)) - 32;
+            } else if (group == 1u) {
+                q = int((ql[ll + 32u] & 0x0Fu) | (((qh[ll] >> 2u) & 0x03u) << 4u)) - 32;
+            } else if (group == 2u) {
+                q = int((ql[ll] >> 4u) | (((qh[ll] >> 4u) & 0x03u) << 4u)) - 32;
+            } else {
+                q = int((ql[ll + 32u] >> 4u) | (((qh[ll] >> 6u) & 0x03u) << 4u)) - 32;
+            }
+            acc = fma(d * s * float(q), float(xp[j]), acc);
+        }
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}

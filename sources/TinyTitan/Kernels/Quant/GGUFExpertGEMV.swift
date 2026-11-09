@@ -13,12 +13,16 @@ package final class GGUFExpertGEMV {
     private let iq3xxs: IQ3XXSGEMV
     private let iq4nl: IQ4NLGEMV
     private let other: IQ4XSQ2GEMV
+    private let q6k: Q6KGEMV
+    private let q8: Q80GEMV
 
     package init(context: MetalContext) throws {
         self.iq2s = try IQ2SGEMV(context: context)
         self.iq3xxs = try IQ3XXSGEMV(context: context)
         self.iq4nl = try IQ4NLGEMV(context: context)
         self.other = try IQ4XSQ2GEMV(context: context)
+        self.q6k = try Q6KGEMV(context: context)
+        self.q8 = try Q80GEMV(context: context)
     }
 
     package func encode(
@@ -48,6 +52,14 @@ package final class GGUFExpertGEMV {
             try other.encode(
                 commandBuffer: commandBuffer, weights: weights, weightsOffset: weightsOffset,
                 x: x, y: y, rows: rows, columns: columns, type: type)
+        case .q6K:
+            try q6k.encode(
+                commandBuffer: commandBuffer, weights: weights, weightsOffset: weightsOffset,
+                x: x, y: y, rows: rows, columns: columns)
+        case .q8_0:
+            try q8.encode(
+                commandBuffer: commandBuffer, weights: weights, weightsOffset: weightsOffset,
+                x: x, y: y, rows: rows, columns: columns)
         default:
             throw MetalError.invalidState(
                 "no fused GEMV for \(type.name); the expert path has no kernel that reads it")

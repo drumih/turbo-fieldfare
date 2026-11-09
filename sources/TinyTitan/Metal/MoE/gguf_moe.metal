@@ -27,3 +27,17 @@ kernel void gguf_accumulate_scaled_half(
     if (gid >= n) return;
     y[gid] = half(float(y[gid]) + w * float(row[gid]));
 }
+
+// Shared-expert output with its sigmoid scalar gate: y += sigmoid(gate[0]) * row.
+kernel void gguf_accumulate_sigmoid_half(
+    device half*       y      [[buffer(0)]],
+    device const half* row    [[buffer(1)]],
+    device const half* scalar [[buffer(2)]],
+    constant uint&     n      [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n) return;
+    const float g = float(scalar[0]);
+    const float s = 1.0f / (1.0f + exp(-g));
+    y[gid] = half(float(y[gid]) + s * float(row[gid]));
+}
