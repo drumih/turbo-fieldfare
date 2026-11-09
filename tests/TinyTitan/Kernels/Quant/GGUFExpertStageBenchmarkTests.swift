@@ -137,11 +137,21 @@ import TinyTitanValidationSupport
             }
             return buffers
         }
-        _ = try encodeToken(commit: true).forEach { $0.waitUntilCompleted() }
+        for buffer in try encodeToken(commit: true) {
+            buffer.waitUntilCompleted()
+            if let error = buffer.error {
+                throw MetalError.invalidState("expert stage warm-up failed: \(error)")
+            }
+        }
 
         let start = DispatchTime.now().uptimeNanoseconds
         let buffers = try encodeToken(commit: true)
-        for buffer in buffers { buffer.waitUntilCompleted() }
+        for buffer in buffers {
+            buffer.waitUntilCompleted()
+            if let error = buffer.error {
+                throw MetalError.invalidState("expert stage command failed: \(error)")
+            }
+        }
         let seconds = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
         let tokPerSecond = 1.0 / seconds
         print(
