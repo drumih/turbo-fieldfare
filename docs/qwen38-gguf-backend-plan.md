@@ -1,5 +1,12 @@
 # Qwen3.8 on GGUF: backend scope and the first landed component
 
+> **Decision 2026-11-09: the model is used as it is. Conversion is parked.**
+> The operator's instruction is to run the GGUF in place; the affine-conversion
+> material below (probes, blob writer, planner, manifest builder) stays on the
+> record as a rejected route, not as the plan. The as-is route needs IQ
+> block-format kernels and a GGUF model path; its first milestone is a dequant
+> kernel measured against the CPU decoder that is already bit-exact.
+
 **Status 2026-11-09.** The Unsloth `UD-IQ3_XXS` checkpoint is installed at
 `models/qwen3.8-flash-next-unsloth-iq3xxs` (83.63 GB base + 4.14 GB MTP +
 0.90 GB mmproj). This note records its measured inventory, decides that the
@@ -303,6 +310,40 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## As-is execution: what runs today, and what the engine needs
+
+The checkpoint runs as-is under llama.cpp, and the numbers are the honest
+baseline for this machine (24 GiB, 78 GiB file):
+
+| build | offload | test | t/s |
+| --- | --- | --- | ---: |
+| CPU-only, 8 threads | — | pp64 | 2.00 ± 0.38 |
+| CPU-only, 8 threads | — | tg16 | **0.09 ± 0.00** |
+| Metal + BLAS, 8 threads | `-ngl 8` | pp32 | 0.60 ± 0.00 |
+| Metal + BLAS, 8 threads | `-ngl 8` | tg8 | **0.06 ± 0.00** |
+
+Partial offload is *worse*: the working set is split across two pools and both
+page. llama.cpp has no expert cache, so a 78 GiB model on a 24 GiB machine
+faults on nearly every expert read. The recorded affine install on this machine
+is 4.62 tok/s, and the difference is the cache, not the format.
+
+**The engine's as-is path** therefore needs, in order:
+
+1. **Dequant kernels for the expert formats** — IQ2_S and IQ3_XXS (gate/up),
+   IQ4_NL (down and the PLE table), IQ4_XS and Q2_0 (the layer exceptions) —
+   writing bf16 tiles the existing `BF16GEMV` and gather kernels already read.
+   The CPU decoders in `GGUFDequant` are the bit-exact reference for each.
+2. **A GGUF model path**: build the architecture from metadata and the family
+   preset (the manifest builder's cross-check is reusable), skip the
+   manifest/receipt requirement, and open tensors in place.
+3. **Expert streaming**: feed the IQ blocks from `GGUFExpertLayout` ranges into
+   the dequant kernel, inside the existing prefetch/eviction machinery.
+4. **PLE gather over IQ4_NL** — the table stays in its block format; only the
+   gathered rows are decoded.
+
+The first milestone is (1) for one format, with a GPU throughput measurement and
+a bit-exact comparison against `GGUFDequant`; everything else builds on it.
 
 ## Reference measurement: llama.cpp on this host (2026-11-09)
 
