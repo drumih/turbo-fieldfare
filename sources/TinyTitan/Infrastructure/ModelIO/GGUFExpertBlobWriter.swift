@@ -159,20 +159,53 @@ package enum GGUFExpertBlobWriter {
         var biases: [UInt8] = []
     }
 
-    private static func serialize(
-        layer: Int, expert: Int, model: GGUFModel, reader: ShardReader
-    ) throws -> Blob {
-        let weights = try GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
-        let roles: [(String, GGUFTensorRange, String)] = [
-            ("gate", weights.gate, "ffn_gate_exps.weight"),
-            ("up", weights.up, "ffn_up_exps.weight"),
-            ("down", weights.down, "ffn_down_exps.weight"),
-        ]
-        var bytes: [UInt8] = []
+    static let roles: [(role: String, suffix: String)] = [
+        ("gate", "ffn_gate_exps.weight"),
+        ("up", "ffn_up_exps.weight"),
+        ("down", "ffn_down_exps.weight"),
+    ]
+
+    /// The layout record for one full layer, without reading or writing any
+    /// weights. The planner uses this to build `layout.json` for all 48 layers;
+    /// the writer uses `expertLayout` so the records and the payload come from
+    /// one calculation rather than two that could drift.
+    package static func layoutRecord(
+        layer: Int, expertCount: Int, in model: GGUFModel
+    ) throws -> SSDAILayerV1 {
+        let available = try GGUFExpertLayout.expertsPerLayer(in: model)
+        guard expertCount > 0, expertCount <= available else {
+            throw GGUFExpertBlobError.expertCountOutOfRange(
+                requested: expertCount, available: available)
+        }
+        let layout = try expertLayout(layer: layer, model: model)
+        let experts = (0..<expertCount).map { expert in
+            SSDAIExpertV1(
+                expert: expert,
+                physicalRank: expert,
+                offset: UInt64(expert) * layout.stride,
+                size: layout.stride,
+                tensors: layout.tensors)
+        }
+        return SSDAILayerV1(
+            layer: layer, file: fileName(layer: layer), experts: experts)
+    }
+
+    package static func fileName(layer: Int) -> String {
+        String(format: "layer_%02d.bin", layer)
+    }
+
+    /// Offsets and sizes of one expert's nine sub-tensors, and the 16 KiB-padded
+    /// stride. Sizes follow from the tensor shapes alone: nibbles are half the
+    /// weights, and each group of 64 carries a BF16 scale and bias.
+    static func expertLayout(
+        layer: Int, model: GGUFModel
+    ) throws -> (stride: UInt64, tensors: [String: SSDAISubTensorV1]) {
+        var offset: UInt64 = 0
         var tensors: [String: SSDAISubTensorV1] = [:]
-        for (role, range, suffix) in roles {
+        for (role, suffix) in roles {
             let name = "blk.\(layer).\(suffix)"
-            guard let location = model.tensor(named: name), location.tensor.dimensions.count == 3
+            guard let location = model.tensor(named: name),
+                location.tensor.dimensions.count == 3
             else {
                 throw GGUFExpertBlobError.shapeMismatch(
                     name: name, rows: 0, columns: 0, elements: 0)
@@ -184,47 +217,81 @@ package enum GGUFExpertBlobWriter {
                 throw GGUFExpertBlobError.rowNotGroupAligned(
                     name: name, columns: columns, group: groupSize)
             }
-            let data = try reader.read(range: range)
-            let values = try GGUFDequant.decode(type: range.type, bytes: data)
-            guard UInt64(values.count) == rows * columns else {
-                throw GGUFExpertBlobError.shapeMismatch(
-                    name: name, rows: rows, columns: columns, elements: UInt64(values.count))
-            }
-            let blob = try quantize(values: values, rows: Int(rows), columns: Int(columns))
+            let packed = rows * columns / 2
+            let groups = columns / UInt64(groupSize)
+            let auxiliary = rows * groups * 2
+            let packedOffset = alignUp(offset, to: 4)
+            offset = packedOffset + packed
+            let scalesOffset = alignUp(offset, to: 2)
+            offset = scalesOffset + auxiliary
+            let biasesOffset = alignUp(offset, to: 2)
+            offset = biasesOffset + auxiliary
+            tensors[role] = SSDAISubTensorV1(
+                offset: packedOffset, size: packed, dtype: "U32",
+                shape: [UInt32(rows), UInt32(columns)], bits: 4)
+            tensors["\(role)_scales"] = SSDAISubTensorV1(
+                offset: scalesOffset, size: auxiliary, dtype: "BF16",
+                shape: [UInt32(rows), UInt32(groups)], bits: nil)
+            tensors["\(role)_biases"] = SSDAISubTensorV1(
+                offset: biasesOffset, size: auxiliary, dtype: "BF16",
+                shape: [UInt32(rows), UInt32(groups)], bits: nil)
+        }
+        let alignment = SSDAIFormatV1.alignmentBytes
+        return (alignUp(offset, to: alignment), tensors)
+    }
 
-            // Weights first, then scales, then biases, each at its required
-            // alignment: U32 words for the nibbles, 2 bytes for BF16.
-            let packedOffset = UInt64(bytes.count)
+    private static func serialize(
+        layer: Int, expert: Int, model: GGUFModel, reader: ShardReader
+    ) throws -> Blob {
+        let weights = try GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
+        let layout = try expertLayout(layer: layer, model: model)
+        let ranges = [weights.gate, weights.up, weights.down]
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(Int(layout.stride))
+        for (index, (role, suffix)) in roles.enumerated() {
+            let name = "blk.\(layer).\(suffix)"
+            guard let location = model.tensor(named: name),
+                location.tensor.dimensions.count == 3
+            else {
+                throw GGUFExpertBlobError.shapeMismatch(
+                    name: name, rows: 0, columns: 0, elements: 0)
+            }
+            let columns = Int(location.tensor.dimensions[0])
+            let rows = Int(location.tensor.dimensions[1])
+            let data = try reader.read(range: ranges[index])
+            let values = try GGUFDequant.decode(type: ranges[index].type, bytes: data)
+            guard values.count == rows * columns else {
+                throw GGUFExpertBlobError.shapeMismatch(
+                    name: name, rows: UInt64(rows), columns: UInt64(columns),
+                    elements: UInt64(values.count))
+            }
+            let blob = try quantize(values: values, rows: rows, columns: columns)
+            guard UInt64(blob.packed.count) == layout.tensors[role]?.size,
+                UInt64(blob.scales.count) == layout.tensors["\(role)_scales"]?.size,
+                UInt64(blob.biases.count) == layout.tensors["\(role)_biases"]?.size,
+                UInt64(bytes.count) == layout.tensors[role]?.offset
+            else {
+                throw GGUFExpertBlobError.shapeMismatch(
+                    name: name, rows: UInt64(rows), columns: UInt64(columns),
+                    elements: UInt64(values.count))
+            }
             bytes.append(contentsOf: blob.packed)
             align(&bytes, to: 4)
-            let scalesOffset = UInt64(bytes.count)
             bytes.append(contentsOf: blob.scales)
             align(&bytes, to: 2)
-            let biasesOffset = UInt64(bytes.count)
             bytes.append(contentsOf: blob.biases)
             align(&bytes, to: 2)
-
-            let groups = columns / UInt64(groupSize)
-            tensors[role] = SSDAISubTensorV1(
-                offset: packedOffset,
-                size: UInt64(blob.packed.count),
-                dtype: "U32",
-                shape: [UInt32(rows), UInt32(columns)],
-                bits: 4)
-            tensors["\(role)_scales"] = SSDAISubTensorV1(
-                offset: scalesOffset,
-                size: UInt64(blob.scales.count),
-                dtype: "BF16",
-                shape: [UInt32(rows), UInt32(groups)],
-                bits: nil)
-            tensors["\(role)_biases"] = SSDAISubTensorV1(
-                offset: biasesOffset,
-                size: UInt64(blob.biases.count),
-                dtype: "BF16",
-                shape: [UInt32(rows), UInt32(groups)],
-                bits: nil)
         }
-        return Blob(bytes: bytes, tensors: tensors)
+        if UInt64(bytes.count) < layout.stride {
+            bytes.append(
+                contentsOf: repeatElement(0, count: Int(layout.stride) - bytes.count))
+        }
+        return Blob(bytes: bytes, tensors: layout.tensors)
+    }
+
+    private static func alignUp(_ value: UInt64, to alignment: UInt64) -> UInt64 {
+        let remainder = value % alignment
+        return remainder == 0 ? value : value + (alignment - remainder)
     }
 
     private static func quantize(

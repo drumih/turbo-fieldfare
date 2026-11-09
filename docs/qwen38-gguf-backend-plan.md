@@ -195,7 +195,8 @@ it with the read-window size.
 | 5 | engine seam: weight source + kernel format | **measured 2026-11-09**: host decode 0.21–0.36 G elements/s, ≈9 s/token, so decode-on-fetch is rejected; the fork between IQ kernels and an affine conversion is open | yes (GGUF) |
 | 6 | affine conversion probe | **landed 2026-11-09**: sizes exact (50.29 → 67.95 GB for experts, ≈100 GB install) and the added error measured at 8.7–10.1% relative | yes (GGUF) |
 | 7 | converter producing a real install | **landed 2026-11-09 (one layer)**: `GGUFExpertBlobWriter` writes a `.ssdai` expert blob and layout.json that the engine's reader accepts; weights read back equal the quantise→dequantise reference | yes (GGUF) |
-| 8 | full converter + manifest | every layer written, manifest built from the GGUF's architecture metadata, the install loads | yes |
+| 8a | full layout plan | **landed 2026-11-09**: 48 layers x 512 experts x 9 sub-tensors, `layout.json` 19.2 MB (under the 128 MiB cap), expert payload 68.05 GB | yes |
+| 8b | manifest + resident weights | manifest decodes against the runtime's `qwen4Flash` arch; `model_weights.bin` written | yes |
 | 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 8 is the converter proper: every layer through this writer, a
@@ -297,6 +298,28 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## Route B, third probe: the full layout plan
+
+`GGUFInstallPlanner` builds every layer's records from the GGUF's geometry
+without reading a weight, encodes `layout.json` and decodes it through the
+format's own validator. Measured on the install:
+
+- **48 layers × 512 experts × 9 sub-tensors = 221,184 records**;
+- `layout.json` is **19,190,558 bytes**, comfortably inside the reader's 128 MiB
+  cap — that cap was the one number that could have made the whole layout
+  unwritable, and it is not close;
+- expert stride 2,768,896; the last expert starts at `511 × stride` and its
+  highest sub-tensor ends inside the stride;
+- expert payload **68,048,388,096 bytes (68.05 GB)** — the probe's 67.95 GB plus
+  ~0.10 GB of 16 KiB per-expert padding.
+
+What remains for a loadable install is the manifest and the resident weights:
+the arch block can be taken from the runtime's `qwen4Flash` preset and
+cross-checked field by field against the GGUF metadata, the quant slots describe
+the affine scheme this writer emits, and `files` needs the sizes and hashes only
+the full run can produce. The KLD/top-1 check against a llama.cpp run of the
+same GGUF is still the bar the conversion has to pass.
 
 ## Route B, second probe: one layer in `.ssdai` layout
 
