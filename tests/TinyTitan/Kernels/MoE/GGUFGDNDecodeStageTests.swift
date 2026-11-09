@@ -48,7 +48,9 @@ import TinyTitanValidationSupport
             "blk.0.ssm_norm.weight", "blk.0.ssm_out.weight",
         ]
         let arena = try GGUFResidentArena.build(names: names, from: model, context: context)
-        let stage = try GGUFGDNDecodeStage(context: context, arch: arch, arena: arena)
+        let mapped = try GGUFMappedShards(model: model, device: context.device)
+        let stage = try GGUFGDNDecodeStage(
+            context: context, arch: arch, arena: arena, mapped: mapped)
 
         var rng = SeedTree(0x6D4D).key("gdn-x")
         let x = (0..<arch.hiddenSize).map { _ in Float16(rng.uniform(-1, 1)) }
@@ -196,7 +198,9 @@ import TinyTitanValidationSupport
             "blk.0.ssm_norm.weight", "blk.0.ssm_out.weight",
         ]
         let arena = try GGUFResidentArena.build(names: names, from: model, context: context)
-        let stage = try GGUFGDNDecodeStage(context: context, arch: arch, arena: arena)
+        let mapped = try GGUFMappedShards(model: model, device: context.device)
+        let stage = try GGUFGDNDecodeStage(
+            context: context, arch: arch, arena: arena, mapped: mapped)
         var rng = SeedTree(0x6D4D).key("gdn-x")
         let x = (0..<arch.hiddenSize).map { _ in Float16(rng.uniform(-1, 1)) }
         let xBits = x.map(\.bitPattern)

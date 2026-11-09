@@ -12,7 +12,9 @@ import Metal
 package final class GGUFGDNDecodeStage {
     private let gdn: GDN
     private let gemv: BF16GEMV
+    private let fused: GGUFExpertGEMV
     private let arena: GGUFResidentArena
+    private let mapped: GGUFMappedShards
     private let config: LinearAttentionConfig
     private let hidden: Int
 
@@ -27,11 +29,14 @@ package final class GGUFGDNDecodeStage {
     private let state: MTLBuffer
 
     package init(
-        context: MetalContext, arch: ArchConfig, arena: GGUFResidentArena
+        context: MetalContext, arch: ArchConfig, arena: GGUFResidentArena,
+        mapped: GGUFMappedShards
     ) throws {
         self.gdn = try GDN(context: context, config: arch.linearAttention)
         self.gemv = try BF16GEMV(context: context)
+        self.fused = try GGUFExpertGEMV(context: context)
         self.arena = arena
+        self.mapped = mapped
         self.config = arch.linearAttention
         self.hidden = arch.hiddenSize
 
@@ -74,6 +79,9 @@ package final class GGUFGDNDecodeStage {
         outOffset: Int = 0
     ) throws {
         let prefix = "blk.\(layer)."
+        // The fused GEMV entry point takes whole buffers; every caller passes
+        // base buffers, so an offset here would be a silent mis-read.
+        precondition(xOffset == 0 && outOffset == 0, "fused GEMV takes whole buffers")
         func view(_ suffix: String, rows: Int) throws -> (MTLBuffer, Int) {
             guard let entry = arena.entries[prefix + suffix] else {
                 throw MetalError.invalidState("missing \(prefix + suffix) in the arena")
@@ -81,16 +89,19 @@ package final class GGUFGDNDecodeStage {
             _ = rows
             return (arena.buffer, Int(entry.offset))
         }
-        let (qkvW, qkvOff) = try view("attn_qkv.weight", rows: config.qkvDim)
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: qkvW, weightsOffset: qkvOff,
-            x: x, xOffset: xOffset, y: qkvRaw,
-            m: UInt32(config.qkvDim), n: UInt32(hidden))
-        let (zW, zOff) = try view("attn_gate.weight", rows: config.valueDim)
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: zW, weightsOffset: zOff,
-            x: x, xOffset: xOffset, y: zOut,
-            m: UInt32(config.valueDim), n: UInt32(hidden))
+        func fusedGEMV(
+            _ name: String, _ y: MTLBuffer, rows: Int
+        ) throws {
+            guard let weight = try mapped.weight(named: prefix + name) else {
+                throw MetalError.invalidState("missing \(prefix + name) in the shards")
+            }
+            try fused.encode(
+                commandBuffer: commandBuffer, weights: weight.buffer,
+                weightsOffset: weight.offset, x: x, y: y,
+                rows: rows, columns: hidden, type: weight.type)
+        }
+        try fusedGEMV("attn_qkv.weight", qkvRaw, rows: config.qkvDim)
+        try fusedGEMV("attn_gate.weight", zOut, rows: config.valueDim)
         let (aW, aOff) = try view("ssm_alpha.weight", rows: config.numVHeads)
         try gemv.encode(
             commandBuffer: commandBuffer, weights: aW, weightsOffset: aOff,
@@ -119,10 +130,12 @@ package final class GGUFGDNDecodeStage {
         try gdn.encodeGatedNorm(
             commandBuffer: commandBuffer, y: yOut, z: zOut,
             weight: normW, weightOffset: normOff, out: gdnOut)
-        let (outW, outOff) = try view("ssm_out.weight", rows: hidden)
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: outW, weightsOffset: outOff,
-            x: gdnOut, y: out, yOffset: outOffset,
-            m: UInt32(hidden), n: UInt32(config.valueDim))
+        guard let outWeight = try mapped.weight(named: prefix + "ssm_out.weight") else {
+            throw MetalError.invalidState("missing \(prefix)ssm_out.weight in the shards")
+        }
+        try fused.encode(
+            commandBuffer: commandBuffer, weights: outWeight.buffer,
+            weightsOffset: outWeight.offset, x: gdnOut, y: out,
+            rows: hidden, columns: config.valueDim, type: outWeight.type)
     }
 }

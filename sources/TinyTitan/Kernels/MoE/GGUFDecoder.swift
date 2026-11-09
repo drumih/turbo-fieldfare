@@ -13,6 +13,7 @@ package final class GGUFDecoder {
     private let context: MetalContext
     private let arch: ArchConfig
     private let arena: GGUFResidentArena
+    private let mapped: GGUFMappedShards
 
     private let hc: HyperConnection
     private let elementwise: Elementwise
@@ -49,9 +50,21 @@ package final class GGUFDecoder {
         // and the Q6_K head read them directly), and the shared experts are
         // preloaded by their own stage: including them in the arena as bf16
         // would duplicate ~2.5 GB of the 24 GB this machine has.
+        // The GDN stage reads its three Q6_K matrices through the mapped
+        // shards, so they do not belong in the bf16 arena either.
+        let gdnMatrixSuffixes = ["attn_qkv.weight", "attn_gate.weight", "ssm_out.weight"]
+        func isGDNAndMatrix(_ name: String) -> Bool {
+            guard name.hasPrefix("blk.") else { return false }
+            let parts = name.split(separator: ".")
+            guard parts.count >= 3, let layer = Int(parts[1]) else { return false }
+            guard layer < arch.numLayers,
+                arch.fullAttentionLayerMask[layer] == 2
+            else { return false }
+            return gdnMatrixSuffixes.contains(parts.dropFirst(2).joined(separator: "."))
+        }
         let arenaNames = source.residentNames.filter { name in
             name != "token_embd.weight" && name != "output.weight"
-                && !name.contains("_shexp.")
+                && !name.contains("_shexp.") && !isGDNAndMatrix(name)
         }
         self.arena = try GGUFResidentArena.build(
             names: arenaNames, from: model, context: context)
@@ -59,7 +72,9 @@ package final class GGUFDecoder {
             context: context, dim: arch.hiddenSize, streams: arch.hyperConnections.count,
             lowRank: arch.hyperConnections.lowRank, weightBits: 4)
         self.elementwise = try Elementwise(context: context)
-        self.gdn = try GGUFGDNDecodeStage(context: context, arch: arch, arena: arena)
+        self.mapped = try GGUFMappedShards(model: model, device: context.device)
+        self.gdn = try GGUFGDNDecodeStage(
+            context: context, arch: arch, arena: arena, mapped: mapped)
         self.fullAttention = try GGUFFullAttentionDecodeStage(
             context: context, arch: arch, arena: arena, maxSeq: maxSeq)
         self.router = try GGUFRouter(context: context, arch: arch, model: model)
