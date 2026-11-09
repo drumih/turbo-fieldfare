@@ -160,6 +160,8 @@ package final class GGUFDecoder {
         try ple.gather(context: history)
 
         var waitByLayer: [(Int, UInt64)] = []
+        var gpuAttnSeconds: TimeInterval = 0
+        var gpuRoutedSeconds: TimeInterval = 0
         var phaseNanos: [String: UInt64] = [:]
         func mark(_ name: String, _ start: UInt64) {
             phaseNanos[name, default: 0] &+= DispatchTime.now().uptimeNanoseconds - start
@@ -231,6 +233,7 @@ package final class GGUFDecoder {
             cb.waitUntilCompleted()
             if let error = cb.error { throw MetalError.invalidState("\(error)") }
             mark("  wait(attn)", tWait)
+            gpuAttnSeconds += cb.gpuEndTime - cb.gpuStartTime
             waitByLayer.append((layer, DispatchTime.now().uptimeNanoseconds - tWait))
             mark("attn+router+shared", tAttn)
 
@@ -249,8 +252,12 @@ package final class GGUFDecoder {
             routedCB.waitUntilCompleted()
             if let error = routedCB.error { throw MetalError.invalidState("\(error)") }
             mark("  wait(routed)", tRoutedWait)
+            gpuRoutedSeconds += routedCB.gpuEndTime - routedCB.gpuStartTime
             mark("routed", tRouted)
         }
+        print(
+            "  GPU: attn \(String(format: "%.0f", gpuAttnSeconds * 1000)) ms, "
+                + "routed \(String(format: "%.0f", gpuRoutedSeconds * 1000)) ms")
         for (layer, nanos) in waitByLayer.prefix(4) {
             print("  wait(attn) layer \(layer): \(String(format: "%.0f", Double(nanos) / 1e6)) ms")
         }
