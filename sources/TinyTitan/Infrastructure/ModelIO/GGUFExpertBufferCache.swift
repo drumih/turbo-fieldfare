@@ -127,7 +127,10 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             slotIndex = free
         } else {
             let evicted = order.removeFirst()
-            slotIndex = entries.removeValue(forKey: evicted)!.slotIndex
+            guard let victim = entries.removeValue(forKey: evicted) else {
+                throw GGUFExpertBufferCacheError.invalidCapacity(0)
+            }
+            slotIndex = victim.slotIndex
         }
         let loaded = try load(layer: layer, expert: expert, slotIndex: slotIndex)
         entries[key] = loaded
