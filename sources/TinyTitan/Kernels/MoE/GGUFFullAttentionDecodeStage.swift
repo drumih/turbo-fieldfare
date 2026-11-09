@@ -18,6 +18,8 @@ package final class GGUFFullAttentionDecodeStage {
     private let attention: Attention
     private let elementwise: Elementwise
     private let arena: GGUFResidentArena
+    private let mapped: GGUFMappedShards
+    private let fused: GGUFExpertGEMV
     private let arch: ArchConfig
 
     private let headDim: Int
@@ -30,15 +32,20 @@ package final class GGUFFullAttentionDecodeStage {
 
     private var kCache: [Int: MTLBuffer] = [:]
     private var vCache: [Int: MTLBuffer] = [:]
+    private let kScratch: MTLBuffer
+    private let vScratch: MTLBuffer
     private let qPacked: MTLBuffer
     private let qScratch: MTLBuffer
     private let gateScratch: MTLBuffer
     private let attnOut: MTLBuffer
 
     package init(
-        context: MetalContext, arch: ArchConfig, arena: GGUFResidentArena, maxSeq: Int
+        context: MetalContext, arch: ArchConfig, arena: GGUFResidentArena,
+        mapped: GGUFMappedShards, maxSeq: Int
     ) throws {
         self.gemv = try BF16GEMV(context: context)
+        self.fused = try GGUFExpertGEMV(context: context)
+        self.mapped = mapped
         self.rms = try RMSNorm(context: context)
         self.rope = try RoPE(context: context)
         self.attention = try Attention(context: context)
@@ -60,6 +67,8 @@ package final class GGUFFullAttentionDecodeStage {
             else { throw MetalError.bufferAllocationFailed(label) }
             return buffer
         }
+        self.kScratch = try make(kvDim * 2, "full k scratch")
+        self.vScratch = try make(kvDim * 2, "full v scratch")
         self.qPacked = try make(2 * qDim * 2, "full q packed")
         self.qScratch = try make(qDim * 2, "full q")
         self.gateScratch = try make(qDim * 2, "full gate")
@@ -90,21 +99,21 @@ package final class GGUFFullAttentionDecodeStage {
             return Int(entry.offset)
         }
         let kvRowOffset = position * kvDim * 2
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: arena.buffer,
-            weightsOffset: try offset("attn_q.weight"),
-            x: x, xOffset: xOffset, y: qPacked,
-            m: UInt32(2 * qDim), n: UInt32(arch.hiddenSize))
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: arena.buffer,
-            weightsOffset: try offset("attn_k.weight"),
-            x: x, xOffset: xOffset, y: kBuffer, yOffset: kvRowOffset,
-            m: UInt32(kvDim), n: UInt32(arch.hiddenSize))
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: arena.buffer,
-            weightsOffset: try offset("attn_v.weight"),
-            x: x, xOffset: xOffset, y: vBuffer, yOffset: kvRowOffset,
-            m: UInt32(kvDim), n: UInt32(arch.hiddenSize))
+        // The fused GEMV writes a whole buffer, so k and v land in scratch,
+        // take their norm and RoPE there, and are blitted into the cache row.
+        precondition(xOffset == 0 && outOffset == 0, "fused GEMV takes whole buffers")
+        func fusedProjection(_ name: String, into y: MTLBuffer, rows: Int) throws {
+            guard let weight = try mapped.weight(named: prefix + name) else {
+                throw MetalError.invalidState("missing \(prefix + name) in the shards")
+            }
+            try fused.encode(
+                commandBuffer: commandBuffer, weights: weight.buffer,
+                weightsOffset: weight.offset, x: x, y: y,
+                rows: rows, columns: arch.hiddenSize, type: weight.type)
+        }
+        try fusedProjection("attn_q.weight", into: qPacked, rows: 2 * qDim)
+        try fusedProjection("attn_k.weight", into: kScratch, rows: kvDim)
+        try fusedProjection("attn_v.weight", into: vScratch, rows: kvDim)
         try elementwise.encodeSplitQGate(
             commandBuffer: commandBuffer, packed: qPacked,
             q: qScratch, gate: gateScratch, heads: numHeads, dim: headDim)
@@ -113,9 +122,9 @@ package final class GGUFFullAttentionDecodeStage {
             weight: arena.buffer, weightOffset: try offset("attn_q_norm.weight"),
             out: qScratch, headDim: UInt32(headDim), numHeads: numHeads, eps: 1e-6)
         try rms.encodeBF16WPerHead(
-            commandBuffer: commandBuffer, x: kBuffer, xOffset: kvRowOffset,
+            commandBuffer: commandBuffer, x: kScratch,
             weight: arena.buffer, weightOffset: try offset("attn_k_norm.weight"),
-            out: kBuffer, outOffset: kvRowOffset,
+            out: kScratch,
             headDim: UInt32(headDim), numHeads: numKVHeads, eps: 1e-6)
         try rope.encodeNeoxSubdim(
             commandBuffer: commandBuffer, data: qScratch,
@@ -123,10 +132,20 @@ package final class GGUFFullAttentionDecodeStage {
             numHeads: UInt32(numHeads), rotaryDim: rotaryDim,
             theta: Float(arch.fullRopeTheta))
         try rope.encodeNeoxSubdim(
-            commandBuffer: commandBuffer, data: kBuffer, dataOffset: kvRowOffset,
+            commandBuffer: commandBuffer, data: kScratch,
             position: UInt32(position), headDim: UInt32(headDim),
             numHeads: UInt32(numKVHeads), rotaryDim: rotaryDim,
             theta: Float(arch.fullRopeTheta))
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        blit.copy(
+            from: kScratch, sourceOffset: 0, to: kBuffer,
+            destinationOffset: kvRowOffset, size: kvDim * 2)
+        blit.copy(
+            from: vScratch, sourceOffset: 0, to: vBuffer,
+            destinationOffset: kvRowOffset, size: kvDim * 2)
+        blit.endEncoding()
         try attention.encodeFull(
             commandBuffer: commandBuffer, q: qScratch,
             k: kBuffer, v: vBuffer, out: attnOut,
@@ -135,11 +154,13 @@ package final class GGUFFullAttentionDecodeStage {
             scale: Float(arch.attentionScale))
         try elementwise.encodeSigmoidGateMul(
             commandBuffer: commandBuffer, out: attnOut, gate: gateScratch, count: qDim)
-        try gemv.encode(
-            commandBuffer: commandBuffer, weights: arena.buffer,
-            weightsOffset: try offset("attn_output.weight"),
-            x: attnOut, y: out, yOffset: outOffset,
-            m: UInt32(arch.hiddenSize), n: UInt32(qDim))
+        guard let outputWeight = try mapped.weight(named: prefix + "attn_output.weight") else {
+            throw MetalError.invalidState("missing \(prefix)attn_output.weight in the shards")
+        }
+        try fused.encode(
+            commandBuffer: commandBuffer, weights: outputWeight.buffer,
+            weightsOffset: outputWeight.offset, x: attnOut, y: out,
+            rows: arch.hiddenSize, columns: qDim, type: outputWeight.type)
     }
 
     package func resetCache() {

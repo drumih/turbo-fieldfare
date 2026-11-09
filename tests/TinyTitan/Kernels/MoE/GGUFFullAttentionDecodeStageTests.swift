@@ -48,8 +48,9 @@ import TinyTitanValidationSupport
             "blk.\(layer).attn_q_norm.weight", "blk.\(layer).attn_k_norm.weight",
         ]
         let arena = try GGUFResidentArena.build(names: names, from: model, context: context)
+        let mapped = try GGUFMappedShards(model: model, device: context.device)
         let stage = try GGUFFullAttentionDecodeStage(
-            context: context, arch: arch, arena: arena, maxSeq: 8)
+            context: context, arch: arch, arena: arena, mapped: mapped, maxSeq: 8)
         var rng = SeedTree(0xA77E).key("full-attn-x")
         let x = (0..<arch.hiddenSize).map { _ in Float16(rng.uniform(-1, 1)) }
         let xBits = x.map(\.bitPattern)
@@ -142,8 +143,9 @@ import TinyTitanValidationSupport
             "blk.\(layer).attn_q_norm.weight", "blk.\(layer).attn_k_norm.weight",
         ]
         let arena = try GGUFResidentArena.build(names: names, from: model, context: context)
+        let mapped = try GGUFMappedShards(model: model, device: context.device)
         let stage = try GGUFFullAttentionDecodeStage(
-            context: context, arch: arch, arena: arena, maxSeq: 8)
+            context: context, arch: arch, arena: arena, mapped: mapped, maxSeq: 8)
 
         var rng = SeedTree(0xA77E).key("full-attn-x")
         let x0 = (0..<arch.hiddenSize).map { _ in Float16(rng.uniform(-1, 1)) }
