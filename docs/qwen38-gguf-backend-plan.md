@@ -193,7 +193,9 @@ it with the read-window size.
 | 3 | tokenizer + template | **landed 2026-11-09**: the sidecar exports and loads, and ten prompts tokenize exactly as llama-tokenize at `7d7f028` does | no |
 | 4 | per-expert addressing | **landed 2026-11-09**: 73,728 slices tile 50.29 GB with no gaps; block decode at expert 511's computed offset | directories only |
 | 5 | engine seam: weight source + kernel format | **measured 2026-11-09**: host decode 0.21–0.36 G elements/s, ≈9 s/token, so decode-on-fetch is rejected; the fork between IQ kernels and an affine conversion is open | yes (GGUF) |
-| 6 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
+| 6 | affine conversion probe | **landed 2026-11-09**: sizes exact (50.29 → 67.95 GB for experts, ≈100 GB install) and the added error measured at 8.7–10.1% relative | yes (GGUF) |
+| 7 | converter producing a real install | one layer written in `.ssdai` layout and read back; storage plan in place for the full run | yes (GGUF) |
+| 8 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 5 — the engine seam — is the right next step, and it is a decision as
 much as an implementation: one expert block must reach a real kernel, which
@@ -257,6 +259,42 @@ That leaves two real routes, and they differ by an order of magnitude in work:
 Recommendation: **B**, when storage allows. It reuses the entire engine and is
 the only route whose new code is a converter rather than a kernel library, and
 the GGUF stays as the quality reference for the conversion.
+
+## Route B, first probe: one layer re-quantised
+
+The operator chose conversion to the engine's affine format, starting with one
+layer. `GGUFAffineProbeTests` decodes a real expert slice, re-quantises it with
+the engine's own `quantizeInt4Affine` (4-bit, group 64, BF16 scale + bias) and
+reports both the size and the reconstruction error:
+
+| tensor | source format | weights | rmse | max abs | relative |
+| --- | --- | ---: | ---: | ---: | ---: |
+| blk.0 gate | IQ2_S | 1,638,400 | 0.00129 | 0.00677 | 9.2% |
+| blk.0 down | IQ4_NL | 1,638,400 | 0.00116 | 0.00780 | 9.3% |
+| blk.14 gate | IQ3_XXS | 1,638,400 | 0.00110 | 0.00757 | 8.7% |
+| blk.47 gate | IQ4_XS | 1,638,400 | 0.00158 | 0.01903 | 10.1% |
+
+**Size is exact, not sampled.** Affine bytes are a function of the element count
+(`elements/2` of nibbles plus 4 bytes per 64), so all 144 expert tensors are
+counted without decoding them: **120,795,955,200 weights, 50.29 GB as IQ →
+67.95 GB as affine 4-bit, 1.35×**. Adding the PLE table (51.2 G weights, the same
+0.5625 B/weight as its IQ4_NL), the two 636 M-weight embeddings at Q6_K→affine,
+attention/SSM/hyper-connection tensors and the BF16 norms puts the whole install
+at **≈100 GB** (the expert figure is exact; the non-expert part is an estimate
+from the inventory).
+
+Two consequences:
+
+- **Disk.** ~100 GB of output does not fit in the 79 GiB free here. It fits if
+  the 83.6 GB source moves to external storage first, which frees ~78 GiB and
+  leaves ~157 GiB for the output. The source still has to be readable during the
+  conversion, so the minimum is one external volume holding the GGUF (which also
+  stays as the quality reference afterwards).
+- **Quality.** A 9–10% relative weight error is the *added* error of the second
+  quantisation, on top of the IQ error the file already contains. It is not a
+  quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
+  and the conversion is not shippable until it passes. The probe is the cheap
+  filter that says the conversion is worth attempting.
 
 ## Open questions
 
