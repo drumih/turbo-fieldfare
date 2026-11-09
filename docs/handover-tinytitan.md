@@ -209,6 +209,45 @@ traps that one named still bite and are folded in below.
 > See the #230 entry under "Where the work stands" for why it moved and what was
 > re-verified on the way.
 
+## The active thread after the audit: Qwen3.8 on GGUF (2026-11-09)
+
+**The audit below is complete (210/210, 0 open); the live work is this.** The
+checkpoint `models/qwen3.8-flash-next-unsloth-iq3xxs` (83.63 GB base + 4.14 GB
+MTP + 0.90 GB mmproj) is the only copy on this machine, and the engine cannot
+serve a GGUF today.
+
+The operator chose **route B: convert it to the engine's affine `.ssdai`
+format**, starting with prototypes. Landed, each with a gated test against the
+real file and a commit:
+
+| commit | component |
+| --- | --- |
+| `e76ad10f` | split GGUF v2/v3 directory reader (1,224 tensors, 83,615,413,760 bytes) |
+| `7e6a852f`, `33336798` | block decode for all nine checkpoint types, bit-exact against ggml `7d7f028` |
+| `eab6b227` | tokenizer sidecar (tokenizer.json/config/template), ten prompts id-identical to `llama-tokenize` |
+| `c2e7e8e7` | per-expert addressing (73,728 slices tile 50.29 GB) |
+| `da9d0ee9` | host decode measured: 0.21–0.36 G elements/s, so decode-on-fetch is rejected |
+| `c45fa8ca` | affine probe: 8.7–10.1% added weight error; experts 50.29 → 67.95 GB |
+| `36f958b8` | one layer written as a `.ssdai` blob and read back |
+| `9476bbbf` | full layout plan: 48×512×9 records, layout.json 19.2 MB, payload 68.05 GB |
+| `556bd588` | manifest: accepted by `ManifestReader.decode` against `qwen38FlashNext` |
+
+**Where it stands:** the expert payload, the layout and the manifest are proven.
+What remains is the **resident** half — `model_weights.bin` — and it is not a
+rename: the runtime composes `qProj` as `[query; gate]` while the GGUF keeps
+`attn_q` and `attn_gate` apart, so the writer must concatenate and reshape for
+the 12 full-attention layers, keep the fused `attn_qkv` for the 36 GDN layers,
+and handle the hyper-connection pairs and the PLE table. Then the full ~100 GB
+write, and KLD/top-1 against a llama.cpp run of the same GGUF.
+
+**Facts that shape it.** `CPUModelFamily` serves only `qwen3_5_dense`, so there
+is no CPU forward for this architecture; experts are affine-only in the engine
+(`DequantInt4/8GEMV`), while `BF16GEMV` exists for non-experts. `expertStride`
+must be a multiple of 16 KiB (2,764,800 → 2,768,896). The PLE table's 160-wide
+rows are `embedDim / ngramHeads`, not the preset's 2,560. The full run needs the
+83.6 GB source on external storage: ~100 GB of output against 79 GiB free.
+Details, measurements and open questions: `docs/qwen38-gguf-backend-plan.md`.
+
 ## Where the work stands
 
 **#230 closed 2026-10-17 — the systemwide harness moved to `0.2.1-rc.2` and the pin

@@ -300,6 +300,31 @@ Two consequences:
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
 
+## Route B, fifth probe: resident tensors are not a rename
+
+The expert half converts one tensor at a time; the resident half does not. The
+GGUF and the runtime disagree on how attention tensors are composed, and the
+shapes say so:
+
+| tensor | GGUF dims | runtime role |
+| --- | --- | --- |
+| `blk.0.attn_qkv.weight` (GDN layers) | [2560, 10240] | `gdnQKV` |
+| `blk.3.attn_q/k/v.weight` (full-attention layers) | three tensors | `qProj`, `kProj`, `vProj` |
+| `blk.N.attn_gate.weight` (every layer) | [2560, 6144] | composed **into** `qProj` as its gate half |
+
+`attnOutputGate` means the runtime's q projection carries `[query; gate]` rows;
+the GGUF keeps the gate in its own tensor. A resident writer therefore has to
+**concatenate** `attn_q` and `attn_gate` (and reshape the result), not copy a
+tensor under a new name — and it has to do it only for the 12 full-attention
+layers, while the 36 GDN layers keep their fused `attn_qkv`. The hyper-connection
+pairs (`hc_*_up`/`hc_*_down` around a rank-320 bottleneck), the 557 F32 norms and
+the PLE table each have their own composition rule too.
+
+That is the resident writer's real job, and it is a design task before it is a
+coding task: get the composition wrong and the install loads, runs, and answers
+fluently with the wrong math. The mapping and the widths per role need a written
+design before bytes are written.
+
 ## Route B, fourth probe: the manifest
 
 `GGUFManifestBuilder` builds the manifest from two sources on purpose: the file
