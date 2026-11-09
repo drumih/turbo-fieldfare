@@ -244,6 +244,7 @@ let package = Package(
                 .copy("Runtime/qwen38_tensor_names.txt"),
                 .copy("Runtime/ple_golden.json"),
                 .copy("Infrastructure/ModelIO/GGUFDequantVectors.txt"),
+                .copy("Infrastructure/ModelIO/GGUFTokenizerVectors.json"),
             ],
             swiftSettings: tinytitanLanguageStandard
         ),
