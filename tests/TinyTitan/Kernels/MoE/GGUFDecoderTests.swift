@@ -27,14 +27,18 @@ import TinyTitanValidationSupport
 
         var timings: [Double] = []
         var tokenLogits: [[Float]] = []
-        for (position, token) in [Int32(100), Int32(200)].enumerated() {
+        let tokens: [Int32] = [100, 200, 300, 400, 500, 600]
+        for (position, token) in tokens.enumerated() {
             var history: [Int32] = [token]
-            if position > 0 { history.append(100) }
+            if position > 0 { history.append(tokens[position - 1]) }
             let start = DispatchTime.now().uptimeNanoseconds
             let logits = try decoder.decode(
                 token: token, position: position, history: history)
             timings.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
             tokenLogits.append(logits)
+        }
+        for (index, seconds) in timings.enumerated() {
+            print("  token \(index): \(String(format: "%.0f", seconds * 1000)) ms")
         }
         for (index, logits) in tokenLogits.enumerated() {
             #expect(logits.count == arch.vocabSize)
@@ -49,6 +53,12 @@ import TinyTitanValidationSupport
         #expect(tokenLogits[0] != tokenLogits[1])
         let total = timings.reduce(0, +)
         let perToken = total / Double(timings.count)
+        // The first token pays the cold expert reads; the steady state is what
+        // a long run would see.
+        let warm = timings.dropFirst().reduce(0, +) / Double(max(timings.count - 1, 1))
+        print(
+            "steady state: \(String(format: "%.0f", warm * 1000)) ms/token -> "
+                + "\(String(format: "%.2f", 1 / warm)) tok/s")
         print(
             "decode: \(String(format: "%.1f", perToken * 1000)) ms/token -> "
                 + "\(String(format: "%.2f", 1 / perToken)) tok/s (with a host "
