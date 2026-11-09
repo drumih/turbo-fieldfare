@@ -364,13 +364,13 @@ All five decode and dot in one pass and match a CPU decode-then-dot to within
 one entry point the engine will call, dispatching by block type, and
 `GGUFExpertStageBenchmarkTests` runs a whole token's routed work through it -
 1,440 fused GEMVs in 48 command buffers, real matrices from every layer. That
-measures **34 ms/token, a 29.8 tok/s expert-compute ceiling**: 2.36 G elements
-in 0.034 s is 69 G elements/s, about 22 GB/s of weights, which is what this GPU
-can read. The earlier 0.33-0.71 ms per matrix was the cost of a commit-and-wait
-per matrix, not the arithmetic.
+measures **29-35 ms/token across runs, a 29-35 tok/s expert-compute ceiling**:
+2.36 G elements in ~0.03 s is 69-81 G elements/s, about 22-26 GB/s of weights,
+which is what this GPU can read. The earlier 0.33-0.71 ms per matrix was the cost
+of a commit-and-wait per matrix, not the arithmetic.
 
-So the expert math is no longer the wall: 34 ms against the 216 ms a 4.62 tok/s
-token takes. What remains is the loader that feeds it and the streaming I/O
+So the expert math is no longer the wall: 29-35 ms against the 216 ms a 4.62
+tok/s token takes. What remains is the loader that feeds it and the streaming I/O
 (403 MB/token at 3.95 GB/s = 102 ms), which the engine's existing prefetch and
 expert cache already handle for the affine install.
 
