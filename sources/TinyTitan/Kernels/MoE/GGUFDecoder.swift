@@ -15,7 +15,7 @@ package final class GGUFDecoder {
     private let arena: GGUFResidentArena
     private let mapped: GGUFMappedShards
 
-    private let hc: HyperConnection
+    private let hc: GGUFHyperConnection
     private let elementwise: Elementwise
     private let gdn: GGUFGDNDecodeStage
     private let fullAttention: GGUFFullAttentionDecodeStage
@@ -63,18 +63,22 @@ package final class GGUFDecoder {
             guard layer < arch.numLayers else { return false }
             return gdnMatrixSuffixes.contains(parts.dropFirst(2).joined(separator: "."))
         }
+        func isHyperConnectionProjection(_ name: String) -> Bool {
+            (name.contains(".hc_attn_down.weight") || name.contains(".hc_attn_up.weight")
+                || name.contains(".hc_ffn_down.weight") || name.contains(".hc_ffn_up.weight"))
+        }
         let arenaNames = source.residentNames.filter { name in
             name != "token_embd.weight" && name != "output.weight"
                 && !name.contains("_shexp.") && !isGDNAndMatrix(name)
+                && !isHyperConnectionProjection(name)
         }
         self.arena = try GGUFResidentArena.build(
             names: arenaNames, from: model, context: context)
-        self.hc = try HyperConnection(
-            context: context, dim: arch.hiddenSize, streams: arch.hyperConnections.count,
-            lowRank: arch.hyperConnections.lowRank, weightBits: 4)
-        self.elementwise = try Elementwise(context: context)
         let mappedShards = try GGUFMappedShards(model: model, device: context.device)
         self.mapped = mappedShards
+        self.hc = try GGUFHyperConnection(
+            context: context, arch: arch, arena: arena, mapped: mappedShards)
+        self.elementwise = try Elementwise(context: context)
         self.gdn = try GGUFGDNDecodeStage(
             context: context, arch: arch, arena: arena, mapped: mappedShards)
         self.fullAttention = try GGUFFullAttentionDecodeStage(
@@ -273,39 +277,28 @@ package final class GGUFDecoder {
     private func encodeRead(
         _ cb: MTLCommandBuffer, prefix: String, streamsBuffer: MTLBuffer, out: MTLBuffer
     ) throws {
-        func offset(_ suffix: String) throws -> Int {
-            guard let entry = arena.entries[prefix + suffix] else {
-                throw MetalError.invalidState("missing \(prefix + suffix)")
-            }
-            return Int(entry.offset)
-        }
-        let normOffset = try offset("norm.weight")
+        let sublayer = prefix.contains("attn") ? "attn" : "ffn"
+        let layer = try layerIndex(from: prefix)
         try hc.encodeRead(
-            commandBuffer: cb, streamsBuffer: streamsBuffer,
-            hcNorm: arena.buffer, hcNormOffset: normOffset,
-            down: HyperConnection.Weights(
-                weights: arena.buffer, weightsOffset: try offset("down.weight"),
-                scales: arena.buffer, biases: arena.buffer, isBF16: true),
-            up: HyperConnection.Weights(
-                weights: arena.buffer, weightsOffset: try offset("up.weight"),
-                scales: arena.buffer, biases: arena.buffer, isBF16: true),
-            blockInput: out, eps: 1e-6)
+            commandBuffer: cb, layer: layer, sublayer: sublayer,
+            streamsBuffer: streamsBuffer, out: out)
     }
 
     private func encodeWrite(
         _ cb: MTLCommandBuffer, prefix: String, streamsBuffer: MTLBuffer, blockOut: MTLBuffer
     ) throws {
-        func offset(_ suffix: String) throws -> Int {
-            guard let entry = arena.entries[prefix + suffix] else {
-                throw MetalError.invalidState("missing \(prefix + suffix)")
-            }
-            return Int(entry.offset)
-        }
+        let sublayer = prefix.contains("attn") ? "attn" : "ffn"
+        let layer = try layerIndex(from: prefix)
         try hc.encodeWrite(
-            commandBuffer: cb, streamsBuffer: streamsBuffer,
-            inject: HyperConnection.Weights(
-                weights: arena.buffer, weightsOffset: try offset("inject.weight"),
-                scales: arena.buffer, biases: arena.buffer, isBF16: true),
-            blockOut: blockOut)
+            commandBuffer: cb, layer: layer, sublayer: sublayer,
+            streamsBuffer: streamsBuffer, blockOut: blockOut)
+    }
+
+    private func layerIndex(from prefix: String) throws -> Int {
+        let parts = prefix.split(separator: ".")
+        guard parts.count >= 2, let layer = Int(parts[1]) else {
+            throw MetalError.invalidState("cannot read a layer from \(prefix)")
+        }
+        return layer
     }
 }
