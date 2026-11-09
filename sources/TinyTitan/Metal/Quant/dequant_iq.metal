@@ -291,3 +291,126 @@ kernel void iq4nl_gemv_simd(
     acc = simd_sum(acc);
     if (lane == 0) { y[row] = half(acc); }
 }
+
+// IQ3_XXS GEMV: lane L owns the 8 values of one (sub, l) pair per 256-value
+// block (sub = L/4, l = L%4): 4 from grid1 then 4 from grid2.
+kernel void iq3xxs_gemv_simd(
+    device const uchar*  W     [[buffer(0)]],
+    device const uint*   grid  [[buffer(1)]],
+    device const uchar*  signs [[buffer(2)]],
+    device const half*   x     [[buffer(3)]],
+    device half*         y     [[buffer(4)]],
+    constant uint&       M     [[buffer(5)]],
+    constant uint&       N     [[buffer(6)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 256u;
+    device const uchar* W_row = W + uint(row) * blocks * 98u;
+    const uint sub = lane / 4u;
+    const uint l = lane % 4u;
+    float acc = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* block = W_row + b * 98u;
+        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        device const uchar* qs = block + 2u;
+        const uint aux = uint(qs[64u + 4u * sub]) | (uint(qs[65u + 4u * sub]) << 8u)
+            | (uint(qs[66u + 4u * sub]) << 16u) | (uint(qs[67u + 4u * sub]) << 24u);
+        const float db = d * (0.5f + float(aux >> 28u)) * 0.5f;
+        const uchar signByte = signs[(aux >> (7u * l)) & 127u];
+        const uint g1 = grid[qs[8u * sub + 2u * l]];
+        const uint g2 = grid[qs[8u * sub + 2u * l + 1u]];
+        device const half* xp = x + b * 256u + sub * 32u + l * 8u;
+        for (uint j = 0u; j < 4u; ++j) {
+            const float s1 = (signByte & (1u << j)) ? -1.0f : 1.0f;
+            const float s2 = (signByte & (1u << (j + 4u))) ? -1.0f : 1.0f;
+            const float v1 = float((g1 >> (8u * j)) & 0xFFu);
+            const float v2 = float((g2 >> (8u * j)) & 0xFFu);
+            acc = fma(db * v1 * s1, float(xp[j]), acc);
+            acc = fma(db * v2 * s2, float(xp[j + 4u]), acc);
+        }
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}
+
+// IQ4_XS GEMV: lane L owns 8 values of one 32-value sub-block (sub = L/4,
+// l = L%4): l 0/1 are the low-nibble halves, l 2/3 the high-nibble halves.
+kernel void iq4xs_gemv_simd(
+    device const uchar*  W     [[buffer(0)]],
+    device const half*   x     [[buffer(1)]],
+    device half*         y     [[buffer(2)]],
+    constant uint&       M     [[buffer(3)]],
+    constant uint&       N     [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 256u;
+    device const uchar* W_row = W + uint(row) * blocks * 136u;
+    const uint sub = lane / 4u;
+    const uint l = lane % 4u;
+    const bool highHalf = l >= 2u;
+    const uint byteBase = (l & 1u) * 8u;
+    float acc = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* block = W_row + b * 136u;
+        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        const ushort scalesH = ushort(block[2]) | (ushort(block[3]) << 8u);
+        const uint low = (uint(block[4u + sub / 2u]) >> (4u * (sub % 2u))) & 0x0Fu;
+        const uint high = (uint(scalesH) >> (2u * sub)) & 0x03u;
+        const float dl = d * float(int(low | (high << 4u)) - 32);
+        device const uchar* q = block + 8u + sub * 16u + byteBase;
+        device const half* xp = x + b * 256u + sub * 32u + l * 8u;
+        for (uint j = 0u; j < 8u; ++j) {
+            const uchar packed = q[j];
+            const uint nib = highHalf ? uint(packed >> 4u) : uint(packed & 0x0Fu);
+            acc = fma(dl * float(kIQ4NLTable[nib]), float(xp[j]), acc);
+        }
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}
+
+// Q2_0 GEMV: lane L owns values 2L and 2L+1 of every 64-value block; both are
+// in byte L/2, at bit offsets (L%2)*4 and (L%2)*4+2.
+kernel void q2_0_gemv_simd(
+    device const uchar*  W     [[buffer(0)]],
+    device const half*   x     [[buffer(1)]],
+    device half*         y     [[buffer(2)]],
+    constant uint&       M     [[buffer(3)]],
+    constant uint&       N     [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 64u;
+    device const uchar* W_row = W + uint(row) * blocks * 18u;
+    const uint shift = (lane & 1u) * 4u;
+    float acc = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* block = W_row + b * 18u;
+        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        const uchar packed = block[2u + lane / 2u];
+        const int q0 = int((uint(packed) >> shift) & 0x03u) - 1;
+        const int q1 = int((uint(packed) >> (shift + 2u)) & 0x03u) - 1;
+        device const half* xp = x + b * 64u + lane * 2u;
+        acc = fma(float(q0) * d, float(xp[0]), acc);
+        acc = fma(float(q1) * d, float(xp[1]), acc);
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}

@@ -349,11 +349,19 @@ decoded matrix ever materialised. Verified against CPU decode-then-dot on the
 real blk.0 expert 0 matrices: worst relative error 4.6e-4 (IQ2_S) and 4.8e-4
 (IQ4_NL), both half output rounding.
 
-| operation | per matrix | per token | 
-| --- | ---: | ---: |
-| gate/up, 640x2560 IQ2_S | 0.33-0.49 ms | 317-470 ms (960 matrices) |
-| down, 2560x640 IQ4_NL | 0.41-0.49 ms | 197-235 ms (480 matrices) |
-| **expert compute** | | **514-705 ms -> 1.4-1.9 tok/s ceiling** |
+| format | role | per matrix |
+| --- | --- | ---: |
+| IQ2_S | gate/up, most layers | 0.33-0.49 ms (640x2560) |
+| IQ3_XXS | gate/up, 14 layers | 0.334 ms (640x2560) |
+| IQ4_XS | gate/up, layer 47 | 0.406 ms (640x2560) |
+| IQ4_NL | down, most layers | 0.41-0.49 ms (2560x640) |
+| Q2_0 | down, layers 8/10/13 | 0.709 ms (2560x640) |
+
+All five decode and dot in one pass and match a CPU decode-then-dot to within
+4.6-4.9e-4 relative (half output rounding). With the real mix - ~660 IQ2_S
+gate/up, 280 IQ3_XXS, 20 IQ4_XS, 450 IQ4_NL down, 30 Q2_0 - a token's expert
+compute is **~589 ms, about 1.7 tok/s**, before resident GEMVs and I/O, against
+the 4.62 tok/s affine baseline.
 
 That is the as-is expert path's measured compute ceiling before I/O, against the
 4.62 tok/s affine baseline. It is correct and the shape is right; vectorised
