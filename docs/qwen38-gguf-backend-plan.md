@@ -176,7 +176,8 @@ it with the read-window size.
      the route is kernels for the IQ block types on the GPU, where the decode
      runs beside the fetch instead of in front of it.
 
-   This is the largest piece and is now the project's decision point.
+   This is the largest piece and is now the project's decision point; the
+   measurement below closes one side of it.
 5. **Verification.** There is no receipt for a GGUF. The honest checks are a
    content digest over the shard bytes, tokenizer parity, and generated-text
    comparison against a llama.cpp run on the same file — which this host does not
@@ -191,7 +192,7 @@ it with the read-window size.
 | 2b | block decode: IQ2_S / IQ3_XXS grids | **landed 2026-11-09**: same bit-exact reference, tables generated from ggml | no |
 | 3 | tokenizer + template | **landed 2026-11-09**: the sidecar exports and loads, and ten prompts tokenize exactly as llama-tokenize at `7d7f028` does | no |
 | 4 | per-expert addressing | **landed 2026-11-09**: 73,728 slices tile 50.29 GB with no gaps; block decode at expert 511's computed offset | directories only |
-| 5 | engine seam: weight source + kernel format | one expert block runs through a real kernel; format decision recorded with the measurement | yes (GGUF) |
+| 5 | engine seam: weight source + kernel format | **measured 2026-11-09**: host decode 0.21–0.36 G elements/s, ≈9 s/token, so decode-on-fetch is rejected; the fork between IQ kernels and an affine conversion is open | yes (GGUF) |
 | 6 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 5 — the engine seam — is the right next step, and it is a decision as
@@ -209,6 +210,53 @@ directory's own shard/offset arithmetic for five formats. The IQ2_S/IQ3_XXS
 arithmetic passed against the reference on its first run; the two bugs that did
 appear were caught before it — an operator-precedence mistake in IQ4_XS and the
 element order of IQ3_XXS's two grids.
+
+## Milestone 5: the measurement, and the fork it forces
+
+Host decode, release build, one whole expert slice per call, two runs:
+
+| format | run 1 | run 2 |
+| --- | ---: | ---: |
+| IQ2_S | 0.247 G elements/s | 0.214 G elements/s |
+| IQ3_XXS | 0.362 G elements/s | 0.253 G elements/s |
+
+A token reads 2.359 G elements of experts, so host decoding alone would cost
+**6.5–11 s per token** against a 216 ms baseline, and the 249 ms of I/O it was
+supposed to hide inside. The projection needed >9.5 G elements/s; the hardware
+does ~0.25. Decode-on-fetch on the host is rejected by measurement, not by
+argument.
+
+```bash
+TINYTITAN_GGUF_MODEL=models/qwen3.8-flash-next-unsloth-iq3xxs \
+  swift test -c release --no-parallel --filter GGUFDecodeMeasurement
+```
+
+That leaves two real routes, and they differ by an order of magnitude in work:
+
+- **A — IQ compute kernels on the GPU.** The engine would decode the block
+  formats inside the GEMV, as llama.cpp does. This is not one kernel: every
+  weight path uses one of these formats — routed experts (IQ2_S, IQ3_XXS,
+  IQ4_NL, IQ4_XS, Q2_0), attention (Q6_K, IQ3_XXS), embeddings (Q6_K), the PLE
+  table (IQ4_NL, 28.8 GB read sparsely) and shared experts (Q8_0). That is a
+  kernel project comparable to the quantised GEMV work llama.cpp has accumulated,
+  not an adapter.
+- **B — Convert the GGUF to the engine's affine `.ssdai` format.** The kernels,
+  the streaming expert cache, the receipts and the quality harness already
+  exist; what is new is a converter that reads GGUF blocks, dequantises and
+  re-quantises to 4-bit affine. The output is the same order as the 111.6 GB MLX
+  install (`docs/qwen38-flash-next-port.md:18`; the converter's own `--plan`
+  would state it), and it needs that output **beside** the 83.6 GB source:
+  ~195 GB against 79 GiB free. It does not fit this disk today; it fits if the
+  GGUF moves to external storage and the output is written here. Because the
+  weights are re-quantised, output is not byte-identical to the GGUF and the
+  quality bar has to be measured (KLD/top-1 against the GGUF run, not against
+  the absent affine install).
+- **C — Keep the GGUF as a llama.cpp artifact.** No engine work; this tree
+  cannot serve it, and that is stated rather than implied.
+
+Recommendation: **B**, when storage allows. It reuses the entire engine and is
+the only route whose new code is a converter rather than a kernel library, and
+the GGUF stays as the quality reference for the conversion.
 
 ## Open questions
 
