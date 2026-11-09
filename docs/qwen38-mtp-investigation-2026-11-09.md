@@ -103,10 +103,24 @@ two plausible kernel fixes do not move it.
 ## What a fix would actually require
 
 1. **A decode-native two-row target pass** — one command buffer, two-row GEMV,
-   attention/GDN sharing weights, no 32-token tile scratch — to bring the
-   compute term from 2.0x to ~1.3x. That alone saves ~85 ms/pass, putting the
-   pass near 395 ms and break-even at 86.9% acceptance. It is a large kernel
-   project, not a flag.
+   attention/GDN sharing weights, no 32-token tile scratch. The earlier "85 ms"
+   estimate assumed the GPU term was 2.0x scalar; the measured term is 233 ms,
+   or **1.59x** scalar (147 ms), so a perfect 1.3x fusion saves only ~42 ms.
+   Combining that with a 1.27x-only union fetch and less host turnaround gives
+   the optimistic case below; the pass still has to get under 404 ms.
+
+   | term | now | optimistic fused | realistic fused |
+   | --- | ---: | ---: | ---: |
+   | GPU (233 ms now) | 233 | 191 (1.3x scalar) | 210 |
+   | expert I/O (164 ms now) | 164 | 130 (1.27x scalar) | 150 |
+   | turnaround/proposal/commit (83 ms) | 83 | 60 | 75 |
+   | **pass** | **480** | **381** | **435** |
+   | tok/s at 86.9% acceptance | 3.89 | **4.90** | **4.30** |
+
+   Against scalar's 4.62 tok/s, the ceiling is roughly **+6%**, and the
+   realistic result is **−7%**. It is a large kernel project for a bet that
+   lands somewhere between "slightly slower" and "slightly faster", not a
+   decode-speed feature.
 2. **Overlap the union fetch with the next layer's attention**, impossible while
    layer L+1 depends on layer L's routed residual; the only real lever is a
    better expert predictor, which the project has already measured to its
@@ -118,7 +132,8 @@ two plausible kernel fixes do not move it.
 
 Do not enable MTP for the SSD-streaming Qwen3.8 install on this machine. It
 cannot beat scalar decode without a decode-native two-row pass, and even that
-pass only reaches break-even at the measured acceptance. The 43% loss is not a
+pass only reaches break-even at the measured acceptance — its realistic
+outcome is 4.3 tok/s against scalar's 4.62. The 43% loss is not a
 mystery bug in the draft or the verifier; it is the arithmetic of streaming
 experts twice for a 1.87-token payoff.
 
