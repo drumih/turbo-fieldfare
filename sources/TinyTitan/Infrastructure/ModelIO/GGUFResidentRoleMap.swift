@@ -215,6 +215,24 @@ package enum GGUFResidentRoleMap {
         },
     ]
 
+    /// The runtime role a resident GGUF tensor maps to.
+    package static func role(for name: String) throws -> String {
+        let suffix: String
+        if let dot = name.firstIndex(of: "."), name.hasPrefix("blk.") {
+            let rest = name[name.index(after: dot)...]
+            guard let second = rest.firstIndex(of: ".") else {
+                throw GGUFResidentRoleError.unknownTensor(name)
+            }
+            suffix = String(rest[rest.index(after: second)...])
+        } else {
+            suffix = name
+        }
+        guard let rule = perLayer[suffix] ?? global[suffix] else {
+            throw GGUFResidentRoleError.unknownTensor(name)
+        }
+        return rule.role
+    }
+
     /// Every resident tensor maps to one role, and every shape the architecture
     /// determines is checked. Returns the count per role.
     package static func validate(

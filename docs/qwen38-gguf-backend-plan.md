@@ -198,7 +198,8 @@ it with the read-window size.
 | 8a | full layout plan | **landed 2026-11-09**: 48 layers x 512 experts x 9 sub-tensors, `layout.json` 19.2 MB (under the 128 MiB cap), expert payload 68.05 GB | yes |
 | 8b | manifest | **landed 2026-11-09**: built from the GGUF + `qwen38FlashNext` preset, accepted by `ManifestReader.decode`, and refusing a file whose geometry disagrees | yes |
 | 8c | resident role map | **landed 2026-11-09**: 44 roles over 1,080 resident tensors, every shape checked against the preset; a wrong dim is refused | yes |
-| 8d | resident weights | `model_weights.bin` written at the widths the manifest declares; hashes filled in | yes |
+| 8d | resident writer | **landed 2026-11-09**: `model_weights.bin` written with the engine's index format; `ResidentIndexReader` accepts it and the 4-bit payload decodes to the reference | yes |
+| 8e | width policy + full run | per-role widths matching the manifest; every tensor written; hashes; KLD/top-1 | yes |
 | 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 8 is the converter proper: every layer through this writer, a
@@ -300,6 +301,28 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## Route B, sixth probe: `model_weights.bin`
+
+`GGUFResidentWriter` writes the resident file the way the engine reads it: a
+binary index (24-byte header, 72-byte entries, string table, padded to 16 KiB)
+followed by the payload, every tensor 16 KiB aligned. dtype 0 carries affine
+weights with BF16 scale/bias companions; dtype 1 is the checkpoint's bf16 with
+no companions. The width per tensor is the **caller's**, because which role gets
+4, 8 or bf16 is conversion policy that has to match the manifest's slots — the
+writer's job is only to make bytes and index agree.
+
+Verified on four tensors of layer 0 (`GGUFResidentWriterTests`): the engine's
+`ResidentIndexReader` parses the file, the entries carry the sizes the roles
+imply (4-bit shared-expert gate 819,200 B + 51,200 B scales; 8-bit router
+1,310,720 B; bf16 norm 20,480 B with no companions), and the 4-bit payload read
+back at its recorded offsets dequantises to exactly the row the GGUF quantises
+to. One guard had to move: the group-64 alignment is an affine constraint, not a
+bf16 one, and holding `ssm_a` (48 wide) to it refused a legal tensor.
+
+What remains is policy and orchestration: the per-role width table (so the
+writer and the manifest agree), the hashes over written files, the full 68 GB +
+resident run on external-backed source, and KLD/top-1 against llama.cpp.
 
 ## Route B, fifth probe: resident tensors map by role, with two traps
 
