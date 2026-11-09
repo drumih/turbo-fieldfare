@@ -41,3 +41,14 @@ kernel void gguf_accumulate_sigmoid_half(
     const float s = 1.0f / (1.0f + exp(-g));
     y[gid] = half(float(y[gid]) + s * float(row[gid]));
 }
+
+// The embedding gather decodes Q6_K rows to bf16; the residual is half.
+kernel void gguf_bf16_to_half(
+    device const bfloat* src [[buffer(0)]],
+    device half*         dst [[buffer(1)]],
+    constant uint&       n   [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n) return;
+    dst[gid] = half(float(src[gid]));
+}
