@@ -19,8 +19,8 @@ import TinyTitanValidationSupport
         let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
         let arch = ArchConfig.qwen38FlashNext
         let context = try MetalContext()
-        let cache = try GGUFExpertBufferCache(
-            model: model, device: context.device, capacity: 4)
+        let provider = GGUFMappedExperts(
+            model: model, mapped: try GGUFMappedShards(model: model, device: context.device))
         let stage = try GGUFMoERoutedStage(context: context, arch: arch)
 
         var rng = SeedTree(0x5EED).key("gguf-moe-x")
@@ -44,7 +44,7 @@ import TinyTitanValidationSupport
         }
         memset(out.contents(), 0, arch.hiddenSize * MemoryLayout<UInt16>.size)
         try stage.encode(
-            commandBuffer: commandBuffer, cache: cache, layer: 0,
+            commandBuffer: commandBuffer, provider: provider, layer: 0,
             x: xBuffer, experts: experts, weights: weights, out: out)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

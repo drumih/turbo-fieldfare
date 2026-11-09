@@ -20,7 +20,7 @@ package final class GGUFDecoder {
     private let gdn: GGUFGDNDecodeStage
     private let fullAttention: GGUFFullAttentionDecodeStage
     private let router: GGUFRouter
-    private let cache: GGUFExpertBufferCache
+    private let mappedExperts: GGUFMappedExperts
     private let routed: GGUFMoERoutedStage
     private let shared: GGUFSharedExpertStage
     private let ple: GGUFPLEStage
@@ -85,8 +85,7 @@ package final class GGUFDecoder {
             context: context, arch: arch, arena: arena, mapped: mappedShards,
             maxSeq: maxSeq)
         self.router = try GGUFRouter(context: context, arch: arch, model: model)
-        self.cache = try GGUFExpertBufferCache(
-            model: model, device: context.device, capacity: arch.topKExperts)
+        self.mappedExperts = GGUFMappedExperts(model: model, mapped: mappedShards)
         self.routed = try GGUFMoERoutedStage(context: context, arch: arch)
         self.shared = try GGUFSharedExpertStage(context: context, arch: arch, model: model)
         self.ple = try GGUFPLEStage(context: context, arch: arch, model: model, arena: arena)
@@ -243,7 +242,7 @@ package final class GGUFDecoder {
                 throw MetalError.commandEncoderFailed
             }
             try routed.encode(
-                commandBuffer: routedCB, cache: cache, layer: layer, x: blockInput,
+                commandBuffer: routedCB, provider: mappedExperts, layer: layer, x: blockInput,
                 experts: selection.experts, weights: selection.weights, out: moeOut)
             try encodeWrite(
                 routedCB, prefix: ffnPrefix, streamsBuffer: streams, blockOut: moeOut)

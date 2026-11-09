@@ -19,8 +19,8 @@ import TinyTitanValidationSupport
         let arch = ArchConfig.qwen38FlashNext
         let context = try MetalContext()
         let router = try GGUFRouter(context: context, arch: arch, model: model)
-        let cache = try GGUFExpertBufferCache(
-            model: model, device: context.device, capacity: arch.topKExperts)
+        let provider = GGUFMappedExperts(
+            model: model, mapped: try GGUFMappedShards(model: model, device: context.device))
         let routed = try GGUFMoERoutedStage(context: context, arch: arch)
         let shared = try GGUFSharedExpertStage(context: context, arch: arch, model: model)
 
@@ -49,7 +49,7 @@ import TinyTitanValidationSupport
             throw MetalError.commandEncoderFailed
         }
         try routed.encode(
-            commandBuffer: cb, cache: cache, layer: 0, x: xBuffer,
+            commandBuffer: cb, provider: provider, layer: 0, x: xBuffer,
             experts: selection.experts, weights: selection.weights, out: out)
         try shared.encode(commandBuffer: cb, layer: 0, x: xBuffer, out: out)
         cb.commit()

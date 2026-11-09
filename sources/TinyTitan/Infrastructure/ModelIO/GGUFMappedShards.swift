@@ -112,6 +112,49 @@ package final class GGUFMappedShards {
         return weight
     }
 
+    /// Maps an arbitrary byte range of a shard, keyed by `key`, and caches it.
+    /// This is how the routed experts are read: their ranges belong to one
+    /// 50 GB tensor, which cannot be one Metal buffer, but each expert's slice
+    /// maps cleanly and the page cache does the caching.
+    package func weight(
+        key: String, url: URL, fileOffset: UInt64, byteCount: UInt64,
+        type: GGUFType, rows: Int, columns: Int
+    ) throws -> Weight {
+        lock.lock()
+        defer { lock.unlock() }
+        if let existing = mapped[key] { return existing }
+        let pageSize = UInt64(getpagesize())
+        let pageStart = fileOffset / pageSize * pageSize
+        let windowLength = Int(
+            (fileOffset + byteCount - pageStart + pageSize - 1)
+                / pageSize * pageSize)
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { throw GGUFMappedShardsError.openFailed(url.path, errno) }
+        defer { close(fd) }
+        guard
+            let base = mmap(nil, windowLength, PROT_READ, MAP_PRIVATE, fd, off_t(pageStart)),
+            base != MAP_FAILED
+        else {
+            throw GGUFMappedShardsError.mapFailed(key)
+        }
+        let pointer = base.assumingMemoryBound(to: UInt8.self)
+        _ = posix_madvise(base, windowLength, POSIX_MADV_RANDOM)
+        guard
+            let buffer = device.makeBuffer(
+                bytesNoCopy: pointer, length: windowLength, options: .storageModeShared,
+                deallocator: nil)
+        else {
+            munmap(base, windowLength)
+            throw MetalError.bufferAllocationFailed(key)
+        }
+        regions.append((base, windowLength))
+        let weight = Weight(
+            buffer: buffer, offset: Int(fileOffset - pageStart),
+            type: type, rows: rows, columns: columns)
+        mapped[key] = weight
+        return weight
+    }
+
     /// Bytes mapped so far (page-cache backed, not resident).
     package var mappedBytes: Int { regions.reduce(0) { $0 + $1.length } }
 }
