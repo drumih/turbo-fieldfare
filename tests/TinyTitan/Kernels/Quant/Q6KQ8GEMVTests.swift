@@ -130,3 +130,81 @@ import TinyTitanValidationSupport
         #expect(relative < 5e-3)
     }
 }
+
+/// The Q6_K GEMV's own number and rate on this machine.
+@Suite struct Q6KGEMVThroughputTests {
+    private static var realModelPath: String? {
+        ProcessInfo.processInfo.environment["TINYTITAN_GGUF_MODEL"]
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_GGUF_MODEL"] != nil))
+    func measuresTheGEMVRateAndMatchesTheCPU() throws {
+        let path = try #require(Self.realModelPath)
+        let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
+        let context = try MetalContext()
+        let location = try #require(model.tensor(named: "blk.0.attn_qkv.weight"))
+        let shard = model.shards[location.shardIndex]
+        let handle = try FileHandle(forReadingFrom: shard.url)
+        defer { try? handle.close() }
+        let rows = 640
+        let columns = 2_560
+        let rowBytes = (columns / 256) * 210
+        try handle.seek(toOffset: shard.dataOffset + location.tensor.offset)
+        let data = try #require(try handle.read(upToCount: rows * rowBytes))
+        let values = try GGUFDequant.decode(type: .q6K, bytes: [UInt8](data))
+        var rng = SeedTree(0x6B6B).key("q6k-throughput")
+        let x = (0..<columns).map { _ in Float16(rng.uniform(-1, 1)) }
+        let xBits = x.map(\.bitPattern)
+        let xBuffer: MTLBuffer? = xBits.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return nil }
+            return context.device.makeBuffer(
+                bytes: base, length: raw.count, options: .storageModeShared)
+        }
+        guard
+            let w = context.device.makeBuffer(bytes: [UInt8](data), length: data.count),
+            let xBuffer,
+            let y = context.device.makeBuffer(length: rows * 2, options: .storageModeShared)
+        else { throw MetalError.bufferAllocationFailed("q6k throughput buffers") }
+        let kernel = try Q6KGEMV(context: context)
+        func run(_ iterations: Int) throws -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            for _ in 0..<iterations {
+                guard let cb = context.queue.makeCommandBuffer() else {
+                    throw MetalError.commandEncoderFailed
+                }
+                try kernel.encode(
+                    commandBuffer: cb, weights: w, x: xBuffer, y: y,
+                    rows: rows, columns: columns)
+                cb.commit()
+                cb.waitUntilCompleted()
+                if let error = cb.error { throw MetalError.invalidState("\(error)") }
+            }
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+        }
+        _ = try run(2)
+        let iterations = 200
+        let seconds = try run(iterations)
+        let elements = Double(rows * columns * iterations)
+        let rate = elements / seconds / 1e9
+        print("Q6_K GEMV: \(String(format: "%.2f", rate)) G elements/s")
+
+        // Numbers must equal the CPU dot.
+        let pointer = y.contents().assumingMemoryBound(to: UInt16.self)
+        let xf = x.map(Float.init)
+        var sqDiff: Double = 0
+        var sqRef: Double = 0
+        for row in 0..<rows {
+            var acc: Float = 0
+            let base = row * columns
+            for n in 0..<columns { acc += values[base + n] * xf[n] }
+            let reference = Float(Float16(acc))
+            let got = Float(Float16(bitPattern: pointer[row]))
+            sqDiff += Double(got - reference) * Double(got - reference)
+            sqRef += Double(reference * reference)
+        }
+        let relative = (sqDiff / max(sqRef, 1e-12)).squareRoot()
+        print("Q6_K GEMV RMS: \(relative)")
+        #expect(relative < 5e-3)
+        #expect(rate > 0)
+    }
+}
