@@ -212,3 +212,50 @@ kernel void dequant_q8_0_bf16(
         dst[j] = bfloat(float(as_type<char>(blocks[base + 2u + j])) * d);
     }
 }
+
+// IQ2_S GEMV: y[m] = sum_n W[m,n] * x[n], with W in IQ2_S blocks and both
+// vectors in half. One SIMD per row; lane L owns elements L*8...L*8+7 of every
+// 256-value block, which is exactly one 8-value grid entry (sub = L/4, entry
+// l = L%4), so no cross-lane weight exchange is needed - only the final
+// simd_sum.
+kernel void iq2s_gemv_simd(
+    device const uchar*  W     [[buffer(0)]],
+    device const ulong*  grid  [[buffer(1)]],
+    device const half*   x     [[buffer(2)]],
+    device half*         y     [[buffer(3)]],
+    constant uint&       M     [[buffer(4)]],
+    constant uint&       N     [[buffer(5)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 256u;
+    const uint rowBytes = blocks * 82u;
+    device const uchar* W_row = W + uint(row) * rowBytes;
+    const uint sub = lane / 4u;
+    const uint l = lane % 4u;
+    const uint elementBase = lane * 8u;
+    float acc = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* block = W_row + b * 82u;
+        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        const uchar sc = block[74u + sub];
+        const float dl = d * (0.5f + float(l < 2u ? (sc & 0x0Fu) : (sc >> 4u))) * 0.25f;
+        const uint index = uint(block[2u + 4u * sub + l])
+            | ((uint(block[66u + sub]) << (8u - 2u * l)) & 0x300u);
+        const uchar signs = block[2u + 32u + 4u * sub + l];
+        const ulong entry = grid[index];
+        device const half* xp = x + b * 256u + elementBase;
+        for (uint j = 0u; j < 8u; ++j) {
+            const float v = float((entry >> (8u * j)) & 0xFFu);
+            const float sign = (signs & (1u << j)) ? -1.0f : 1.0f;
+            acc = fma(dl * v * sign, float(xp[j]), acc);
+        }
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) { y[row] = half(acc); }
+}
