@@ -19,6 +19,9 @@ package struct GGUFExpertBuffers: @unchecked Sendable {
     package let gate: GGUFExpertMatrix
     package let up: GGUFExpertMatrix
     package let down: GGUFExpertMatrix
+    /// The cache slot these matrices live in; the cache reuses slots, so a
+    /// caller must not hold them across a slot's refill.
+    package let slotIndex: Int
 
     package var fetchedBytes: Int {
         gate.byteCount + up.byteCount + down.byteCount
@@ -56,11 +59,28 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
     private var descriptors: [Int: Int32] = [:]
     private var order: [CacheKey] = []
     private var entries: [CacheKey: GGUFExpertBuffers] = [:]
+    /// Fixed slot storage: allocating a buffer per miss cost ~480 five-megabyte
+    /// allocations a token and most of the routed phase. Each slot holds the
+    /// three matrices at the largest size they can be, and a miss fills it.
+    private var slots: [Slot] = []
+    private var freeSlots: [Int] = []
 
     private struct CacheKey: Hashable {
         let layer: Int
         let expert: Int
     }
+
+    private struct Slot {
+        let gate: MTLBuffer
+        let up: MTLBuffer
+        let down: MTLBuffer
+    }
+
+    /// Largest routed matrices this checkpoint stores: gate/up are 640 x 2560
+    /// at the widest format they use (IQ4_XS, 136 bytes per 256 values, layer
+    /// 47), down is 2560 x 640 at IQ4_NL (18 bytes per 32 values).
+    private static let gateBytes = 640 * 2_560 * 136 / 256
+    private static let downBytes = 2_560 * 640 * 18 / 32
 
     package init(
         model: GGUFModel, device: MTLDevice, capacity: Int = 8
@@ -71,6 +91,20 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         self.model = model
         self.device = device
         self.capacity = capacity
+        for _ in 0..<capacity {
+            guard
+                let gate = device.makeBuffer(
+                    length: Self.gateBytes, options: .storageModeShared),
+                let up = device.makeBuffer(
+                    length: Self.gateBytes, options: .storageModeShared),
+                let down = device.makeBuffer(
+                    length: Self.downBytes, options: .storageModeShared)
+            else {
+                throw MetalError.bufferAllocationFailed("expert cache slots")
+            }
+            slots.append(Slot(gate: gate, up: up, down: down))
+            freeSlots.append(slots.count - 1)
+        }
     }
 
     deinit {
@@ -88,31 +122,30 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             }
             return cached
         }
-        let loaded = try load(layer: layer, expert: expert)
+        var slotIndex: Int
+        if let free = freeSlots.popLast() {
+            slotIndex = free
+        } else {
+            let evicted = order.removeFirst()
+            slotIndex = entries.removeValue(forKey: evicted)!.slotIndex
+        }
+        let loaded = try load(layer: layer, expert: expert, slotIndex: slotIndex)
         entries[key] = loaded
         order.append(key)
-        while order.count > capacity {
-            let evicted = order.removeFirst()
-            entries.removeValue(forKey: evicted)
-        }
         return loaded
     }
 
-    private func load(layer: Int, expert: Int) throws -> GGUFExpertBuffers {
+    private func load(layer: Int, expert: Int, slotIndex: Int) throws -> GGUFExpertBuffers {
         let weights = try GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
-        func matrix(_ range: GGUFTensorRange, rows: Int, columns: Int, name: String) throws
+        let slot = slots[slotIndex]
+        func fill(_ range: GGUFTensorRange, into buffer: MTLBuffer, name: String) throws
             -> GGUFExpertMatrix
         {
-            let descriptor = try descriptor(for: range.shardIndex)
-            guard
-                let buffer = device.makeBuffer(
-                    length: Int(range.byteCount), options: .storageModeShared)
-            else {
-                throw MetalError.bufferAllocationFailed("expert \(name)")
+            guard Int(range.byteCount) <= buffer.length else {
+                throw GGUFExpertBufferCacheError.shortRead(
+                    name: name, expected: Int(range.byteCount), got: buffer.length)
             }
-            // pread straight into the shared buffer: one syscall per 1 MiB
-            // chunk, no FileHandle buffering, and the bytes the GPU reads are
-            // the bytes that arrived.
+            let descriptor = try descriptor(for: range.shardIndex)
             let destination = buffer.contents()
             var total = 0
             while total < Int(range.byteCount) {
@@ -122,25 +155,21 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
                     destination.advanced(by: total),
                     count,
                     off_t(range.fileOffset) + off_t(total))
-                if read < 0 {
+                if read <= 0 {
                     throw GGUFExpertBufferCacheError.shortRead(
                         name: name, expected: Int(range.byteCount), got: total)
                 }
-                if read == 0 { break }
                 total += read
             }
-            guard total == Int(range.byteCount) else {
-                throw GGUFExpertBufferCacheError.shortRead(
-                    name: name, expected: Int(range.byteCount), got: total)
-            }
             return GGUFExpertMatrix(
-                buffer: buffer, rows: rows, columns: columns, type: range.type,
+                buffer: buffer, rows: 0, columns: 0, type: range.type,
                 byteCount: Int(range.byteCount))
         }
-        let gate = try matrix(weights.gate, rows: 640, columns: 2_560, name: "gate")
-        let up = try matrix(weights.up, rows: 640, columns: 2_560, name: "up")
-        let down = try matrix(weights.down, rows: 2_560, columns: 640, name: "down")
-        return GGUFExpertBuffers(layer: layer, expert: expert, gate: gate, up: up, down: down)
+        let gate = try fill(weights.gate, into: slot.gate, name: "gate")
+        let up = try fill(weights.up, into: slot.up, name: "up")
+        let down = try fill(weights.down, into: slot.down, name: "down")
+        return GGUFExpertBuffers(
+            layer: layer, expert: expert, gate: gate, up: up, down: down, slotIndex: slotIndex)
     }
 
     private func descriptor(for shard: Int) throws -> Int32 {

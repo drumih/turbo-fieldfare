@@ -45,8 +45,16 @@ package final class GGUFDecoder {
         let directory = (model.shards.first?.url ?? URL(fileURLWithPath: "."))
             .deletingLastPathComponent()
         let source = try GGUFModelSource.open(directoryURL: directory)
+        // The embedding and head tables are held as their blocks (the gather
+        // and the Q6_K head read them directly), and the shared experts are
+        // preloaded by their own stage: including them in the arena as bf16
+        // would duplicate ~2.5 GB of the 24 GB this machine has.
+        let arenaNames = source.residentNames.filter { name in
+            name != "token_embd.weight" && name != "output.weight"
+                && !name.contains("_shexp.")
+        }
         self.arena = try GGUFResidentArena.build(
-            names: source.residentNames, from: model, context: context)
+            names: arenaNames, from: model, context: context)
         self.hc = try HyperConnection(
             context: context, dim: arch.hiddenSize, streams: arch.hyperConnections.count,
             lowRank: arch.hyperConnections.lowRank, weightBits: 4)
@@ -129,6 +137,7 @@ package final class GGUFDecoder {
         // PLE rows depend only on the token and its predecessors.
         try ple.gather(context: history)
 
+        var waitByLayer: [(Int, UInt64)] = []
         var phaseNanos: [String: UInt64] = [:]
         func mark(_ name: String, _ start: UInt64) {
             phaseNanos[name, default: 0] &+= DispatchTime.now().uptimeNanoseconds - start
@@ -137,6 +146,16 @@ package final class GGUFDecoder {
         // command buffers: everything up to and including the router and the
         // shared expert, then the routed experts and the FFN write. That is a
         // wait per layer, which a GPU top-k would remove; correctness first.
+        guard let broadcastCB = context.queue.makeCommandBuffer() else {
+            throw MetalError.commandEncoderFailed
+        }
+        try elementwise.encodeHCBroadcast(
+            commandBuffer: broadcastCB, streams: streams, dim: hidden,
+            streamCount: arch.hyperConnections.count)
+        broadcastCB.commit()
+        broadcastCB.waitUntilCompleted()
+        if let error = broadcastCB.error { throw MetalError.invalidState("\(error)") }
+
         for layer in 0..<arch.numLayers {
             if layer == ple.layerIndex {
                 guard let pleCB = context.queue.makeCommandBuffer() else {
@@ -150,11 +169,6 @@ package final class GGUFDecoder {
             let tAttn = DispatchTime.now().uptimeNanoseconds
             guard let cb = context.queue.makeCommandBuffer() else {
                 throw MetalError.commandEncoderFailed
-            }
-            if layer == 0 {
-                try elementwise.encodeHCBroadcast(
-                    commandBuffer: cb, streams: streams, dim: hidden,
-                    streamCount: arch.hyperConnections.count)
             }
             // Mask values: 1 full attention, 2 GDN linear attention (the
             // checkpoint has 12 of the former: layers 3, 7, ... 47).
@@ -190,9 +204,12 @@ package final class GGUFDecoder {
             t = DispatchTime.now().uptimeNanoseconds
             try shared.encode(commandBuffer: cb, layer: layer, x: blockInput, out: moeOut)
             mark("  shared", t)
+            let tWait = DispatchTime.now().uptimeNanoseconds
             cb.commit()
             cb.waitUntilCompleted()
             if let error = cb.error { throw MetalError.invalidState("\(error)") }
+            mark("  wait(attn)", tWait)
+            waitByLayer.append((layer, DispatchTime.now().uptimeNanoseconds - tWait))
             mark("attn+router+shared", tAttn)
 
             let tRouted = DispatchTime.now().uptimeNanoseconds
@@ -205,10 +222,19 @@ package final class GGUFDecoder {
                 experts: selection.experts, weights: selection.weights, out: moeOut)
             try encodeWrite(
                 routedCB, prefix: ffnPrefix, streamsBuffer: streams, blockOut: moeOut)
+            let tRoutedWait = DispatchTime.now().uptimeNanoseconds
             routedCB.commit()
             routedCB.waitUntilCompleted()
             if let error = routedCB.error { throw MetalError.invalidState("\(error)") }
+            mark("  wait(routed)", tRoutedWait)
             mark("routed", tRouted)
+        }
+        for (layer, nanos) in waitByLayer.prefix(4) {
+            print("  wait(attn) layer \(layer): \(String(format: "%.0f", Double(nanos) / 1e6)) ms")
+        }
+        if let last = waitByLayer.last {
+            print(
+                "  wait(attn) layer \(last.0): \(String(format: "%.0f", Double(last.1) / 1e6)) ms")
         }
         for (name, nanos) in phaseNanos.sorted(by: { $0.value > $1.value }) {
             print("  \(name): \(String(format: "%.1f", Double(nanos) / 1e6)) ms")
