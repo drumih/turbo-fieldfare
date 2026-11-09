@@ -351,12 +351,23 @@ rate a token's 2.36 G expert elements would still cost ~460 ms, so vectorised
 stores and fewer launches are needed before the as-is path can approach the
 216 ms affine baseline; the kernel is the right shape, not yet the right speed.
 
-**ANE is measured not to pay for this model.** `benchmark/ane-prefill/README.md`
-records 197.5 s on the GPU against 273.5 s on the ANE for Qwen 3.8 125B-A6B
-4-bit - **0.72x** - because the GPU path attends only the indexer's ~2,051
-selected keys while the ANE graph is dense over the context. There is no ANE
-graph for the as-is GGUF path, and building one would start from a measured
-loss, so the as-is route targets the GPU.
+**ANE is a prefill-only path here, and it was measured for this model.** The
+engine never uses the ANE for decode. For prefill it was tried on the affine
+4-bit install and does not pay: 197.5 s on the GPU against 273.5 s on the ANE for
+a ~4,333-token prompt (**0.72x**; 8-bit 0.87x, `benchmark/ane-prefill/README.md`).
+The mechanism is measured, not inferred: the GPU path gathers only the indexer's
+~2,051 selected keys while the ANE graph is dense over the context (~4x the score
+arithmetic for that prompt), and each Core ML variant load costs 6.9-13.6 s with
+24 variants per prompt.
+
+The as-is GGUF path has no ANE graph at all, and an ANE graph needs fp16 weights
+of the whole block - which the checkpoint does not carry in that form and which
+this route may not create. If the operator wants ANE prefill re-measured, the
+exporter still supports the family and takes an affine install (`tools/
+export_ane_prefill.py --model ... --chunk 4096 --max-history 8192`); it cannot be
+produced from the GGUF without converting the very weights this route keeps in
+place. Until that measurement exists, prefill stays on the GPU with the QSA
+selection, and decode stays on the GPU.
 
 ## Reference measurement: llama.cpp on this host (2026-11-09)
 
