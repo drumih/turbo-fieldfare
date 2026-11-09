@@ -377,4 +377,28 @@ private struct GGUFWriter {
         #expect(ple.tensor.type == .iq4NL)
         #expect(ple.tensor.byteCount == 28_800_138_240)
     }
+
+    /// Decodes one real block through the directory's offsets for each of the
+    /// types the decoder implements against this file. The synthetic vectors
+    /// prove the arithmetic; this proves the addressing: a shard index, a data
+    /// offset and a block size that agree with 83 GB of bytes on disk.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_GGUF_MODEL"] != nil))
+    func decodesRealBlocksAtTheirDirectoryOffsets() throws {
+        let path = try #require(Self.realModelPath)
+        let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
+        let names = ["output.weight", "blk.8.ffn_down_exps.weight", "per_layer_token_embd.weight"]
+        for name in names {
+            let location = try #require(model.tensor(named: name))
+            let shard = model.shards[location.shardIndex]
+            let blockBytes = Int(location.tensor.type.blockBytes)
+            let handle = try FileHandle(forReadingFrom: shard.url)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: shard.dataOffset + location.tensor.offset)
+            let data = try #require(try handle.read(upToCount: blockBytes))
+            let values = try GGUFDequant.decode(type: location.tensor.type, bytes: [UInt8](data))
+            #expect(values.count == Int(location.tensor.type.blockSize))
+            #expect(values.allSatisfy { $0.isFinite }, "\(name) decoded a non-finite value")
+            #expect(values.contains { $0 != 0 }, "\(name) decoded an all-zero block")
+        }
+    }
 }
