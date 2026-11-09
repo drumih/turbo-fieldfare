@@ -196,7 +196,8 @@ it with the read-window size.
 | 6 | affine conversion probe | **landed 2026-11-09**: sizes exact (50.29 → 67.95 GB for experts, ≈100 GB install) and the added error measured at 8.7–10.1% relative | yes (GGUF) |
 | 7 | converter producing a real install | **landed 2026-11-09 (one layer)**: `GGUFExpertBlobWriter` writes a `.ssdai` expert blob and layout.json that the engine's reader accepts; weights read back equal the quantise→dequantise reference | yes (GGUF) |
 | 8a | full layout plan | **landed 2026-11-09**: 48 layers x 512 experts x 9 sub-tensors, `layout.json` 19.2 MB (under the 128 MiB cap), expert payload 68.05 GB | yes |
-| 8b | manifest + resident weights | manifest decodes against the runtime's `qwen4Flash` arch; `model_weights.bin` written | yes |
+| 8b | manifest | **landed 2026-11-09**: built from the GGUF + `qwen38FlashNext` preset, accepted by `ManifestReader.decode`, and refusing a file whose geometry disagrees | yes |
+| 8c | resident weights | `model_weights.bin` written at the widths the manifest declares; hashes filled in | yes |
 | 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 8 is the converter proper: every layer through this writer, a
@@ -298,6 +299,28 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## Route B, fourth probe: the manifest
+
+`GGUFManifestBuilder` builds the manifest from two sources on purpose: the file
+is authoritative for geometry, the runtime's `qwen38FlashNext` preset for the
+conventions a GGUF does not carry in a form the engine reads. Every field with a
+GGUF key is compared with the preset, and a disagreement is refused by name.
+
+The result decodes through `ManifestReader.decode(data:expecting:)` with all the
+extension geometry present: hyper-connections 4, indexer budget 2,048, PLE n-gram
+3, and the affine 4-bit/group-64 quant slots. The negative test mutates
+`block_count` to 47 and gets `numLayers` named in the refusal.
+
+The cross-check earned its keep immediately: it caught this repo's own mapping
+being wrong. `embedding_length_per_layer_input` is 160, the PLE table's row
+width (`embedDim / ngramHeads`), not the preset's 2,560-wide injection — reading
+it as `embedDim` would have described a tensor that does not exist.
+
+`files` stays a parameter: sizes and SHA-256 values describe bytes the conversion
+has not written yet, and inventing a hash would be worse than having no manifest.
+Likewise the quant slots are a claim about bytes, so the resident writer has to
+emit exactly what they say before the manifest is shippable.
 
 ## Route B, third probe: the full layout plan
 
