@@ -342,14 +342,28 @@ is 4.62 tok/s, and the difference is the cache, not the format.
 4. **PLE gather over IQ4_NL** — the table stays in its block format; only the
    gathered rows are decoded.
 
-**First kernel landed (2026-11-09).** `dequant_iq4nl_bf16` decodes a GGUF
-IQ4_NL block (fp16 scale + 16 nibble bytes) to 32 bf16 values the existing
-`BF16GEMV` and gather kernels already read. It is element-for-element identical
-to `GGUFDequant`'s CPU decoder and measures **5.14 G elements/s** on this M3
-(1.64 M elements x 20, warmed), against 0.21-0.36 G on the CPU - 14-24x. At that
-rate a token's 2.36 G expert elements would still cost ~460 ms, so vectorised
-stores and fewer launches are needed before the as-is path can approach the
-216 ms affine baseline; the kernel is the right shape, not yet the right speed.
+**All seven block formats now decode on the GPU (2026-11-09).** Each kernel is
+element-for-element identical to `GGUFDequant`'s CPU decoder, which is bit-exact
+against ggml, and each writes bf16 tiles the existing `BF16GEMV` and gather
+kernels already read. Measured on this M3, one block per thread, 1.64 M elements
+x 20 warmed:
+
+| format | where it is used | GPU rate (G elements/s) |
+| --- | --- | ---: |
+| IQ4_NL | down experts, PLE table | 2.45-5.14 |
+| IQ2_S | gate/up experts (most layers) | 2.08-3.27 |
+| IQ3_XXS | gate/up, layers 14+ | 2.63-3.71 |
+| IQ4_XS | layer 47 gate/up | 2.86-3.13 |
+| Q2_0 | layers 8/10/13 down | 2.96-3.26 |
+| Q6_K | embeddings, head, attention | 1.93-2.30 |
+| Q8_0 | shared experts | 2.34-3.37 |
+
+Rates are ranges across runs (the machine moves by up to 2x); the CPU decoders
+of the same formats run at 0.21-0.36 G, so the GPU is 6-15x faster. At ~3 G/s a
+token's 2.36 G expert elements still cost ~790 ms, so vectorised stores and
+fewer, larger launches remain before the as-is path can approach the 216 ms
+affine baseline. Decoders are not a runtime: the loader that opens a GGUF
+directory in place is still the missing piece.
 
 **ANE is a prefill-only path here, and it was measured for this model.** The
 engine never uses the ANE for decode. For prefill it was tried on the affine

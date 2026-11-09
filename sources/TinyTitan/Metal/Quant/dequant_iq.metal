@@ -107,3 +107,108 @@ kernel void dequant_iq2s_bf16(
         }
     }
 }
+
+// IQ4_XS: fp16 d, 16-bit high scales, 4 low-scale bytes, 128 nibble bytes.
+// Per 32-element sub-block: a 6-bit scale (ls - 32) and 16 bytes whose low
+// nibbles are elements 0...15 and high nibbles 16...31.
+kernel void dequant_iq4xs_bf16(
+    device const uchar* blocks     [[buffer(0)]],
+    device bfloat*      out        [[buffer(1)]],
+    constant uint&      blockCount [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= blockCount) return;
+    const uint base = gid * 136u;
+    const ushort dBits = ushort(blocks[base]) | (ushort(blocks[base + 1u]) << 8u);
+    const float d = float(as_type<half>(dBits));
+    const ushort scalesH = ushort(blocks[base + 2u]) | (ushort(blocks[base + 3u]) << 8u);
+    device const uchar* scalesL = blocks + base + 4u;
+    device const uchar* qs = blocks + base + 8u;
+    device bfloat* dst = out + gid * 256u;
+    for (uint sub = 0u; sub < 8u; ++sub) {
+        const uint low = (uint(scalesL[sub / 2u]) >> (4u * (sub % 2u))) & 0x0Fu;
+        const uint high = (uint(scalesH) >> (2u * sub)) & 0x03u;
+        const float dl = d * float(int(low | (high << 4u)) - 32);
+        for (uint j = 0u; j < 16u; ++j) {
+            const uchar packed = qs[sub * 16u + j];
+            dst[sub * 32u + j] = bfloat(dl * float(kIQ4NLTable[packed & 0x0Fu]));
+            dst[sub * 32u + 16u + j] = bfloat(dl * float(kIQ4NLTable[packed >> 4u]));
+        }
+    }
+}
+
+// Q2_0: fp16 d + 16 bytes of 2-bit quants, 64 values. The code is offset by
+// one (00 -> -1, 01 -> 0, 10 -> +1, 11 -> +2), as block_q2_0 defines it.
+kernel void dequant_q2_0_bf16(
+    device const uchar* blocks     [[buffer(0)]],
+    device bfloat*      out        [[buffer(1)]],
+    constant uint&      blockCount [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= blockCount) return;
+    const uint base = gid * 18u;
+    const ushort dBits = ushort(blocks[base]) | (ushort(blocks[base + 1u]) << 8u);
+    const float d = float(as_type<half>(dBits));
+    device bfloat* dst = out + gid * 64u;
+    for (uint j = 0u; j < 64u; ++j) {
+        const uchar packed = blocks[base + 2u + (j / 4u)];
+        const uint q = (uint(packed) >> (2u * (j % 4u))) & 0x03u;
+        dst[j] = bfloat(float(int(q) - 1) * d);
+    }
+}
+
+// Q6_K: 128 low-nibble bytes, 64 high-bit bytes, 16 int8 sub-block scales, and
+// an fp16 super-scale. The four values one loop step produces land 32 apart.
+kernel void dequant_q6k_bf16(
+    device const uchar* blocks     [[buffer(0)]],
+    device bfloat*      out        [[buffer(1)]],
+    constant uint&      blockCount [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= blockCount) return;
+    const uint base = gid * 210u;
+    const ushort dBits = ushort(blocks[base + 208u]) | (ushort(blocks[base + 209u]) << 8u);
+    const float d = float(as_type<half>(dBits));
+    device const uchar* ql = blocks + base;
+    device const uchar* qh = blocks + base + 128u;
+    device const uchar* sc = blocks + base + 192u;
+    device bfloat* dst = out + gid * 256u;
+    for (uint halfIndex = 0u; halfIndex < 2u; ++halfIndex) {
+        device const uchar* qlH = ql + halfIndex * 64u;
+        device const uchar* qhH = qh + halfIndex * 32u;
+        device const uchar* scH = sc + halfIndex * 8u;
+        device bfloat* halfOut = dst + halfIndex * 128u;
+        for (uint l = 0u; l < 32u; ++l) {
+            const uint is = l / 16u;
+            const int q1 = int((qlH[l] & 0x0Fu) | ((qhH[l] & 0x03u) << 4u)) - 32;
+            const int q2 = int((qlH[l + 32u] & 0x0Fu) | (((qhH[l] >> 2u) & 0x03u) << 4u)) - 32;
+            const int q3 = int((qlH[l] >> 4u) | (((qhH[l] >> 4u) & 0x03u) << 4u)) - 32;
+            const int q4 = int((qlH[l + 32u] >> 4u) | (((qhH[l] >> 6u) & 0x03u) << 4u)) - 32;
+            const float s0 = float(as_type<char>(scH[is]));
+            const float s1 = float(as_type<char>(scH[is + 2u]));
+            const float s2 = float(as_type<char>(scH[is + 4u]));
+            const float s3 = float(as_type<char>(scH[is + 6u]));
+            halfOut[l] = bfloat(d * s0 * float(q1));
+            halfOut[l + 32u] = bfloat(d * s1 * float(q2));
+            halfOut[l + 64u] = bfloat(d * s2 * float(q3));
+            halfOut[l + 96u] = bfloat(d * s3 * float(q4));
+        }
+    }
+}
+
+// Q8_0: fp16 d + 32 signed bytes.
+kernel void dequant_q8_0_bf16(
+    device const uchar* blocks     [[buffer(0)]],
+    device bfloat*      out        [[buffer(1)]],
+    constant uint&      blockCount [[buffer(2)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= blockCount) return;
+    const uint base = gid * 34u;
+    const ushort dBits = ushort(blocks[base]) | (ushort(blocks[base + 1u]) << 8u);
+    const float d = float(as_type<half>(dBits));
+    device bfloat* dst = out + gid * 32u;
+    for (uint j = 0u; j < 32u; ++j) {
+        dst[j] = bfloat(float(as_type<char>(blocks[base + 2u + j])) * d);
+    }
+}
