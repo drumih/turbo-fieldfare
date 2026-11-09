@@ -194,14 +194,16 @@ it with the read-window size.
 | 4 | per-expert addressing | **landed 2026-11-09**: 73,728 slices tile 50.29 GB with no gaps; block decode at expert 511's computed offset | directories only |
 | 5 | engine seam: weight source + kernel format | **measured 2026-11-09**: host decode 0.21–0.36 G elements/s, ≈9 s/token, so decode-on-fetch is rejected; the fork between IQ kernels and an affine conversion is open | yes (GGUF) |
 | 6 | affine conversion probe | **landed 2026-11-09**: sizes exact (50.29 → 67.95 GB for experts, ≈100 GB install) and the added error measured at 8.7–10.1% relative | yes (GGUF) |
-| 7 | converter producing a real install | one layer written in `.ssdai` layout and read back; storage plan in place for the full run | yes (GGUF) |
-| 8 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
+| 7 | converter producing a real install | **landed 2026-11-09 (one layer)**: `GGUFExpertBlobWriter` writes a `.ssdai` expert blob and layout.json that the engine's reader accepts; weights read back equal the quantise→dequantise reference | yes (GGUF) |
+| 8 | full converter + manifest | every layer written, manifest built from the GGUF's architecture metadata, the install loads | yes |
+| 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
-Milestone 5 — the engine seam — is the right next step, and it is a decision as
-much as an implementation: one expert block must reach a real kernel, which
-means choosing between IQ block-format kernels and a decode-on-fetch stage, and
-measuring the smaller one. The CPU detour the earlier version of this table
-named is closed by `CPUModelFamily`: this architecture has no CPU forward.
+Milestone 8 is the converter proper: every layer through this writer, a
+manifest built from the GGUF's architecture metadata, and the full ~100 GB run —
+which needs the source moved to external storage first so the output fits. The
+writer proves the payload; what remains is the orchestration around it, plus the
+KLD/top-1 check against a llama.cpp run that decides whether the conversion is
+shippable.
 
 The decoder is checked against ggml's own `dequantize_row_*`, not against
 itself: `tools/gguf-ref-vectors.c` prints deterministic blocks and their decoded
@@ -295,6 +297,28 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## Route B, second probe: one layer in `.ssdai` layout
+
+`GGUFExpertBlobWriter` writes a layer's routed experts exactly as the runtime
+reads them: per role, 4-bit affine weights in U32 words with
+`shape: [rows, columns]`, then BF16 scales and biases shaped
+`[rows, columns/64]`, with sub-tensor offsets relative to the expert. It takes
+the GGUF's IQ bytes, decodes them, and re-quantises with the engine's own
+`quantizeInt4Affine`, so the payload is what the kernels already consume.
+
+Verified on four experts of layer 0 (`GGUFExpertBlobWriterTests`): the layer
+file is `experts × stride`, `layout.json` decodes through the engine's
+`PackedExpertsLayoutReader`, and expert 3's first and last gate rows read back
+from their recorded offsets equal the quantise→dequantise reference exactly.
+The expert records carry `bits: 4` and the shipped shapes, so
+`validateRoutedExpertLayout` has what it checks.
+
+One format fact the first attempt got wrong: `expertStride` must be a multiple
+of the 16 KiB `alignmentBytes`, and the raw blob is 2,764,800 bytes
+(168.75 pages). Each expert is padded to 2,768,896; a converter that wrote the
+unpadded size would be refused by the layout validator, which is how this was
+found.
 
 ## Open questions
 
