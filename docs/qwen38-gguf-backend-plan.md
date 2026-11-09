@@ -199,7 +199,9 @@ it with the read-window size.
 | 8b | manifest | **landed 2026-11-09**: built from the GGUF + `qwen38FlashNext` preset, accepted by `ManifestReader.decode`, and refusing a file whose geometry disagrees | yes |
 | 8c | resident role map | **landed 2026-11-09**: 44 roles over 1,080 resident tensors, every shape checked against the preset; a wrong dim is refused | yes |
 | 8d | resident writer | **landed 2026-11-09**: `model_weights.bin` written with the engine's index format; `ResidentIndexReader` accepts it and the 4-bit payload decodes to the reference | yes |
-| 8e | width policy + full run | per-role widths matching the manifest; every tensor written; hashes; KLD/top-1 | yes |
+| 8e | width policy + conversion plan | **landed 2026-11-09**: per-role widths, exact totals, and the PLE table exposed as a format blocker (175.6 GB with today's kernels) | yes |
+| 8f | PLE storage | group-32 affine in the int4 kernel (~105 GB), or padded group-64 rows (~107 GB) | yes |
+| 8g | full run | every tensor written; hashes; KLD/top-1 against llama.cpp | yes |
 | 9 | expert streaming + cache | measured tok/s and output identity against a llama.cpp reference | yes |
 
 Milestone 8 is the converter proper: every layer through this writer, a
@@ -301,6 +303,45 @@ Two consequences:
   quality verdict: that needs KLD/top-1 against a llama.cpp run of the same GGUF,
   and the conversion is not shippable until it passes. The probe is the cheap
   filter that says the conversion is worth attempting.
+
+## Route B, seventh probe: the PLE table does not fit today's format
+
+`GGUFConversionPlanner` sizes the whole install from the file. The numbers, with
+the current width policy:
+
+| component | bytes |
+| --- | ---: |
+| residents, 4-bit (embedding/head/shared) | 847,872,000 |
+| residents, 8-bit (attention/router) | 2,928,721,920 |
+| residents, bf16 | 103,768,344,320 |
+| experts | 68,048,388,096 |
+| **total** | **175,593,326,336 (175.6 GB)** |
+
+The bf16 line is one tensor. `per_layer_token_embd.weight` is
+`[160, 320001536]` — 51.2 G weights whose rows are **160 wide**, and the int4
+shader hardcodes `kGroupSize = 64`. 160 is not a multiple of 64, so the affine
+format cannot describe a row of it, and the policy falls back to bf16:
+**102,400,491,520 bytes** where group-32 affine would take **32,000,153,600**.
+The plan reports that fallback by name rather than hiding it in a total.
+
+Three ways through, with their cost:
+
+- **Group-32 affine for the PLE table.** Make `kGroupSize` a function constant
+  in `dequant_int4.metal` and `dequant_int8.metal`, declare `groupSize: 32` in
+  the manifest's embedding slot, and quantise the table at 32. PLE drops to
+  32.0 GB and the install lands at **~105 GB**. This matches the checkpoint's
+  own quant family (the community MLX build uses group 32) and pads nothing.
+- **Pad the rows to 192 and keep group 64.** PLE costs 34.6 GB and the install
+  ~107 GB, but the gather has to know the padded stride and slice the 160 used
+  columns; the padded columns are zeros that must never reach the key
+  projection. Similar work to the first, with more room to get it wrong.
+- **Leave it bf16.** 175.6 GB, which does not fit the storage this machine can
+  offer; this is the status quo the plan reports, not a route.
+
+Either real option is a kernel change of the same order, so the group-32 route
+is the recommendation. The ~100 GB figure in the earlier probe was right only if
+the PLE table could be affine at a group that divides 160; this is where that
+assumption is checked, and it was wrong by 70 GB.
 
 ## Route B, sixth probe: `model_weights.bin`
 
