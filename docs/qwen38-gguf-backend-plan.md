@@ -338,6 +338,14 @@ Three ways through, with their cost:
 - **Leave it bf16.** 175.6 GB, which does not fit the storage this machine can
   offer; this is the status quo the plan reports, not a route.
 
+**The CPU half of the group-32 route is landed.** `quantizeInt4Affine`,
+`dequantizeInt4Affine` and the Int8 pair now take an explicit group; the
+one-argument forms remain and call them with 64, so every existing caller and
+function reference is unchanged. A 160-wide row round-trips at group 32 in
+`QuantizationAffineTests`. What remains is the shader's `kGroupSize` (a function
+constant in `dequant_int4.metal`, used by `embed_lookup_int4` and the GEMVs) and
+the manifest slot that declares 32 for the embedding family.
+
 Either real option is a kernel change of the same order, so the group-32 route
 is the recommendation. The ~100 GB figure in the earlier probe was right only if
 the PLE table could be affine at a group that divides 160; this is where that

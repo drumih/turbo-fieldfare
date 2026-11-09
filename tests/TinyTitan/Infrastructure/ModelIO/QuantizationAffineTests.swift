@@ -28,6 +28,41 @@ import TinyTitan
         }
     }
 
+    /// The PLE table's rows are 160 wide, so 160 must work at group 32: that is
+    /// the only group that divides it and still packs whole groups.
+    @Test func quantizeDequantizeInt4AffineAtGroup32() {
+        var row = [Float]()
+        row.reserveCapacity(160)
+        for k in 0..<160 { row.append(-0.5 + Float(k) * 0.01) }
+
+        let q = Quantization.quantizeInt4Affine(row, group: 32)
+        #expect(q.packed.count == 80)
+        #expect(q.scales.count == 5)
+        #expect(q.biases.count == 5)
+        let r = Quantization.dequantizeInt4Affine(q, n: 160, group: 32)
+        #expect(r.count == 160)
+        // group-32 scale ≈ 0.31/15 ≈ 0.021; half a step plus BF16 rounding of the
+        // scale stays under 0.02.
+        for i in 0..<160 {
+            #expect(abs(r[i] - row[i]) < 0.02, "i=\(i) ref=\(row[i]) got=\(r[i])")
+        }
+    }
+
+    @Test func quantizeDequantizeInt8AffineAtGroup32() {
+        var row = [Float]()
+        row.reserveCapacity(160)
+        for k in 0..<160 { row.append(-0.3 + Float(k) * 0.008) }
+
+        let q = Quantization.quantizeInt8Affine(row, group: 32)
+        #expect(q.packed.count == 160)
+        #expect(q.scales.count == 5)
+        #expect(q.biases.count == 5)
+        let r = Quantization.dequantizeInt8Affine(q, n: 160, group: 32)
+        for i in 0..<160 {
+            #expect(abs(r[i] - row[i]) < 0.008, "i=\(i) ref=\(row[i]) got=\(r[i])")
+        }
+    }
+
     @Test func quantizeDequantizeInt8Affine_roundtrip() {
         var row = [Float]()
         row.reserveCapacity(64)
