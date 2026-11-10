@@ -25,16 +25,26 @@ import TinyTitanValidationSupport
         let loadSeconds = Double(DispatchTime.now().uptimeNanoseconds - built) / 1e9
         print("decoder load: \(String(format: "%.1f", loadSeconds)) s")
 
+        func faults() -> (minor: Int64, major: Int64) {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return (Int64(usage.ru_minflt), Int64(usage.ru_majflt))
+        }
         var timings: [Double] = []
         var tokenLogits: [[Float]] = []
         let tokens: [Int32] = [100, 200, 300, 400, 500, 600]
         for (position, token) in tokens.enumerated() {
             var history: [Int32] = [token]
             if position > 0 { history.append(tokens[position - 1]) }
+            let before = faults()
             let start = DispatchTime.now().uptimeNanoseconds
             let logits = try decoder.decode(
                 token: token, position: position, history: history)
             timings.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
+            let after = faults()
+            print(
+                "  faults on token \(position): minor \(after.minor - before.minor), "
+                    + "major \(after.major - before.major)")
             tokenLogits.append(logits)
         }
         for (index, seconds) in timings.enumerated() {
