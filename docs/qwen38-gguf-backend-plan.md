@@ -675,7 +675,10 @@ already does.
   `Float16(bitPattern:)` silently compares garbage (0.93 RMS).
 - Mapped weights are right for resident tensors read every token and wrong for
   streamed experts: GPU page faults mid-dispatch cost 1.7-2.3 s a token where a
-  pread into a reused slot costs 0.1 s.
+  pread into a reused slot costs 0.1 s. Prefaulting the slices with
+  `POSIX_MADV_WILLNEED` at map time does not rescue it: measured 0.39 tok/s
+  against 0.56-0.83 for the pread slots, with the routed wait rising from
+  80 ms to 196 ms. Rejected on that measurement.
 - The fused GEMV entry point takes whole buffers and no offsets, so the KV
   cache row is written by staging k/v in scratch and blitting.
 - `MTLBuffer.contents()` on a `.storageModeShared` buffer is fine; on
