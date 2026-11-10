@@ -248,7 +248,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                      fp16RingEnabled: useFP16Ring,
                                      slidingWindow: cfg.slidingWindow,
                                      maxPrefillChunkTokens: max(
-                                        PrefillRuntimeConfig.maxChunkTokens,
+                                        runtimeConfiguration.prefillChunkTokens,
                                         VisionConfig().maximumPooledTokens))
 
         self.embedInt4 = try EmbedLookupInt4(context: context)

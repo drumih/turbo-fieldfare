@@ -133,11 +133,13 @@ public func run(args: Args,
         if case .needsMemory = ContextAdmission.availability(
             config: ArchConfig.gemma4_26B_A4B,
             maxContext: args.maxContext,
-            hostMemoryBytes: hostMemory, expertCacheSlots: runtime.expertCacheSlots) {
+            hostMemoryBytes: hostMemory, expertCacheSlots: runtime.expertCacheSlots,
+            prefillChunkTokens: runtime.prefillChunkTokens) {
             let need = ContextAdmission.needDescription(
                 config: ArchConfig.gemma4_26B_A4B,
                 maxContext: args.maxContext,
-                hostMemoryBytes: hostMemory, expertCacheSlots: runtime.expertCacheSlots)
+                hostMemoryBytes: hostMemory, expertCacheSlots: runtime.expertCacheSlots,
+                prefillChunkTokens: runtime.prefillChunkTokens)
             stderr.write(Data("[memory: \(need) Continuing.]\n".utf8))
         }
 

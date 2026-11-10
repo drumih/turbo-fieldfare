@@ -27,6 +27,17 @@ public enum ContextAdmission {
         return UInt64(max(0, slots - 16)) * UInt64(config.numLayers) * UInt64(slotBytes)
     }
 
+    /// Prefill scratch beyond what the measured baseline already holds. The
+    /// baseline was taken at the default chunk; a larger chunk grows the
+    /// scratch by about 125.5 KB per token.
+    private static func additionalPrefillScratchBytes(config: ArchConfig, prefillChunkTokens: Int) -> UInt64 {
+        let baselineChunkTokens = PrefillRuntimeConfig.defaultChunked.chunkTokens
+        guard prefillChunkTokens > baselineChunkTokens else { return 0 }
+        let requested = PrefillChunkScratchLayout(config: config, chunkTokens: prefillChunkTokens)
+        let baseline = PrefillChunkScratchLayout(config: config, chunkTokens: baselineChunkTokens)
+        return UInt64(requested.totalPersistentBytes - baseline.totalPersistentBytes)
+    }
+
     /// Headroom left to the OS and to a minimum routed-expert page cache. A
     /// host that satisfied only the projected footprint would run with every
     /// expert read faulting against a cold cache.
@@ -43,9 +54,12 @@ public enum ContextAdmission {
     /// image-token count, and `KVCacheManager` sizes the ring at
     /// `slidingWindow + maxPrefillChunkTokens`, so the widest chunk the runtime
     /// may see — not the default text chunk — is what the ring costs. 1,304
-    /// today.
-    public static func productionSlidingRingRows(config: ArchConfig, maxContext: Int) -> Int {
-        let chunkRows = max(PrefillRuntimeConfig.defaultChunked.chunkTokens,
+    /// for every chunk up to the pooled image span; a larger configured chunk
+    /// widens the ring by the difference.
+    public static func productionSlidingRingRows(config: ArchConfig,
+                                                 maxContext: Int,
+                                                 prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> Int {
+        let chunkRows = max(prefillChunkTokens,
                             VisionConfig().maximumPooledTokens)
         return min(maxContext, config.slidingWindow + chunkRows)
     }
@@ -54,12 +68,16 @@ public enum ContextAdmission {
     ///
     /// Sliding-window layers are ring-capped; only the full-attention layers
     /// grow with the context, at 20,480 B per token across the five of them.
-    public static func fp16KVBytes(config: ArchConfig, maxContext: Int) -> UInt64 {
+    public static func fp16KVBytes(config: ArchConfig,
+                                   maxContext: Int,
+                                   prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> UInt64 {
         let fullLayers = config.fullAttentionLayerMask.reduce(0) { $0 + ($1 == 0 ? 0 : 1) }
         let slidingLayers = config.numLayers - fullLayers
         let fp16Bytes = 2
         let keyAndValue = 2
-        let slidingRows = productionSlidingRingRows(config: config, maxContext: maxContext)
+        let slidingRows = productionSlidingRingRows(config: config,
+                                                    maxContext: maxContext,
+                                                    prefillChunkTokens: prefillChunkTokens)
         let slidingBytesPerRow = config.numKVHeads * config.headDim * keyAndValue * fp16Bytes
         let fullBytesPerRow = config.numFullKVHeads * config.fullHeadDim * keyAndValue * fp16Bytes
         return UInt64(slidingLayers * slidingRows * slidingBytesPerRow)
@@ -67,20 +85,27 @@ public enum ContextAdmission {
     }
 
     /// What the process is expected to occupy at this context.
-    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
-        fp16KVBytes(config: config, maxContext: maxContext) + nonKVRuntimeFootprintBytes
+    public static func projectedFootprintBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16,
+                                               prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> UInt64 {
+        fp16KVBytes(config: config, maxContext: maxContext, prefillChunkTokens: prefillChunkTokens)
+            + nonKVRuntimeFootprintBytes
             + additionalExpertCacheBytes(config: config, slots: expertCacheSlots)
+            + additionalPrefillScratchBytes(config: config, prefillChunkTokens: prefillChunkTokens)
     }
 
     /// The smallest host memory that admits this context.
-    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16) -> UInt64 {
-        projectedFootprintBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots) + hostReserveBytes
+    public static func minimumHostMemoryBytes(config: ArchConfig, maxContext: Int, expertCacheSlots: Int = 16,
+                                              prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> UInt64 {
+        projectedFootprintBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                prefillChunkTokens: prefillChunkTokens) + hostReserveBytes
     }
 
     public static func availability(config: ArchConfig,
                                     maxContext: Int,
-                                    hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> Availability {
-        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots)
+                                    hostMemoryBytes: UInt64, expertCacheSlots: Int = 16,
+                                    prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> Availability {
+        let minimum = minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                             prefillChunkTokens: prefillChunkTokens)
         return hostMemoryBytes >= minimum ? .available : .needsMemory(minimumHostBytes: minimum)
     }
 
@@ -90,9 +115,11 @@ public enum ContextAdmission {
     /// refusal, a hidden menu row's caption or a CLI warning.
     public static func needDescription(config: ArchConfig,
                                        maxContext: Int,
-                                       hostMemoryBytes: UInt64, expertCacheSlots: Int = 16) -> String {
+                                       hostMemoryBytes: UInt64, expertCacheSlots: Int = 16,
+                                       prefillChunkTokens: Int = PrefillRuntimeConfig.defaultChunked.chunkTokens) -> String {
         let need = marketingGigabytesRoundedUp(
-            minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots))
+            minimumHostMemoryBytes(config: config, maxContext: maxContext, expertCacheSlots: expertCacheSlots,
+                                   prefillChunkTokens: prefillChunkTokens))
         let have = marketingGigabytesNearest(hostMemoryBytes)
         return "A \(grouped(maxContext))-token context needs \(need) GB of memory; this Mac has \(have) GB."
     }

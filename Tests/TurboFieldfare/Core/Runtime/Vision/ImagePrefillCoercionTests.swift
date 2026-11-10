@@ -55,7 +55,7 @@ import Testing
         let images = work.filter(\.isImage)
         #expect(images.count == 1)
         #expect(images.first?.range == span)
-        #expect(span.count > PrefillRuntimeConfig.maxChunkTokens)
+        #expect(span.count > 128)
     }
 
     @Test func workItemsCoverTheWholePromptInOrder() {

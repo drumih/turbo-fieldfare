@@ -221,6 +221,21 @@ import Metal
         #expect(kv.bufferLength(layer: 5) == 262_144 * 2_048)
     }
 
+    /// Only the sliding ring follows the prefill chunk; full-attention layers
+    /// are sized by the context alone.
+    @Test func widerPrefillChunkWidensOnlyTheSlidingRing() throws {
+        let (_, kv) = try makeManager(maxContext: 8_192,
+                                      fp16RingEnabled: true,
+                                      maxPrefillChunkTokens: 1_024)
+        #expect(kv.capacity(layer: 0)
+                == ContextAdmission.productionSlidingRingRows(config: config,
+                                                              maxContext: 8_192,
+                                                              prefillChunkTokens: 1_024))
+        #expect(kv.capacity(layer: 0) == 2_048)
+        #expect(kv.bufferLength(layer: 0) == 2_048 * 4_096)
+        #expect(kv.capacity(layer: 5) == 8_192)
+    }
+
     @Test func reset_clearsPosition() throws {
         let (_, kv) = try makeManager(maxContext: 128)
         for _ in 0..<100 { kv.advance() }

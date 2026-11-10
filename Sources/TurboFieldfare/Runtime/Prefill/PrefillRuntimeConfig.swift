@@ -220,17 +220,16 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     /// else. On an 11,612-token prompt that meant 578 GB read from a 12 GB pool
     /// with no cache hits at all.
     ///
-    /// 256 is free: the runner floors the chunk at
-    /// `VisionConfig().maximumPooledTokens` (280) for the KV ring and for the
-    /// multimodal scratch layout, so every size up to 280 produces byte-identical
-    /// geometry. 512 is the first size that costs anything, and raising this past
-    /// 280 should come with a test that asserts ring bytes the way
-    /// `PrefillChunkScratchTests` asserts scratch.
-    public static let maxChunkTokens = 256
+    /// Sizes up to 280 are free: the runner floors the ring chunk at
+    /// `VisionConfig().maximumPooledTokens` (280). Past that the sliding ring
+    /// is sized from the configured chunk, not from this cap, so only a caller
+    /// that opts into 512+ pays for it. On a 10,779-token prompt (M4 Pro,
+    /// 24 GB) 1024 prefilled 41% faster than 256 and 2048 45% faster, with
+    /// byte-identical output, for about 245 MB and 585 MB more footprint.
+    public static let maxChunkTokens = 2048
 
-    /// Chunk sizes a caller may select. Capped at `maxChunkTokens` - see there
-    /// for why the larger sizes the scratch layout can handle are not offered.
-    public static let allowedChunkTokens = [32, 64, 128, 256]
+    /// Chunk sizes a caller may select. Capped at `maxChunkTokens`.
+    public static let allowedChunkTokens = [32, 64, 128, 256, 512, 1024, 2048]
 
     /// The largest selectable chunk no greater than `requested`.
     ///
