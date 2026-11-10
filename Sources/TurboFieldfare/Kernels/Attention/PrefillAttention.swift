@@ -56,10 +56,13 @@ final class PrefillAttention {
     private let psoCausalTiled: MTLComputePipelineState
     private let psoParamsSmoke: MTLComputePipelineState
     private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
+    private let swaTensorOpsAvailable: Bool
 
     var tensorOps2DValidityV2Available: Bool {
         psoFullTensorOps2DValidityV2 != nil
     }
+
+    var slidingWindowTensorOpsAvailable: Bool { swaTensorOpsAvailable }
 
     convenience init(context: MetalContext) throws {
         try self.init(context: context, simulatingMissingTensorOps: false)
@@ -73,7 +76,11 @@ final class PrefillAttention {
         self.psoParamsSmoke = try context.pipeline("prefill_attention_params_smoke")
         if simulatingMissingTensorOps {
             self.psoFullTensorOps2DValidityV2 = nil
+            self.swaTensorOpsAvailable = false
         } else {
+            self.swaTensorOpsAvailable =
+                ProcessInfo.processInfo.environment["TURBO_FIELDFARE_PREFILL_SWA_TENSOROPS"] != "0"
+                && (try? context.pipeline("attention_prefill_swa_tensorops")) != nil
             do {
                 self.psoFullTensorOps2DValidityV2 = try context.pipeline(
                     "attention_prefill_full_tensorops_2d_validity_v2")
@@ -119,6 +126,22 @@ final class PrefillAttention {
             && effectiveParams.numQHeads == 16
             && effectiveParams.numKVHeads == 2
             && effectiveParams.scale == 1.0
+        let swaTensorOpsShape = requestsTensorOps
+            && swaTensorOpsAvailable
+            && layerKind == .slidingWindow
+            && effectiveParams.headDim == 256
+            && effectiveParams.numQHeads == 16
+            && effectiveParams.numKVHeads == 8
+        if swaTensorOpsShape {
+            encodeSlidingWindowTensorOps(commandBuffer: commandBuffer,
+                                         q: q, qOffset: qOffset,
+                                         k: k, kOffset: kOffset,
+                                         v: v, vOffset: vOffset,
+                                         out: out, outOffset: outOffset,
+                                         params: effectiveParams,
+                                         kvRingCapacity: kvRingCapacity)
+            return
+        }
         let tensorOpsPipeline = tensorOpsShape ? psoFullTensorOps2DValidityV2 : nil
         let useTensorOps = tensorOpsPipeline != nil
         let pipeline: MTLComputePipelineState
@@ -202,6 +225,39 @@ final class PrefillAttention {
         enc.setBuffer(out, offset: 0, index: 1)
         enc.dispatchThreads(MTLSize(width: 13, height: 1, depth: 1),
                             threadsPerThreadgroup: MTLSize(width: 13, height: 1, depth: 1))
+        enc.endEncoding()
+    }
+
+    /// Four queries times the two query heads sharing a KV head per threadgroup.
+    private func encodeSlidingWindowTensorOps(commandBuffer: MTLCommandBuffer,
+                                              q: MTLBuffer, qOffset: Int,
+                                              k: MTLBuffer, kOffset: Int,
+                                              v: MTLBuffer, vOffset: Int,
+                                              out: MTLBuffer, outOffset: Int,
+                                              params: PrefillAttentionParams,
+                                              kvRingCapacity: UInt32) {
+        let pipeline: MTLComputePipelineState
+        do {
+            pipeline = try context.pipeline(
+                "attention_prefill_swa_tensorops",
+                constants: kvRingCapacity > 0
+                    ? [MetalFunctionConstant(index: 76, value: .uint32(kvRingCapacity))]
+                    : [])
+        } catch {
+            preconditionFailure("failed to build sliding-window TensorOps prefill attention: \(error)")
+        }
+        guard let enc = commandBuffer.makeComputeCommandEncoder() else { return }
+        enc.setComputePipelineState(pipeline)
+        enc.setBuffer(q, offset: qOffset, index: 0)
+        enc.setBuffer(k, offset: kOffset, index: 1)
+        enc.setBuffer(v, offset: vOffset, index: 2)
+        enc.setBuffer(out, offset: outOffset, index: 3)
+        var p = params
+        enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
+        let queryGroups = (Int(params.queryCount) + 3) / 4
+        enc.dispatchThreadgroups(
+            MTLSize(width: queryGroups, height: Int(params.numKVHeads), depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
         enc.endEncoding()
     }
 
