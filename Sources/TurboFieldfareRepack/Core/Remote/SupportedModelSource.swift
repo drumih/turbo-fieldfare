@@ -1,28 +1,29 @@
 import Foundation
 
+/// Convenience accessors for the default source.
+///
+/// These forward to `SupportedModelSource.default`; the descriptors in
+/// `ModelSourceDescriptor.swift` are the source of truth. Prefer
+/// `SupportedModelSource.descriptor(forKey:)` or a concrete descriptor in
+/// new code.
 public enum SupportedModelSource {
-    public static let displayName = "Gemma 4 26B-A4B IT 4-bit"
-    public static let repoID = "mlx-community/gemma-4-26b-a4b-it-4bit"
-    public static let revision = "0d77464eeb233a2da68ebf9d7dc4edaac7db956d"
-    public static let sourceIndexSHA256 =
-        "bf198c9f5ea6462addca1966e5dd669c407537a876e82cf06db9084c5c850b13"
-    public static let approximateDownloadBytes: UInt64 = 14_620_479_420
-    public static let installedBytes: UInt64 = 14_291_921_884
-    public static let reserveBytes: UInt64 = 1_073_741_824
+    public static let displayName = SupportedModelSource.default.displayName
+    public static let repoID = SupportedModelSource.default.repoID
+    public static let revision = SupportedModelSource.default.revision
+    public static let sourceIndexSHA256 = SupportedModelSource.default.sourceIndexSHA256
+    public static let approximateDownloadBytes =
+        SupportedModelSource.default.approximateDownloadBytes
+    public static let installedBytes = SupportedModelSource.default.installedBytes
+    public static let reserveBytes = SupportedModelSource.default.reserveBytes
 
     public static func installOptions(outputDirectory: URL,
                                       overwrite: Bool,
                                       token: String?,
                                       resume: Bool = false)
         -> RemoteStreamingRepackOptions {
-        RemoteStreamingRepackOptions(
-            repoID: repoID,
-            revision: revision,
-            outputDir: outputDirectory.path,
-            token: token,
-            requireKnownSource: true,
-            minFreeReserveBytes: reserveBytes,
-            overwrite: overwrite,
-            resume: resume)
+        SupportedModelSource.default.installOptions(outputDirectory: outputDirectory,
+                                                    overwrite: overwrite,
+                                                    token: token,
+                                                    resume: resume)
     }
 }
