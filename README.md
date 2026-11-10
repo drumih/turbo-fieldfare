@@ -26,7 +26,7 @@
   <a href="docs/IMPLEMENTATION_REFERENCES.md">References</a>
 </p>
 
-![TurboFieldfare Mac app generating text with Gemma 4 26B-A4B](docs/assets/turbofieldfare-app.webp)
+![TurboFieldfare Mac app with local chat history, LaTeX rendering, and run statistics](docs/assets/turbofieldfare-app.webp)
 
 Memory got expensive. So I gave a 26-billion-parameter model a ~2 GB budget.
 
