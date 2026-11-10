@@ -674,10 +674,18 @@ block shape. Verified on layer 3: `wq` 12,288 x 2,560 fp16, geometry
 (hidden 2,560; 24/2 heads; head dim 256; rotary 64; theta 1e7; chunk 4,096), and
 every sampled value round-trips to the arena's bf16 exactly.
 
-What it still needs: an adapter in `tools/export_ane_prefill.py` to consume this
-directory instead of a `.ssdai` index, a chunked prefill path in the decoder to
-call the sidecar, and the A/B against GPU prefill - the qwen3.8 sidecar measured
-0.72x, so the as-is blocks have to earn the switch.
+**The sidecar now builds from it (2026-11-10).** `tools/export_ane_prefill.py
+--source-dir` consumes the derived fp16 (geometry, six tensors per layer, a
+digest binding the sidecar to that source) and runs the unchanged Core ML
+build-and-verify path. Layer 3's `h0` compiled with **64 operations on the
+Neural Engine**, `aneCompileVerified: true`, `selectionFolded: true`, geometry
+2560 / 24q / 2kv, package written. The source for all 12 full-attention layers
+is 1.1 GB; the checkpoint was not touched.
+
+What it still needs: a chunked prefill path in the decoder to call the sidecar,
+the export of the remaining layers (same command, per layer), and the A/B
+against GPU prefill - the qwen3.8 sidecar measured 0.72x, so the as-is blocks
+have to earn the switch.
 
 **Traps this route cost, recorded so they are not re-learned:**
 

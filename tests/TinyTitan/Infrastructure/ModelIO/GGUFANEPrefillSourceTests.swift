@@ -78,4 +78,26 @@ import Testing
                 layer: 0, from: model, context: context, to: temporary)
         }
     }
+
+    /// Tooling hook for the exporter: write the source to a path the operator
+    /// names, so `export_ane_prefill.py --source-dir` can consume it. Gated on
+    /// its own variable, so an ordinary run does not write outside temp.
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_ANE_SOURCE_DIR"] != nil))
+    func writesTheExportSourceAtTheRequestedPath() throws {
+        let path = try #require(Self.realModelPath)
+        let destination = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_ANE_SOURCE_DIR"])
+        let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
+        let context = try MetalContext()
+        let root = URL(fileURLWithPath: destination)
+        for layer in [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47] {
+            let written = try GGUFANEPrefillSource.write(
+                layer: layer, from: model, context: context,
+                to: root.appendingPathComponent("layer_\(layer)"))
+            #expect(written["wq"] != nil)
+        }
+        print("ANE source written to \(root.path)")
+    }
 }

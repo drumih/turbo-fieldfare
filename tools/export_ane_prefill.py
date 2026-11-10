@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import dataclasses
 import json
 import os
@@ -691,9 +692,91 @@ def sidecar_directory(chunk: int) -> str:
     return "ane_prefill" if chunk == CHUNK else f"ane_prefill-{chunk}"
 
 
+def geometry_from_source(root: pathlib.Path, chunk: int, layers_arg: str | None):
+    """Geometry and layer list from a GGUF-derived fp16 source.
+
+    The source is what `GGUFANEPrefillSource` writes: `layer_<L>/` with
+    `wq/wk/wv/wo/q_norm/k_norm.f16` and a `geometry.json`. Nothing here reads
+    the checkpoint; the fp16 is already the sidecar's precision.
+    """
+    layer_dirs = sorted(root.glob("layer_*"))
+    if not layer_dirs:
+        raise SystemExit(f"no layer_<L> directories under {root}")
+    meta = json.load(open(layer_dirs[0] / "geometry.json", encoding="utf-8"))
+    available = tuple(int(path.name.split("_")[1]) for path in layer_dirs)
+    selected = [int(x) for x in layers_arg.split(",")] if layers_arg else list(available)
+    missing = [layer for layer in selected if layer not in available]
+    if missing:
+        raise SystemExit(f"the source has no fp16 for layers {missing}")
+    geom = Geometry(
+        family="qwen38flash",
+        prefix="",
+        hidden=int(meta["hidden"]),
+        q_heads=int(meta["numHeads"]),
+        kv_heads=int(meta["numKVHeads"]),
+        head_dim=int(meta["headDim"]),
+        rotary=int(meta["rotaryDim"]),
+        theta=float(meta["theta"]),
+        scale=0.0625,  # 256^-0.5, the checkpoint's attention scale
+        chunk=chunk,
+        layers=available,
+    )
+    return geom, selected
+
+
+def source_digest(root: pathlib.Path) -> str:
+    """A stable digest of the derived fp16 the sidecar was built from.
+
+    The `.ssdai` path binds the sidecar to the install's `model_weights.bin`
+    hash; a GGUF-derived source has no such file, so it binds to its own
+    contents. Order is fixed by the sorted layer list, and each file's name is
+    hashed with it, so a swapped or edited layer changes the digest.
+    """
+    digest = hashlib.sha256()
+    for layer_dir in sorted(root.glob("layer_*")):
+        for name in sorted(layer_dir.iterdir()):
+            if not name.is_file():
+                continue
+            digest.update(name.name.encode())
+            digest.update(name.read_bytes())
+    return digest.hexdigest()
+
+
+def load_source_weights(layer_dir: pathlib.Path, geom: Geometry) -> dict[str, np.ndarray]:
+    """Read the six fp16 tensors of one layer from the derived source."""
+
+    def read(name: str, rows: int, columns: int) -> np.ndarray:
+        path = layer_dir / f"{name}.f16"
+        if not path.exists():
+            raise SystemExit(f"{path}: missing from the GGUF-derived source")
+        data = np.fromfile(path, dtype=np.float16)
+        if data.size != rows * columns:
+            raise SystemExit(f"{path}: {data.size} values, expected {rows * columns}")
+        return data.reshape(rows, columns)
+
+    return {
+        "wq": read("wq", 2 * geom.q_dim, geom.hidden),
+        "wk": read("wk", geom.kv_dim, geom.hidden),
+        "wv": read("wv", geom.kv_dim, geom.hidden),
+        "wo": read("wo", geom.hidden, geom.q_dim),
+        "q_norm": read("q_norm", 1, geom.head_dim).reshape(-1),
+        "k_norm": read("k_norm", 1, geom.head_dim).reshape(-1),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", required=True, help="path to the installed .ssdai directory")
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="path to the installed .ssdai directory",
+    )
+    parser.add_argument(
+        "--source-dir",
+        default=None,
+        help="path to a GGUF-derived fp16 source (layer_<L>/ directories from "
+        "GGUFANEPrefillSource); alternative to --model",
+    )
     parser.add_argument(
         "--max-history",
         type=int,
@@ -721,29 +804,39 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    model_dir = pathlib.Path(args.model)
-    weights_bin = model_dir / "model_weights.bin"
-    if not weights_bin.exists():
-        raise SystemExit(f"not a .ssdai directory: {model_dir}")
+    if not args.model and not args.source_dir:
+        raise SystemExit("one of --model or --source-dir is required")
     if args.max_history % args.chunk != 0:
         raise SystemExit(f"--max-history must be a multiple of --chunk ({args.chunk})")
     histories = list(range(0, args.max_history + 1, args.chunk))
 
-    manifest = json.load(open(model_dir / "manifest.json", encoding="utf-8"))
-    entries = read_index(weights_bin)
-    # The chunk is the operator's choice here and the runtime's gate later:
-    # `eligibleChunk` only routes a chunk to the sidecar when the configured
-    # prefill chunk equals this. A 4,096 chunk wins on long prompts (fewer
-    # boundaries, fewer per-layer model reloads); a smaller one is what makes
-    # the band below 4,096 tokens reachable at all.
-    geom = dataclasses.replace(geometry_for(manifest, entries), chunk=args.chunk)
-    layers = [int(x) for x in args.layers.split(",")] if args.layers else list(geom.layers)
-    unknown = [L for L in layers if L not in geom.layers]
-    if unknown:
-        raise SystemExit(
-            f"--layers names {unknown}, which are not full-attention layers of "
-            f"this model ({list(geom.layers)})"
-        )
+    if args.source_dir:
+        model_dir = pathlib.Path(args.source_dir)
+        geom, layers = geometry_from_source(model_dir, args.chunk, args.layers)
+        manifest = None
+        entries = None
+        weight_bits = 16
+        selection_folded = True
+    else:
+        model_dir = pathlib.Path(args.model)
+        weights_bin = model_dir / "model_weights.bin"
+        if not weights_bin.exists():
+            raise SystemExit(f"not a .ssdai directory: {model_dir}")
+        manifest = json.load(open(model_dir / "manifest.json", encoding="utf-8"))
+        entries = read_index(weights_bin)
+        # The chunk is the operator's choice here and the runtime's gate later:
+        # `eligibleChunk` only routes a chunk to the sidecar when the configured
+        # prefill chunk equals this. A 4,096 chunk wins on long prompts (fewer
+        # boundaries, fewer per-layer model reloads); a smaller one is what makes
+        # the band below 4,096 tokens reachable at all.
+        geom = dataclasses.replace(geometry_for(manifest, entries), chunk=args.chunk)
+        layers = [int(x) for x in args.layers.split(",")] if args.layers else list(geom.layers)
+        unknown = [L for L in layers if L not in geom.layers]
+        if unknown:
+            raise SystemExit(
+                f"--layers names {unknown}, which are not full-attention layers of "
+                f"this model ({list(geom.layers)})"
+            )
     print(
         f"{geom.family}: hidden {geom.hidden}, "
         f"{geom.q_heads}q/{geom.kv_heads}kv x {geom.head_dim}, "
@@ -754,11 +847,12 @@ def main() -> int:
     # Attention weights are 4-bit in the 4-bit build and 8-bit in the 8-bit
     # build; both dequantize to the same fp16 graph, so only the unpack
     # differs. The sidecar itself is fp16 either way.
-    weight_bits = manifest["quant"]["attention"]["weightBits"]
-    # A sparse indexer is the model's own geometry, like the head count: it
-    # decides whether the runtime must fold a selection into the mask, and the
-    # runtime cross-checks this flag against its own configuration.
-    selection_folded = int(manifest["arch"].get("indexerBudget") or 0) > 0
+    if not args.source_dir:
+        weight_bits = manifest["quant"]["attention"]["weightBits"]
+        # A sparse indexer is the model's own geometry, like the head count: it
+        # decides whether the runtime must fold a selection into the mask, and
+        # the runtime cross-checks this flag against its own configuration.
+        selection_folded = int(manifest["arch"].get("indexerBudget") or 0) > 0
     if selection_folded:
         print(
             "sparse indexer: the runtime will fold this model's key "
@@ -774,10 +868,14 @@ def main() -> int:
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir()
-    handle = open(weights_bin, "rb")
+    handle = None if args.source_dir else open(weights_bin, "rb")
     try:
         for layer in layers:
-            weights = load_layer_weights(handle, entries, layer, geom, manifest)
+            weights = (
+                load_source_weights(model_dir / f"layer_{layer}", geom)
+                if args.source_dir
+                else load_layer_weights(handle, entries, layer, geom, manifest)
+            )
             stage = staging / f".stage_layer_{layer}"
             if stage.exists():
                 shutil.rmtree(stage)
@@ -843,7 +941,11 @@ def main() -> int:
             # Binds the sidecar to the exact weights it was built from. The
             # runtime refuses a mismatch: a sidecar from different weights would
             # compute plausible-looking but wrong attention.
-            "weightsSha256": manifest["files"]["model_weights.bin"]["sha256"],
+            "weightsSha256": (
+                source_digest(model_dir)
+                if args.source_dir
+                else manifest["files"]["model_weights.bin"]["sha256"]
+            ),
             # The runtime requires this flag. A sidecar that predates it (or
             # was written by a failing export) is refused, so the ~38x
             # CPU-fallback prefill of issue #7 cannot happen.
@@ -872,7 +974,8 @@ def main() -> int:
         shutil.rmtree(staging, ignore_errors=True)
         raise
     finally:
-        handle.close()
+        if handle is not None:
+            handle.close()
 
 
 if __name__ == "__main__":
