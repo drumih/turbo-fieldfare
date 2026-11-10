@@ -694,6 +694,22 @@ the export of the remaining layers (same command, per layer), and the A/B
 against GPU prefill - the qwen3.8 sidecar measured 0.72x, so the as-is blocks
 have to earn the switch.
 
+**The chunked path's first piece: a batched IQ2_S GEMM (2026-11-10).** The
+chunk form needs a batched GEMM over the GGUF blocks, and IQ2_S is the format
+that dominates the experts (gate/up). `iq2s_gemm_bf16` (Metal/Quant/gguf_gemm.metal,
+`IQ2SGemm.swift`) computes `Y[t][m] = sum_k A[t][k] * W[m][k]` with one weight
+row and up to 128 prompt tokens per threadgroup: lanes 0-31 decode each
+256-element block into threadgroup memory once per 128-token tile, then every
+thread dots its own token against it - the row is decoded once per tile, not
+once per token, which is what makes a prompt cheaper than token-at-a-time
+decoding. K must be 256-element aligned, which every IQ2_S tensor in this
+checkpoint is (the 640-wide down projections use 32/64-element formats and stay
+on their GEMV). Verified element for element against CPU decode-then-dot on
+random blocks: worst relative error 3.1e-3, bf16 output rounding. Measured
+184-197 GFLOP/s (9.1 ms and 8.5 ms across two runs) for 128 tokens x
+2560 x 2560. Not wired into the decoder yet - it is the kernel the chunked
+prefill path will call.
+
 **Traps this route cost, recorded so they are not re-learned:**
 
 - `fullAttentionLayerMask` values are 1 = full attention, 2 = GDN. This check-
