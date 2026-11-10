@@ -1028,6 +1028,22 @@ struct ServerArgumentTests {
         }
     }
 
+    @Test func promptCheckpointIsOffUnlessAsked() throws {
+        let defaults = try ServerArguments.parse(["--model", "model.gturbo"])
+        #expect(!defaults.promptCheckpointEnabled)
+        let enabled = try ServerArguments.parse([
+            "--model", "model.gturbo",
+            "--prompt-checkpoint", "on",
+        ])
+        #expect(enabled.promptCheckpointEnabled)
+        #expect(throws: ServerArgumentError.self) {
+            try ServerArguments.parse([
+                "--model", "model.gturbo",
+                "--prompt-checkpoint", "yes",
+            ])
+        }
+    }
+
     @Test func runtimeFlagsReachTheResolvedConfiguration() throws {
         let arguments = try ServerArguments.parse([
             "--model", "model.gturbo",

@@ -270,6 +270,27 @@ extension GenerationConfig {
 /// logits buffer is never written; the loop then requires a pure-greedy config
 /// and reads `lastGreedyToken`. Callers with sampling configs must construct
 /// the runner with `forceLogitsHead: true`.
+/// Prefill a prompt prefix from an empty KV with no decode after it, for a
+/// caller that keeps the KV it leaves. Goes through `runRawPrefill` so the
+/// prefix is chunked exactly as a full prefill would chunk it.
+public func runRawPromptPrefill(producer: any LogitProducer,
+                                promptIds: [Int32],
+                                prefillConfig: PrefillRuntimeConfig,
+                                scratch: RawCompletionScratch) async throws -> Double {
+    let outcome = try await runRawPrefill(
+        producer: producer,
+        promptIds: promptIds,
+        multimodalInput: nil,
+        prefillConfig: prefillConfig,
+        start: .reset,
+        outputMode: .greedyIfAvailable,
+        seedUse: .discarded,
+        historyReserve: promptIds.count,
+        scratch: scratch,
+        onProgress: { _ in })
+    return outcome.prefillSeconds
+}
+
 public func runRawCompletion(producer: any LogitProducer,
                              tokenizer: GFTokenizer,
                              promptIds: [Int32],

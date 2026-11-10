@@ -405,6 +405,23 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         kv?.position ?? 0
     }
 
+    public func snapshotKVPrefix() throws -> KVPrefixSnapshot {
+        guard let kv else {
+            throw PrefillError.prefillCursorMismatch(
+                "snapshot requires an initialized KV cache")
+        }
+        return try kv.snapshotPrefix()
+    }
+
+    public func restoreKVPrefix(_ snapshot: KVPrefixSnapshot) throws {
+        guard let kv else {
+            throw PrefillError.prefillCursorMismatch(
+                "restore requires an initialized KV cache")
+        }
+        kv.restorePrefix(snapshot)
+        resetTransientState()
+    }
+
     public func prepareForContinuation(expectedPosition: Int) throws {
         guard let kv else {
             throw PrefillError.prefillCursorMismatch(

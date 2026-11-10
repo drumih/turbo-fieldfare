@@ -221,6 +221,64 @@ import Metal
         #expect(kv.bufferLength(layer: 5) == 262_144 * 2_048)
     }
 
+    private func writeMarker(_ kv: KVCacheManager, position: Int, value: UInt16) {
+        for layer in 0..<config.numLayers {
+            let key = kv.kSlot(layer: layer, position: position)
+            let value16 = kv.vSlot(layer: layer, position: position)
+            key.buffer.contents().advanced(by: key.offset).storeBytes(of: value, as: UInt16.self)
+            value16.buffer.contents().advanced(by: value16.offset)
+                .storeBytes(of: value &+ 1, as: UInt16.self)
+        }
+    }
+
+    private func readMarkers(_ kv: KVCacheManager, layer: Int, position: Int) -> (UInt16, UInt16) {
+        let key = kv.kSlot(layer: layer, position: position)
+        let value = kv.vSlot(layer: layer, position: position)
+        return (key.buffer.contents().advanced(by: key.offset).load(as: UInt16.self),
+                value.buffer.contents().advanced(by: value.offset).load(as: UInt16.self))
+    }
+
+    /// A prefix far past the ring slack comes back intact after a longer
+    /// continuation and a whole other conversation overwrote it, which is the
+    /// case `rewind` cannot serve.
+    @Test func prefixSnapshotSurvivesOverwritesThatRewindCannotUndo() throws {
+        let (_, kv) = try makeManager(maxContext: 4_096,
+                                      fp16RingEnabled: true,
+                                      maxPrefillChunkTokens: productionChunkTokens)
+        let prefixLength = 2_000
+        for position in 0..<prefixLength {
+            writeMarker(kv, position: position, value: UInt16(position % 60_000))
+            kv.advance()
+        }
+        let snapshot = try kv.snapshotPrefix()
+        #expect(snapshot.position == prefixLength)
+        // Sliding layers keep only their 1,024-row window, not the whole ring.
+        #expect(snapshot.byteCount == 25 * config.slidingWindow * 4_096 * 2 + 5 * prefixLength * 2_048 * 2)
+
+        for position in prefixLength..<3_000 {
+            writeMarker(kv, position: position, value: 61_000)
+            kv.advance()
+        }
+        kv.reset()
+        for position in 0..<prefixLength {
+            writeMarker(kv, position: position, value: 62_000)
+            kv.advance()
+        }
+
+        kv.restorePrefix(snapshot)
+        #expect(kv.position == prefixLength)
+        #expect(kv.highWaterPosition == prefixLength)
+        let windowStart = prefixLength - config.slidingWindow
+        for position in [windowStart, 1_500, prefixLength - 1] {
+            let expected = UInt16(position % 60_000)
+            #expect(readMarkers(kv, layer: 0, position: position) == (expected, expected &+ 1))
+        }
+        for position in [0, 977, prefixLength - 1] {
+            let expected = UInt16(position % 60_000)
+            #expect(readMarkers(kv, layer: 5, position: position) == (expected, expected &+ 1))
+        }
+    }
+
     @Test func reset_clearsPosition() throws {
         let (_, kv) = try makeManager(maxContext: 128)
         for _ in 0..<100 { kv.advance() }

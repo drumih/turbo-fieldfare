@@ -16,6 +16,26 @@ struct ServerPromptCacheDomain: Sendable, Equatable {
     let templateSHA256: String
 }
 
+/// The KV of a leading system turn, kept apart from the single-prefix entry so
+/// that whatever request runs next cannot evict it. Agent clients open every
+/// conversation with the same system turn and tool list.
+struct ServerPromptCheckpoint: Sendable {
+    /// Below this the prefill a checkpoint saves is too short to be worth its
+    /// memory, and it keeps a client's short side requests (session titles)
+    /// from replacing the system turn that matters.
+    static let minimumTokens = 1_024
+
+    let tokenIDs: [Int32]
+    let snapshot: KVPrefixSnapshot
+
+    /// The rendered system turn shares its tokens with the full prompt up to
+    /// where the conversation starts; anything a render appends after the
+    /// system turn falls outside the common prefix.
+    static func boundary(systemTurnIDs: [Int32], promptIDs: [Int32]) -> Int {
+        zip(systemTurnIDs, promptIDs).prefix { $0 == $1 }.count
+    }
+}
+
 struct CachedAssistantTurn: Sendable, Equatable {
     let message: GFTokenizer.Message
     let rawStopReason: StopReason
