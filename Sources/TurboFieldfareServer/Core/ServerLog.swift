@@ -79,6 +79,10 @@ enum ServerLog {
         "prompt cache miss reason=\(reason.rawValue)"
     }
 
+    static func promptCacheRewound(tokens: Int, dropped: Int) {
+        write("prompt cache rewound tokens=\(tokens) dropped=\(dropped)")
+    }
+
     static func promptCachePublication(_ result: ServerPromptCachePublishResult) {
         if let message = promptCachePublicationMessage(result) { write(message) }
     }

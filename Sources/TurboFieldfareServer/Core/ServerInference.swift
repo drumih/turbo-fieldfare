@@ -519,6 +519,11 @@ public actor ServerModelSession: ServerInferenceBackend {
     private let promptCacheMode: ServerPromptCacheMode
     private let promptCacheDomain: ServerPromptCacheDomain
     private var promptCache = ServerPromptCache()
+    private var kvLineage: ServerKVLineage?
+    /// The last prompt whose completion failed to parse. Rewinding to it would
+    /// replay the same KV and the same first token, so an identical retry
+    /// prefills along another path instead of looping on the failure.
+    private var failedPromptIDs: [Int32]?
     public nonisolated let visionCapability: String
     private let visionRuntime: VisionRuntime?
     private let visionResidencyPolicy: VisionResidencyPolicy
@@ -893,6 +898,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         let request = prepared.request
         var completionStarted = false
         var completed = false
+        var kvIntact = false
         defer {
             // Rendering, planning and image encoding touch no KV state, so a
             // request that fails or is cancelled before the completion starts
@@ -900,7 +906,12 @@ public actor ServerModelSession: ServerInferenceBackend {
             // Image encoding is seconds long, so this window is not rare.
             if completionStarted, !completed {
                 promptCache.invalidate()
-                runner.reset()
+                // A completion that returned and then failed to parse leaves a
+                // KV that matches its recorded lineage; anything earlier does not.
+                if !kvIntact {
+                    runner.reset()
+                    kvLineage = nil
+                }
             }
         }
         let needsToolTemplate = usesToolTemplate(request)
@@ -965,12 +976,26 @@ public actor ServerModelSession: ServerInferenceBackend {
             if let renderedTextIDs {
                 effectivePromptIDs = renderedTextIDs
                 multimodalInput = nil
+                if promptCacheMode == .singlePrefix,
+                   renderedTextIDs != failedPromptIDs,
+                   let lineage = kvLineage,
+                   runner.continuationPosition == lineage.tokenIDs.count,
+                   let target = lineage.rewindTarget(promptIDs: renderedTextIDs,
+                                                     canRewind: { self.runner.canRewind(to: $0) }) {
+                    completionStarted = true
+                    try runner.rewind(to: target)
+                    ServerLog.promptCacheRewound(tokens: target,
+                                                 dropped: lineage.tokenIDs.count - target)
+                    completionStart = .resume(cachedPromptTokens: target)
+                } else {
+                    completionStart = .reset
+                }
             } else {
                 let rendered = try await renderMultimodal(request)
                 effectivePromptIDs = rendered.effectiveTokenIDs
                 multimodalInput = rendered
+                completionStart = .reset
             }
-            completionStart = .reset
         }
         // What the template renders versus what actually prefills: on a text
         // cache hit the two genuinely differ, and that difference is the point
@@ -1059,11 +1084,14 @@ public actor ServerModelSession: ServerInferenceBackend {
                     shouldStop = true
                 }
         }
+        kvLineage = ServerKVLineage(tokenIDs: result.kvBackedTokenIDs)
+        kvIntact = runner.continuationPosition == result.kvBackedTokenIDs.count
         func structuredFailure(
             kind: StructuredOutputFailureKind,
             cause: StructuredOutputFailureCause
         ) -> StructuredOutputFailure {
-            StructuredOutputFailure(
+            failedPromptIDs = renderedPromptIDs
+            return StructuredOutputFailure(
                 kind: kind,
                 cause: cause,
                 diagnostics: StructuredOutputFailureDiagnostics(
@@ -1122,6 +1150,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             ServerLog.promptCachePublication(publication)
         }
         completed = true
+        failedPromptIDs = nil
         return ServerCompletion(
             content: content,
             toolCalls: calls,
