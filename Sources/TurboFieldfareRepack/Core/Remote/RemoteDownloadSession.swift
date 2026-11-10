@@ -120,22 +120,28 @@ struct RemoteMetadataRedirectPolicy {
     private let sourceHost: String?
     private let originalMethod: String?
     private let originalAuthorization: String?
+    private let allowedForwardHosts: Set<String>
     private let maximumRedirects: Int
     private var redirectCount = 0
 
-    init(originalRequest: URLRequest, maximumRedirects: Int) {
+    init(originalRequest: URLRequest,
+         maximumRedirects: Int,
+         allowedForwardHosts: Set<String> = RemoteRedirectPolicy.defaultForwardHosts) {
         self.sourceHost = originalRequest.url?.host?.lowercased()
         self.originalMethod = originalRequest.httpMethod
         self.originalAuthorization = originalRequest.value(
             forHTTPHeaderField: "Authorization")
+        self.allowedForwardHosts = allowedForwardHosts
         self.maximumRedirects = maximumRedirects
     }
 
     mutating func request(proposedRequest: URLRequest) -> URLRequest? {
         redirectCount += 1
+        let targetHost = proposedRequest.url?.host?.lowercased()
+        let isAllowedForward = targetHost.map(allowedForwardHosts.contains) ?? false
         guard redirectCount <= maximumRedirects,
               proposedRequest.url?.scheme?.lowercased() == "https",
-              proposedRequest.url?.host?.lowercased() == sourceHost else {
+              targetHost == sourceHost || isAllowedForward else {
             return nil
         }
         var redirected = proposedRequest

@@ -57,4 +57,23 @@ struct RemoteDownloadSessionTests {
         #expect(policy.request(proposedRequest: URLRequest(
             url: URL(string: "https://hf.test/too-many")!)) == nil)
     }
+
+    @Test func metadataRedirectForwardsAuthorizationToAllowedCDNHost() {
+        var original = URLRequest(url: URL(string: "https://hf.test/model/file")!)
+        original.httpMethod = "HEAD"
+        original.setValue("Bearer secret", forHTTPHeaderField: "Authorization")
+        var policy = RemoteMetadataRedirectPolicy(
+            originalRequest: original,
+            maximumRedirects: 2)
+
+        let cdn = policy.request(proposedRequest: URLRequest(
+            url: URL(string: "https://cdn-lfs.huggingface.co/repo/file.bin")!))
+        #expect(cdn?.httpMethod == "HEAD")
+        #expect(cdn?.value(forHTTPHeaderField: "Authorization") == "Bearer secret")
+        #expect(cdn?.value(forHTTPHeaderField: "Accept-Encoding") == "identity")
+
+        let unknown = policy.request(proposedRequest: URLRequest(
+            url: URL(string: "https://evil.test/stolen")!))
+        #expect(unknown == nil)
+    }
 }
