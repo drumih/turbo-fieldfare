@@ -628,3 +628,61 @@ found.
 - **Quality bar.** The affine install this would replace is not on disk, so
   output identity cannot be compared to it. The reference has to be llama.cpp on
   the same GGUF, and the comparison has to be stated as such.
+
+## The as-is route now runs (measured, 2026-11-10)
+
+The conversion route above is parked. The checkpoint executes in place: no
+tensor is re-quantised, and every kernel reads the GGUF block layouts.
+
+**What runs.** `GGUFDecoder` in `sources/TinyTitan/Kernels/MoE/` composes the
+per-stage pieces that were each verified against a CPU reference on the real
+file: token embedding (Q6_K gather), hyper-connections (grouped RMS norm, the
+low-rank gate, the stream reduce and inject), the 36 GDN layers (qkv/gate,
+conv + qk norm, delta rule with FP32 state, gated norm), the 12 full-attention
+layers (per-head `[q ; gate]` split, q/k norms, partial NeoX RoPE, GQA over a
+KV cache, output gate), the routed MoE (fused GEMVs per expert format) and the
+shared expert, the PLE injection (16 hashed rows, IQ4_NL), and the output
+mixer plus Q6_K head.
+
+**Stage agreements with the CPU** (RMS relative, real weights):
+GDN step 1.6e-4 - 2.9e-3; full attention 4.6e-4 / 2.5e-3; routed MoE layer
+5.8e-4; shared expert 4.4e-4; output tail 3.2e-3; projections 1e-5 - 4e-5;
+embedding gather bit-exact; PLE rows bit-exact. Where a number rose after the
+mapped path landed, the reference is the less precise side: it rounds weights
+to bf16 while the kernel now reads the original Q6_K blocks.
+
+**End to end**, six tokens, on this M3/24 GB machine when it is quiet:
+1.204 s/token steady state (**0.83 tok/s**), the first token 5.15 s (cold
+expert reads), GPU work 0.29 s of that. For comparison, llama.cpp at its
+committed build on this host measured tg 0.09 tok/s CPU-only and 0.06 with
+`-ngl 8`. The engine's affine install of the same architecture runs at
+4.62 tok/s, which remains the target.
+
+**Where the remaining time is.** ~0.9 s/token of host time: roughly 2,900
+dispatches a token (60 a layer) at ~0.3 ms of Swift-side encoding each, and 96
+command-buffer waits. The GPU is not the limit. The next work is batching the
+per-expert GEMVs into persistent kernels, the way the engine's affine MoE path
+already does.
+
+**Traps this route cost, recorded so they are not re-learned:**
+
+- `fullAttentionLayerMask` values are 1 = full attention, 2 = GDN. This check-
+  point has **12** full-attention layers (3, 7, 11, ... 47), not the three the
+  first survey suggested.
+- The full-attention q projection packs `[q ; gate]` **per head**
+  (`packed[h*2*dim + d]` and `+ dim`), not all queries followed by all gates.
+- bf16 bits are the top 16 bits of the fp32 pattern; converting through
+  `Float16(bitPattern:)` silently compares garbage (0.93 RMS).
+- Mapped weights are right for resident tensors read every token and wrong for
+  streamed experts: GPU page faults mid-dispatch cost 1.7-2.3 s a token where a
+  pread into a reused slot costs 0.1 s.
+- The fused GEMV entry point takes whole buffers and no offsets, so the KV
+  cache row is written by staging k/v in scratch and blitting.
+- `MTLBuffer.contents()` on a `.storageModeShared` buffer is fine; on
+  `.storageModePrivate` it segfaults.
+- The PLE head ranges end 90 rows short of the table's 320,001,536; the
+  invariant is "fits inside", not "ends exactly".
+- Expert cache slots must be sized for the widest format each role uses
+  (IQ4_XS gate 870,400 bytes, IQ4_NL down 921,600), not the average.
+- A whole shard is 49.9 GB and Metal refuses one that large; mapping is per
+  tensor.
