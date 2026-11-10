@@ -9,7 +9,16 @@ struct RunnerDiagnosticsSection: View {
         Section("Last run") {
             if let diagnostics {
                 groupLabel("Result")
-                DiagnosticRow("Settings", diagnostics.runtimeOptions.resultSummary, multiline: true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Settings")
+                    Text(diagnostics.runtimeOptions.resultSummary
+                        .replacingOccurrences(of: ", RDADVISE ", with: "\nRDADVISE "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 DiagnosticRow("Prompt tokens", diagnostics.promptTokenCount.map(String.init) ?? "unknown")
                 DiagnosticRow("Output tokens", "\(diagnostics.generatedTokens)")
                 DiagnosticRow("Stop", diagnostics.stopReason.rawValue)
