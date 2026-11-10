@@ -7,18 +7,15 @@ import TurboFieldfare
 
 public actor TurboFieldfareHTTPServer {
     public static let maximumBodyBytes = StreamingChatRequestBody.maximumWireBytes
-    /// Accepted sockets are unbounded otherwise, and each one costs a file
-    /// descriptor plus whatever its half-sent request has staged.
+    public static let maximumBatchFileBytes = 200 * 1_024 * 1_024
     public static let maximumConnections = 128
-    /// How long a connection may sit without being read from before it is
-    /// closed. Generous, because it must never interrupt a slow client that is
-    /// still uploading images.
-    public static let idleTimeout = TimeAmount.seconds(120)
 
     private let group: MultiThreadedEventLoopGroup
     private let modelID: String
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
+    private let batches: BatchRegistry
+    private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
     private let visionCapability: String
     private let attachmentRoot: URL
@@ -33,12 +30,20 @@ public actor TurboFieldfareHTTPServer {
                 heartbeatInterval: TimeAmount = .seconds(5),
                 visionCapability: String = "missing",
                 attachmentRoot: URL = ServerAttachmentDirectory.root,
-                idleTimeout: TimeAmount = TurboFieldfareHTTPServer.idleTimeout,
+                idleTimeout: TimeAmount = .seconds(120),
+                batchOutputDirectory: URL? = nil,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
         self.modelID = modelID
         self.backend = backend
         self.coordinator = ServerCoordinator(queueLimit: queueLimit)
+        let batchDirectory = batchOutputDirectory ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("TurboFieldfare/batches", isDirectory: true)
+        let files = BatchFileStore(directory: batchDirectory)
+        self.files = files
+        self.batches = BatchRegistry(outputDirectory: batchDirectory) { id, expiresAt in
+            _ = try? await files.registerBatchOutput(id, expiresAt: expiresAt)
+        }
         self.heartbeatInterval = heartbeatInterval
         self.visionCapability = visionCapability
         self.attachmentRoot = attachmentRoot
@@ -50,32 +55,30 @@ public actor TurboFieldfareHTTPServer {
         let modelID = self.modelID
         let backend = self.backend
         let coordinator = self.coordinator
+        let batches = self.batches
+        let files = self.files
         let heartbeatInterval = self.heartbeatInterval
-        let childChannels = self.childChannels
         let visionCapability = self.visionCapability
         let attachmentRoot = self.attachmentRoot
         let idleTimeout = self.idleTimeout
+        let childChannels = self.childChannels
         let bootstrap = ServerBootstrap(group: group)
-            // The listen queue is sized to the connection cap so a burst of
-            // connects up to the cap waits for the accept loop instead of
-            // overflowing, which macOS 27 answers with RST (issue #151).
-            .serverChannelOption(
-                ChannelOptions.backlog,
-                value: Int32(TurboFieldfareHTTPServer.maximumConnections))
+            .serverChannelOption(ChannelOptions.backlog,
+                                 value: Int32(TurboFieldfareHTTPServer.maximumConnections))
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 childChannels.insert(channel)
-                return channel.pipeline.addHandler(
-                    IdleStateHandler(readTimeout: idleTimeout)
-                ).flatMap {
+                return channel.pipeline.addHandler(IdleStateHandler(readTimeout: idleTimeout)).flatMap {
                     channel.pipeline.configureHTTPServerPipeline(
-                        withPipeliningAssistance: true,
-                        withErrorHandling: true)
+                    withPipeliningAssistance: true,
+                    withErrorHandling: true)
                 }.flatMap {
                     channel.pipeline.addHandler(ServerHTTPHandler(
                         modelID: modelID,
                         backend: backend,
                         coordinator: coordinator,
+                        batches: batches,
+                        files: files,
                         heartbeatInterval: heartbeatInterval,
                         visionCapability: visionCapability,
                         attachmentRoot: attachmentRoot,
@@ -139,6 +142,15 @@ public actor TurboFieldfareHTTPServer {
     }
 }
 
+private struct BatchInputValidationError: Error {
+    let error: ServerRequestError
+    let line: Int?
+}
+
+private struct BatchInputErrors: Error {
+    let errors: [BatchRegistry.BatchError]
+}
+
 private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
@@ -146,26 +158,27 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let modelID: String
     private let backend: any ServerInferenceBackend
     private let coordinator: ServerCoordinator
+    private let batches: BatchRegistry
+    private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
-    private let childChannels: ChildChannelRegistry
     private let visionCapability: String
     private let attachmentRoot: URL
+    private let childChannels: ChildChannelRegistry
+    private var head: HTTPRequestHead?
+    private var body = ByteBuffer()
+    private var oversized = false
     private var bodyParser: StreamingChatRequestBody?
     private var bodyError: (any Error)?
     private var receivedBodyBytes = 0
-    /// Past the wire cap the drain toward `.end` is unbounded - a chunked
-    /// stream may never send one - so the request is answered immediately
-    /// and everything after it dropped until the connection closes.
     private var discardingUntilClose = false
-    /// Requests still producing an answer. A generation reads nothing for as
-    /// long as it runs, so the idle timeout must not close under it.
     private var inFlightRequests = 0
-    private var head: HTTPRequestHead?
     private var activeTask: Task<Void, Never>?
 
     init(modelID: String,
          backend: any ServerInferenceBackend,
          coordinator: ServerCoordinator,
+         batches: BatchRegistry,
+         files: BatchFileStore,
          heartbeatInterval: TimeAmount,
          visionCapability: String,
          attachmentRoot: URL,
@@ -173,25 +186,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         self.modelID = modelID
         self.backend = backend
         self.coordinator = coordinator
+        self.batches = batches
+        self.files = files
         self.heartbeatInterval = heartbeatInterval
         self.visionCapability = visionCapability
         self.attachmentRoot = attachmentRoot
         self.childChannels = childChannels
-    }
-
-    static let chatCompletionsPath = "/v1/chat/completions"
-
-    static func requestPath(_ head: HTTPRequestHead) -> String {
-        head.uri.split(separator: "?", maxSplits: 1,
-                       omittingEmptySubsequences: false)
-            .first.map(String.init) ?? head.uri
-    }
-
-    static func carriesChatBody(_ head: HTTPRequestHead) -> Bool {
-        head.method == .POST
-            && requestPath(head) == chatCompletionsPath
-            && head.headers.first(name: "content-type")?
-                .lowercased().hasPrefix("application/json") == true
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -199,77 +199,77 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         case .head(let head):
             guard !discardingUntilClose else { return }
             self.head = head
-            // The parser stages inline images to disk, so it is created only
-            // once the request is known to carry a chat body. A body sent
-            // elsewhere is counted and dropped.
+            body.clear()
+            oversized = false
+            bodyError = nil
+            receivedBodyBytes = 0
             bodyParser = Self.carriesChatBody(head)
                 ? StreamingChatRequestBody(attachmentRoot: attachmentRoot,
                                            visionCapability: visionCapability)
                 : nil
-            bodyError = nil
-            receivedBodyBytes = 0
         case .body(var part):
             guard !discardingUntilClose else { return }
             receivedBodyBytes += part.readableBytes
-            if receivedBodyBytes > StreamingChatRequestBody.maximumWireBytes {
-                // A body already rejected for its own reason keeps it: telling a
-                // client its image was too large is more useful than telling it
-                // the request was, and the drain past the cap is what forces the
-                // answer now.
-                let capError = (bodyError as? ServerRequestError)
-                    ?? ServerRequestError.invalid(
-                        message: "request body is too large",
-                        param: nil, code: "request_too_large")
-                bodyError = nil
-                bodyParser = nil
+            let limit = bodyParser == nil && Self.requestPath(head) == "/v1/files"
+                ? TurboFieldfareHTTPServer.maximumBatchFileBytes
+                : TurboFieldfareHTTPServer.maximumBodyBytes
+            if receivedBodyBytes > limit {
                 head = nil
+                bodyParser = nil
                 discardingUntilClose = true
-                writeError(context, status: capError.httpStatus, capError.envelope,
+                writeError(context, status: .payloadTooLarge,
+                           OpenAIErrorEnvelope(message: "request body is too large", code: "request_too_large"),
                            closeAfter: true)
                 return
             }
-            guard bodyError == nil else { return }
-            guard let parser = bodyParser else { return }
-            do { try parser.feed(&part) }
-            catch {
-                bodyError = error
-                // Rejection is already certain, so release the staged bytes now.
-                bodyParser = nil
-            }
-        case .end:
-            guard !discardingUntilClose else { return }
-            guard let head else { return }
-            self.head = nil
-            let parser = bodyParser
-            // Cleared on every path below: a retained parser pins its staged
-            // images until the connection closes.
-            bodyParser = nil
-            if let bodyError {
-                self.bodyError = nil
-                if let requestError = bodyError as? ServerRequestError {
-                    writeError(context, status: requestError.httpStatus,
-                               requestError.envelope)
-                } else {
-                    writeError(context, status: .badRequest,
-                               OpenAIErrorEnvelope(message: "malformed JSON request",
-                                                   code: "invalid_json"))
-                }
+            if let parser = bodyParser {
+                guard bodyError == nil else { return }
+                do { try parser.feed(&part) }
+                catch { bodyError = error; bodyParser = nil }
                 return
             }
-            do {
-                let parsed = try parser?.finish()
-                    ?? ParsedChatRequestBody(json: Data(), stagedImages: [:], lease: nil)
-                route(head: head, body: parsed, context: context)
-            } catch let error as ServerRequestError {
-                writeError(context, status: error.httpStatus, error.envelope)
-            } catch {
-                writeError(context, status: .badRequest,
-                           OpenAIErrorEnvelope(message: "malformed JSON request",
-                                               code: "invalid_json"))
+            if body.readableBytes + part.readableBytes > limit {
+                oversized = true
+            } else {
+                body.writeBuffer(&part)
             }
+        case .end:
+            guard !discardingUntilClose, let head else { return }
+            self.head = nil
+            if let parser = bodyParser {
+                bodyParser = nil
+                do { routeChat(head: head, body: try parser.finish(), context: context) }
+                catch let error as ServerRequestError { writeError(context, status: .badRequest, error.envelope) }
+                catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")) }
+                return
+            }
+            if let bodyError {
+                self.bodyError = nil
+                let error = bodyError as? ServerRequestError
+                writeError(context, status: .badRequest,
+                           error?.envelope ?? OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
+                return
+            }
+            if oversized {
+                writeError(context, status: .payloadTooLarge,
+                           OpenAIErrorEnvelope(message: "request body is too large",
+                                               code: "request_too_large"))
+                return
+            }
+            route(head: head, body: body, context: context)
         }
     }
 
+    static let chatCompletionsPath = "/v1/chat/completions"
+    static func requestPath(_ head: HTTPRequestHead?) -> String {
+        guard let head else { return "" }
+        return head.uri.split(separator: "?", maxSplits: 1,
+                              omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
+    }
+    static func carriesChatBody(_ head: HTTPRequestHead) -> Bool {
+        head.method == .POST && requestPath(head) == chatCompletionsPath
+            && head.headers.first(name: "content-type")?.lowercased().hasPrefix("application/json") == true
+    }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         if event is IdleStateHandler.IdleStateEvent, inFlightRequests == 0 {
@@ -282,25 +282,20 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     func channelInactive(context: ChannelHandlerContext) {
         activeTask?.cancel()
         activeTask = nil
-        // Frees the staged images of a request abandoned mid-body.
         bodyParser = nil
         bodyError = nil
-        head = nil
         childChannels.remove(context.channel)
         context.fireChannelInactive()
     }
 
     private func route(head: HTTPRequestHead,
-                       body: ParsedChatRequestBody,
+                       body: ByteBuffer,
                        context: ChannelHandlerContext) {
         let path = head.uri.split(separator: "?", maxSplits: 1,
                                   omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
         switch (head.method, path) {
         case (.GET, "/health"):
-            writeJSON(context, status: .ok, object: [
-                "status": "ok",
-                "vision": visionCapability,
-            ])
+            writeJSON(context, status: .ok, object: ["status": "ok", "vision": visionCapability])
         case (.GET, "/v1/models"):
             let response = OpenAIModelList(
                 object: "list",
@@ -308,10 +303,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                              object: "model",
                              created: 0,
                              ownedBy: "turbofieldfare",
-                             capabilities: visionCapability == "ready"
-                                ? ["text", "image"] : ["text"])])
+                             capabilities: visionCapability == "ready" ? ["text", "image"] : ["text"])])
             writeCodable(context, status: .ok, response)
         case (.POST, "/v1/chat/completions"):
+            writeError(context, status: .unsupportedMediaType,
+                       OpenAIErrorEnvelope(message: "content-type must be application/json",
+                                           code: "unsupported_media_type"))
+        case (.POST, "/v1/batches"):
             guard head.headers.first(name: "content-type")?
                 .lowercased().hasPrefix("application/json") == true else {
                 writeError(context, status: .unsupportedMediaType,
@@ -319,8 +317,31 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                                code: "unsupported_media_type"))
                 return
             }
-            handleCompletion(body: body, context: context)
-        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"):
+            handleBatchJob(body: body, context: context)
+        case (.POST, "/v1/files"):
+            guard head.headers.first(name: "content-type")?
+                .lowercased().hasPrefix("multipart/form-data") == true else {
+                writeError(context, status: .unsupportedMediaType,
+                           OpenAIErrorEnvelope(message: "content-type must be multipart/form-data",
+                                               code: "unsupported_media_type"))
+                return
+            }
+            handleFileUpload(head: head, body: body, context: context)
+        case (.GET, "/v1/files"):
+            handleFileList(uri: head.uri, context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/files/") && uri.hasSuffix("/content"):
+            handleFileContent(id: String(uri.dropFirst("/v1/files/".count).dropLast("/content".count)), context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/files/"):
+            handleFileStatus(id: String(uri.dropFirst("/v1/files/".count)), context: context)
+        case (.DELETE, let uri) where uri.hasPrefix("/v1/files/"):
+            handleFileDelete(id: String(uri.dropFirst("/v1/files/".count)), context: context)
+        case (.GET, "/v1/batches"):
+            handleBatchList(uri: head.uri, context: context)
+        case (.GET, let uri) where uri.hasPrefix("/v1/batches/"):
+            handleBatchStatus(uri: uri, context: context)
+        case (.POST, let uri) where uri.hasPrefix("/v1/batches/") && uri.hasSuffix("/cancel"):
+            handleBatchCancel(uri: uri, context: context)
+        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"), (_, "/v1/batches"), (_, "/v1/files"):
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -331,14 +352,281 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
+    private func routeChat(head: HTTPRequestHead,
+                           body: ParsedChatRequestBody,
+                           context: ChannelHandlerContext) {
+        guard head.headers.first(name: "content-type")?.lowercased()
+            .hasPrefix("application/json") == true else {
+            writeError(context, status: .unsupportedMediaType,
+                       OpenAIErrorEnvelope(message: "content-type must be application/json",
+                                           code: "unsupported_media_type"))
+            return
+        }
+        handleCompletion(body: body, context: context)
+    }
+
+    private func handleBatchJob(body: ByteBuffer, context: ChannelHandlerContext) {
+        let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask {
+            do {
+                    let decoded = try? JSONDecoder().decode(OpenAIBatchCreateRequest.self, from: Data(bytes))
+                    let requests: [BatchRequest]
+                    var inputFileID: String?
+                    var completionWindow: String?
+                    var metadata: [String: String]?
+                    var outputExpiresAfterSeconds: Int?
+                    if let create = decoded {
+                        guard (create.metadata?.count ?? 0) <= 16,
+                              create.metadata?.allSatisfy({ $0.key.utf8.count <= 64 && $0.value.utf8.count <= 512 }) ?? true else {
+                            throw ServerRequestError.invalid(message: "metadata supports at most 16 entries with keys up to 64 and values up to 512 UTF-8 bytes", param: "metadata", code: "invalid_value")
+                        }
+                        guard create.endpoint == "/v1/chat/completions" else {
+                            throw ServerRequestError.invalid(message: "only /v1/chat/completions batches are supported", param: "endpoint", code: "unsupported_value")
+                        }
+                        guard create.completionWindow == "24h" else {
+                            throw ServerRequestError.invalid(message: "only completion_window=24h is supported", param: "completion_window", code: "unsupported_value")
+                        }
+                        if let outputExpiresAfter = create.outputExpiresAfter {
+                            guard outputExpiresAfter.anchor == "created_at",
+                                  (3_600...2_592_000).contains(outputExpiresAfter.seconds) else {
+                                throw ServerRequestError.invalid(message: "output_expires_after requires anchor=created_at and seconds between 3600 and 2592000", param: "output_expires_after", code: "invalid_value")
+                            }
+                            outputExpiresAfterSeconds = outputExpiresAfter.seconds
+                        }
+                        guard let inputFile = await self.files.get(create.inputFileID),
+                              inputFile.purpose == "batch",
+                              let input = try await self.files.contents(create.inputFileID) else {
+                            throw ServerRequestError.invalid(message: "input_file_id must reference a file with purpose=batch", param: "input_file_id", code: "invalid_value")
+                        }
+                        switch self.decodeBatchInput(input) {
+                        case .success(let decoded):
+                            requests = decoded
+                        case .failure(let validation):
+                            let snapshot = await self.batches.createFailed(
+                                modelID: self.modelID,
+                                inputFileID: create.inputFileID,
+                                completionWindow: create.completionWindow,
+                                metadata: create.metadata,
+                                errors: validation.errors)
+                            self.writeCodable(box.value, status: .ok, snapshot)
+                            return
+                        }
+                        inputFileID = create.inputFileID
+                        completionWindow = create.completionWindow
+                        metadata = create.metadata
+                    } else {
+                        let legacy = try JSONDecoder().decode(LegacyOpenAIChatBatchRequest.self, from: Data(bytes))
+                        guard !legacy.requests.isEmpty else { throw ServerRequestError.invalid(message: "requests must not be empty", param: "requests", code: "invalid_value") }
+                        requests = try legacy.requests.enumerated().map { index, item in
+                            guard item.stream != true else { throw ServerRequestError.invalid(message: "streaming is not supported for batch requests", param: "requests.stream", code: "unsupported_value") }
+                            return BatchRequest(customID: item.customID ?? "request-\(index)", request: try OpenAIRequestValidator.validate(item, modelID: self.modelID))
+                        }
+                    }
+                    let snapshot = try await self.batches.create(requests: requests,
+                                                                 backend: self.backend,
+                                                                 coordinator: self.coordinator,
+                                                                 modelID: self.modelID,
+                                                                 inputFileID: inputFileID,
+                                                                 completionWindow: completionWindow,
+                                                                 metadata: metadata,
+                                                                 outputExpiresAfterSeconds: outputExpiresAfterSeconds)
+                    self.writeCodable(box.value, status: .ok, snapshot)
+            } catch let error as ServerRequestError {
+                self.writeError(box.value, status: error == .unknownModel ? .notFound : .badRequest, error.envelope)
+            } catch {
+                self.writeError(box.value, status: .badRequest,
+                                OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
+            }
+        }
+    }
+
+    private func decodeBatchInput(_ data: Data) -> Result<[BatchRequest], BatchInputErrors> {
+        struct Line: Decodable { let customID: String; let method: String; let url: String; let body: OpenAIChatRequest
+            enum CodingKeys: String, CodingKey { case customID = "custom_id", method, url, body } }
+        let text = String(decoding: data, as: UTF8.self)
+        var lines = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        if lines.last?.isEmpty == true { lines.removeLast() }
+        guard !lines.isEmpty else { return .failure(.init(errors: [batchError(.init(error: .invalid(message: "input file must contain JSONL requests", param: "input_file_id", code: "invalid_value"), line: nil))])) }
+        guard lines.count <= 50_000 else { return .failure(.init(errors: [batchError(.init(error: .invalid(message: "batch input may contain at most 50,000 requests", param: "input_file_id", code: "invalid_value"), line: nil))])) }
+        var ids = Set<String>()
+        var requests: [BatchRequest] = []
+        var errors: [BatchRegistry.BatchError] = []
+        for (index, line) in lines.enumerated() {
+            do {
+                guard !line.isEmpty else {
+                    throw BatchInputValidationError(error: .invalid(message: "JSONL request line must not be empty", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard let lineData = String(line).data(using: .utf8) else { throw BatchInputValidationError(error: .invalid(message: "invalid UTF-8 JSONL line", param: "input_file_id", code: "invalid_value"), line: index + 1) }
+                let item: Line
+                do { item = try JSONDecoder().decode(Line.self, from: lineData) }
+                catch { throw BatchInputValidationError(error: .invalid(message: "invalid JSONL request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1) }
+                guard !item.customID.isEmpty, item.customID.utf8.count <= 512 else {
+                    throw BatchInputValidationError(error: .invalid(message: "custom_id must contain 1 through 512 UTF-8 bytes", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard item.method == "POST", item.url == "/v1/chat/completions", ids.insert(item.customID).inserted else {
+                    throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+                guard item.body.stream != true else { throw BatchInputValidationError(error: .invalid(message: "streaming is not supported for batch requests", param: "input_file_id", code: "unsupported_value"), line: index + 1) }
+                do {
+                    requests.append(BatchRequest(customID: item.customID, request: try OpenAIRequestValidator.validate(item.body, modelID: modelID)))
+                } catch let error as ServerRequestError {
+                    throw BatchInputValidationError(error: error, line: index + 1)
+                } catch {
+                    throw BatchInputValidationError(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)
+                }
+            } catch let error as BatchInputValidationError {
+                errors.append(batchError(error))
+            } catch {
+                errors.append(batchError(.init(error: .invalid(message: "invalid Batch request at line \(index + 1)", param: "input_file_id", code: "invalid_value"), line: index + 1)))
+            }
+        }
+        return errors.isEmpty ? .success(requests) : .failure(.init(errors: errors))
+    }
+
+    private func batchError(_ error: BatchInputValidationError) -> BatchRegistry.BatchError {
+        .init(code: error.error.envelope.error.code,
+              message: error.error.envelope.error.message,
+              param: error.error.envelope.error.param,
+              line: error.line)
+    }
+
+    private func handleFileUpload(head: HTTPRequestHead, body: ByteBuffer, context: ChannelHandlerContext) {
+        do {
+            guard let contentType = head.headers.first(name: "content-type"),
+                  let boundary = contentType.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { $0.hasPrefix("boundary=") })?.dropFirst("boundary=".count) else {
+                throw ServerRequestError.invalid(message: "content-type must be multipart/form-data", param: nil, code: "unsupported_media_type")
+            }
+            let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
+            let parsed = try parseMultipart(Data(bytes), boundary: String(boundary).trimmingCharacters(in: CharacterSet(charactersIn: "\"")))
+            let box = SendableContext(context)
+            activeTask = childChannels.startTask { do {
+                let file = try await self.files.create(filename: parsed.filename, purpose: parsed.purpose, contents: parsed.contents)
+                self.writeCodable(box.value, status: .ok, file)
+            } catch let error as ServerRequestError { self.writeError(box.value, status: .badRequest, error.envelope) }
+              catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not store file", code: "internal_error")) } }
+        } catch let error as ServerRequestError { writeError(context, status: .badRequest, error.envelope) }
+          catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed multipart request", code: "invalid_request_error")) }
+    }
+
+    private func parseMultipart(_ data: Data, boundary: String) throws -> (filename: String, purpose: String, contents: Data) {
+        let text = String(decoding: data, as: UTF8.self)
+        let parts = text.components(separatedBy: "--\(boundary)")
+        var purpose: String?
+        var filename: String?
+        var contents: Data?
+        for rawPart in parts {
+            let part = rawPart.trimmingCharacters(in: CharacterSet(charactersIn: "\r\n-"))
+            guard let range = part.range(of: "\r\n\r\n") else { continue }
+            let headers = String(part[..<range.lowerBound])
+            var value = String(part[range.upperBound...])
+            if value.hasSuffix("\r\n") { value.removeLast(2) }
+            if headers.contains("name=\"purpose\"") { purpose = value }
+            if headers.contains("name=\"file\"") {
+                filename = headers.components(separatedBy: "filename=\"").dropFirst().first?.components(separatedBy: "\"").first
+                contents = Data(value.utf8)
+            }
+        }
+        guard let purpose, let filename, let contents else {
+            throw ServerRequestError.invalid(message: "multipart request requires file and purpose", param: nil, code: "invalid_value")
+        }
+        return (filename, purpose, contents)
+    }
+
+    private func handleFileStatus(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let file = await self.files.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, file) }
+    }
+
+    private func handleFileList(uri: String, context: ChannelHandlerContext) {
+        struct List: Encodable {
+            let object = "list"
+            let data: [BatchFileStore.File]
+            let firstID: String?
+            let lastID: String?
+            let hasMore: Bool
+            enum CodingKeys: String, CodingKey {
+                case object, data
+                case firstID = "first_id"
+                case lastID = "last_id"
+                case hasMore = "has_more"
+            }
+        }
+        guard let components = URLComponents(string: "http://localhost\(uri)") else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid query", code: "invalid_value"))
+            return
+        }
+        let query = components.queryItems ?? []
+        let limit = query.first(where: { $0.name == "limit" })?.value.flatMap(Int.init) ?? 10_000
+        let order = query.first(where: { $0.name == "order" })?.value ?? "desc"
+        guard (1...10_000).contains(limit), order == "asc" || order == "desc" else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid Files list query", code: "invalid_value"))
+            return
+        }
+        let after = query.first(where: { $0.name == "after" })?.value
+        let purpose = query.first(where: { $0.name == "purpose" })?.value
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask {
+            let all = await self.files.list(order: order, purpose: purpose)
+            let start = after.flatMap { id in all.firstIndex(where: { $0.id == id }).map { $0 + 1 } } ?? 0
+            let page = Array(all.dropFirst(start).prefix(limit))
+            self.writeCodable(box.value, status: .ok, List(data: page, firstID: page.first?.id,
+                                                            lastID: page.last?.id,
+                                                            hasMore: start + page.count < all.count))
+        }
+    }
+
+    private func handleFileDelete(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { do {
+            guard try await self.files.delete(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }
+            self.writeJSON(box.value, status: .ok, object: ["id": id, "object": "file", "deleted": true])
+        } catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not delete file", code: "internal_error")) } }
+    }
+
+    private func handleFileContent(id: String, context: ChannelHandlerContext) {
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { do { guard let data = try await self.files.contents(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "file not found", code: "not_found")); return }; self.writeRaw(box.value, status: .ok, contentType: "application/jsonl", data: data) } catch { self.writeError(box.value, status: .internalServerError, OpenAIErrorEnvelope(message: "could not read file", code: "internal_error")) } }
+    }
+
+    private func handleBatchList(uri: String, context: ChannelHandlerContext) {
+        guard let components = URLComponents(string: "http://localhost\(uri)") else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "invalid query", code: "invalid_value"))
+            return
+        }
+        let limit = components.queryItems?.first(where: { $0.name == "limit" })?.value
+            .flatMap { Int($0) } ?? 20
+        guard (1...100).contains(limit) else {
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "limit must be between 1 and 100", param: "limit", code: "invalid_value"))
+            return
+        }
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask {
+            self.writeCodable(box.value, status: .ok,
+                              await self.batches.list(
+                                limit: limit,
+                                after: components.queryItems?.first(where: { $0.name == "after" })?.value))
+        }
+    }
+
+    private func handleBatchStatus(uri: String, context: ChannelHandlerContext) {
+        let id = String(uri.dropFirst("/v1/batches/".count))
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let batch = await self.batches.get(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "batch not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, batch) }
+    }
+
+    private func handleBatchCancel(uri: String, context: ChannelHandlerContext) {
+        let id = String(uri.dropFirst("/v1/batches/".count).dropLast("/cancel".count))
+        let box = SendableContext(context)
+        activeTask = childChannels.startTask { guard let batch = await self.batches.cancel(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "batch not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, batch) }
+    }
+
     private func handleCompletion(body: ParsedChatRequestBody,
                                   context: ChannelHandlerContext) {
         do {
             let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: body.json)
             let request = try OpenAIRequestValidator.validate(
-                decoded,
-                modelID: modelID,
-                preStagedImages: body.stagedImages,
+                decoded, modelID: modelID, preStagedImages: body.stagedImages,
                 attachmentLease: body.lease)
             let responseID = "chatcmpl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let created = Int(Date().timeIntervalSince1970)
@@ -367,14 +655,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             inFlightRequests += 1
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
-                // Back on the event loop, where `inFlightRequests` lives. The hop
-                // also orders this after the assignment above, which is still
-                // executing in this same event-loop tick.
-                defer {
-                    contextBox.value.eventLoop.execute {
-                        self.inFlightRequests -= 1
-                    }
-                }
+                defer { contextBox.value.eventLoop.execute { self.inFlightRequests -= 1 } }
                 let started = ContinuousClock.now
                 ServerLog.accepted(id: responseID, streaming: request.stream)
                 do {
@@ -434,13 +715,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                           context: contextBox.value,
                                           id: responseID,
                                           phase: phaseState.value,
-                                          stream: streamState.isStarted,
-                                          started: started)
+                                          stream: streamState.isStarted)
                 }
             }
         } catch let error as ServerRequestError {
             writeError(context,
-                       status: error.httpStatus,
+                       status: error == .unknownModel ? .notFound : .badRequest,
                        error.envelope)
         } catch {
             writeError(context, status: .badRequest,
@@ -453,6 +733,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                  id: String,
                                  created: Int,
                                  completion: ServerCompletion) {
+        writeJSON(context, status: .ok,
+                  object: completionObject(id: id, created: created, completion: completion))
+    }
+
+    private func completionObject(id: String,
+                                  created: Int,
+                                  completion: ServerCompletion) -> [String: Any] {
         let encodedContent: Any =
             completion.content.isEmpty && !completion.toolCalls.isEmpty
                 ? NSNull()
@@ -476,7 +763,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             ]],
             "usage": usageObject(completion.usage),
         ]
-        writeJSON(context, status: .ok, object: object)
+        return object
     }
 
     private func beginStream(
@@ -604,12 +891,11 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   context: ChannelHandlerContext,
                                   id: String,
                                   phase: String,
-                                  stream: Bool,
-                                  started: ContinuousClock.Instant) {
+                                  stream: Bool) {
         let envelope: OpenAIErrorEnvelope
         let status: HTTPResponseStatus
         if let requestError = error as? ServerRequestError {
-            status = requestError.httpStatus
+            status = requestError == .queueFull ? .tooManyRequests : .badRequest
             envelope = requestError.envelope
         } else {
             status = .internalServerError
@@ -618,13 +904,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 code: "internal_error",
                 type: "server_error")
         }
-        if error is CancellationError {
-            // Not a failure, and not silence either: without a terminal line the
-            // request's last record stayed `generating` forever, so a reader could
-            // not tell running from abandoned from crashed.
-            ServerLog.cancelled(id: id, phase: phase,
-                                duration: started.duration(to: .now))
-        } else {
+        if !(error is CancellationError) {
             ServerLog.failed(id: id, phase: phase, status: status.code, error: error)
         }
         if stream {
@@ -654,17 +934,17 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     private func writeCodable<T: Encodable>(_ context: ChannelHandlerContext,
                                             status: HTTPResponseStatus,
-                                            _ value: T,
-                                            closeAfter: Bool = false) {
+                                            _ value: T) {
         guard let data = try? JSONEncoder().encode(value) else { return }
-        writeData(context, status: status, data: data, closeAfter: closeAfter)
+        writeData(context, status: status, data: data)
     }
 
     private func writeError(_ context: ChannelHandlerContext,
                             status: HTTPResponseStatus,
                             _ error: OpenAIErrorEnvelope,
                             closeAfter: Bool = false) {
-        writeCodable(context, status: status, error, closeAfter: closeAfter)
+        guard let data = try? JSONEncoder().encode(error) else { return }
+        writeData(context, status: status, data: data, closeAfter: closeAfter)
     }
 
     private func writeJSON(_ context: ChannelHandlerContext,
@@ -694,21 +974,30 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
             if closeAfter {
                 let promise = contextBox.value.eventLoop.makePromise(of: Void.self)
-                let channel = contextBox.value.channel
                 promise.futureResult.whenComplete { _ in
-                    // Lingering close: an immediate close RSTs away the very
-                    // response that explains the rejection while the client's
-                    // remaining bytes are still in flight. The grace is a hard
-                    // bound - a client that streams past it is cut off with its
-                    // response undelivered, which is on the client.
-                    _ = channel.eventLoop.scheduleTask(in: .seconds(2)) {
-                        channel.close(promise: nil)
+                    _ = contextBox.value.channel.eventLoop.scheduleTask(in: .seconds(2)) {
+                        contextBox.value.channel.close(promise: nil)
                     }
                 }
                 contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: promise)
             } else {
                 contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
             }
+        }
+    }
+
+    private func writeRaw(_ context: ChannelHandlerContext, status: HTTPResponseStatus,
+                          contentType: String, data: Data) {
+        let contextBox = SendableContext(context)
+        context.eventLoop.execute {
+            var headers = HTTPHeaders()
+            headers.add(name: "content-type", value: contentType)
+            headers.add(name: "content-length", value: "\(data.count)")
+            contextBox.value.write(self.wrapOutboundOut(.head(HTTPResponseHead(version: .http1_1, status: status, headers: headers))), promise: nil)
+            var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
         }
     }
 
@@ -754,27 +1043,6 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 }
 
-/// The one mapping from a request rejection to its wire status. Every write
-/// site derives the status from here, so a new resource-limit code cannot
-/// return 400 at one site and 413 at another.
-private extension ServerRequestError {
-    var httpStatus: HTTPResponseStatus {
-        switch self {
-        case .unknownModel:
-            .notFound
-        case .queueFull:
-            .tooManyRequests
-        case .invalid(_, _, let code):
-            switch code {
-            case "request_too_large", "image_too_large", "too_many_images":
-                .payloadTooLarge
-            default:
-                .badRequest
-            }
-        }
-    }
-}
-
 private final class ChildChannelRegistry: Sendable {
     private struct State {
         var channels: [ObjectIdentifier: Channel] = [:]
@@ -784,13 +1052,12 @@ private final class ChildChannelRegistry: Sendable {
 
     private let state = Mutex(State())
 
-    /// Registers a connection, or closes it because the server is shutting
-    /// down or already at its connection cap.
     func insert(_ channel: Channel) {
         let shouldClose = state.withLock {
-            guard !$0.shuttingDown,
-                  $0.channels.count < TurboFieldfareHTTPServer.maximumConnections
-            else { return true }
+            guard !$0.shuttingDown else { return true }
+            guard $0.channels.count < TurboFieldfareHTTPServer.maximumConnections else {
+                return true
+            }
             $0.channels[ObjectIdentifier(channel)] = channel
             return false
         }
