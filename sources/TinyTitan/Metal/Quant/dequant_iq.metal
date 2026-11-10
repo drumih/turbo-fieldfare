@@ -504,3 +504,65 @@ kernel void q6k_gemv_simd(
     acc = simd_sum(acc);
     if (lane == 0) { y[row] = half(acc); }
 }
+
+// Q6_K GEMV with four accumulators. The addressing below is copied verbatim
+// from q6k_gemv_simd; only the accumulation is restructured, so the earlier
+// vectorising rewrite's pointer arithmetic (which disagreed with the CPU) is
+// not repeated. Four independent chains give the scheduler ILP across the
+// dependent FMAs, which is the limit here: the kernel is latency-bound, not
+// bandwidth-bound (3 G elements/s is ~1.5 GB/s of reads).
+kernel void q6k_gemv_acc4(
+    device const uchar* W  [[buffer(0)]],
+    device const half*  x  [[buffer(1)]],
+    device half*        y  [[buffer(2)]],
+    constant uint&      M  [[buffer(3)]],
+    constant uint&      N  [[buffer(4)]],
+    uint tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane   [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8u;
+    const uint row = tg_idx * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint blocks = N / 256u;
+    device const uchar* W_row = W + uint(row) * blocks * 210u;
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
+    for (uint b = 0u; b < blocks; ++b) {
+        device const uchar* bp = W_row + b * 210u;
+        const ushort dBits = ushort(bp[208]) | (ushort(bp[209]) << 8u);
+        const float d = float(as_type<half>(dBits));
+        const uint within = (lane * 8u) % 256u;
+        const uint halfIndex = within / 128u;
+        const uint w = within % 128u;
+        const uint group = w / 32u;
+        const uint l = w % 32u;
+        device const uchar* ql = bp + halfIndex * 64u;
+        device const uchar* qh = bp + 128u + halfIndex * 32u;
+        device const uchar* sc = bp + 192u + halfIndex * 8u;
+        device const half* xp = x + b * 256u + within;
+        const uint is = l / 16u;
+        const float s = float(as_type<char>(sc[is + 2u * group]));
+        for (uint j = 0u; j < 8u; ++j) {
+            const uint ll = l + j;
+            int q = 0;
+            if (group == 0u) {
+                q = int((ql[ll] & 0x0Fu) | ((qh[ll] & 0x03u) << 4u)) - 32;
+            } else if (group == 1u) {
+                q = int((ql[ll + 32u] & 0x0Fu) | (((qh[ll] >> 2u) & 0x03u) << 4u)) - 32;
+            } else if (group == 2u) {
+                q = int((ql[ll] >> 4u) | (((qh[ll] >> 4u) & 0x03u) << 4u)) - 32;
+            } else {
+                q = int((ql[ll + 32u] >> 4u) | (((qh[ll] >> 6u) & 0x03u) << 4u)) - 32;
+            }
+            const float term = d * s * float(q) * float(xp[j]);
+            const uint which = j & 3u;
+            if (which == 0u) { acc0 += term; }
+            else if (which == 1u) { acc1 += term; }
+            else if (which == 2u) { acc2 += term; }
+            else { acc3 += term; }
+        }
+    }
+    const float acc = (acc0 + acc1) + (acc2 + acc3);
+    const float total = simd_sum(acc);
+    if (lane == 0) { y[row] = half(total); }
+}
