@@ -246,9 +246,16 @@ package final class GGUFDecoder {
             guard let routedCB = context.queue.makeCommandBuffer() else {
                 throw MetalError.commandEncoderFailed
             }
+            let tFetch = DispatchTime.now().uptimeNanoseconds
+            for expert in selection.experts {
+                _ = try cache.expert(layer: layer, expert: expert)
+            }
+            mark("  expert fetch", tFetch)
+            let tEncode = DispatchTime.now().uptimeNanoseconds
             try routed.encode(
                 commandBuffer: routedCB, cache: cache, layer: layer, x: blockInput,
                 experts: selection.experts, weights: selection.weights, out: moeOut)
+            mark("  routed encode", tEncode)
             try encodeWrite(
                 routedCB, prefix: ffnPrefix, streamsBuffer: streams, blockOut: moeOut)
             let tRoutedWait = DispatchTime.now().uptimeNanoseconds
