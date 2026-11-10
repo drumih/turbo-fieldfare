@@ -38,6 +38,8 @@ package final class GGUFDecoder {
 
     package let hidden: Int
     package let model: GGUFModel
+    /// The experts each layer selected on the last decode, for routing studies.
+    package private(set) var lastRouting: [[Int]] = []
 
     package init(context: MetalContext, arch: ArchConfig, model: GGUFModel, maxSeq: Int) throws {
         self.context = context
@@ -89,6 +91,11 @@ package final class GGUFDecoder {
         // mapped expert pages when it faults them mid-dispatch (measured
         // wait(routed) 1.7-2.3 s), while a pread into a reused slot is paid once
         // on the host and the GPU then reads clean pages (measured 90 ms).
+        //
+        // Capacity stays top-k: a 480-slot cache (one token's whole working
+        // set) was measured and changed nothing (1.78 s/token against 1.66),
+        // because successive tokens select different experts - the cost is the
+        // per-token read, not a repeated one, and the extra 1.3 GB buys no hit.
         self.cache = try GGUFExpertBufferCache(
             model: model, device: context.device, capacity: arch.topKExperts)
         self.routed = try GGUFMoERoutedStage(context: context, arch: arch)
@@ -243,6 +250,8 @@ package final class GGUFDecoder {
 
             let tRouted = DispatchTime.now().uptimeNanoseconds
             let selection = router.select(topK: arch.topKExperts)
+            if layer == 0 { lastRouting = [] }
+            lastRouting.append(selection.experts)
             guard let routedCB = context.queue.makeCommandBuffer() else {
                 throw MetalError.commandEncoderFailed
             }

@@ -60,6 +60,14 @@ import TinyTitanValidationSupport
             #expect(nonFinite == 0)
             #expect(argmax >= 0 && argmax < arch.vocabSize)
         }
+        // Routing overlap between tokens: a larger expert cache only pays if
+        // the same (layer, expert) pairs recur.
+        var routings: [Set<Int>] = []
+        // Re-run the first two tokens through the decoder is not possible
+        // without disturbing state, so this reports the last token's routing
+        // count only; the pair study lives in its own test.
+        routings.append(Set(decoder.lastRouting.flatMap { $0 }))
+        print("last token routed \(routings[0].count) distinct experts across 48 layers")
         #expect(tokenLogits[0] != tokenLogits[1])
         let total = timings.reduce(0, +)
         let perToken = total / Double(timings.count)
