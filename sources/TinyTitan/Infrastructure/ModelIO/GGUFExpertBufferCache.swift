@@ -141,6 +141,72 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         return loaded
     }
 
+    /// Reads one matrix into its buffer. Opens its own descriptor so the three
+    /// reads of an expert can run concurrently without sharing file state.
+    private static func read(
+        _ range: GGUFTensorRange, into buffer: MTLBuffer, name: String, url: URL
+    ) throws -> Int {
+        guard Int(range.byteCount) <= buffer.length else {
+            throw GGUFExpertBufferCacheError.shortRead(
+                name: name, expected: Int(range.byteCount), got: buffer.length)
+        }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw MetalError.invalidState("open(\(url.path)) failed: \(errno)")
+        }
+        defer { close(fd) }
+        let destination = buffer.contents()
+        var total = 0
+        while total < Int(range.byteCount) {
+            let count = min(Int(range.byteCount) - total, 1 << 20)
+            let read = pread(
+                fd, destination.advanced(by: total), count,
+                off_t(range.fileOffset) + off_t(total))
+            if read <= 0 {
+                throw GGUFExpertBufferCacheError.shortRead(
+                    name: name, expected: Int(range.byteCount), got: total)
+            }
+            total += read
+        }
+        return total
+    }
+
+    /// unchecked-invariant: each job index is written by exactly one task and
+    /// read only after the group completes; only the failure slot is shared, and
+    /// it is behind a lock.
+    private final class ReadJobs: @unchecked Sendable {
+        let ranges: [GGUFTensorRange]
+        let buffers: [MTLBuffer]
+        let urls: [URL]
+        let names: [String]
+        private let lock = NSLock()
+        private var failure: Error?
+
+        init(ranges: [GGUFTensorRange], buffers: [MTLBuffer], urls: [URL], names: [String]) {
+            self.ranges = ranges
+            self.buffers = buffers
+            self.urls = urls
+            self.names = names
+        }
+
+        func run(_ index: Int) {
+            do {
+                _ = try GGUFExpertBufferCache.read(
+                    ranges[index], into: buffers[index], name: names[index], url: urls[index])
+            } catch {
+                lock.lock()
+                if failure == nil { failure = error }
+                lock.unlock()
+            }
+        }
+
+        var firstFailure: Error? {
+            lock.lock()
+            defer { lock.unlock() }
+            return failure
+        }
+    }
+
     private func load(layer: Int, expert: Int, slotIndex: Int) throws -> GGUFExpertBuffers {
         let weights = try GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
         let slot = slots[slotIndex]
@@ -158,42 +224,31 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
                 Int(location.tensor.dimensions[0])
             )
         }
-        func fill(
-            _ range: GGUFTensorRange, into buffer: MTLBuffer, name: String,
-            shape: (rows: Int, columns: Int)
-        ) throws -> GGUFExpertMatrix {
-            guard Int(range.byteCount) <= buffer.length else {
-                throw GGUFExpertBufferCacheError.shortRead(
-                    name: name, expected: Int(range.byteCount), got: buffer.length)
-            }
-            let descriptor = try descriptor(for: range.shardIndex)
-            let destination = buffer.contents()
-            var total = 0
-            while total < Int(range.byteCount) {
-                let count = min(Int(range.byteCount) - total, 1 << 20)
-                let read = pread(
-                    descriptor,
-                    destination.advanced(by: total),
-                    count,
-                    off_t(range.fileOffset) + off_t(total))
-                if read <= 0 {
-                    throw GGUFExpertBufferCacheError.shortRead(
-                        name: name, expected: Int(range.byteCount), got: total)
-                }
-                total += read
-            }
-            return GGUFExpertMatrix(
-                buffer: buffer, rows: shape.rows, columns: shape.columns, type: range.type,
-                byteCount: Int(range.byteCount))
-        }
-        let gate = try fill(
-            weights.gate, into: slot.gate, name: "gate", shape: try shape(of: "ffn_gate"))
-        let up = try fill(
-            weights.up, into: slot.up, name: "up", shape: try shape(of: "ffn_up"))
-        let down = try fill(
-            weights.down, into: slot.down, name: "down", shape: try shape(of: "ffn_down"))
+        let ranges = [weights.gate, weights.up, weights.down]
+        let buffers = [slot.gate, slot.up, slot.down]
+        let names = ["gate", "up", "down"]
+        let jobs = ReadJobs(
+            ranges: ranges, buffers: buffers,
+            urls: ranges.map { model.shards[$0.shardIndex].url }, names: names)
+        // The three reads are independent: run them together, which is where a
+        // token's expert time is spent.
+        DispatchQueue.concurrentPerform(iterations: 3) { jobs.run($0) }
+        if let error = jobs.firstFailure { throw error }
         return GGUFExpertBuffers(
-            layer: layer, expert: expert, gate: gate, up: up, down: down, slotIndex: slotIndex)
+            layer: layer, expert: expert,
+            gate: GGUFExpertMatrix(
+                buffer: slot.gate, rows: try shape(of: "ffn_gate").rows,
+                columns: try shape(of: "ffn_gate").columns, type: weights.gate.type,
+                byteCount: Int(weights.gate.byteCount)),
+            up: GGUFExpertMatrix(
+                buffer: slot.up, rows: try shape(of: "ffn_up").rows,
+                columns: try shape(of: "ffn_up").columns, type: weights.up.type,
+                byteCount: Int(weights.up.byteCount)),
+            down: GGUFExpertMatrix(
+                buffer: slot.down, rows: try shape(of: "ffn_down").rows,
+                columns: try shape(of: "ffn_down").columns, type: weights.down.type,
+                byteCount: Int(weights.down.byteCount)),
+            slotIndex: slotIndex)
     }
 
     private func descriptor(for shard: Int) throws -> Int32 {
