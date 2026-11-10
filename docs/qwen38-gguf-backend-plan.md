@@ -664,6 +664,21 @@ command-buffer waits. The GPU is not the limit. The next work is batching the
 per-expert GEMVs into persistent kernels, the way the engine's affine MoE path
 already does.
 
+**ANE prefill source (first piece, 2026-11-10).** `GGUFANEPrefillSource` writes
+the derived fp16 a sidecar needs for one full-attention layer - `wq`, `wk`,
+`wv`, `wo`, `q_norm`, `k_norm` in the exporter's `[out, in]` layout - read from
+the checkpoint's Q6_K blocks through the GPU arena. Nothing on disk changes:
+this is a derived accelerator artifact. Only the 12 full-attention layers are
+eligible (GDN is refused by name), matching how the qwen3.8 sidecar covers one
+block shape. Verified on layer 3: `wq` 12,288 x 2,560 fp16, geometry
+(hidden 2,560; 24/2 heads; head dim 256; rotary 64; theta 1e7; chunk 4,096), and
+every sampled value round-trips to the arena's bf16 exactly.
+
+What it still needs: an adapter in `tools/export_ane_prefill.py` to consume this
+directory instead of a `.ssdai` index, a chunked prefill path in the decoder to
+call the sidecar, and the A/B against GPU prefill - the qwen3.8 sidecar measured
+0.72x, so the as-is blocks have to earn the switch.
+
 **Traps this route cost, recorded so they are not re-learned:**
 
 - `fullAttentionLayerMask` values are 1 = full attention, 2 = GDN. This check-
