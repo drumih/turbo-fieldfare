@@ -680,7 +680,18 @@ digest binding the sidecar to that source) and runs the unchanged Core ML
 build-and-verify path. Layer 3's `h0` compiled with **64 operations on the
 Neural Engine**, `aneCompileVerified: true`, `selectionFolded: true`, geometry
 2560 / 24q / 2kv, package written. The source for all 12 full-attention layers
-is 1.1 GB; the checkpoint was not touched.
+is 1.1 GB; the checkpoint was not touched. The **complete sidecar is exported**:
+12 layers x histories {0, 4096}, 24 variants, every one compiled and loaded on
+the ANE, `aneCompileVerified`, 1.1 GB.
+
+**A batched GEMM exists (2026-11-10).** `iq2s_gemm_bf16` computes
+`Y[t][m] = sum_k A[t][k] * W[m][k]` with W in IQ2_S blocks: one weight row and
+128 prompt tokens per threadgroup, the row decoded into threadgroup memory once
+per tile. Element-for-element within 3.1e-3 of the CPU decoder and dots, and
+**197 GFLOP/s** (8.5 ms for 128 x 2560 x 2560) on this M3. It is the first
+batched kernel the chunked prefill path needs; IQ2_S covers the experts' gate/up,
+whose K = 2560 is block aligned (the 640-wide down projections use 32/64-element
+formats instead, so they need their own).
 
 **A prefill path exists (2026-11-10).** `GGUFDecoder.prefill(tokens:)` walks a
 prompt through the decode loop with the two-token PLE history and reports the
