@@ -24,6 +24,8 @@ xcuserdata/
 *.safetensors
 *.gguf
 *.bin
+# The fitted next-layer guess ships with the runtime (NextLayerGuessWeights).
+!Sources/TurboFieldfare/NextLayerGuess/*.bin
 *.npz
 *.pdf
 weights/
