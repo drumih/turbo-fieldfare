@@ -57,7 +57,7 @@ package final class GGUFMoERoutedStage {
     /// must start at zero (or at a residual the caller wants included).
     package func encode(
         commandBuffer: MTLCommandBuffer,
-        provider: GGUFMappedExperts,
+        cache: GGUFExpertBufferCache,
         layer: Int,
         x: MTLBuffer,
         experts: [Int],
@@ -67,15 +67,13 @@ package final class GGUFMoERoutedStage {
     ) throws {
         precondition(experts.count <= topK && experts.count == weights.count)
         for (index, expert) in experts.enumerated() {
-            let buffers = try provider.matrices(layer: layer, expert: expert)
+            let buffers = try cache.expert(layer: layer, expert: expert)
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.gate.buffer,
-                weightsOffset: buffers.gate.offset,
                 x: x, y: gateBuffers[index],
                 rows: moeWidth, columns: hidden, type: buffers.gate.type)
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.up.buffer,
-                weightsOffset: buffers.up.offset,
                 x: x, y: upBuffers[index],
                 rows: moeWidth, columns: hidden, type: buffers.up.type)
             try encodeElementwise(
@@ -84,7 +82,6 @@ package final class GGUFMoERoutedStage {
                 count: moeWidth)
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.down.buffer,
-                weightsOffset: buffers.down.offset,
                 x: actBuffers[index], y: downBuffers[index],
                 rows: hidden, columns: moeWidth, type: buffers.down.type)
             try encodeAccumulate(

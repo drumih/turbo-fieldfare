@@ -20,7 +20,7 @@ package final class GGUFDecoder {
     private let gdn: GGUFGDNDecodeStage
     private let fullAttention: GGUFFullAttentionDecodeStage
     private let router: GGUFRouter
-    private let mappedExperts: GGUFMappedExperts
+    private let cache: GGUFExpertBufferCache
     private let routed: GGUFMoERoutedStage
     private let shared: GGUFSharedExpertStage
     private let ple: GGUFPLEStage
@@ -85,7 +85,12 @@ package final class GGUFDecoder {
             context: context, arch: arch, arena: arena, mapped: mappedShards,
             maxSeq: maxSeq)
         self.router = try GGUFRouter(context: context, arch: arch, model: model)
-        self.mappedExperts = GGUFMappedExperts(model: model, mapped: mappedShards)
+        // Experts go through the slot cache, not the mapping: the GPU stalls on
+        // mapped expert pages when it faults them mid-dispatch (measured
+        // wait(routed) 1.7-2.3 s), while a pread into a reused slot is paid once
+        // on the host and the GPU then reads clean pages (measured 90 ms).
+        self.cache = try GGUFExpertBufferCache(
+            model: model, device: context.device, capacity: arch.topKExperts)
         self.routed = try GGUFMoERoutedStage(context: context, arch: arch)
         self.shared = try GGUFSharedExpertStage(context: context, arch: arch, model: model)
         self.ple = try GGUFPLEStage(context: context, arch: arch, model: model, arena: arena)
@@ -242,7 +247,7 @@ package final class GGUFDecoder {
                 throw MetalError.commandEncoderFailed
             }
             try routed.encode(
-                commandBuffer: routedCB, provider: mappedExperts, layer: layer, x: blockInput,
+                commandBuffer: routedCB, cache: cache, layer: layer, x: blockInput,
                 experts: selection.experts, weights: selection.weights, out: moeOut)
             try encodeWrite(
                 routedCB, prefix: ffnPrefix, streamsBuffer: streams, blockOut: moeOut)
