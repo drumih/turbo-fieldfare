@@ -682,6 +682,13 @@ Neural Engine**, `aneCompileVerified: true`, `selectionFolded: true`, geometry
 2560 / 24q / 2kv, package written. The source for all 12 full-attention layers
 is 1.1 GB; the checkpoint was not touched.
 
+**A prefill path exists (2026-11-10).** `GGUFDecoder.prefill(tokens:)` walks a
+prompt through the decode loop with the two-token PLE history and reports the
+wall time: 8 tokens in 13.9 s (**0.58 tok/s, 1.73 s/token**) on the GPU, the
+reference an ANE block must beat. It is token-at-a-time, not chunked: the
+sidecar path needs the chunk form to engage at all (it requires a full 4,096
+chunk).
+
 What it still needs: a chunked prefill path in the decoder to call the sidecar,
 the export of the remaining layers (same command, per layer), and the A/B
 against GPU prefill - the qwen3.8 sidecar measured 0.72x, so the as-is blocks
