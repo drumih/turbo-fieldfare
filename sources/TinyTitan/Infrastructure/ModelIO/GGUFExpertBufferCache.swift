@@ -31,6 +31,7 @@ package struct GGUFExpertBuffers: @unchecked Sendable {
 package enum GGUFExpertBufferCacheError: Error, Equatable, CustomStringConvertible {
     case invalidCapacity(Int)
     case shortRead(name: String, expected: Int, got: Int)
+    case missingTensor(String)
 
     package var description: String {
         switch self {
@@ -38,6 +39,8 @@ package enum GGUFExpertBufferCacheError: Error, Equatable, CustomStringConvertib
             return "expert cache capacity \(value) must be at least 1"
         case .shortRead(let name, let expected, let got):
             return "short read of \(name): expected \(expected) bytes, got \(got)"
+        case .missingTensor(let name):
+            return "the model has no expert tensor \(name)"
         }
     }
 }
@@ -141,9 +144,24 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
     private func load(layer: Int, expert: Int, slotIndex: Int) throws -> GGUFExpertBuffers {
         let weights = try GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
         let slot = slots[slotIndex]
-        func fill(_ range: GGUFTensorRange, into buffer: MTLBuffer, name: String) throws
-            -> GGUFExpertMatrix
-        {
+        /// GGUF dims are [columns, rows, experts]; the layout record's shape is
+        /// [rows, columns], which the fused GEMV dispatch depends on.
+        func shape(of role: String) throws -> (rows: Int, columns: Int) {
+            let name = "blk.\(layer).\(role)_exps.weight"
+            guard let location = model.tensor(named: name),
+                location.tensor.dimensions.count == 3
+            else {
+                throw GGUFExpertBufferCacheError.missingTensor(name)
+            }
+            return (
+                Int(location.tensor.dimensions[1]),
+                Int(location.tensor.dimensions[0])
+            )
+        }
+        func fill(
+            _ range: GGUFTensorRange, into buffer: MTLBuffer, name: String,
+            shape: (rows: Int, columns: Int)
+        ) throws -> GGUFExpertMatrix {
             guard Int(range.byteCount) <= buffer.length else {
                 throw GGUFExpertBufferCacheError.shortRead(
                     name: name, expected: Int(range.byteCount), got: buffer.length)
@@ -165,12 +183,15 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
                 total += read
             }
             return GGUFExpertMatrix(
-                buffer: buffer, rows: 0, columns: 0, type: range.type,
+                buffer: buffer, rows: shape.rows, columns: shape.columns, type: range.type,
                 byteCount: Int(range.byteCount))
         }
-        let gate = try fill(weights.gate, into: slot.gate, name: "gate")
-        let up = try fill(weights.up, into: slot.up, name: "up")
-        let down = try fill(weights.down, into: slot.down, name: "down")
+        let gate = try fill(
+            weights.gate, into: slot.gate, name: "gate", shape: try shape(of: "ffn_gate"))
+        let up = try fill(
+            weights.up, into: slot.up, name: "up", shape: try shape(of: "ffn_up"))
+        let down = try fill(
+            weights.down, into: slot.down, name: "down", shape: try shape(of: "ffn_down"))
         return GGUFExpertBuffers(
             layer: layer, expert: expert, gate: gate, up: up, down: down, slotIndex: slotIndex)
     }
