@@ -116,7 +116,7 @@ import TurboFieldfare
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--seed", "--stop", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
-            "--rdadvise", "--help",
+            "--rdadvise", "--early-expert-read", "--help",
             "--chat-prompt", "--image", "--vision-pack", "--vision-residency",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
@@ -132,6 +132,7 @@ import TurboFieldfare
             "--prefill", "off",
             "--prefill-chunk-tokens", "64",
             "--rdadvise", "adaptive",
+            "--early-expert-read", "off",
         ])
 
         #expect(arguments.expertCacheSlots == 24)
@@ -139,6 +140,7 @@ import TurboFieldfare
         #expect(arguments.prefillPolicy == .off)
         #expect(arguments.prefillChunkTokens == 64)
         #expect(arguments.rdadvisePolicy == .adaptive)
+        #expect(arguments.earlyExpertRead == .off)
 
         let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: true)
         #expect(runtime.expertCacheSlots == 24)
@@ -146,6 +148,7 @@ import TurboFieldfare
         #expect(runtime.prefillPolicy == .off)
         #expect(runtime.prefillChunkTokens == 64)
         #expect(runtime.rdadvisePolicy == .adaptive)
+        #expect(runtime.earlyExpertRead == .off)
         #expect(runtime.headPath == .logits)
     }
 
@@ -180,6 +183,13 @@ import TurboFieldfare
             ])
             #expect(arguments.rdadvisePolicy.rawValue == value)
         }
+        for value in RuntimeEarlyExpertRead.allCases {
+            let arguments = try Args.parse([
+                "--model", "m.gturbo", "--prompt", "hi",
+                "--early-expert-read", value.rawValue,
+            ])
+            #expect(arguments.earlyExpertRead == value)
+        }
         #expect(try Args.parse([
             "--model", "m.gturbo", "--prompt", "hi", "--prefill", "on",
         ]).prefillPolicy == .chunked)
@@ -195,6 +205,7 @@ import TurboFieldfare
             ("--prefill", "yes"),
             ("--prefill-chunk-tokens", "512"),
             ("--rdadvise", "automatic"),
+            ("--early-expert-read", "next-layer"),
         ]
         for (flag, value) in invalidValues {
             #expect(throws: ArgsError.invalidValue(flag: flag, value: value)) {
@@ -367,6 +378,20 @@ import TurboFieldfare
         } catch {
             Issue.record("unexpected error: \(error)")
         }
+    }
+
+    /// The early-read line reports per decode forward, and precision as the
+    /// share of early reads used.
+    @Test func earlyExpertReadFooterReportsPerForward() {
+        var stats = EarlyExpertReadStats()
+        stats.forwards = 4
+        stats.misses = 300
+        stats.reads = 116
+        stats.used = 80
+        #expect(earlyExpertReadFooter(stats)
+                == "[early-read needed/tok=75.00 loaded-early/tok=20.00 reads/tok=29.00 precision=0.690]\n")
+        #expect(earlyExpertReadFooter(EarlyExpertReadStats())
+                == "[early-read needed/tok=n/a loaded-early/tok=n/a reads/tok=n/a precision=n/a]\n")
     }
 
 }
