@@ -26,8 +26,9 @@ import TinyTitanValidationSupport
         }
         let bytes = ranges.reduce(0) { $0 + Int($1.byteCount) }
         let url: URL = model.shards[ranges[0].shardIndex].url
-        guard let buffer = context.device.makeBuffer(
-            length: 1 << 20, options: .storageModeShared)
+        guard
+            let buffer = context.device.makeBuffer(
+                length: 1 << 20, options: .storageModeShared)
         else { throw MetalError.bufferAllocationFailed("read scaling") }
 
         func read(_ range: GGUFTensorRange) {
