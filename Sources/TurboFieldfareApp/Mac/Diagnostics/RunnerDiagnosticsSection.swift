@@ -11,8 +11,7 @@ struct RunnerDiagnosticsSection: View {
                 groupLabel("Result")
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Settings")
-                    Text(diagnostics.runtimeOptions.resultSummary
-                        .replacingOccurrences(of: ", RDADVISE ", with: "\nRDADVISE "))
+                    Text(diagnostics.runtimeOptions.resultSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
