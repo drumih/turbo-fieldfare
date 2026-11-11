@@ -9,47 +9,58 @@ import Metal
 /// output is the routed experts plus the shared expert. The PLE block runs on
 /// its declared layer before that layer's attention read. Finally the output
 /// hyper-connection collapses the streams and the head produces logits.
+///
+/// The stages and scratch are internal rather than private because the
+/// decoder is split across files (`+Prefill`, `+BatchedPrefill`) that drive the
+/// same stages in a different order; nothing outside the decoder uses them.
 package final class GGUFDecoder {
-    private let context: MetalContext
-    private let arch: ArchConfig
-    private let arena: GGUFResidentArena
-    private let mapped: GGUFMappedShards
+    let context: MetalContext
+    let arch: ArchConfig
+    let arena: GGUFResidentArena
+    let mapped: GGUFMappedShards
 
-    private let hc: GGUFHyperConnection
-    private let elementwise: Elementwise
-    private let gdn: GGUFGDNDecodeStage
-    private let fullAttention: GGUFFullAttentionDecodeStage
-    private let router: GGUFRouter
-    private let cache: GGUFExpertBufferCache
-    private let routed: GGUFMoERoutedStage
-    private let shared: GGUFSharedExpertStage
-    /// Internal, not private: the prefill extension derives the n-gram window
-    /// from it.
+    let hc: GGUFHyperConnection
+    let elementwise: Elementwise
+    let gdn: GGUFGDNDecodeStage
+    let fullAttention: GGUFFullAttentionDecodeStage
+    let router: GGUFRouter
+    let cache: GGUFExpertBufferCache
+    let routed: GGUFMoERoutedStage
+    let shared: GGUFSharedExpertStage
     let ple: GGUFPLEStage
-    private let output: GGUFOutputStage
-    private let embedGather: GGUFEmbeddingGather
-    private let embedTable: MTLBuffer
-    private let convert: MTLComputePipelineState
+    let output: GGUFOutputStage
+    let embedGather: GGUFEmbeddingGather
+    let embedTable: MTLBuffer
+    let convert: MTLComputePipelineState
 
-    private let streams: MTLBuffer
-    private let blockInput: MTLBuffer
+    let streams: MTLBuffer
+    let blockInput: MTLBuffer
     /// The token mixer's block output, and the FFN's: separate, because the
     /// shared and routed stages accumulate into theirs.
-    private let attnOut: MTLBuffer
-    private let ffnOut: MTLBuffer
-    private let embedBF16: MTLBuffer
-    private let embedHalf: MTLBuffer
-    private let rowIndex: MTLBuffer
+    let attnOut: MTLBuffer
+    let ffnOut: MTLBuffer
+    let embedBF16: MTLBuffer
+    let embedHalf: MTLBuffer
+    let rowIndex: MTLBuffer
 
     /// Opt-in parity capture (`TINYTITAN_GGUF_DUMP_DIR`); nil on the normal path.
-    private let stageDump: GGUFStageDump?
+    let stageDump: GGUFStageDump?
+    /// Opt-in routing log (`TINYTITAN_GGUF_ROUTING_LOG=<file>`): one line per
+    /// token, the routed experts of every layer (`,` within a layer, `;`
+    /// between layers), appended. The input for expert-cache policy studies.
+    let routingLog: FileHandle?
 
     package let hidden: Int
     package let model: GGUFModel
     /// The experts each layer selected on the last decode, for routing studies.
     package private(set) var lastRouting: [[Int]] = []
 
-    package init(context: MetalContext, arch: ArchConfig, model: GGUFModel, maxSeq: Int) throws {
+    /// `ramBudgetBytes` is the process target (`--ram-budget`); nil sizes the
+    /// expert cache by `TINYTITAN_GGUF_EXPERT_CACHE_GB` or the measured default.
+    package init(
+        context: MetalContext, arch: ArchConfig, model: GGUFModel, maxSeq: Int,
+        ramBudgetBytes: Int? = nil
+    ) throws {
         self.context = context
         self.arch = arch
         self.model = model
@@ -103,10 +114,11 @@ package final class GGUFDecoder {
         // A cache sized for reuse does not pay: a 480-slot cache (one token's
         // whole working set) was measured and changed nothing (1.78 s/token
         // against 1.66), because successive tokens select different experts.
-        // The capacity is two top-k sets: the layer the GPU last read and the
-        // one being fetched, so a fetch never waits on an eviction it cannot make.
         self.cache = try GGUFExpertBufferCache(
-            model: model, device: context.device, capacity: 2 * arch.topKExperts)
+            model: model, device: context.device,
+            capacity: try Self.expertSlotsPerLayer(
+                model: model, arch: arch, ramBudgetBytes: ramBudgetBytes,
+                arenaBytes: arena.buffer.length))
         self.routed = try GGUFMoERoutedStage(context: context, arch: arch)
         self.shared = try GGUFSharedExpertStage(context: context, arch: arch, model: model)
         self.ple = try GGUFPLEStage(context: context, arch: arch, model: model, arena: arena)
@@ -146,6 +158,8 @@ package final class GGUFDecoder {
         self.embedHalf = try make(hidden * 2, "embed half")
         self.rowIndex = try make(4, "row index")
         self.stageDump = GGUFStageDump.fromEnvironment()
+        self.routingLog = Self.openRoutingLog(
+            ProcessInfo.processInfo.environment["TINYTITAN_GGUF_ROUTING_LOG"])
     }
 
     /// Runs one token and returns its logits. `position` is the token's index
@@ -172,7 +186,9 @@ package final class GGUFDecoder {
             let stats = cache.statistics
             FileHandle.standardError.write(
                 Data(
-                    "  experts (cumulative): hits \(stats.hits), misses \(stats.misses)\n".utf8))
+                    ("  experts (cumulative): hits \(stats.hits), misses \(stats.misses), "
+                        + "\(cache.capacity) slots/layer, "
+                        + "\(cache.residentBytes / 1_048_576) MiB\n").utf8))
         }
 
         try run { commandBuffer in
@@ -181,15 +197,95 @@ package final class GGUFDecoder {
         let pointer = output.logits.contents().assumingMemoryBound(to: UInt16.self)
         let logits = (0..<arch.vocabSize).map { Float(Float16(bitPattern: pointer[$0])) }
         try capture?.write("logits", values: logits)
+        if let routingLog {
+            let line = lastRouting.map { $0.map(String.init).joined(separator: ",") }
+                .joined(separator: ";")
+            routingLog.write(Data((line + "\n").utf8))
+        }
         return logits
     }
 
+    /// Expert slots per layer: the RAM budget (`TINYTITAN_GGUF_EXPERT_CACHE_GB`,
+    /// default a twelfth of physical memory) divided by what one slot costs
+    /// across all layers, at least two top-k sets (the pinned layer and the one
+    /// being fetched) and at most every expert.
+    ///
+    /// The default is measured, not guessed. The pool is wired Metal memory, so
+    /// every GiB it takes is a GiB the mmap'd attention and GDN weights lose to
+    /// the page cache. On the 24 GB M-series Mac (essay prompt, 80 tokens, two
+    /// rounds, 2026-11-11): 2 GiB 2.07/2.46 tok/s, 3 GiB 1.07/2.46, 4 GiB
+    /// 0.75/2.34 with wait(attn) doubling to 199 ms; the hit rate rose 52% -> 64%
+    /// and bought nothing. 6 GiB (the old quarter) drove free memory to 28% and
+    /// the GPU into page-fault stalls. A twelfth is 2 GiB there.
+    ///
+    /// With a process target (`ramBudgetBytes`, the CLI's `--ram-budget`, the
+    /// launcher's `--ram`) the cache gets what the target leaves after the rest
+    /// of the model: every non-expert tensor as stored (the mapped matrices are
+    /// paged in on use and count against the process), the bf16 arena built
+    /// from some of them, and a working margin for KV, scratch and the
+    /// runtime. A target that leaves less than the two-set floor is refused
+    /// with the floor named, rather than silently exceeded.
+    static func expertSlotsPerLayer(
+        model: GGUFModel, arch: ArchConfig, ramBudgetBytes: Int?, arenaBytes: Int
+    ) throws -> Int {
+        let perSlot = try GGUFExpertBufferCache.bytesPerSlotAcrossLayers(model: model)
+        let floor = 2 * arch.topKExperts
+        let budget: Double
+        if let ramBudgetBytes {
+            let resident = residentBytesOutsideTheExpertCache(
+                model: model, arenaBytes: arenaBytes)
+            let required = resident + floor * perSlot
+            guard ramBudgetBytes >= required else {
+                throw MetalError.invalidState(
+                    "--ram-budget \(ramBudgetBytes / 1_048_576) MiB is below this model's floor of "
+                        + "\(required / 1_048_576) MiB (\(resident / 1_048_576) MiB outside the "
+                        + "expert cache plus \(floor) expert slots per layer)")
+            }
+            budget = Double(ramBudgetBytes - resident)
+        } else if let value = ProcessInfo.processInfo.environment["TINYTITAN_GGUF_EXPERT_CACHE_GB"]
+            .flatMap(Double.init), value > 0
+        {
+            budget = value * 1_073_741_824
+        } else {
+            budget = Double(ProcessInfo.processInfo.physicalMemory) / 12
+        }
+        let slots = Int(budget / Double(perSlot))
+        return min(arch.numExperts, max(floor, slots))
+    }
+
+    /// What the process holds besides the expert pools: the non-expert
+    /// tensors as stored, the bf16 arena, and a 768 MiB margin (KV cache,
+    /// scratch, Metal and the runtime itself).
+    ///
+    /// The PLE n-gram table is left out: it is 26.8 GiB of this checkpoint's
+    /// 77.2, and the stage reads a handful of its rows per token from the
+    /// mapping, so what it costs the process is those pages, not the table.
+    /// Counting it would put every RAM target under 33 GiB below the floor.
+    static func residentBytesOutsideTheExpertCache(model: GGUFModel, arenaBytes: Int) -> Int {
+        let notResident = model.tensors.filter { name, _ in
+            name.contains("_exps.") || name.hasSuffix("per_layer_token_embd.weight")
+        }
+        .reduce(0) { $0 + Int($1.value.tensor.byteCount) }
+        let resident = Int(model.totalTensorBytes) - notResident
+        return resident + arenaBytes + 768 * 1_048_576
+    }
+
+    private static func openRoutingLog(_ path: String?) -> FileHandle? {
+        guard let path, !path.isEmpty else { return nil }
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        guard let handle = FileHandle(forWritingAtPath: path) else { return nil }
+        handle.seekToEndOfFile()
+        return handle
+    }
+
     /// The residual's element count: every hyper stream of the hidden width.
-    private var wideCount: Int { arch.hyperConnections.count * hidden }
+    var wideCount: Int { arch.hyperConnections.count * hidden }
 
     /// Embedding: gather the token's Q6_K row as bf16, convert to half, and
     /// place it in stream 0 for the broadcast.
-    private func embed(token: Int32) throws {
+    func embed(token: Int32) throws {
         rowIndex.contents().assumingMemoryBound(to: UInt32.self)[0] = UInt32(bitPattern: token)
         try run { commandBuffer in
             try embedGather.encode(
@@ -219,7 +315,7 @@ package final class GGUFDecoder {
     /// The FFN output has its own buffer, zeroed on the GPU in the same command
     /// buffer: the shared and routed stages accumulate into it, and the
     /// attention output must not be part of that sum.
-    private func decodeLayer(
+    func decodeLayer(
         _ layer: Int, position: Int, capture: GGUFStageDump.Capture?,
         timing: inout GGUFDecodeTiming
     ) throws {
@@ -295,21 +391,21 @@ package final class GGUFDecoder {
         try capture?.write(tag + ".out", half: streams, count: wideCount)
     }
 
-    private func makeCommandBuffer() throws -> MTLCommandBuffer {
+    func makeCommandBuffer() throws -> MTLCommandBuffer {
         guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw MetalError.commandEncoderFailed
         }
         return commandBuffer
     }
 
-    private func finish(_ commandBuffer: MTLCommandBuffer) throws {
+    func finish(_ commandBuffer: MTLCommandBuffer) throws {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error { throw MetalError.invalidState("\(error)") }
     }
 
     /// One command buffer around `body`, committed and waited on.
-    private func run(_ body: (MTLCommandBuffer) throws -> Void) throws {
+    func run(_ body: (MTLCommandBuffer) throws -> Void) throws {
         let commandBuffer = try makeCommandBuffer()
         try body(commandBuffer)
         try finish(commandBuffer)
@@ -318,7 +414,7 @@ package final class GGUFDecoder {
     /// A stage boundary. With no capture it is free; with one, the work so far
     /// is committed and waited on, the stage's output is written, and a fresh
     /// command buffer continues - same kernels, same order, same numerics.
-    private func checkpoint(
+    func checkpoint(
         _ commandBuffer: inout MTLCommandBuffer, _ capture: GGUFStageDump.Capture?,
         _ stage: String, _ buffer: MTLBuffer, _ count: Int
     ) throws {
@@ -330,7 +426,7 @@ package final class GGUFDecoder {
 
     /// Zeroes `bytes` of `buffer` in GPU order, so the clear lands after every
     /// earlier write in the same command buffer and before every later one.
-    private func encodeZero(_ commandBuffer: MTLCommandBuffer, _ buffer: MTLBuffer, bytes: Int)
+    func encodeZero(_ commandBuffer: MTLCommandBuffer, _ buffer: MTLBuffer, bytes: Int)
         throws
     {
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {

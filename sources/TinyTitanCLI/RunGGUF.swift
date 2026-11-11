@@ -58,7 +58,8 @@ func runGGUFAsIs(
         let budget = min(options.maxTokens, contextLimit - promptIDs.count)
 
         let decoder = try GGUFDecoder(
-            context: metal, arch: .qwen38FlashNext, model: model, maxSeq: contextLimit)
+            context: metal, arch: .qwen38FlashNext, model: model, maxSeq: contextLimit,
+            ramBudgetBytes: args.ramBudgetBytes)
         let sampler = CPUSampler(
             temperature: Float(options.temperature), topP: Float(options.topP),
             topK: options.topK,

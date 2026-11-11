@@ -71,15 +71,23 @@ package final class GGUFHyperConnection {
         return weight
     }
 
-    /// Residual -> block input, matching `HyperConnection.encodeRead`.
+    /// Bytes of the normalised residual a read leaves for its write.
+    package var normedBytes: Int { dim * streams * 2 }
+
+    /// Residual -> block input, matching `HyperConnection.encodeRead`. The
+    /// normalised residual lands in `normedOut` when given (a caller that
+    /// interleaves several reads before their writes keeps one per token),
+    /// else in the stage's own buffer.
     package func encodeRead(
         commandBuffer: MTLCommandBuffer,
         layer: Int,
         sublayer: String,
         streamsBuffer: MTLBuffer,
         out: MTLBuffer,
+        normedOut: MTLBuffer? = nil,
         eps: Float = 1e-6
     ) throws {
+        let normed = normedOut ?? self.normed
         let prefix = "blk.\(layer).hc_\(sublayer)_"
         let wide = dim * streams
         try rms.encodeBF16WGrouped(
@@ -108,14 +116,17 @@ package final class GGUFHyperConnection {
     }
 
     /// Block output -> residual, matching `HyperConnection.encodeWrite`. Must
-    /// follow its matching read: it consumes the `normed` that read left.
+    /// follow its matching read: it consumes the normalised residual that read
+    /// left, in `normed` when the read was given one.
     package func encodeWrite(
         commandBuffer: MTLCommandBuffer,
         layer: Int,
         sublayer: String,
         streamsBuffer: MTLBuffer,
-        blockOut: MTLBuffer
+        blockOut: MTLBuffer,
+        normed: MTLBuffer? = nil
     ) throws {
+        let normed = normed ?? self.normed
         let prefix = "blk.\(layer).hc_\(sublayer)_"
         // The inject projection is tiny (streams x wide) and F32 in the file;
         // the arena carries its bf16 copy, which BF16GEMV reads.

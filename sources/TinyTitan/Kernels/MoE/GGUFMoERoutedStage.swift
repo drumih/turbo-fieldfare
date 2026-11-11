@@ -14,7 +14,14 @@ package final class GGUFMoERoutedStage {
     private let gemv: GGUFExpertGEMV
     private let siluMul: MTLComputePipelineState
     private let accumulate: MTLComputePipelineState
+    private let weightedSum: MTLComputePipelineState
+    private let batch: GGUFExpertBatchGEMV
     private let device: MTLDevice
+    // The batched route's scratch: expert k's rows at k * width.
+    private let gateAll: MTLBuffer
+    private let upAll: MTLBuffer
+    private let actAll: MTLBuffer
+    private let downAll: MTLBuffer
 
     private let moeWidth: Int
     private let hidden: Int
@@ -29,9 +36,28 @@ package final class GGUFMoERoutedStage {
         self.gemv = try GGUFExpertGEMV(context: context)
         self.siluMul = try context.pipeline("gguf_silu_mul_half")
         self.accumulate = try context.pipeline("gguf_accumulate_scaled_half")
+        self.weightedSum = try context.pipeline("gguf_accumulate_weighted_rows_half")
+        self.batch = try GGUFExpertBatchGEMV(context: context)
         self.moeWidth = arch.moeIntermediateSize
         self.hidden = arch.hiddenSize
         self.topK = arch.topKExperts
+        precondition(topK <= GGUFExpertBatchGEMV.maxMatrices)
+        guard
+            let gateAll = context.device.makeBuffer(
+                length: topK * moeWidth * 2, options: .storageModePrivate),
+            let upAll = context.device.makeBuffer(
+                length: topK * moeWidth * 2, options: .storageModePrivate),
+            let actAll = context.device.makeBuffer(
+                length: topK * moeWidth * 2, options: .storageModePrivate),
+            let downAll = context.device.makeBuffer(
+                length: topK * hidden * 2, options: .storageModePrivate)
+        else {
+            throw MetalError.bufferAllocationFailed("GGUF MoE batched scratch")
+        }
+        self.gateAll = gateAll
+        self.upAll = upAll
+        self.actAll = actAll
+        self.downAll = downAll
         for _ in 0..<topK {
             guard
                 let gate = context.device.makeBuffer(
@@ -84,13 +110,90 @@ package final class GGUFMoERoutedStage {
         outOffset: Int = 0
     ) throws {
         precondition(experts.count <= topK && experts.count == weights.count)
+        guard !experts.isEmpty else { return }
+        let gates = experts.map(\.gate)
+        let ups = experts.map(\.up)
+        let downs = experts.map(\.down)
+        if batch.supports(gates), batch.supports(ups), batch.supports(downs) {
+            try encodeBatched(
+                commandBuffer: commandBuffer, gates: gates, ups: ups, downs: downs,
+                x: x, weights: weights, out: out, outOffset: outOffset)
+            return
+        }
+        try encodeEach(
+            commandBuffer: commandBuffer, experts: experts,
+            x: x, weights: weights, out: out, outOffset: outOffset)
+    }
+
+    /// The batched route: gate and up of every expert in one dispatch each,
+    /// one SiLU·mul over all of them, one down dispatch, one weighted sum.
+    /// Bit-identical to `encodeEach` (same row functions, same add order).
+    private func encodeBatched(
+        commandBuffer: MTLCommandBuffer,
+        gates: [GGUFExpertMatrix],
+        ups: [GGUFExpertMatrix],
+        downs: [GGUFExpertMatrix],
+        x: MTLBuffer,
+        weights: [Float],
+        out: MTLBuffer,
+        outOffset: Int
+    ) throws {
+        try batch.encode(
+            commandBuffer: commandBuffer, matrices: gates,
+            x: x, xStride: 0, y: gateAll, yStride: moeWidth)
+        try batch.encode(
+            commandBuffer: commandBuffer, matrices: ups,
+            x: x, xStride: 0, y: upAll, yStride: moeWidth)
+        try encodeElementwise(
+            commandBuffer: commandBuffer, pipeline: siluMul,
+            buffers: [gateAll, upAll, actAll], count: moeWidth * gates.count)
+        try batch.encode(
+            commandBuffer: commandBuffer, matrices: downs,
+            x: actAll, xStride: moeWidth, y: downAll, yStride: hidden)
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
+        }
+        encoder.setComputePipelineState(weightedSum)
+        encoder.setBuffer(out, offset: outOffset, index: 0)
+        encoder.setBuffer(downAll, offset: 0, index: 1)
+        // GGUFWeightedRows: float w[32]; uint count; uint stride.
+        var layout = [UInt32](repeating: 0, count: GGUFExpertBatchGEMV.maxMatrices + 2)
+        for (index, weight) in weights.enumerated() {
+            layout[index] = weight.bitPattern
+        }
+        layout[GGUFExpertBatchGEMV.maxMatrices] = UInt32(weights.count)
+        layout[GGUFExpertBatchGEMV.maxMatrices + 1] = UInt32(hidden)
+        layout.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            encoder.setBytes(base, length: bytes.count, index: 2)
+        }
+        var n = UInt32(hidden)
+        encoder.setBytes(&n, length: MemoryLayout<UInt32>.size, index: 3)
+        dispatch(encoder, pipeline: weightedSum, count: hidden)
+        encoder.endEncoding()
+    }
+
+    /// One expert at a time: the route for matrices the batched kernels cannot
+    /// share a dispatch for (a format with no batched kernel, or experts that
+    /// do not live in one pool buffer), and the reference the batched route is
+    /// tested against.
+    package func encodeEach(
+        commandBuffer: MTLCommandBuffer,
+        experts: [GGUFExpertBuffers],
+        x: MTLBuffer,
+        weights: [Float],
+        out: MTLBuffer,
+        outOffset: Int
+    ) throws {
         for (index, buffers) in experts.enumerated() {
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.gate.buffer,
+                weightsOffset: buffers.gate.offset,
                 x: x, y: gateBuffers[index],
                 rows: moeWidth, columns: hidden, type: buffers.gate.type)
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.up.buffer,
+                weightsOffset: buffers.up.offset,
                 x: x, y: upBuffers[index],
                 rows: moeWidth, columns: hidden, type: buffers.up.type)
             try encodeElementwise(
@@ -99,6 +202,7 @@ package final class GGUFMoERoutedStage {
                 count: moeWidth)
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.down.buffer,
+                weightsOffset: buffers.down.offset,
                 x: actBuffers[index], y: downBuffers[index],
                 rows: hidden, columns: moeWidth, type: buffers.down.type)
             try encodeAccumulate(

@@ -878,3 +878,79 @@ was removed; the batched fetch, the slot pinning it needed and the routed
 stage taking already-fetched buffers stay. What would change the verdict is a
 way to need fewer bytes (a RAM tier that holds a useful share of the 24,576
 experts), not a way to read the same bytes sooner.
+
+## Expert RAM tier, batched routed MoE, layer-major prefill (2026-11-11)
+
+Same M3 / 24 GB. The machine was under heavy unrelated load for most of the
+day (a game using the GPU, another project's release builds), so the speed
+numbers below are this machine that afternoon. The correctness claims are not
+load-dependent: they are bit-identity tests.
+
+**Expert RAM tier.** `GGUFExpertBufferCache` keeps one exact-size pool per
+layer (a slot holds one expert's gate, up and down, each 256-byte aligned)
+with per-layer LRU and pinning. The pool is wired Metal memory, so on a busy
+24 GB machine a bigger pool is not free. Essay prompt, 80 tokens, two rounds:
+
+| pool | slots/layer | hit rate | decode (tok/s) |
+| --- | ---: | ---: | --- |
+| 2 GiB | 21 | 52% | 2.07, 2.46 |
+| 3 GiB | 32 | 60% | 1.07, 2.46 |
+| 4 GiB | 43 | 64% | 0.75, 2.34 (wait(attn) 199 ms) |
+
+The default without a target is a twelfth of RAM (2 GiB here).
+`--ram-budget` (the launcher's `--ram`) now reaches this route: the pool
+gets the target minus everything else the process holds, which is every
+non-expert tensor as stored (4.2 GiB), the bf16 arena, and a 768 MiB margin.
+The PLE table (26.8 GiB of the checkpoint's 77.2) is left out because the
+stage reads a few of its rows per token. At `--ram-budget 10G` that is 52
+slots per layer (4.9 GB). A target below the floor (two top-k sets per layer)
+is refused with the floor named. Tensor totals from the four shards' headers:
+routed experts 46.2 GiB, PLE table 26.8 GiB, everything else 4.2 GiB.
+
+**Batched routed MoE.** The ten selected experts of a layer share a format
+per projection and live in one pool buffer. So `GGUFExpertBatchGEMV` runs
+each projection for all ten in one dispatch (`<fmt>_gemv_batched`, grid
+`(rows / 8, experts)`, a byte offset per expert). With one SiLU·mul and one
+weighted sum (`gguf_accumulate_weighted_rows_half`) a layer goes from 50
+encoders to 5. The batched kernels call the same row functions as the
+single-matrix kernels (`<fmt>_row_dot`), and the weighted sum adds in the
+same order with the same half rounding. `GGUFMoEBatchedRouteTests` therefore
+asserts **bit equality** with the one-at-a-time route on layers 0, 1, 12
+and 47, and greedy text was byte-identical.
+
+**Layer-major prefill.** `prefill(tokens:)` runs a chunk of up to 64 tokens
+through layer 0, then layer 1, and so on (`prefillBatched`). The steps are:
+
+1. One command buffer carries every token's mixer, FFN read, router and
+   shared expert.
+2. One wait follows.
+3. The tokens are split into groups whose union of selected experts fits the
+   pool.
+4. One fetch and one command buffer serve each group.
+
+Each token runs exactly the kernels `decode` runs, in the same order, so the
+logits are bit-identical (`GGUFBatchedPrefillTests`: max |diff| 0.0, same
+argmax, 24 tokens). Two traps the test caught:
+
+- **The HC write reads its read's state.** The hyper-connection's write
+  consumes the normalised residual its read left. With every token's FFN read
+  run before any FFN write, every write used the last token's. Each token now
+  carries its own (`normedOut:` / `normed:`).
+- **The reset was incomplete.** A decoder reused for a second prompt did not
+  reset the PLE block's causal-conv history. `resetSequence()` now clears it,
+  and `GGUFDecoderDeterminismTests` pins that two fresh decoders agree bit for
+  bit.
+
+Prefill, 24 tokens, same decoder, interleaved in one test:
+
+| route | run 1 | run 2 | run 3 |
+| --- | --- | --- | --- |
+| token at a time | 27.9 s | 44.1 s | 79.8 s |
+| layer-major | 11.1 s | 14.1 s | 9.5 s |
+
+**Still open:**
+- Multi-token expert kernels, so a group's tokens that share an expert read
+  its blocks once.
+- The ANE sidecar for the twelve full-attention layers inside the layer-major
+  loop.
+- A decode measurement at `--ram-budget 10G` on a quiet machine.

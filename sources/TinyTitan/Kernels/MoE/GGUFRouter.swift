@@ -73,7 +73,9 @@ package final class GGUFRouter {
         try encode(commandBuffer: commandBuffer, layer: layer, x: x, into: logits)
     }
 
-    private func encode(
+    /// Encodes the router GEMV for `layer` into `output` (float logits, one per
+    /// expert): what a batched prefill uses to keep each token's logits apart.
+    package func encode(
         commandBuffer: MTLCommandBuffer, layer: Int, x: MTLBuffer, into output: MTLBuffer
     ) throws {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {

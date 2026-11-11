@@ -6,16 +6,18 @@ import Metal
 /// failure. The cache decides what to read and into which slot; this file only
 /// moves bytes.
 extension GGUFExpertBufferCache {
-    /// Reads one matrix into its buffer with `pread`, which carries its own
-    /// offset, so concurrent reads can share one descriptor per shard.
+    /// Reads one matrix into `capacity` bytes of `buffer` at `offset` with
+    /// `pread`, which carries its own file offset, so concurrent reads can
+    /// share one descriptor per shard.
     static func read(
-        _ range: GGUFTensorRange, into buffer: MTLBuffer, name: String, descriptor: Int32
+        _ range: GGUFTensorRange, into buffer: MTLBuffer, offset: Int, capacity: Int,
+        name: String, descriptor: Int32
     ) throws -> Int {
-        guard Int(range.byteCount) <= buffer.length else {
+        guard Int(range.byteCount) <= capacity, offset + capacity <= buffer.length else {
             throw GGUFExpertBufferCacheError.shortRead(
-                name: name, expected: Int(range.byteCount), got: buffer.length)
+                name: name, expected: Int(range.byteCount), got: capacity)
         }
-        let destination = buffer.contents()
+        let destination = buffer.contents().advanced(by: offset)
         var total = 0
         while total < Int(range.byteCount) {
             let count = min(Int(range.byteCount) - total, 1 << 20)
@@ -37,6 +39,8 @@ extension GGUFExpertBufferCache {
         struct Job {
             let range: GGUFTensorRange
             let buffer: MTLBuffer
+            let offset: Int
+            let capacity: Int
             let descriptor: Int32
             let name: String
         }
@@ -51,7 +55,8 @@ extension GGUFExpertBufferCache {
             let job = jobs[index]
             do {
                 _ = try GGUFExpertBufferCache.read(
-                    job.range, into: job.buffer, name: job.name, descriptor: job.descriptor)
+                    job.range, into: job.buffer, offset: job.offset, capacity: job.capacity,
+                    name: job.name, descriptor: job.descriptor)
             } catch {
                 lock.lock()
                 if failure == nil { failure = error }

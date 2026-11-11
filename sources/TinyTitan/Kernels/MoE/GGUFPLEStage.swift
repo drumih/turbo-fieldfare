@@ -47,6 +47,13 @@ package final class GGUFPLEStage {
     /// The layer this block runs on (0-based).
     package var layerIndex: Int { layer }
 
+    /// Clears the block's causal-conv history, for a new sequence: the conv
+    /// carries rows from token to token, so a second prompt run without this
+    /// starts from the first prompt's tail.
+    package func resetState() {
+        block.resetState()
+    }
+
     /// The hash context for the token at `position` of `sequence`: the token,
     /// then up to `ngram_size - 1` predecessors, newest first - the order
     /// `PLEHash.rows(context:)` reads. A predecessor before the sequence start

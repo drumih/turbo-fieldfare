@@ -62,7 +62,8 @@ import TinyTitanValidationSupport
         let gemv = try GGUFExpertGEMV(context: context)
         try gemv.encode(
             commandBuffer: commandBuffer, weights: expert.gate.buffer,
-            x: xBuffer, y: yBuffer, rows: 640, columns: 2_560, type: expert.gate.type)
+            weightsOffset: expert.gate.offset, x: xBuffer, y: yBuffer, rows: 640, columns: 2_560,
+            type: expert.gate.type)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error { throw MetalError.invalidState("\(error)") }
@@ -121,7 +122,8 @@ import TinyTitanValidationSupport
         func bytes(_ matrix: GGUFExpertMatrix) -> [UInt8] {
             Array(
                 UnsafeBufferPointer(
-                    start: matrix.buffer.contents().assumingMemoryBound(to: UInt8.self),
+                    start: matrix.buffer.contents().advanced(by: matrix.offset)
+                        .assumingMemoryBound(to: UInt8.self),
                     count: matrix.byteCount))
         }
         let single = try GGUFExpertBufferCache(model: model, device: context.device, capacity: 1)

@@ -28,6 +28,31 @@ kernel void gguf_accumulate_scaled_half(
     y[gid] = half(float(y[gid]) + w * float(row[gid]));
 }
 
+// The routed experts' weighted sum in one pass: row k of `rows` (stride
+// `p.stride` halves) is added scaled by p.w[k], in k order, rounding to half
+// after every add exactly as k successive gguf_accumulate_scaled_half
+// dispatches did, so the batched route is bit-identical to the old one.
+struct GGUFWeightedRows {
+    float w[32];
+    uint count;
+    uint stride;
+};
+
+kernel void gguf_accumulate_weighted_rows_half(
+    device half*              y    [[buffer(0)]],
+    device const half*        rows [[buffer(1)]],
+    constant GGUFWeightedRows& p   [[buffer(2)]],
+    constant uint&            n    [[buffer(3)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    if (gid >= n) return;
+    half acc = y[gid];
+    for (uint k = 0u; k < p.count; ++k) {
+        acc = half(float(acc) + p.w[k] * float(rows[k * p.stride + gid]));
+    }
+    y[gid] = acc;
+}
+
 // Shared-expert output with its sigmoid scalar gate: y += sigmoid(gate[0]) * row.
 kernel void gguf_accumulate_sigmoid_half(
     device half*       y      [[buffer(0)]],
