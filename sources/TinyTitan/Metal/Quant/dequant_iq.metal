@@ -213,11 +213,14 @@ kernel void dequant_q8_0_bf16(
     }
 }
 
-// The per-matrix layout of a batched expert GEMV dispatch.
+// The per-matrix layout of a batched expert GEMV dispatch: where each matrix
+// starts in the weight buffer (bytes), and where its input and output rows
+// start (halves). Per-matrix input offsets let one dispatch serve several
+// tokens' experts in a prefill as well as one token's ten in a decode.
 struct GGUFMatrixBatch {
     uint offsets[32];
-    uint xStride;
-    uint yStride;
+    uint xOffsets[32];
+    uint yOffsets[32];
 };
 
 // IQ2_S GEMV: y[m] = sum_n W[m,n] * x[n], with W in IQ2_S blocks and both
@@ -244,12 +247,18 @@ static inline float iq2s_row_dot(device const uchar* W_row, device const ulong* 
             | ((uint(block[66u + sub]) << (8u - 2u * l)) & 0x300u);
         const uchar signs = block[2u + 32u + 4u * sub + l];
         const ulong entry = grid[index];
-        device const half* xp = x + b * 256u + elementBase;
-        for (uint j = 0u; j < 8u; ++j) {
-            const float v = float((entry >> (8u * j)) & 0xFFu);
-            const float sign = (signs & (1u << j)) ? -1.0f : 1.0f;
-            acc = fma(dl * v * sign, float(xp[j]), acc);
-        }
+        device const half4* xp = (device const half4*)(x + b * 256u + elementBase);
+        const float4 x0 = float4(xp[0]);
+        const float4 x1 = float4(xp[1]);
+        const float4 w0 = float4(
+            float(entry & 0xFFu), float((entry >> 8u) & 0xFFu),
+            float((entry >> 16u) & 0xFFu), float((entry >> 24u) & 0xFFu))
+            * select(float4(1.0f), float4(-1.0f), (uint4(signs) & uint4(1u, 2u, 4u, 8u)) != 0u);
+        const float4 w1 = float4(
+            float((entry >> 32u) & 0xFFu), float((entry >> 40u) & 0xFFu),
+            float((entry >> 48u) & 0xFFu), float(entry >> 56u))
+            * select(float4(1.0f), float4(-1.0f), (uint4(signs) & uint4(16u, 32u, 64u, 128u)) != 0u);
+        acc = fma(dl, dot(w0, x0) + dot(w1, x1), acc);
     }
     return acc;
 }
@@ -275,8 +284,8 @@ kernel void iq2s_gemv_simd(
 
 // Batched iq2s GEMV over up to 32 matrices of one buffer (the routed
 // experts of a layer, which share a block format and live in one pool):
-// matrix m starts at byte batch.offsets[m], reads x + m * xStride and writes
-// y[m * yStride + row]. Grid: (rows / 8, matrices).
+// matrix m starts at byte batch.offsets[m], reads x + xOffsets[m] and writes
+// y[yOffsets[m] + row] (both in halves). Grid: (rows / 8, matrices).
 kernel void iq2s_gemv_batched(
     device const uchar*  W     [[buffer(0)]],
     device const ulong*  grid  [[buffer(1)]],
@@ -293,9 +302,9 @@ kernel void iq2s_gemv_batched(
     const uint m = tg.y;
     if (row >= M) return;
     device const uchar* W_row = W + batch.offsets[m] + row * (N / 256u) * 82u;
-    float acc = iq2s_row_dot(W_row, grid, x + m * batch.xStride, N, lane);
+    float acc = iq2s_row_dot(W_row, grid, x + batch.xOffsets[m], N, lane);
     acc = simd_sum(acc);
-    if (lane == 0) { y[m * batch.yStride + row] = half(acc); }
+    if (lane == 0) { y[batch.yOffsets[m] + row] = half(acc); }
 }
 
 // IQ4_NL GEMV: y[m] = sum_n W[m,n] * x[n], W in IQ4_NL blocks (32 values, 18
@@ -304,16 +313,34 @@ kernel void iq2s_gemv_batched(
 // The iq4nl row loop, shared by the single-matrix and batched kernels:
 // the lane's partial sum of one row of W against x.
 static inline float iq4nl_row_dot(device const uchar* W_row, device const half* x, uint N, uint lane) {
-    const uint blocks = N / 32u;
+    // Two lanes per 32-value block, 16 values each: lane half h reads the
+    // block's nibble bytes h*8...h*8+7 (low nibbles are values h*8+j, high
+    // nibbles 16+h*8+j) as four 2-byte loads and its x as four half4 loads,
+    // instead of one byte and one half per lane per block.
+    const uint units = (N / 32u) * 2u;
     float acc = 0.0f;
-    for (uint b = 0u; b < blocks; ++b) {
+    for (uint p = lane; p < units; p += 32u) {
+        const uint b = p >> 1u;
+        const uint h = p & 1u;
         device const uchar* block = W_row + b * 18u;
-        const ushort dBits = ushort(block[0]) | (ushort(block[1]) << 8u);
-        const float d = float(as_type<half>(dBits));
-        // ggml stores low nibbles as values 0...15 and high nibbles as 16...31.
-        const uchar packed = block[2u + (lane & 15u)];
-        const uint q = lane < 16u ? uint(packed & 0x0Fu) : uint(packed >> 4u);
-        acc = fma(d * float(kIQ4NLTable[q]), float(x[b * 32u + lane]), acc);
+        const float d = float(as_type<half>(*(device const ushort*)block));
+        device const ushort* q = (device const ushort*)(block + 2u + h * 8u);
+        device const half4* xl = (device const half4*)(x + b * 32u + h * 8u);
+        device const half4* xh = (device const half4*)(x + b * 32u + 16u + h * 8u);
+        float sum = 0.0f;
+        for (uint k = 0u; k < 2u; ++k) {
+            const uint lo = uint(q[2u * k]) | (uint(q[2u * k + 1u]) << 16u);
+            const float4 l4 = float4(xl[k]);
+            const float4 h4 = float4(xh[k]);
+            const float4 wl = float4(
+                kIQ4NLTable[lo & 0xFu], kIQ4NLTable[(lo >> 8u) & 0xFu],
+                kIQ4NLTable[(lo >> 16u) & 0xFu], kIQ4NLTable[(lo >> 24u) & 0xFu]);
+            const float4 wh = float4(
+                kIQ4NLTable[(lo >> 4u) & 0xFu], kIQ4NLTable[(lo >> 12u) & 0xFu],
+                kIQ4NLTable[(lo >> 20u) & 0xFu], kIQ4NLTable[lo >> 28u]);
+            sum += dot(wl, l4) + dot(wh, h4);
+        }
+        acc = fma(d, sum, acc);
     }
     return acc;
 }
@@ -338,8 +365,8 @@ kernel void iq4nl_gemv_simd(
 
 // Batched iq4nl GEMV over up to 32 matrices of one buffer (the routed
 // experts of a layer, which share a block format and live in one pool):
-// matrix m starts at byte batch.offsets[m], reads x + m * xStride and writes
-// y[m * yStride + row]. Grid: (rows / 8, matrices).
+// matrix m starts at byte batch.offsets[m], reads x + xOffsets[m] and writes
+// y[yOffsets[m] + row] (both in halves). Grid: (rows / 8, matrices).
 kernel void iq4nl_gemv_batched(
     device const uchar*  W     [[buffer(0)]],
     device const half*   x     [[buffer(1)]],
@@ -355,9 +382,9 @@ kernel void iq4nl_gemv_batched(
     const uint m = tg.y;
     if (row >= M) return;
     device const uchar* W_row = W + batch.offsets[m] + row * (N / 32u) * 18u;
-    float acc = iq4nl_row_dot(W_row, x + m * batch.xStride, N, lane);
+    float acc = iq4nl_row_dot(W_row, x + batch.xOffsets[m], N, lane);
     acc = simd_sum(acc);
-    if (lane == 0) { y[m * batch.yStride + row] = half(acc); }
+    if (lane == 0) { y[batch.yOffsets[m] + row] = half(acc); }
 }
 
 // IQ3_XXS GEMV: lane L owns the 8 values of one (sub, l) pair per 256-value
@@ -380,15 +407,16 @@ static inline float iq3xxs_row_dot(device const uchar* W_row, device const uint*
         const uchar signByte = signs[(aux >> (7u * l)) & 127u];
         const uint g1 = grid[qs[8u * sub + 2u * l]];
         const uint g2 = grid[qs[8u * sub + 2u * l + 1u]];
-        device const half* xp = x + b * 256u + sub * 32u + l * 8u;
-        for (uint j = 0u; j < 4u; ++j) {
-            const float s1 = (signByte & (1u << j)) ? -1.0f : 1.0f;
-            const float s2 = (signByte & (1u << (j + 4u))) ? -1.0f : 1.0f;
-            const float v1 = float((g1 >> (8u * j)) & 0xFFu);
-            const float v2 = float((g2 >> (8u * j)) & 0xFFu);
-            acc = fma(db * v1 * s1, float(xp[j]), acc);
-            acc = fma(db * v2 * s2, float(xp[j + 4u]), acc);
-        }
+        device const half4* xp = (device const half4*)(x + b * 256u + sub * 32u + l * 8u);
+        const float4 w1 = float4(
+            float(g1 & 0xFFu), float((g1 >> 8u) & 0xFFu),
+            float((g1 >> 16u) & 0xFFu), float(g1 >> 24u))
+            * select(float4(1.0f), float4(-1.0f), (uint4(signByte) & uint4(1u, 2u, 4u, 8u)) != 0u);
+        const float4 w2 = float4(
+            float(g2 & 0xFFu), float((g2 >> 8u) & 0xFFu),
+            float((g2 >> 16u) & 0xFFu), float(g2 >> 24u))
+            * select(float4(1.0f), float4(-1.0f), (uint4(signByte) & uint4(16u, 32u, 64u, 128u)) != 0u);
+        acc = fma(db, dot(w1, float4(xp[0])) + dot(w2, float4(xp[1])), acc);
     }
     return acc;
 }
@@ -415,8 +443,8 @@ kernel void iq3xxs_gemv_simd(
 
 // Batched iq3xxs GEMV over up to 32 matrices of one buffer (the routed
 // experts of a layer, which share a block format and live in one pool):
-// matrix m starts at byte batch.offsets[m], reads x + m * xStride and writes
-// y[m * yStride + row]. Grid: (rows / 8, matrices).
+// matrix m starts at byte batch.offsets[m], reads x + xOffsets[m] and writes
+// y[yOffsets[m] + row] (both in halves). Grid: (rows / 8, matrices).
 kernel void iq3xxs_gemv_batched(
     device const uchar*  W     [[buffer(0)]],
     device const uint*   grid  [[buffer(1)]],
@@ -434,9 +462,9 @@ kernel void iq3xxs_gemv_batched(
     const uint m = tg.y;
     if (row >= M) return;
     device const uchar* W_row = W + batch.offsets[m] + row * (N / 256u) * 98u;
-    float acc = iq3xxs_row_dot(W_row, grid, signs, x + m * batch.xStride, N, lane);
+    float acc = iq3xxs_row_dot(W_row, grid, signs, x + batch.xOffsets[m], N, lane);
     acc = simd_sum(acc);
-    if (lane == 0) { y[m * batch.yStride + row] = half(acc); }
+    if (lane == 0) { y[batch.yOffsets[m] + row] = half(acc); }
 }
 
 // IQ4_XS GEMV: lane L owns 8 values of one 32-value sub-block (sub = L/4,
@@ -489,8 +517,8 @@ kernel void iq4xs_gemv_simd(
 
 // Batched iq4xs GEMV over up to 32 matrices of one buffer (the routed
 // experts of a layer, which share a block format and live in one pool):
-// matrix m starts at byte batch.offsets[m], reads x + m * xStride and writes
-// y[m * yStride + row]. Grid: (rows / 8, matrices).
+// matrix m starts at byte batch.offsets[m], reads x + xOffsets[m] and writes
+// y[yOffsets[m] + row] (both in halves). Grid: (rows / 8, matrices).
 kernel void iq4xs_gemv_batched(
     device const uchar*  W     [[buffer(0)]],
     device const half*   x     [[buffer(1)]],
@@ -506,9 +534,9 @@ kernel void iq4xs_gemv_batched(
     const uint m = tg.y;
     if (row >= M) return;
     device const uchar* W_row = W + batch.offsets[m] + row * (N / 256u) * 136u;
-    float acc = iq4xs_row_dot(W_row, x + m * batch.xStride, N, lane);
+    float acc = iq4xs_row_dot(W_row, x + batch.xOffsets[m], N, lane);
     acc = simd_sum(acc);
-    if (lane == 0) { y[m * batch.yStride + row] = half(acc); }
+    if (lane == 0) { y[batch.yOffsets[m] + row] = half(acc); }
 }
 
 // Q2_0 GEMV: lane L owns values 2L and 2L+1 of every 64-value block; both are
@@ -553,8 +581,8 @@ kernel void q2_0_gemv_simd(
 
 // Batched q2_0 GEMV over up to 32 matrices of one buffer (the routed
 // experts of a layer, which share a block format and live in one pool):
-// matrix m starts at byte batch.offsets[m], reads x + m * xStride and writes
-// y[m * yStride + row]. Grid: (rows / 8, matrices).
+// matrix m starts at byte batch.offsets[m], reads x + xOffsets[m] and writes
+// y[yOffsets[m] + row] (both in halves). Grid: (rows / 8, matrices).
 kernel void q2_0_gemv_batched(
     device const uchar*  W     [[buffer(0)]],
     device const half*   x     [[buffer(1)]],
@@ -570,9 +598,9 @@ kernel void q2_0_gemv_batched(
     const uint m = tg.y;
     if (row >= M) return;
     device const uchar* W_row = W + batch.offsets[m] + row * (N / 64u) * 18u;
-    float acc = q2_0_row_dot(W_row, x + m * batch.xStride, N, lane);
+    float acc = q2_0_row_dot(W_row, x + batch.xOffsets[m], N, lane);
     acc = simd_sum(acc);
-    if (lane == 0) { y[m * batch.yStride + row] = half(acc); }
+    if (lane == 0) { y[batch.yOffsets[m] + row] = half(acc); }
 }
 
 // Q8_0 GEMV: 34-byte blocks (fp16 d + 32 signed bytes). Lane L owns 8

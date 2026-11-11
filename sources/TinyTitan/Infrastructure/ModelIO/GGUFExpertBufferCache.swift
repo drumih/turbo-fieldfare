@@ -122,6 +122,9 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         return counters
     }
 
+    /// Every layer's pool buffer, for a caller that pins them.
+    package var poolBuffers: [MTLBuffer] { pools.map(\.buffer) }
+
     /// Resident bytes, all layers' pools together.
     package var residentBytes: Int {
         pools.reduce(0) { $0 + $1.buffer.length }
@@ -334,6 +337,11 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             throw MetalError.invalidState(
                 "cannot open \(model.shards[shard].url.lastPathComponent): errno \(errno)")
         }
+        // Expert bytes land in the pool, which is the cache; letting the
+        // kernel keep a second copy in the page cache doubles the memory a
+        // miss costs and evicts other pages. Best effort: a refusal leaves
+        // ordinary cached reads, which are still correct.
+        _ = fcntl(opened, F_NOCACHE, 1)
         descriptors[shard] = opened
         return opened
     }

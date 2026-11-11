@@ -64,6 +64,24 @@ package final class GGUFExpertBatchGEMV {
         y: MTLBuffer,
         yStride: Int
     ) throws {
+        try encode(
+            commandBuffer: commandBuffer, matrices: matrices,
+            x: x, xOffsets: matrices.indices.map { $0 * xStride },
+            y: y, yOffsets: matrices.indices.map { $0 * yStride })
+    }
+
+    /// Encodes `y[yOffsets[m] + r] = matrices[m] · x[xOffsets[m] ...]` for every
+    /// matrix, offsets in elements: the form a prefill uses, where matrix m
+    /// belongs to whichever token selected it. Call `supports(_:)` first.
+    package func encode(
+        commandBuffer: MTLCommandBuffer,
+        matrices: [GGUFExpertMatrix],
+        x: MTLBuffer,
+        xOffsets: [Int],
+        y: MTLBuffer,
+        yOffsets: [Int]
+    ) throws {
+        precondition(xOffsets.count == matrices.count && yOffsets.count == matrices.count)
         guard supports(matrices), let first = matrices.first,
             let pipeline = pipelines[first.type]
         else {
@@ -92,12 +110,13 @@ package final class GGUFExpertBatchGEMV {
         var columns = UInt32(first.columns)
         encoder.setBytes(&rows, length: MemoryLayout<UInt32>.size, index: next + 2)
         encoder.setBytes(&columns, length: MemoryLayout<UInt32>.size, index: next + 3)
-        var layout = [UInt32](repeating: 0, count: Self.maxMatrices + 2)
+        // GGUFMatrixBatch: uint offsets[32]; uint xOffsets[32]; uint yOffsets[32].
+        var layout = [UInt32](repeating: 0, count: 3 * Self.maxMatrices)
         for (index, matrix) in matrices.enumerated() {
             layout[index] = UInt32(matrix.offset)
+            layout[Self.maxMatrices + index] = UInt32(xOffsets[index])
+            layout[2 * Self.maxMatrices + index] = UInt32(yOffsets[index])
         }
-        layout[Self.maxMatrices] = UInt32(xStride)
-        layout[Self.maxMatrices + 1] = UInt32(yStride)
         layout.withUnsafeBytes { bytes in
             guard let base = bytes.baseAddress else { return }
             encoder.setBytes(base, length: bytes.count, index: next + 4)

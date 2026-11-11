@@ -9,15 +9,12 @@ import TinyTitanValidationSupport
 /// same kernels in the same order either way, so the last token's logits must
 /// be bit-identical; the grouping rule is pinned without a model.
 @Suite struct GGUFBatchedPrefillTests {
-    @Test func groupsKeepOrderAndFitTheCapacity() {
-        let selections = [[1, 2], [2, 3], [4, 5], [5, 6], [1, 2]]
-        let groups = GGUFDecoder.expertGroups(selections, capacity: 4)
-        #expect(groups == [[0, 1], [2, 3], [4]])
-        for group in groups {
-            #expect(Set(group.flatMap { selections[$0] }).count <= 4)
-        }
-        #expect(GGUFDecoder.expertGroups(selections, capacity: 100) == [[0, 1, 2, 3, 4]])
-        #expect(GGUFDecoder.expertGroups([], capacity: 4).isEmpty)
+    @Test func everySelectedExpertIsInExactlyOneBatchOfAtMostTheCapacity() {
+        let selections = [[9, 2], [2, 3], [4, 5], [5, 6], [9, 2]]
+        let batches = GGUFDecoder.expertBatches(selections, capacity: 4)
+        #expect(batches == [[2, 3, 4, 5], [6, 9]])
+        #expect(GGUFDecoder.expertBatches(selections, capacity: 100) == [[2, 3, 4, 5, 6, 9]])
+        #expect(GGUFDecoder.expertBatches([], capacity: 4).isEmpty)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_GGUF_MODEL"] != nil))
@@ -47,6 +44,12 @@ import TinyTitanValidationSupport
                 + "\(String(describing: argmax(reference.logits)))")
         #expect(batched.logits.count == reference.logits.count)
         #expect(batched.logits == reference.logits, "layer-major logits differ")
+        // Two chunks must continue where the first stopped (state handed on
+        // through the GDN, KV and PLE history), as a long prompt's chunks do.
+        decoder.resetSequence()
+        _ = try decoder.prefillBatched(sequence: prompt, range: 0..<10)
+        let split = try decoder.prefillBatched(sequence: prompt, range: 10..<prompt.count)
+        #expect(split == reference.logits, "a prompt split into two chunks differs")
         print(
             "GGUF prefill: token-by-token \(String(format: "%.2f", reference.seconds)) s, "
                 + "layer-major \(String(format: "%.2f", batched.seconds)) s "

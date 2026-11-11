@@ -954,3 +954,45 @@ Prefill, 24 tokens, same decoder, interleaved in one test:
 - The ANE sidecar for the twelve full-attention layers inside the layer-major
   loop.
 - A decode measurement at `--ram-budget 10G` on a quiet machine.
+
+## Decode at `--ram-budget 10G`: 0.52 -> 4.15 tok/s (2026-11-11, evening)
+
+Same M3 / 24 GB, essay prompt, 80 greedy tokens, `--ram-budget 10G`. The
+system had 11-13 GB of swap in use from other applications all afternoon,
+which is what exposed the first problem. Every row printed byte-identical
+text, `GGUFLogitProbeTests` (top-1/top-5 against llama.cpp) passes, and the
+bit-identity suites pass.
+
+| step | decode (tok/s) |
+| --- | --- |
+| baseline: attention/GDN/HC matrices mapped, pools unpinned | 0.56, 0.52 |
+| matrices copied in (`GGUFMappedShards.Residency.resident`) | 2.28, 0.62 |
+| + pools, arena, embedding and copies pinned (`mlock`, `ResidentMemoryLock`) | 3.07, 2.89, 2.96 |
+| + vectorised IQ4_NL / IQ2_S / IQ3_XXS row functions | 2.56, 2.86 (noise) |
+| + one wait per layer (the routed work rides in the next layer's buffer) | 3.14, 3.44 |
+| + reads bypass the page cache (`F_NOCACHE`) | 3.46, 3.43 |
+| + reads cut into 256 KiB pieces on a concurrent queue | **4.15, 4.14** |
+
+- **Resident and pinned.** Under memory pressure the system evicted the
+  mapped matrices and swapped the shared pools between dispatches. Every
+  token then waited 0.9-1.9 s on GPU page faults. A process given a RAM
+  budget has been told it may hold these bytes, so with a budget it copies
+  them in and pins them. Without a budget the mapped behaviour is unchanged.
+- **Kernels.** The 640-wide IQ4_NL down projection is 43% of expert bytes.
+  It read one byte and one half per lane per block; it now takes 16 values a
+  lane from four 2-byte loads and four `half4` loads. IQ2_S and IQ3_XXS load
+  their activations as `half4`. In `GGUFRoutedKernelBenchmarkTests`
+  (`TINYTITAN_KERNEL_BENCH=1`) the routed stage went from 26.7 to 49.5 GB/s,
+  and 48 layers from 37 to 20 ms. The CPU-reference error is unchanged
+  (2.8e-4). The add order changed, so the routed sum is not bit-identical to
+  the previous kernels. The text and the llama.cpp top-5 are identical.
+- **Reads.** `concurrentPerform` runs one item per core, so blocking
+  `pread`s held the drive's queue at the core count. Pieces on a concurrent
+  queue let GCD add threads while reads block.
+
+Per token now (mean of 80): expert fetch 127 ms, GPU 74 ms, output head 8
+ms, embedding and PLE 2 ms.
+
+**Next:** use the SSD's idle time during each layer's GPU work to read the
+next layer's predicted experts (the engine's predictive ring). This is the
+one lever left that the fetch time points at.

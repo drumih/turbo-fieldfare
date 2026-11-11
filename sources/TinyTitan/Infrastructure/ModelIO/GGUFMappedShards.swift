@@ -5,9 +5,13 @@ import Metal
 package enum GGUFMappedShardsError: Error, Equatable, CustomStringConvertible {
     case openFailed(String, Int32)
     case mapFailed(String)
+    case readFailed(String, Int32)
 
     package var description: String {
         switch self {
+        case .readFailed(let name, let code):
+            return "could not read \(name) (errno \(code))"
+
         case .openFailed(let path, let code):
             return "could not open \(path) (errno \(code))"
         case .mapFailed(let name):
@@ -42,14 +46,29 @@ package final class GGUFMappedShards {
         let dimensions: [UInt64]
     }
 
+    /// How a tensor's bytes reach the GPU.
+    package enum Residency: Sendable {
+        /// A no-copy buffer over the file's pages: costs page cache, which
+        /// the system may evict - and then the GPU faults the pages back in
+        /// mid-dispatch.
+        case mapped
+        /// A copy in a Metal buffer, read once and pinned (`mlock`): costs the
+        /// bytes for the process's life, and the GPU never faults on them.
+        /// What a process with a RAM budget wants, since the budget already
+        /// counts them.
+        case resident
+    }
+
     private let device: MTLDevice
+    private let residency: Residency
     private let locations: [String: Location]
     private let lock = NSLock()
     private var mapped: [String: Weight] = [:]
     private var regions: [(base: UnsafeMutableRawPointer, length: Int)] = []
 
-    package init(model: GGUFModel, device: MTLDevice) throws {
+    package init(model: GGUFModel, device: MTLDevice, residency: Residency = .mapped) throws {
         self.device = device
+        self.residency = residency
         var table: [String: Location] = [:]
         for (name, location) in model.tensors {
             let shard = model.shards[location.shardIndex]
@@ -77,6 +96,16 @@ package final class GGUFMappedShards {
         guard let location = locations[name], location.dimensions.count >= 2 else {
             return nil
         }
+        let columns = Int(location.dimensions[0])
+        let rows = location.dimensions.dropFirst().reduce(1) { $0 * Int($1) }
+        if residency == .resident {
+            let weight = Weight(
+                buffer: try Self.readResident(location, name: name, device: device), offset: 0,
+                type: location.type, rows: rows, columns: columns)
+            residentBytes += Int(location.byteCount)
+            mapped[name] = weight
+            return weight
+        }
         let pageSize = UInt64(getpagesize())
         let pageStart = location.fileOffset / pageSize * pageSize
         let end = location.fileOffset + location.byteCount
@@ -103,8 +132,6 @@ package final class GGUFMappedShards {
             throw MetalError.bufferAllocationFailed("mapped \(name)")
         }
         regions.append((base, windowLength))
-        let columns = Int(location.dimensions[0])
-        let rows = location.dimensions.dropFirst().reduce(1) { $0 * Int($1) }
         let weight = Weight(
             buffer: buffer, offset: Int(location.fileOffset - pageStart),
             type: location.type, rows: rows, columns: columns)
@@ -157,4 +184,37 @@ package final class GGUFMappedShards {
 
     /// Bytes mapped so far (page-cache backed, not resident).
     package var mappedBytes: Int { regions.reduce(0) { $0 + $1.length } }
+
+    /// Bytes copied into resident buffers so far.
+    package private(set) var residentBytes = 0
+
+    /// Reads a tensor's bytes into a new shared Metal buffer with `pread`, in
+    /// 64 MiB steps; the length is the tensor's own byte count, so the
+    /// allocation is bounded by the checkpoint's table, not by the file.
+    private static func readResident(
+        _ location: Location, name: String, device: MTLDevice
+    ) throws -> MTLBuffer {
+        let length = Int(location.byteCount)
+        guard let buffer = device.makeBuffer(length: max(length, 1), options: .storageModeShared)
+        else {
+            throw MetalError.bufferAllocationFailed("resident \(name)")
+        }
+        let fd = open(location.url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else {
+            throw GGUFMappedShardsError.openFailed(location.url.path, errno)
+        }
+        defer { close(fd) }
+        var done = 0
+        while done < length {
+            let step = min(64 << 20, length - done)
+            let got = pread(
+                fd, buffer.contents() + done, step, off_t(location.fileOffset) + off_t(done))
+            guard got > 0 else {
+                throw GGUFMappedShardsError.readFailed(name, got < 0 ? errno : 0)
+            }
+            done += got
+        }
+        ResidentMemoryLock.lock([buffer], label: name)
+        return buffer
+    }
 }

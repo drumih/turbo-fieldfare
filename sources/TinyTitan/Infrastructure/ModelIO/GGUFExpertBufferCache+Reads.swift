@@ -1,39 +1,39 @@
 import Foundation
 import Metal
 
-/// The read mechanics behind `GGUFExpertBufferCache`: one `pread` loop per
-/// matrix, and a batch of them that runs concurrently and remembers the first
-/// failure. The cache decides what to read and into which slot; this file only
-/// moves bytes.
+/// The read mechanics behind `GGUFExpertBufferCache`: `pread` loops over
+/// pieces of a matrix (`pread` carries its own file offset, so concurrent
+/// reads share one descriptor per shard), and a batch of them that runs
+/// concurrently and remembers the first failure. The cache decides what to
+/// read and into which slot; this file only moves bytes.
 extension GGUFExpertBufferCache {
-    /// Reads one matrix into `capacity` bytes of `buffer` at `offset` with
-    /// `pread`, which carries its own file offset, so concurrent reads can
-    /// share one descriptor per shard.
-    static func read(
-        _ range: GGUFTensorRange, into buffer: MTLBuffer, offset: Int, capacity: Int,
-        name: String, descriptor: Int32
-    ) throws -> Int {
-        guard Int(range.byteCount) <= capacity, offset + capacity <= buffer.length else {
+    /// Reads bytes `piece` of one matrix (relative to its start) into its
+    /// place at `offset + piece.lowerBound` of `buffer`.
+    static func readPiece(
+        _ range: GGUFTensorRange, piece: Range<Int>, into buffer: MTLBuffer, offset: Int,
+        capacity: Int, name: String, descriptor: Int32
+    ) throws {
+        guard Int(range.byteCount) <= capacity, offset + capacity <= buffer.length,
+            piece.upperBound <= Int(range.byteCount)
+        else {
             throw GGUFExpertBufferCacheError.shortRead(
                 name: name, expected: Int(range.byteCount), got: capacity)
         }
         let destination = buffer.contents().advanced(by: offset)
-        var total = 0
-        while total < Int(range.byteCount) {
-            let count = min(Int(range.byteCount) - total, 1 << 20)
+        var total = piece.lowerBound
+        while total < piece.upperBound {
             let read = pread(
-                descriptor, destination.advanced(by: total), count,
+                descriptor, destination.advanced(by: total), piece.upperBound - total,
                 off_t(range.fileOffset) + off_t(total))
             if read <= 0 {
                 throw GGUFExpertBufferCacheError.shortRead(
-                    name: name, expected: Int(range.byteCount), got: total)
+                    name: name, expected: piece.count, got: total - piece.lowerBound)
             }
             total += read
         }
-        return total
     }
 
-    /// unchecked-invariant: each job index is run by exactly one task and the
+    /// unchecked-invariant: each (job, piece) is run by exactly one task and the
     /// inputs are immutable; only the failure slot is shared, behind a lock.
     final class ReadJobs: @unchecked Sendable {
         struct Job {
@@ -49,14 +49,25 @@ extension GGUFExpertBufferCache {
         private let lock = NSLock()
         private var failure: Error?
 
+        /// Bytes per `pread`. A layer's misses are a few matrices of 0.3-0.9
+        /// MB; cut into pieces of this size they keep the drive's queue deep.
+        static let pieceBytes = 256 << 10
+
+        /// The pool the pieces run on. `concurrentPerform` runs one item per
+        /// CPU core, so a blocking read held the queue depth at the core count;
+        /// work submitted to a concurrent queue gets more threads when the
+        /// ones it has block in the kernel.
+        private static let queue = DispatchQueue(
+            label: "tinytitan.gguf.expert-reads", qos: .userInitiated, attributes: .concurrent)
+
         init(_ jobs: [Job]) { self.jobs = jobs }
 
-        func run(_ index: Int) {
+        private func run(_ index: Int, piece: Range<Int>) {
             let job = jobs[index]
             do {
-                _ = try GGUFExpertBufferCache.read(
-                    job.range, into: job.buffer, offset: job.offset, capacity: job.capacity,
-                    name: job.name, descriptor: job.descriptor)
+                try GGUFExpertBufferCache.readPiece(
+                    job.range, piece: piece, into: job.buffer, offset: job.offset,
+                    capacity: job.capacity, name: job.name, descriptor: job.descriptor)
             } catch {
                 lock.lock()
                 if failure == nil { failure = error }
@@ -64,10 +75,18 @@ extension GGUFExpertBufferCache {
             }
         }
 
-        /// Runs every job on the calling thread's concurrent pool and returns
-        /// when all are done.
+        /// Runs every job, cut into `pieceBytes` reads, concurrently and
+        /// returns when all are done.
         func runAll() throws {
-            DispatchQueue.concurrentPerform(iterations: jobs.count) { run($0) }
+            let group = DispatchGroup()
+            for (index, job) in jobs.enumerated() {
+                let length = Int(job.range.byteCount)
+                for start in stride(from: 0, to: length, by: Self.pieceBytes) {
+                    let piece = start..<min(length, start + Self.pieceBytes)
+                    Self.queue.async(group: group) { self.run(index, piece: piece) }
+                }
+            }
+            group.wait()
             if let error = firstFailure { throw error }
         }
 

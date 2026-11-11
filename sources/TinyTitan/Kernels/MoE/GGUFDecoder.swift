@@ -95,7 +95,14 @@ package final class GGUFDecoder {
         }
         self.arena = try GGUFResidentArena.build(
             names: arenaNames, from: model, context: context)
-        let mappedShards = try GGUFMappedShards(model: model, device: context.device)
+        // Under a RAM budget the attention, GDN and hyper-connection matrices
+        // are copied in rather than mapped: the budget already counts them,
+        // and mapped pages the system evicts are faulted back in by the GPU
+        // mid-dispatch. Measured at --ram-budget 10G on the 24 GB M3 with the
+        // system in swap: wait(attn) 0.9-1.9 s a token mapped.
+        let mappedShards = try GGUFMappedShards(
+            model: model, device: context.device,
+            residency: ramBudgetBytes == nil ? .mapped : .resident)
         self.mapped = mappedShards
         self.hc = try GGUFHyperConnection(
             context: context, arch: arch, arena: arena, mapped: mappedShards)
@@ -160,6 +167,12 @@ package final class GGUFDecoder {
         self.stageDump = GGUFStageDump.fromEnvironment()
         self.routingLog = Self.openRoutingLog(
             ProcessInfo.processInfo.environment["TINYTITAN_GGUF_ROUTING_LOG"])
+        if ramBudgetBytes != nil {
+            // The budget counts these bytes; pin them so the system cannot
+            // swap them out between dispatches (see ResidentMemoryLock).
+            ResidentMemoryLock.lock(cache.poolBuffers, label: "the expert cache")
+            ResidentMemoryLock.lock([arena.buffer, embedTable], label: "the resident weights")
+        }
     }
 
     /// Runs one token and returns its logits. `position` is the token's index
@@ -168,19 +181,36 @@ package final class GGUFDecoder {
     /// the sequence and is what a caller normally uses.
     package func decode(token: Int32, position: Int, history: [Int32]) throws -> [Float] {
         let capture = try stageDump?.capture(position: position)
+        var timing = GGUFDecodeTiming()
+        let headStart = GGUFDecodeTiming.now()
         try embed(token: token)
         try ple.gather(context: history)
-        try run { commandBuffer in
-            try elementwise.encodeHCBroadcast(
-                commandBuffer: commandBuffer, streams: streams, dim: hidden,
-                streamCount: arch.hyperConnections.count)
-        }
-        try capture?.write("hc_init", half: streams, count: wideCount)
+        // One command buffer is carried from layer to layer: a layer's routed
+        // experts and FFN write go into the buffer that then takes the next
+        // layer's mixer, router and shared expert, so a token waits once a
+        // layer (for the router's top-k) instead of twice.
+        var commandBuffer = try makeCommandBuffer()
+        try elementwise.encodeHCBroadcast(
+            commandBuffer: commandBuffer, streams: streams, dim: hidden,
+            streamCount: arch.hyperConnections.count)
+        try checkpoint(&commandBuffer, capture, "hc_init", streams, wideCount)
+        timing.add("embed+ple", since: headStart)
 
-        var timing = GGUFDecodeTiming()
         for layer in 0..<arch.numLayers {
-            try decodeLayer(layer, position: position, capture: capture, timing: &timing)
+            try decodeLayer(
+                layer, position: position, commandBuffer: &commandBuffer, capture: capture,
+                timing: &timing)
         }
+
+        let outputStart = GGUFDecodeTiming.now()
+        try output.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
+        try finish(commandBuffer)
+        timing.gpuRoutedSeconds += commandBuffer.gpuEndTime - commandBuffer.gpuStartTime
+        timing.add("last routed + output head", since: outputStart)
+        let readStart = GGUFDecodeTiming.now()
+        let pointer = output.logits.contents().assumingMemoryBound(to: UInt16.self)
+        let logits = (0..<arch.vocabSize).map { Float(Float16(bitPattern: pointer[$0])) }
+        timing.add("logits read", since: readStart)
         if GGUFDecodeTiming.enabled {
             timing.report()
             let stats = cache.statistics
@@ -190,12 +220,6 @@ package final class GGUFDecoder {
                         + "\(cache.capacity) slots/layer, "
                         + "\(cache.residentBytes / 1_048_576) MiB\n").utf8))
         }
-
-        try run { commandBuffer in
-            try output.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
-        }
-        let pointer = output.logits.contents().assumingMemoryBound(to: UInt16.self)
-        let logits = (0..<arch.vocabSize).map { Float(Float16(bitPattern: pointer[$0])) }
         try capture?.write("logits", values: logits)
         if let routingLog {
             let line = lastRouting.map { $0.map(String.init).joined(separator: ",") }
@@ -312,19 +336,21 @@ package final class GGUFDecoder {
     /// router and shared expert, a host wait for the router's top-k, the routed
     /// experts and the FFN write.
     ///
+    /// `commandBuffer` arrives holding the previous layer's uncommitted routed
+    /// work (or the embedding broadcast) and leaves holding this layer's: the
+    /// one wait per layer is the router read-back.
+    ///
     /// The FFN output has its own buffer, zeroed on the GPU in the same command
     /// buffer: the shared and routed stages accumulate into it, and the
     /// attention output must not be part of that sum.
     func decodeLayer(
-        _ layer: Int, position: Int, capture: GGUFStageDump.Capture?,
-        timing: inout GGUFDecodeTiming
+        _ layer: Int, position: Int, commandBuffer: inout MTLCommandBuffer,
+        capture: GGUFStageDump.Capture?, timing: inout GGUFDecodeTiming
     ) throws {
         let tag = String(format: "l%02d", layer)
         if layer == ple.layerIndex {
-            try run { commandBuffer in
-                try ple.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
-            }
-            try capture?.write(tag + ".ple", half: streams, count: wideCount)
+            try ple.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
+            try checkpoint(&commandBuffer, capture, tag + ".ple", streams, wideCount)
         }
         // Mask values: 1 full attention, 2 GDN linear attention (the checkpoint
         // has 12 of the former: layers 3, 7, ... 47).
@@ -335,7 +361,6 @@ package final class GGUFDecoder {
             )
         }
         let layerStart = GGUFDecodeTiming.now()
-        var commandBuffer = try makeCommandBuffer()
         try hc.encodeRead(
             commandBuffer: commandBuffer, layer: layer, sublayer: "attn",
             streamsBuffer: streams, out: blockInput)
@@ -375,20 +400,16 @@ package final class GGUFDecoder {
         let fetchStart = GGUFDecodeTiming.now()
         let fetched = try cache.experts(layer: layer, experts: selection.experts)
         timing.add("  expert fetch", since: fetchStart)
-        var routedBuffer = try makeCommandBuffer()
+        commandBuffer = try makeCommandBuffer()
         try routed.encode(
-            commandBuffer: routedBuffer, experts: fetched, x: blockInput,
+            commandBuffer: commandBuffer, experts: fetched, x: blockInput,
             weights: selection.weights, out: ffnOut)
-        try checkpoint(&routedBuffer, capture, tag + ".ffn_out", ffnOut, hidden)
+        try checkpoint(&commandBuffer, capture, tag + ".ffn_out", ffnOut, hidden)
         try hc.encodeWrite(
-            commandBuffer: routedBuffer, layer: layer, sublayer: "ffn",
+            commandBuffer: commandBuffer, layer: layer, sublayer: "ffn",
             streamsBuffer: streams, blockOut: ffnOut)
-        let routedWait = GGUFDecodeTiming.now()
-        try finish(routedBuffer)
-        timing.add("  wait(routed)", since: routedWait)
-        timing.gpuRoutedSeconds += routedBuffer.gpuEndTime - routedBuffer.gpuStartTime
+        try checkpoint(&commandBuffer, capture, tag + ".out", streams, wideCount)
         timing.add("routed", since: routedStart)
-        try capture?.write(tag + ".out", half: streams, count: wideCount)
     }
 
     func makeCommandBuffer() throws -> MTLCommandBuffer {
