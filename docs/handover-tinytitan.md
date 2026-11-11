@@ -1,3 +1,32 @@
+# Handover: the as-is GGUF route (2026-11-11)
+
+**Read this block first; the release handover below it is older.** The Unsloth
+`Qwen3.8-Flash-Next-UD-IQ3_XXS` GGUF in `models/qwen3.8-flash-next-unsloth-iq3xxs`
+runs in place, CLI only: `.build/release/TinyTitanCLI --model
+models/qwen3.8-flash-next-unsloth-iq3xxs --prompt "..."` (a directory of `.gguf`
+shards with no `manifest.json` routes to `runGGUFAsIs`). The engineering record
+is `docs/qwen38-gguf-backend-plan.md`, its last three sections in particular.
+
+- **Correct against llama.cpp** since `203673c`: same top-1/top-5 and top-5
+  logits within 1.0 on the pinned prompt (`GGUFLogitProbeTests`, model-gated by
+  `TINYTITAN_GGUF_MODEL`). Five defects were fixed; the traps that hid them are
+  in the plan doc. Any change to this path re-runs that test.
+- **Speed**: 1.07 -> 2.6-3.8 tok/s decode on the 24 GB M3 (`e539c42`: one
+  concurrent fetch per layer, vectorised Q6_K/Q8_0 GEMV). The fetch now runs
+  near the drive's read limit; speculative prefetch was measured and rejected
+  (`f74d8c2`). `TINYTITAN_GGUF_TRACE=1` prints the per-phase split.
+- **Parity tooling**: `TINYTITAN_GGUF_DUMP_DIR` (+ `_POSITION`) captures every
+  stage; the llama.cpp side needs `llama-debug` with a local tensor-dump patch
+  (the plan doc names it). Comparison scripts used on 2026-11-11 lived in the
+  gitignored `.build/parity/`.
+- **Open** (wiki Project Tracker): TT-056 chunked prefill and the ANE sidecar
+  (the prompt still runs token by token), TT-057 decode speed, TT-058 serving
+  through `TinyTitanLib` and the server, TT-059 QSA beyond 2,048 tokens, TT-060
+  a measured noise floor (needs a Metal llama.cpp build).
+- **Machine**: this Mac is shared with other projects' builds and an ANE
+  compile; check `uptime` and the top CPU users before calling a number a
+  measurement, and A/B interleaved in one build.
+
 # Handover: after release 5.18, the pre-production audit
 
 **Paste this into the next session:**
