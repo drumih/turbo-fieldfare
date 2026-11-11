@@ -114,6 +114,8 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         package var hits = 0
         /// Requested experts read on demand.
         package var misses = 0
+        /// Experts whose bytes were advised to the kernel ahead of use.
+        package var advised = 0
     }
 
     package var statistics: Statistics {
@@ -190,13 +192,34 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         try experts(layer: layer, experts: [expert])[0]
     }
 
-    /// Fetches `experts` of `layer` and pins them until the next call.
-    ///
-    /// Resident experts are used as they are, and every remaining matrix is
-    /// read at once (up to 30 `pread`s): fetched one expert at a time, the
-    /// drive saw at most three outstanding reads, which the decode trace
-    /// measured at 583 ms of a 970 ms token (2026-11-11, 24 GB M3).
+    /// Fetches `experts` of `layer` and pins them until the next call:
+    /// `beginFetch` and `completeFetch` back to back.
     package func experts(layer: Int, experts: [Int]) throws -> [GGUFExpertBuffers] {
+        let fetch = try beginFetch(layer: layer, experts: experts)
+        try completeFetch(fetch)
+        return fetch.buffers
+    }
+
+    /// A fetch in flight: every requested expert's buffers in request order,
+    /// which of them were resident (usable at once), and the reads that fill
+    /// the rest.
+    package struct Fetch {
+        package let layer: Int
+        package let buffers: [GGUFExpertBuffers]
+        /// Per requested position: the expert was resident when asked for, so
+        /// its bytes are valid now; the others are valid after `completeFetch`.
+        package let wasResident: [Bool]
+        fileprivate let planned: [(expert: Int, slot: Int)]
+        fileprivate let reads: ReadJobs
+    }
+
+    /// Pins `experts` of `layer`, claims slots for the missing ones and starts
+    /// reading them, and returns without waiting: the caller can put the
+    /// resident experts on the GPU while the drive reads the rest, then call
+    /// `completeFetch` before it uses those. Every missing matrix is read at
+    /// once - fetched one expert at a time the drive saw at most three
+    /// outstanding reads (583 ms of a 970 ms token, 2026-11-11, 24 GB M3).
+    package func beginFetch(layer: Int, experts: [Int]) throws -> Fetch {
         guard experts.count <= capacity else {
             throw GGUFExpertBufferCacheError.tooManyExperts(
                 requested: experts.count, capacity: capacity)
@@ -208,12 +231,15 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         defer { lock.unlock() }
         pinned = Set(experts.map { CacheKey(layer: layer, expert: $0) })
         var misses: [Int] = []
+        var wasResident: [Bool] = []
         for expert in experts {
             if pools[layer].entries[expert] != nil {
                 touch(layer: layer, expert: expert)
                 counters.hits += 1
-            } else if !misses.contains(expert) {
-                misses.append(expert)
+                wasResident.append(true)
+            } else {
+                if !misses.contains(expert) { misses.append(expert) }
+                wasResident.append(false)
             }
         }
         counters.misses += misses.count
@@ -226,26 +252,83 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             }
             planned.append((expert, slot))
         }
+        let plan: ReadPlan
         do {
-            let plan = try readPlan(layer: layer, planned: planned)
-            try plan.reads.runAll()
-            for (index, entry) in planned.enumerated() {
-                pools[layer].entries[entry.expert] = plan.buffers[index]
-                pools[layer].order.append(entry.expert)
-            }
+            plan = try readPlan(layer: layer, planned: planned)
         } catch {
-            // The planned slots hold partial reads; return them to the pool.
             pools[layer].freeSlots.append(contentsOf: planned.map(\.slot))
             throw error
         }
-        return try experts.map { expert in
-            guard let buffers = pools[layer].entries[expert] else {
-                throw GGUFExpertBufferCacheError.missingTensor(
-                    "layer \(layer) expert \(expert)")
+        var byExpert: [Int: GGUFExpertBuffers] = [:]
+        for (index, entry) in planned.enumerated() { byExpert[entry.expert] = plan.buffers[index] }
+        let buffers = try experts.map { expert in
+            if let resident = pools[layer].entries[expert] { return resident }
+            guard let buffers = byExpert[expert] else {
+                throw GGUFExpertBufferCacheError.missingTensor("layer \(layer) expert \(expert)")
             }
             return buffers
         }
+        plan.reads.start()
+        return Fetch(
+            layer: layer, buffers: buffers, wasResident: wasResident, planned: planned,
+            reads: plan.reads)
     }
+
+    /// Waits for a fetch's reads and makes the experts they filled resident;
+    /// on a failed read the claimed slots go back to the pool and the error
+    /// is thrown.
+    package func completeFetch(_ fetch: Fetch) throws {
+        do {
+            try fetch.reads.wait()
+        } catch {
+            lock.lock()
+            pools[fetch.layer].freeSlots.append(contentsOf: fetch.planned.map(\.slot))
+            lock.unlock()
+            throw error
+        }
+        guard !fetch.planned.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        var byExpert: [Int: GGUFExpertBuffers] = [:]
+        for buffers in fetch.buffers { byExpert[buffers.expert] = buffers }
+        for entry in fetch.planned {
+            pools[fetch.layer].entries[entry.expert] = byExpert[entry.expert]
+            pools[fetch.layer].order.append(entry.expert)
+        }
+    }
+
+    /// Asks the kernel to start reading `experts` of `layer` that are not
+    /// resident into the page cache (`F_RDADVISE`), so a later miss on them
+    /// is a copy from RAM rather than a wait on the drive. Nothing is
+    /// claimed or pinned, so a wrong guess costs only the drive's time.
+    package func adviseRead(layer: Int, experts: [Int]) {
+        guard pools.indices.contains(layer) else { return }
+        lock.lock()
+        var ranges: [(descriptor: Int32, range: GGUFTensorRange)] = []
+        for expert in experts where pools[layer].entries[expert] == nil {
+            guard
+                let weights = try? GGUFExpertLayout.weights(layer: layer, expert: expert, in: model)
+            else { continue }
+            for range in [weights.gate, weights.up, weights.down] {
+                guard let descriptor = try? descriptor(for: range.shardIndex) else { continue }
+                ranges.append((descriptor, range))
+            }
+        }
+        counters.advised += ranges.count / 3
+        lock.unlock()
+        guard !ranges.isEmpty else { return }
+        // One call per matrix, issued concurrently: a call costs ~0.2 ms, so
+        // thirty in series would land the last advice after its layer starts.
+        for (descriptor, range) in ranges {
+            Self.adviceQueue.async {
+                _ = RDAdvice.call(
+                    fd: descriptor, offset: range.fileOffset, byteCount: range.byteCount)
+            }
+        }
+    }
+
+    private static let adviceQueue = DispatchQueue(
+        label: "tinytitan.gguf.expert-advice", qos: .userInitiated, attributes: .concurrent)
 
     private func touch(layer: Int, expert: Int) {
         if let position = pools[layer].order.firstIndex(of: expert) {
@@ -337,11 +420,8 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             throw MetalError.invalidState(
                 "cannot open \(model.shards[shard].url.lastPathComponent): errno \(errno)")
         }
-        // Expert bytes land in the pool, which is the cache; letting the
-        // kernel keep a second copy in the page cache doubles the memory a
-        // miss costs and evicts other pages. Best effort: a refusal leaves
-        // ordinary cached reads, which are still correct.
-        _ = fcntl(opened, F_NOCACHE, 1)
+        // Reads go through the page cache (no F_NOCACHE): `adviseRead` puts
+        // guessed experts there ahead of use, and a miss on one must find them.
         descriptors[shard] = opened
         return opened
     }

@@ -47,6 +47,13 @@ package final class GGUFDecoder {
     let embedBF16: MTLBuffer
     let embedHalf: MTLBuffer
     let rowIndex: MTLBuffer
+    /// The routed experts' down outputs, one hidden-wide row per selection.
+    let routedRows: MTLBuffer
+    /// How many of the next layer's guessed experts are advised to the kernel
+    /// for read-ahead (`TINYTITAN_GGUF_ADVISE`, 0 disables it), and the
+    /// logits they are guessed from.
+    let adviseExperts: Int
+    let predictedLogits: MTLBuffer
 
     /// Opt-in parity capture (`TINYTITAN_GGUF_DUMP_DIR`); nil on the normal path.
     let stageDump: GGUFStageDump?
@@ -184,6 +191,14 @@ package final class GGUFDecoder {
         self.embedBF16 = try make(hidden * 2, "embed bf16")
         self.embedHalf = try make(hidden * 2, "embed half")
         self.rowIndex = try make(4, "row index")
+        self.routedRows = try make(arch.topKExperts * hidden * 2, "routed rows")
+        self.adviseExperts = min(
+            arch.numExperts,
+            max(
+                0,
+                ProcessInfo.processInfo.environment["TINYTITAN_GGUF_ADVISE"].flatMap(Int.init)
+                    ?? arch.topKExperts))
+        self.predictedLogits = try make(arch.numExperts * 4, "predicted router logits")
         self.stageDump = GGUFStageDump.fromEnvironment()
         self.routingLog = Self.openRoutingLog(
             ProcessInfo.processInfo.environment["TINYTITAN_GGUF_ROUTING_LOG"])
@@ -353,6 +368,14 @@ package final class GGUFDecoder {
         try checkpoint(&commandBuffer, capture, tag + ".ffn_read", blockInput, hidden)
         try encodeZero(commandBuffer, ffnOut, bytes: hidden * 2)
         try router.encode(commandBuffer: commandBuffer, layer: layer, x: blockInput)
+        // The next layer's router on this layer's FFN input: the guess whose
+        // missing experts the kernel is asked to read ahead.
+        let guessing = adviseExperts > 0 && layer + 1 < arch.numLayers
+        if guessing {
+            try router.encode(
+                commandBuffer: commandBuffer, layer: layer + 1, x: blockInput,
+                into: predictedLogits)
+        }
         try shared.encode(commandBuffer: commandBuffer, layer: layer, x: blockInput, out: ffnOut)
         let waitStart = GGUFDecodeTiming.now()
         try finish(commandBuffer)
@@ -368,12 +391,42 @@ package final class GGUFDecoder {
         try capture?.write(tag + ".topk", values: selection.experts.map(Float.init))
         try capture?.write(tag + ".topk_weights", values: selection.weights)
         let fetchStart = GGUFDecodeTiming.now()
-        let fetched = try cache.experts(layer: layer, experts: selection.experts)
+        // Resident experts go to the GPU at once while the missing ones are
+        // read; the late ones and the weighted sum follow in the next buffer.
+        // Every row is the decode route's arithmetic and the sum keeps its
+        // order, so the result does not depend on the split.
+        let fetch = try cache.beginFetch(layer: layer, experts: selection.experts)
+        if guessing {
+            let pointer = predictedLogits.contents().assumingMemoryBound(to: Float.self)
+            let logits = Array(UnsafeBufferPointer(start: pointer, count: arch.numExperts))
+            cache.adviseRead(
+                layer: layer + 1,
+                experts: GGUFRouter.select(logits: logits, topK: adviseExperts).experts)
+        }
+        let pairs = fetch.buffers.enumerated().map { rank, buffers in
+            (
+                GGUFMoERoutedStage.RoutedPair(expert: buffers, xOffset: 0, row: rank),
+                fetch.wasResident[rank]
+            )
+        }
+        let early = pairs.filter(\.1).map(\.0)
+        let late = pairs.filter { !$0.1 }.map(\.0)
+        if !early.isEmpty, !late.isEmpty {
+            let earlyBuffer = try makeCommandBuffer()
+            try routed.encodePairs(
+                commandBuffer: earlyBuffer, pairs: early, x: blockInput, rows: routedRows)
+            earlyBuffer.commit()
+        }
+        try cache.completeFetch(fetch)
         timing.add("  expert fetch", since: fetchStart)
         commandBuffer = try makeCommandBuffer()
-        try routed.encode(
-            commandBuffer: commandBuffer, experts: fetched, x: blockInput,
-            weights: selection.weights, out: ffnOut)
+        try routed.encodePairs(
+            commandBuffer: commandBuffer,
+            pairs: early.isEmpty || late.isEmpty ? early + late : late,
+            x: blockInput, rows: routedRows)
+        try routed.encodeWeightedSum(
+            commandBuffer: commandBuffer, rows: routedRows, rowsOffset: 0,
+            weights: selection.weights, out: ffnOut, outOffset: 0)
         try checkpoint(&commandBuffer, capture, tag + ".ffn_out", ffnOut, hidden)
         try hc.encodeWrite(
             commandBuffer: commandBuffer, layer: layer, sublayer: "ffn",

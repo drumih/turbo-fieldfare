@@ -78,19 +78,30 @@ extension GGUFExpertBufferCache {
             }
         }
 
-        /// Runs every job, cut into `pieceBytes` reads, concurrently and
-        /// returns when all are done.
-        func runAll() throws {
-            let group = DispatchGroup()
+        private let group = DispatchGroup()
+
+        /// Starts every job, cut into `pieceBytes` reads, on the concurrent
+        /// queue and returns at once; `wait()` returns when all are done.
+        func start() {
             for (index, job) in jobs.enumerated() {
                 let length = Int(job.range.byteCount)
-                for start in stride(from: 0, to: length, by: Self.pieceBytes) {
-                    let piece = start..<min(length, start + Self.pieceBytes)
+                for begin in stride(from: 0, to: length, by: Self.pieceBytes) {
+                    let piece = begin..<min(length, begin + Self.pieceBytes)
                     Self.queue.async(group: group) { self.run(index, piece: piece) }
                 }
             }
+        }
+
+        /// Waits for every started read and throws the first failure.
+        func wait() throws {
             group.wait()
             if let error = firstFailure { throw error }
+        }
+
+        /// Runs every job and returns when all are done.
+        func runAll() throws {
+            start()
+            try wait()
         }
 
         var firstFailure: Error? {
