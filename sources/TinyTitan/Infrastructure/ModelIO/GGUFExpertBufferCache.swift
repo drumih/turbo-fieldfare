@@ -48,22 +48,27 @@ package enum GGUFExpertBufferCacheError: Error, Equatable, CustomStringConvertib
     }
 }
 
-/// Reads one expert's three matrices into Metal buffers on demand and keeps a
-/// few of them, keyed by (layer, expert).
+/// Reads routed experts' three matrices into fixed Metal slots on demand and
+/// keeps them keyed by (layer, expert).
 ///
-/// This is the streaming half of the as-is path. The engine's affine streamer
-/// copies fixed-stride expert blobs into page-aligned slots; a GGUF expert is
-/// three separate byte ranges in a shard with a block format per matrix, so the
-/// fetch has to assemble them and the GEMV has to be told each matrix's type.
-/// Reads go straight into the shared MTLBuffer, so the GPU sees the bytes the
-/// fused GEMV will read without a host copy.
+/// This is the streaming half of the as-is path. A GGUF expert is three
+/// separate byte ranges in a shard with a block format per matrix, so the fetch
+/// assembles them and the GEMV is told each matrix's type. Reads go straight
+/// into shared MTLBuffers, so the GPU reads the fetched bytes with no host copy.
+///
+/// **Pinning.** `experts(layer:experts:)` pins what it returns until the next
+/// call: the caller encodes GPU work on those slots and waits for it before it
+/// asks again, so a later miss never overwrites them meanwhile.
+///
+/// A speculative prefetch of the next layer's experts was built and measured
+/// on this cache and rejected (2026-11-11, `docs/qwen38-gguf-backend-plan.md`):
+/// the drive is already near its read limit, so early reads of guessed experts
+/// only moved bandwidth around, and a top-6 guess was slower.
 ///
 /// unchecked-invariant: every mutable field (`descriptors`, `order`, `entries`,
-/// `slots`, `freeSlots`) is read and written only while `lock` is held - in
-/// `experts(layer:experts:)` and the `load`/`descriptor` calls it makes under the
-/// lock. A slot handed out is rewritten only when it is evicted, and with
-/// `capacity >= top-k` that happens on a later layer's fetch, after the caller
-/// has waited for the GPU work reading it.
+/// `pinned`, `counters`, `freeSlots`) is read and written only while `lock` is
+/// held. The concurrent reads a request issues run while the request holds the
+/// lock and touch only the slot buffers it assigned them.
 package final class GGUFExpertBufferCache: @unchecked Sendable {
     private let model: GGUFModel
     private let device: MTLDevice
@@ -72,6 +77,8 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
     private var descriptors: [Int: Int32] = [:]
     private var order: [CacheKey] = []
     private var entries: [CacheKey: GGUFExpertBuffers] = [:]
+    private var pinned: Set<CacheKey> = []
+    private var counters = Statistics()
     /// Fixed slot storage: allocating a buffer per miss cost ~480 five-megabyte
     /// allocations a token and most of the routed phase. Each slot holds the
     /// three matrices at the largest size they can be, and a miss fills it.
@@ -87,6 +94,20 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         let gate: MTLBuffer
         let up: MTLBuffer
         let down: MTLBuffer
+    }
+
+    /// How requests were served, cumulative since the cache was built.
+    package struct Statistics: Sendable, Equatable {
+        /// Requested experts that were already resident.
+        package var hits = 0
+        /// Requested experts read on demand.
+        package var misses = 0
+    }
+
+    package var statistics: Statistics {
+        lock.lock()
+        defer { lock.unlock() }
+        return counters
     }
 
     /// Largest routed matrices this checkpoint stores: gate/up are 640 x 2560
@@ -128,14 +149,13 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         try experts(layer: layer, experts: [expert])[0]
     }
 
-    /// Fetches `experts` of `layer`, reading every missing matrix at once.
+    /// Fetches `experts` of `layer` and pins them until the next call.
     ///
-    /// A token's routed experts are known together, so their reads are issued
-    /// together. Fetched one expert at a time, the drive saw at most three
-    /// outstanding reads, and the decode trace measured the fetch at 583 ms of
-    /// a 970 ms token (2026-11-11, 24 GB M3). Hits are refreshed first and
-    /// misses evict from the least-recent end, so with `experts.count <=
-    /// capacity` a miss never evicts an expert of the same request.
+    /// Resident experts are used as they are, and every remaining matrix is
+    /// read at once (up to 30
+    /// `pread`s): fetched one expert at a time, the drive saw at most three
+    /// outstanding reads, which the decode trace measured at 583 ms of a 970 ms
+    /// token (2026-11-11, 24 GB M3).
     package func experts(layer: Int, experts: [Int]) throws -> [GGUFExpertBuffers] {
         guard experts.count <= capacity else {
             throw GGUFExpertBufferCacheError.tooManyExperts(
@@ -143,115 +163,74 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
         }
         lock.lock()
         defer { lock.unlock() }
+        let keys = experts.map { CacheKey(layer: layer, expert: $0) }
+        pinned = Set(keys)
         var misses: [CacheKey] = []
-        for expert in experts {
-            let key = CacheKey(layer: layer, expert: expert)
+        for key in keys {
             if entries[key] != nil {
-                if let position = order.firstIndex(of: key) {
-                    order.remove(at: position)
-                    order.append(key)
-                }
+                touch(key)
+                counters.hits += 1
             } else if !misses.contains(key) {
                 misses.append(key)
             }
         }
+        counters.misses += misses.count
         var planned: [(key: CacheKey, slot: Int)] = []
         for key in misses {
-            if let free = freeSlots.popLast() {
-                planned.append((key, free))
-                continue
+            guard let slot = claimSlot() else {
+                freeSlots.append(contentsOf: planned.map(\.slot))
+                throw GGUFExpertBufferCacheError.tooManyExperts(
+                    requested: experts.count, capacity: capacity)
             }
-            let evicted = order.removeFirst()
-            guard let victim = entries.removeValue(forKey: evicted) else {
-                throw GGUFExpertBufferCacheError.invalidCapacity(0)
-            }
-            planned.append((key, victim.slotIndex))
+            planned.append((key, slot))
         }
         do {
-            let loaded = try load(layer: layer, planned: planned)
-            for (plan, buffers) in zip(planned, loaded) {
-                entries[plan.key] = buffers
-                order.append(plan.key)
+            let plan = try readPlan(layer: layer, planned: planned)
+            try plan.reads.runAll()
+            for (index, entry) in planned.enumerated() {
+                entries[entry.key] = plan.buffers[index]
+                order.append(entry.key)
             }
         } catch {
-            // The planned slots hold partial reads; return them to the pool
-            // rather than losing them.
+            // The planned slots hold partial reads; return them to the pool.
             freeSlots.append(contentsOf: planned.map(\.slot))
             throw error
         }
-        return try experts.map { expert in
-            guard let buffers = entries[CacheKey(layer: layer, expert: expert)] else {
-                throw GGUFExpertBufferCacheError.missingTensor("layer \(layer) expert \(expert)")
+        return try keys.map { key in
+            guard let buffers = entries[key] else {
+                throw GGUFExpertBufferCacheError.missingTensor(
+                    "layer \(key.layer) expert \(key.expert)")
             }
             return buffers
         }
     }
 
-    /// Reads one matrix into its buffer with `pread`, which carries its own
-    /// offset, so concurrent reads can share one descriptor per shard.
-    private static func read(
-        _ range: GGUFTensorRange, into buffer: MTLBuffer, name: String, descriptor: Int32
-    ) throws -> Int {
-        guard Int(range.byteCount) <= buffer.length else {
-            throw GGUFExpertBufferCacheError.shortRead(
-                name: name, expected: Int(range.byteCount), got: buffer.length)
-        }
-        let destination = buffer.contents()
-        var total = 0
-        while total < Int(range.byteCount) {
-            let count = min(Int(range.byteCount) - total, 1 << 20)
-            let read = pread(
-                descriptor, destination.advanced(by: total), count,
-                off_t(range.fileOffset) + off_t(total))
-            if read <= 0 {
-                throw GGUFExpertBufferCacheError.shortRead(
-                    name: name, expected: Int(range.byteCount), got: total)
-            }
-            total += read
-        }
-        return total
-    }
-
-    /// unchecked-invariant: each job index is run by exactly one task and the
-    /// inputs are immutable; only the failure slot is shared, behind a lock.
-    private final class ReadJobs: @unchecked Sendable {
-        struct Job {
-            let range: GGUFTensorRange
-            let buffer: MTLBuffer
-            let descriptor: Int32
-            let name: String
-        }
-
-        let jobs: [Job]
-        private let lock = NSLock()
-        private var failure: Error?
-
-        init(_ jobs: [Job]) { self.jobs = jobs }
-
-        func run(_ index: Int) {
-            let job = jobs[index]
-            do {
-                _ = try GGUFExpertBufferCache.read(
-                    job.range, into: job.buffer, name: job.name, descriptor: job.descriptor)
-            } catch {
-                lock.lock()
-                if failure == nil { failure = error }
-                lock.unlock()
-            }
-        }
-
-        var firstFailure: Error? {
-            lock.lock()
-            defer { lock.unlock() }
-            return failure
+    private func touch(_ key: CacheKey) {
+        if let position = order.firstIndex(of: key) {
+            order.remove(at: position)
+            order.append(key)
         }
     }
 
-    /// Reads the planned experts' matrices, all of them concurrently.
-    private func load(layer: Int, planned: [(key: CacheKey, slot: Int)]) throws
-        -> [GGUFExpertBuffers]
-    {
-        guard !planned.isEmpty else { return [] }
+    /// A free slot, or the least recently used unpinned entry's. Nil when
+    /// every slot is pinned. The caller holds `lock`.
+    private func claimSlot() -> Int? {
+        if let free = freeSlots.popLast() { return free }
+        guard let position = order.firstIndex(where: { !pinned.contains($0) }) else {
+            return nil
+        }
+        let victim = order.remove(at: position)
+        return entries.removeValue(forKey: victim)?.slotIndex
+    }
+
+    private struct ReadPlan {
+        let reads: ReadJobs
+        let buffers: [GGUFExpertBuffers]
+    }
+
+    /// The reads that fill `planned` and the buffers they produce. The caller
+    /// holds `lock` (descriptors are opened lazily).
+    private func readPlan(layer: Int, planned: [(key: CacheKey, slot: Int)]) throws -> ReadPlan {
         /// GGUF dims are [columns, rows, experts]; the record's shape is
         /// [rows, columns], which the fused GEMV dispatch depends on.
         func shape(of role: String) throws -> (rows: Int, columns: Int) {
@@ -263,16 +242,16 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
             }
             return (Int(location.tensor.dimensions[1]), Int(location.tensor.dimensions[0]))
         }
-        let gateShape = try shape(of: "ffn_gate")
-        let upShape = try shape(of: "ffn_up")
-        let downShape = try shape(of: "ffn_down")
-        let layouts = try planned.map {
-            try GGUFExpertLayout.weights(layer: layer, expert: $0.key.expert, in: model)
-        }
+        guard !planned.isEmpty else { return ReadPlan(reads: ReadJobs([]), buffers: []) }
+        let gate = try shape(of: "ffn_gate")
+        let up = try shape(of: "ffn_up")
+        let down = try shape(of: "ffn_down")
         var jobs: [ReadJobs.Job] = []
-        jobs.reserveCapacity(planned.count * 3)
-        for (plan, weights) in zip(planned, layouts) {
-            let slot = slots[plan.slot]
+        var buffers: [GGUFExpertBuffers] = []
+        for entry in planned {
+            let weights = try GGUFExpertLayout.weights(
+                layer: layer, expert: entry.key.expert, in: model)
+            let slot = slots[entry.slot]
             for (range, buffer, name) in [
                 (weights.gate, slot.gate, "gate"), (weights.up, slot.up, "up"),
                 (weights.down, slot.down, "down"),
@@ -282,25 +261,21 @@ package final class GGUFExpertBufferCache: @unchecked Sendable {
                         range: range, buffer: buffer,
                         descriptor: try descriptor(for: range.shardIndex), name: name))
             }
+            buffers.append(
+                GGUFExpertBuffers(
+                    layer: layer, expert: entry.key.expert,
+                    gate: GGUFExpertMatrix(
+                        buffer: slot.gate, rows: gate.rows, columns: gate.columns,
+                        type: weights.gate.type, byteCount: Int(weights.gate.byteCount)),
+                    up: GGUFExpertMatrix(
+                        buffer: slot.up, rows: up.rows, columns: up.columns,
+                        type: weights.up.type, byteCount: Int(weights.up.byteCount)),
+                    down: GGUFExpertMatrix(
+                        buffer: slot.down, rows: down.rows, columns: down.columns,
+                        type: weights.down.type, byteCount: Int(weights.down.byteCount)),
+                    slotIndex: entry.slot))
         }
-        let reads = ReadJobs(jobs)
-        DispatchQueue.concurrentPerform(iterations: jobs.count) { reads.run($0) }
-        if let error = reads.firstFailure { throw error }
-        return zip(planned, layouts).map { plan, weights in
-            let slot = slots[plan.slot]
-            return GGUFExpertBuffers(
-                layer: layer, expert: plan.key.expert,
-                gate: GGUFExpertMatrix(
-                    buffer: slot.gate, rows: gateShape.rows, columns: gateShape.columns,
-                    type: weights.gate.type, byteCount: Int(weights.gate.byteCount)),
-                up: GGUFExpertMatrix(
-                    buffer: slot.up, rows: upShape.rows, columns: upShape.columns,
-                    type: weights.up.type, byteCount: Int(weights.up.byteCount)),
-                down: GGUFExpertMatrix(
-                    buffer: slot.down, rows: downShape.rows, columns: downShape.columns,
-                    type: weights.down.type, byteCount: Int(weights.down.byteCount)),
-                slotIndex: plan.slot)
-        }
+        return ReadPlan(reads: ReadJobs(jobs), buffers: buffers)
     }
 
     private func descriptor(for shard: Int) throws -> Int32 {

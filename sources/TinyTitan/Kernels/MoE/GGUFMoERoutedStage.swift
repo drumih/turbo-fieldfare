@@ -66,8 +66,25 @@ package final class GGUFMoERoutedStage {
         outOffset: Int = 0
     ) throws {
         precondition(experts.count <= topK && experts.count == weights.count)
-        for (index, expert) in experts.enumerated() {
-            let buffers = try cache.expert(layer: layer, expert: expert)
+        try encode(
+            commandBuffer: commandBuffer,
+            experts: try cache.experts(layer: layer, experts: experts),
+            x: x, weights: weights, out: out, outOffset: outOffset)
+    }
+
+    /// Encodes the routed contribution of already-fetched `experts` (as
+    /// `GGUFExpertBufferCache.experts(layer:experts:)` returned and pinned
+    /// them) with their `weights` into `out`, which is accumulated into.
+    package func encode(
+        commandBuffer: MTLCommandBuffer,
+        experts: [GGUFExpertBuffers],
+        x: MTLBuffer,
+        weights: [Float],
+        out: MTLBuffer,
+        outOffset: Int = 0
+    ) throws {
+        precondition(experts.count <= topK && experts.count == weights.count)
+        for (index, buffers) in experts.enumerated() {
             try gemv.encode(
                 commandBuffer: commandBuffer, weights: buffers.gate.buffer,
                 x: x, y: gateBuffers[index],

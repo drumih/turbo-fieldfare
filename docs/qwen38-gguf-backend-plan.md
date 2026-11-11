@@ -856,10 +856,25 @@ otherwise: per token, after the parity fixes, 583 ms was the expert fetch and
   branch. Against the CPU decoder on random blocks and on real matrices: RMS
   relative error 1.6e-5 (Q6_K) and 3.2e-6 (Q8_0).
 
-**Next, measured before it is built.** Applying layer L+1's router to layer
-L's FFN input predicts 69% of layer L+1's real experts with a top-10 guess
-(84% with 16, 88% with 20; 2,820 real experts over six positions, from the
-`GGUFStageDump` captures). A speculative prefetch of that guess can overlap
-the next layer's reads with this layer's GPU work; it reads ~30% more bytes,
-and the drive is already near its limit, so it has to be measured, not
-assumed.
+**Speculative prefetch: built, measured, rejected (2026-11-11).** Applying
+layer L+1's router to layer L's FFN input predicts 69% of layer L+1's real
+experts with a top-10 guess (84% with 16, 88% with 20; 2,820 real experts over
+six positions, from the `GGUFStageDump` captures). A prefetch of that guess was
+built on the expert cache (background reads into unpinned slots, published
+when complete; the exact router still chose every expert) and A/B'd in the
+same build with `--max-new 24`, interleaved runs:
+
+| guess | decode (tok/s) | prefetched experts used | prefetched reads wasted |
+| --- | --- | ---: | ---: |
+| off | 3.46, 3.23, 3.77 | - | - |
+| top-4 | 3.42, 3.19 | 84% | 16% |
+| top-6 | 2.83 | 78% | 22% |
+| top-10 | 2.77, 2.88 | 65% | 35% |
+
+No guess size beat the run-to-run spread of "off", and the larger ones were
+slower: the fetch is already near the drive's read limit, so reading early
+only moves bandwidth around, and every wasted read is paid in full. The code
+was removed; the batched fetch, the slot pinning it needed and the routed
+stage taking already-fetched buffers stay. What would change the verdict is a
+way to need fewer bytes (a RAM tier that holds a useful share of the 24,576
+experts), not a way to read the same bytes sooner.

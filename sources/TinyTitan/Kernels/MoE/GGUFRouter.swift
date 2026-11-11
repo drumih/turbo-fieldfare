@@ -70,13 +70,19 @@ package final class GGUFRouter {
     package func encode(
         commandBuffer: MTLCommandBuffer, layer: Int, x: MTLBuffer
     ) throws {
+        try encode(commandBuffer: commandBuffer, layer: layer, x: x, into: logits)
+    }
+
+    private func encode(
+        commandBuffer: MTLCommandBuffer, layer: Int, x: MTLBuffer, into output: MTLBuffer
+    ) throws {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
         encoder.setComputePipelineState(pipeline)
         encoder.setBuffer(layers[layer], offset: 0, index: 0)
         encoder.setBuffer(x, offset: 0, index: 1)
-        encoder.setBuffer(logits, offset: 0, index: 2)
+        encoder.setBuffer(output, offset: 0, index: 2)
         var columns = UInt32(hidden)
         var rows = UInt32(expertCount)
         encoder.setBytes(&columns, length: MemoryLayout<UInt32>.size, index: 3)

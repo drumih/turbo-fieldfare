@@ -100,12 +100,13 @@ package final class GGUFDecoder {
         // wait(routed) 1.7-2.3 s), while a pread into a reused slot is paid once
         // on the host and the GPU then reads clean pages (measured 90 ms).
         //
-        // Capacity stays top-k: a 480-slot cache (one token's whole working
-        // set) was measured and changed nothing (1.78 s/token against 1.66),
-        // because successive tokens select different experts - the cost is the
-        // per-token read, not a repeated one, and the extra 1.3 GB buys no hit.
+        // A cache sized for reuse does not pay: a 480-slot cache (one token's
+        // whole working set) was measured and changed nothing (1.78 s/token
+        // against 1.66), because successive tokens select different experts.
+        // The capacity is two top-k sets: the layer the GPU last read and the
+        // one being fetched, so a fetch never waits on an eviction it cannot make.
         self.cache = try GGUFExpertBufferCache(
-            model: model, device: context.device, capacity: arch.topKExperts)
+            model: model, device: context.device, capacity: 2 * arch.topKExperts)
         self.routed = try GGUFMoERoutedStage(context: context, arch: arch)
         self.shared = try GGUFSharedExpertStage(context: context, arch: arch, model: model)
         self.ple = try GGUFPLEStage(context: context, arch: arch, model: model, arena: arena)
@@ -166,7 +167,13 @@ package final class GGUFDecoder {
         for layer in 0..<arch.numLayers {
             try decodeLayer(layer, position: position, capture: capture, timing: &timing)
         }
-        if GGUFDecodeTiming.enabled { timing.report() }
+        if GGUFDecodeTiming.enabled {
+            timing.report()
+            let stats = cache.statistics
+            FileHandle.standardError.write(
+                Data(
+                    "  experts (cumulative): hits \(stats.hits), misses \(stats.misses)\n".utf8))
+        }
 
         try run { commandBuffer in
             try output.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
@@ -270,12 +277,12 @@ package final class GGUFDecoder {
         try capture?.write(tag + ".topk", values: selection.experts.map(Float.init))
         try capture?.write(tag + ".topk_weights", values: selection.weights)
         let fetchStart = GGUFDecodeTiming.now()
-        _ = try cache.experts(layer: layer, experts: selection.experts)
+        let fetched = try cache.experts(layer: layer, experts: selection.experts)
         timing.add("  expert fetch", since: fetchStart)
         var routedBuffer = try makeCommandBuffer()
         try routed.encode(
-            commandBuffer: routedBuffer, cache: cache, layer: layer, x: blockInput,
-            experts: selection.experts, weights: selection.weights, out: ffnOut)
+            commandBuffer: routedBuffer, experts: fetched, x: blockInput,
+            weights: selection.weights, out: ffnOut)
         try checkpoint(&routedBuffer, capture, tag + ".ffn_out", ffnOut, hidden)
         try hc.encodeWrite(
             commandBuffer: routedBuffer, layer: layer, sublayer: "ffn",
