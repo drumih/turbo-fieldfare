@@ -9,7 +9,7 @@ final class Q6KGEMV {
     static let blockBytes = 210
 
     init(context: MetalContext) throws {
-        self.pso = try context.pipeline("q6k_gemv_acc4")
+        self.pso = try context.pipeline("q6k_gemv_vec")
     }
 
     func encode(

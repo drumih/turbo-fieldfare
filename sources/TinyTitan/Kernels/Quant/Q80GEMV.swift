@@ -9,7 +9,7 @@ final class Q80GEMV {
     static let blockBytes = 34
 
     init(context: MetalContext) throws {
-        self.pso = try context.pipeline("q8_0_gemv_simd")
+        self.pso = try context.pipeline("q8_0_gemv_vec")
     }
 
     func encode(

@@ -112,4 +112,35 @@ import TinyTitanValidationSupport
                 + "\(String(format: "%.0f", perExpertMs * 480)) ms")
         #expect(perExpertMs > 0)
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_GGUF_MODEL"] != nil))
+    func batchFetchMatchesSingleFetchesAndKeepsItsOwnHits() throws {
+        let path = try #require(Self.realModelPath)
+        let model = try GGUFModelReader.read(modelAt: URL(fileURLWithPath: path))
+        let context = try MetalContext()
+        func bytes(_ matrix: GGUFExpertMatrix) -> [UInt8] {
+            Array(
+                UnsafeBufferPointer(
+                    start: matrix.buffer.contents().assumingMemoryBound(to: UInt8.self),
+                    count: matrix.byteCount))
+        }
+        let single = try GGUFExpertBufferCache(model: model, device: context.device, capacity: 1)
+        let batched = try GGUFExpertBufferCache(model: model, device: context.device, capacity: 4)
+
+        // Two of four already resident: the batch must keep them and read two.
+        _ = try batched.experts(layer: 5, experts: [7, 9])
+        let fetched = try batched.experts(layer: 5, experts: [9, 100, 7, 300])
+        #expect(fetched.map(\.expert) == [9, 100, 7, 300])
+        #expect(Set(fetched.map(\.slotIndex)).count == 4)
+        for buffers in fetched {
+            let reference = try single.expert(layer: 5, expert: buffers.expert)
+            #expect(bytes(buffers.gate) == bytes(reference.gate), "gate \(buffers.expert)")
+            #expect(bytes(buffers.up) == bytes(reference.up), "up \(buffers.expert)")
+            #expect(bytes(buffers.down) == bytes(reference.down), "down \(buffers.expert)")
+        }
+
+        #expect(throws: GGUFExpertBufferCacheError.tooManyExperts(requested: 5, capacity: 4)) {
+            _ = try batched.experts(layer: 5, experts: [1, 2, 3, 4, 5])
+        }
+    }
 }

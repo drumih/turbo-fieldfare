@@ -270,9 +270,7 @@ package final class GGUFDecoder {
         try capture?.write(tag + ".topk", values: selection.experts.map(Float.init))
         try capture?.write(tag + ".topk_weights", values: selection.weights)
         let fetchStart = GGUFDecodeTiming.now()
-        for expert in selection.experts {
-            _ = try cache.expert(layer: layer, expert: expert)
-        }
+        _ = try cache.experts(layer: layer, experts: selection.experts)
         timing.add("  expert fetch", since: fetchStart)
         var routedBuffer = try makeCommandBuffer()
         try routed.encode(

@@ -822,3 +822,44 @@ top-1, the same top-5 set, and top-5 logits within 1.0 - which
   `fill`) or give the result its own buffer.
 - `/tmp/refdump` and `.build/parity/ref` were bit-identical: both CPU. A noise
   floor needs a different backend, not a second run of the same one.
+
+## Decode speed, first two steps (2026-11-11)
+
+Measured with the decoder's own trace on this M3 / 24 GB, release build,
+`TINYTITAN_GGUF_TRACE=1 .build/release/TinyTitanCLI --model
+models/qwen3.8-flash-next-unsloth-iq3xxs --temperature 0 --prompt "The capital
+of France is" --max-new 16`, under unrelated background load (another
+project's test runs, an ANE compile), so the numbers are this machine on that
+morning, not a benchmark row. Every run printed the same text (" Paris. The
+capital of Germany is Berlin. The capital of Italy is Rome."), and
+`GGUFLogitProbeTests` (top-1, top-5 and top-5 logits against llama.cpp)
+passes after each step.
+
+The previous note put the remaining time in host-side encoding. The trace says
+otherwise: per token, after the parity fixes, 583 ms was the expert fetch and
+259 ms the GPU work of the attention side; encoding was small.
+
+| step | expert fetch | GPU, attention side | GPU, routed | decode |
+| --- | ---: | ---: | ---: | ---: |
+| parity fixes only | 583 ms | 259 ms | 50 ms | 1.07 tok/s |
+| + one concurrent fetch per layer | 186 ms | 289 ms | 44 ms | 1.42 tok/s |
+| + vectorised Q6_K / Q8_0 GEMV | 173 ms | 65 ms | 37 ms | **2.63 tok/s** |
+
+- **Fetch.** `GGUFExpertBufferCache.experts(layer:experts:)` issues every
+  missing matrix of a layer's ten experts at once (up to 30 `pread`s on one
+  descriptor per shard) instead of one expert at a time with three reads in
+  flight. 0.92 GB a token in ~173 ms is ~5.3 GB/s, which is about what this
+  SSD reads; the fetch is now bandwidth-bound rather than latency-bound.
+- **Kernels.** `q6k_gemv_vec` and `q8_0_gemv_vec` (`gguf_gemv_vec.metal`)
+  replace the per-byte kernels for the resident matrices: three packed 4-byte
+  loads give 16 Q6_K weights, two give 8 Q8_0 weights, with no data-dependent
+  branch. Against the CPU decoder on random blocks and on real matrices: RMS
+  relative error 1.6e-5 (Q6_K) and 3.2e-6 (Q8_0).
+
+**Next, measured before it is built.** Applying layer L+1's router to layer
+L's FFN input predicts 69% of layer L+1's real experts with a top-10 guess
+(84% with 16, 88% with 20; 2,820 real experts over six positions, from the
+`GGUFStageDump` captures). A speculative prefetch of that guess can overlap
+the next layer's reads with this layer's GPU work; it reads ~30% more bytes,
+and the drive is already near its limit, so it has to be measured, not
+assumed.
