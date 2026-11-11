@@ -33,13 +33,10 @@ import TinyTitanValidationSupport
         var timings: [Double] = []
         var tokenLogits: [[Float]] = []
         let tokens: [Int32] = [100, 200, 300, 400, 500, 600]
-        for (position, token) in tokens.enumerated() {
-            var history: [Int32] = [token]
-            if position > 0 { history.append(tokens[position - 1]) }
+        for position in tokens.indices {
             let before = faults()
             let start = DispatchTime.now().uptimeNanoseconds
-            let logits = try decoder.decode(
-                token: token, position: position, history: history)
+            let logits = try decoder.decode(sequence: tokens, position: position)
             timings.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9)
             let after = faults()
             print(

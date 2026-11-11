@@ -34,6 +34,9 @@ package enum GGUFTokenizerError: Error, Equatable, CustomStringConvertible {
 /// and llama.cpp carries the regex in `llama-vocab.cpp` with the comment
 /// "original regex from tokenizer.json", which is what `qwen35Pattern` here is.
 package enum GGUFTokenizerSidecar {
+    /// The subdirectory under a model directory the runtime loader reads
+    /// (`GFTokenizer.tokenizerFolder`); exported files must land there.
+    package static let folderName = "tokenizer"
     package static let tokenizerFileName = "tokenizer.json"
     package static let configFileName = "tokenizer_config.json"
     package static let templateFileName = "chat_template.jinja"

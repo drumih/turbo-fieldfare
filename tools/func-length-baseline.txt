@@ -12,4 +12,3 @@ sources/TinyTitanServer/Core/AnthropicMapper.swift:chatRequest: AUD-024: the AUD
 sources/TinyTitanServer/Core/HTTPServerHandler+Anthropic.swift:handleMessages: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanServer/Core/HTTPServerHandler+Responses.swift:handleResponses: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanServer/Core/HTTPServerHandler+Routes.swift:route: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
-sources/TinyTitan/Kernels/MoE/GGUFDecoder.swift:decode: AUD-025: the as-is decoder is one linear 48-layer pipeline whose phase marks must stay adjacent to the work they time; splitting it would separate the two

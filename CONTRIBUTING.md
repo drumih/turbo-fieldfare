@@ -34,9 +34,9 @@ change:
   without a reason fails exactly like no marker.
 - **func-length** — a ratchet, not a limit: no function over 120 lines without an
   inline `lint:allow-long <reason>` above it. The ratchet file
-  `tools/func-length-baseline.txt` carries the audited exemptions (15 rows: fourteen
-  from the formatter sweep that expanded their bodies, and one for the as-is
-  GGUF decoder's linear pipeline, AUD-025). If you ever add a row,
+  `tools/func-length-baseline.txt` carries the audited exemptions (14 rows, all
+  from the formatter sweep that expanded their bodies; the as-is GGUF decoder's
+  AUD-025 row was dropped when its pipeline split into per-layer helpers). If you ever add a row,
   drop it once the function shrinks: the gate fails on a stale exemption so it
   cannot be reused later.
 - **unchecked-sendable** — every `@unchecked Sendable` under `sources/` must

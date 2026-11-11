@@ -47,6 +47,28 @@ package final class GGUFPLEStage {
     /// The layer this block runs on (0-based).
     package var layerIndex: Int { layer }
 
+    /// The hash context for the token at `position` of `sequence`: the token,
+    /// then up to `ngram_size - 1` predecessors, newest first - the order
+    /// `PLEHash.rows(context:)` reads. A predecessor before the sequence start
+    /// is simply absent, which the hash resolves to EOS, as llama.cpp's
+    /// `llm_graph_input_qwen4exp_ple::set_input` does.
+    ///
+    /// The window comes from the checkpoint's `ple.ngram_size` (3 on
+    /// Qwen3.8-Flash-Next), so a caller never hardcodes how far back it reaches.
+    package func history(of sequence: [Int32], at position: Int) -> [Int32] {
+        Self.window(of: sequence, at: position, ngramSize: setup.ngramSize)
+    }
+
+    /// The rule `history(of:at:)` applies, for an explicit n-gram size.
+    package static func window(of sequence: [Int32], at position: Int, ngramSize: Int) -> [Int32] {
+        precondition(ngramSize >= 1, "an n-gram covers at least the token itself")
+        precondition(
+            position >= 0 && position < sequence.count,
+            "position \(position) is outside a \(sequence.count)-token sequence")
+        let oldest = max(0, position - (ngramSize - 1))
+        return Array(sequence[oldest...position].reversed())
+    }
+
     /// Gathers the token's rows into the block's embedding buffer as fp16.
     package func gather(context tokens: [Int32]) throws {
         let rows = setup.rows(context: tokens)

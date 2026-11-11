@@ -20,7 +20,10 @@
 # bf16-dense Ornith row added its catalogue key and its tests:
 #   * `ornith-1.5_35B_A3B-bf16dense` — the runtime stem in the launcher tests
 #   * `ornith15-bf16dense`           — the installer key in the catalogue
-# All six are matched by `generic-api-key` only because they look like long
+# The seventh was found by the CI scan on 2026-11-10 (commit e83df77d):
+#   * `presence_penalty=0`        — a sampling parameter quoted in
+#     `docs/qwen38-mtp-investigation-2026-11-09.md`, the run's own setting
+# All seven are matched by `generic-api-key` only because they look like long
 # opaque tokens. The values are literal, not shape-based, so no future secret
 # that happens to be shaped like a path, a model id or a counter is hidden.
 
@@ -37,4 +40,5 @@ regexes = [
   '''^expert_misses=37724$''',
   '''^ornith-1\.5_35B_A3B-bf16dense$''',
   '''^ornith15-bf16dense$''',
+  '''^presence_penalty=0$''',
 ]

@@ -23,7 +23,9 @@ package final class GGUFDecoder {
     private let cache: GGUFExpertBufferCache
     private let routed: GGUFMoERoutedStage
     private let shared: GGUFSharedExpertStage
-    private let ple: GGUFPLEStage
+    /// Internal, not private: the prefill extension derives the n-gram window
+    /// from it.
+    let ple: GGUFPLEStage
     private let output: GGUFOutputStage
     private let embedGather: GGUFEmbeddingGather
     private let embedTable: MTLBuffer
@@ -31,10 +33,16 @@ package final class GGUFDecoder {
 
     private let streams: MTLBuffer
     private let blockInput: MTLBuffer
-    private let moeOut: MTLBuffer
+    /// The token mixer's block output, and the FFN's: separate, because the
+    /// shared and routed stages accumulate into theirs.
+    private let attnOut: MTLBuffer
+    private let ffnOut: MTLBuffer
     private let embedBF16: MTLBuffer
     private let embedHalf: MTLBuffer
     private let rowIndex: MTLBuffer
+
+    /// Opt-in parity capture (`TINYTITAN_GGUF_DUMP_DIR`); nil on the normal path.
+    private let stageDump: GGUFStageDump?
 
     package let hidden: Int
     package let model: GGUFModel
@@ -131,201 +139,199 @@ package final class GGUFDecoder {
         }
         self.streams = try make(arch.hyperConnections.count * hidden * 2, "streams")
         self.blockInput = try make(hidden * 2, "block input")
-        self.moeOut = try make(hidden * 2, "moe out")
+        self.attnOut = try make(hidden * 2, "attention out")
+        self.ffnOut = try make(hidden * 2, "ffn out")
         self.embedBF16 = try make(hidden * 2, "embed bf16")
         self.embedHalf = try make(hidden * 2, "embed half")
         self.rowIndex = try make(4, "row index")
+        self.stageDump = GGUFStageDump.fromEnvironment()
     }
 
     /// Runs one token and returns its logits. `position` is the token's index
-    /// in the sequence; `history` is the token followed by its predecessors,
-    /// which is what the PLE n-grams hash.
+    /// in the sequence; `history` is the PLE hash context - the token, then its
+    /// predecessors newest first. `decode(sequence:position:)` derives it from
+    /// the sequence and is what a caller normally uses.
     package func decode(token: Int32, position: Int, history: [Int32]) throws -> [Float] {
-        // Embedding: gather the row, convert to half, stream 0, broadcast.
-        rowIndex.contents().assumingMemoryBound(to: UInt32.self)[0] = UInt32(bitPattern: token)
-        guard let cb = context.queue.makeCommandBuffer() else {
-            throw MetalError.commandEncoderFailed
-        }
-        try embedGather.encode(
-            commandBuffer: cb, table: embedTable, rows: rowIndex, count: 1, out: embedBF16)
-        guard let encoder = cb.makeComputeCommandEncoder() else {
-            throw MetalError.commandEncoderFailed
-        }
-        encoder.setComputePipelineState(convert)
-        encoder.setBuffer(embedBF16, offset: 0, index: 0)
-        encoder.setBuffer(embedHalf, offset: 0, index: 1)
-        var count = UInt32(hidden)
-        encoder.setBytes(&count, length: 4, index: 2)
-        encoder.dispatchThreads(
-            MTLSize(width: hidden, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
-        encoder.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
-        if let error = cb.error { throw MetalError.invalidState("\(error)") }
-        let half = embedHalf.contents().assumingMemoryBound(to: UInt16.self)
-        let streamPointer = streams.contents().assumingMemoryBound(to: UInt16.self)
-        for index in 0..<hidden { streamPointer[index] = half[index] }
-
-        // PLE rows depend only on the token and its predecessors.
+        let capture = try stageDump?.capture(position: position)
+        try embed(token: token)
         try ple.gather(context: history)
-
-        var waitByLayer: [(Int, UInt64)] = []
-        var gpuAttnSeconds: TimeInterval = 0
-        var gpuRoutedSeconds: TimeInterval = 0
-        var phaseNanos: [String: UInt64] = [:]
-        func mark(_ name: String, _ start: UInt64) {
-            phaseNanos[name, default: 0] &+= DispatchTime.now().uptimeNanoseconds - start
+        try run { commandBuffer in
+            try elementwise.encodeHCBroadcast(
+                commandBuffer: commandBuffer, streams: streams, dim: hidden,
+                streamCount: arch.hyperConnections.count)
         }
-        // The router's top-k is read back on the host, so each layer is two
-        // command buffers: everything up to and including the router and the
-        // shared expert, then the routed experts and the FFN write. That is a
-        // wait per layer, which a GPU top-k would remove; correctness first.
-        guard let broadcastCB = context.queue.makeCommandBuffer() else {
-            throw MetalError.commandEncoderFailed
-        }
-        try elementwise.encodeHCBroadcast(
-            commandBuffer: broadcastCB, streams: streams, dim: hidden,
-            streamCount: arch.hyperConnections.count)
-        broadcastCB.commit()
-        broadcastCB.waitUntilCompleted()
-        if let error = broadcastCB.error { throw MetalError.invalidState("\(error)") }
+        try capture?.write("hc_init", half: streams, count: wideCount)
 
+        var timing = GGUFDecodeTiming()
         for layer in 0..<arch.numLayers {
-            if layer == ple.layerIndex {
-                guard let pleCB = context.queue.makeCommandBuffer() else {
-                    throw MetalError.commandEncoderFailed
-                }
-                try ple.encode(commandBuffer: pleCB, streamsBuffer: streams)
-                pleCB.commit()
-                pleCB.waitUntilCompleted()
-                if let error = pleCB.error { throw MetalError.invalidState("\(error)") }
-            }
-            let tAttn = DispatchTime.now().uptimeNanoseconds
-            guard let cb = context.queue.makeCommandBuffer() else {
+            try decodeLayer(layer, position: position, capture: capture, timing: &timing)
+        }
+        if GGUFDecodeTiming.enabled { timing.report() }
+
+        try run { commandBuffer in
+            try output.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
+        }
+        let pointer = output.logits.contents().assumingMemoryBound(to: UInt16.self)
+        let logits = (0..<arch.vocabSize).map { Float(Float16(bitPattern: pointer[$0])) }
+        try capture?.write("logits", values: logits)
+        return logits
+    }
+
+    /// The residual's element count: every hyper stream of the hidden width.
+    private var wideCount: Int { arch.hyperConnections.count * hidden }
+
+    /// Embedding: gather the token's Q6_K row as bf16, convert to half, and
+    /// place it in stream 0 for the broadcast.
+    private func embed(token: Int32) throws {
+        rowIndex.contents().assumingMemoryBound(to: UInt32.self)[0] = UInt32(bitPattern: token)
+        try run { commandBuffer in
+            try embedGather.encode(
+                commandBuffer: commandBuffer, table: embedTable, rows: rowIndex, count: 1,
+                out: embedBF16)
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
-            // Mask values: 1 full attention, 2 GDN linear attention (the
-            // checkpoint has 12 of the former: layers 3, 7, ... 47).
-            let maskValue = arch.fullAttentionLayerMask[layer]
-            let isLinear = maskValue == 2
-            guard maskValue == 1 || maskValue == 2 else {
-                throw MetalError.invalidState(
-                    "layer \(layer) has attention mask \(maskValue), which this decoder does not handle"
-                )
-            }
-            let attnPrefix = "blk.\(layer).hc_attn_"
-            var t = DispatchTime.now().uptimeNanoseconds
-            try encodeRead(cb, prefix: attnPrefix, streamsBuffer: streams, out: blockInput)
-            mark("  hc read attn", t)
-            t = DispatchTime.now().uptimeNanoseconds
-            if isLinear {
-                try gdn.encode(commandBuffer: cb, layer: layer, x: blockInput, out: moeOut)
-            } else {
-                try fullAttention.encode(
-                    commandBuffer: cb, layer: layer, position: position,
-                    x: blockInput, out: moeOut)
-            }
-            mark("  attention", t)
-            t = DispatchTime.now().uptimeNanoseconds
-            try encodeWrite(cb, prefix: attnPrefix, streamsBuffer: streams, blockOut: moeOut)
-            mark("  hc write attn", t)
-            let ffnPrefix = "blk.\(layer).hc_ffn_"
-            try encodeRead(cb, prefix: ffnPrefix, streamsBuffer: streams, out: blockInput)
-            memset(moeOut.contents(), 0, hidden * 2)
-            t = DispatchTime.now().uptimeNanoseconds
-            try router.encode(commandBuffer: cb, layer: layer, x: blockInput)
-            mark("  router", t)
-            t = DispatchTime.now().uptimeNanoseconds
-            try shared.encode(commandBuffer: cb, layer: layer, x: blockInput, out: moeOut)
-            mark("  shared", t)
-            let tWait = DispatchTime.now().uptimeNanoseconds
-            cb.commit()
-            cb.waitUntilCompleted()
-            if let error = cb.error { throw MetalError.invalidState("\(error)") }
-            mark("  wait(attn)", tWait)
-            gpuAttnSeconds += cb.gpuEndTime - cb.gpuStartTime
-            waitByLayer.append((layer, DispatchTime.now().uptimeNanoseconds - tWait))
-            mark("attn+router+shared", tAttn)
+            encoder.setComputePipelineState(convert)
+            encoder.setBuffer(embedBF16, offset: 0, index: 0)
+            encoder.setBuffer(embedHalf, offset: 0, index: 1)
+            var count = UInt32(hidden)
+            encoder.setBytes(&count, length: 4, index: 2)
+            encoder.dispatchThreads(
+                MTLSize(width: hidden, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.endEncoding()
+        }
+        memcpy(streams.contents(), embedHalf.contents(), hidden * 2)
+    }
 
-            let tRouted = DispatchTime.now().uptimeNanoseconds
-            let selection = router.select(topK: arch.topKExperts)
-            if layer == 0 { lastRouting = [] }
-            lastRouting.append(selection.experts)
-            guard let routedCB = context.queue.makeCommandBuffer() else {
-                throw MetalError.commandEncoderFailed
+    /// One layer: the PLE block on its layer, the hyper-connection read, the
+    /// token mixer (GDN or full attention) and its write; then the FFN read,
+    /// router and shared expert, a host wait for the router's top-k, the routed
+    /// experts and the FFN write.
+    ///
+    /// The FFN output has its own buffer, zeroed on the GPU in the same command
+    /// buffer: the shared and routed stages accumulate into it, and the
+    /// attention output must not be part of that sum.
+    private func decodeLayer(
+        _ layer: Int, position: Int, capture: GGUFStageDump.Capture?,
+        timing: inout GGUFDecodeTiming
+    ) throws {
+        let tag = String(format: "l%02d", layer)
+        if layer == ple.layerIndex {
+            try run { commandBuffer in
+                try ple.encode(commandBuffer: commandBuffer, streamsBuffer: streams)
             }
-            let tFetch = DispatchTime.now().uptimeNanoseconds
-            for expert in selection.experts {
-                _ = try cache.expert(layer: layer, expert: expert)
-            }
-            mark("  expert fetch", tFetch)
-            let tEncode = DispatchTime.now().uptimeNanoseconds
-            try routed.encode(
-                commandBuffer: routedCB, cache: cache, layer: layer, x: blockInput,
-                experts: selection.experts, weights: selection.weights, out: moeOut)
-            mark("  routed encode", tEncode)
-            try encodeWrite(
-                routedCB, prefix: ffnPrefix, streamsBuffer: streams, blockOut: moeOut)
-            let tRoutedWait = DispatchTime.now().uptimeNanoseconds
-            routedCB.commit()
-            routedCB.waitUntilCompleted()
-            if let error = routedCB.error { throw MetalError.invalidState("\(error)") }
-            mark("  wait(routed)", tRoutedWait)
-            gpuRoutedSeconds += routedCB.gpuEndTime - routedCB.gpuStartTime
-            mark("routed", tRouted)
+            try capture?.write(tag + ".ple", half: streams, count: wideCount)
         }
-        print(
-            "  GPU: attn \(String(format: "%.0f", gpuAttnSeconds * 1000)) ms, "
-                + "routed \(String(format: "%.0f", gpuRoutedSeconds * 1000)) ms")
-        for (layer, nanos) in waitByLayer.prefix(4) {
-            print("  wait(attn) layer \(layer): \(String(format: "%.0f", Double(nanos) / 1e6)) ms")
+        // Mask values: 1 full attention, 2 GDN linear attention (the checkpoint
+        // has 12 of the former: layers 3, 7, ... 47).
+        let maskValue = arch.fullAttentionLayerMask[layer]
+        guard maskValue == 1 || maskValue == 2 else {
+            throw MetalError.invalidState(
+                "layer \(layer) has attention mask \(maskValue), which this decoder does not handle"
+            )
         }
-        if let last = waitByLayer.last {
-            print(
-                "  wait(attn) layer \(last.0): \(String(format: "%.0f", Double(last.1) / 1e6)) ms")
+        let layerStart = GGUFDecodeTiming.now()
+        var commandBuffer = try makeCommandBuffer()
+        try hc.encodeRead(
+            commandBuffer: commandBuffer, layer: layer, sublayer: "attn",
+            streamsBuffer: streams, out: blockInput)
+        try checkpoint(&commandBuffer, capture, tag + ".attn_read", blockInput, hidden)
+        if maskValue == 2 {
+            try gdn.encode(commandBuffer: commandBuffer, layer: layer, x: blockInput, out: attnOut)
+        } else {
+            try fullAttention.encode(
+                commandBuffer: commandBuffer, layer: layer, position: position,
+                x: blockInput, out: attnOut)
         }
-        for (name, nanos) in phaseNanos.sorted(by: { $0.value > $1.value }) {
-            print("  \(name): \(String(format: "%.1f", Double(nanos) / 1e6)) ms")
-        }
+        try checkpoint(&commandBuffer, capture, tag + ".attn_out", attnOut, hidden)
+        try hc.encodeWrite(
+            commandBuffer: commandBuffer, layer: layer, sublayer: "attn",
+            streamsBuffer: streams, blockOut: attnOut)
+        try checkpoint(&commandBuffer, capture, tag + ".attn_res", streams, wideCount)
+        try hc.encodeRead(
+            commandBuffer: commandBuffer, layer: layer, sublayer: "ffn",
+            streamsBuffer: streams, out: blockInput)
+        try checkpoint(&commandBuffer, capture, tag + ".ffn_read", blockInput, hidden)
+        try encodeZero(commandBuffer, ffnOut, bytes: hidden * 2)
+        try router.encode(commandBuffer: commandBuffer, layer: layer, x: blockInput)
+        try shared.encode(commandBuffer: commandBuffer, layer: layer, x: blockInput, out: ffnOut)
+        let waitStart = GGUFDecodeTiming.now()
+        try finish(commandBuffer)
+        timing.add("  wait(attn)", since: waitStart)
+        timing.attentionWait(layer: layer, since: waitStart)
+        timing.gpuAttentionSeconds += commandBuffer.gpuEndTime - commandBuffer.gpuStartTime
+        timing.add("attn+router+shared", since: layerStart)
 
-        guard let tail = context.queue.makeCommandBuffer() else {
+        let routedStart = GGUFDecodeTiming.now()
+        let selection = router.select(topK: arch.topKExperts)
+        if layer == 0 { lastRouting = [] }
+        lastRouting.append(selection.experts)
+        try capture?.write(tag + ".topk", values: selection.experts.map(Float.init))
+        try capture?.write(tag + ".topk_weights", values: selection.weights)
+        let fetchStart = GGUFDecodeTiming.now()
+        for expert in selection.experts {
+            _ = try cache.expert(layer: layer, expert: expert)
+        }
+        timing.add("  expert fetch", since: fetchStart)
+        var routedBuffer = try makeCommandBuffer()
+        try routed.encode(
+            commandBuffer: routedBuffer, cache: cache, layer: layer, x: blockInput,
+            experts: selection.experts, weights: selection.weights, out: ffnOut)
+        try checkpoint(&routedBuffer, capture, tag + ".ffn_out", ffnOut, hidden)
+        try hc.encodeWrite(
+            commandBuffer: routedBuffer, layer: layer, sublayer: "ffn",
+            streamsBuffer: streams, blockOut: ffnOut)
+        let routedWait = GGUFDecodeTiming.now()
+        try finish(routedBuffer)
+        timing.add("  wait(routed)", since: routedWait)
+        timing.gpuRoutedSeconds += routedBuffer.gpuEndTime - routedBuffer.gpuStartTime
+        timing.add("routed", since: routedStart)
+        try capture?.write(tag + ".out", half: streams, count: wideCount)
+    }
+
+    private func makeCommandBuffer() throws -> MTLCommandBuffer {
+        guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw MetalError.commandEncoderFailed
         }
-        try output.encode(commandBuffer: tail, streamsBuffer: streams)
-        tail.commit()
-        tail.waitUntilCompleted()
-        if let error = tail.error { throw MetalError.invalidState("\(error)") }
-
-        let pointer = output.logits.contents().assumingMemoryBound(to: UInt16.self)
-        return (0..<arch.vocabSize).map { Float(Float16(bitPattern: pointer[$0])) }
+        return commandBuffer
     }
 
-    private func encodeRead(
-        _ cb: MTLCommandBuffer, prefix: String, streamsBuffer: MTLBuffer, out: MTLBuffer
+    private func finish(_ commandBuffer: MTLCommandBuffer) throws {
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error { throw MetalError.invalidState("\(error)") }
+    }
+
+    /// One command buffer around `body`, committed and waited on.
+    private func run(_ body: (MTLCommandBuffer) throws -> Void) throws {
+        let commandBuffer = try makeCommandBuffer()
+        try body(commandBuffer)
+        try finish(commandBuffer)
+    }
+
+    /// A stage boundary. With no capture it is free; with one, the work so far
+    /// is committed and waited on, the stage's output is written, and a fresh
+    /// command buffer continues - same kernels, same order, same numerics.
+    private func checkpoint(
+        _ commandBuffer: inout MTLCommandBuffer, _ capture: GGUFStageDump.Capture?,
+        _ stage: String, _ buffer: MTLBuffer, _ count: Int
     ) throws {
-        let sublayer = prefix.contains("attn") ? "attn" : "ffn"
-        let layer = try layerIndex(from: prefix)
-        try hc.encodeRead(
-            commandBuffer: cb, layer: layer, sublayer: sublayer,
-            streamsBuffer: streamsBuffer, out: out)
+        guard let capture else { return }
+        try finish(commandBuffer)
+        try capture.write(stage, half: buffer, count: count)
+        commandBuffer = try makeCommandBuffer()
     }
 
-    private func encodeWrite(
-        _ cb: MTLCommandBuffer, prefix: String, streamsBuffer: MTLBuffer, blockOut: MTLBuffer
-    ) throws {
-        let sublayer = prefix.contains("attn") ? "attn" : "ffn"
-        let layer = try layerIndex(from: prefix)
-        try hc.encodeWrite(
-            commandBuffer: cb, layer: layer, sublayer: sublayer,
-            streamsBuffer: streamsBuffer, blockOut: blockOut)
-    }
-
-    private func layerIndex(from prefix: String) throws -> Int {
-        let parts = prefix.split(separator: ".")
-        guard parts.count >= 2, let layer = Int(parts[1]) else {
-            throw MetalError.invalidState("cannot read a layer from \(prefix)")
+    /// Zeroes `bytes` of `buffer` in GPU order, so the clear lands after every
+    /// earlier write in the same command buffer and before every later one.
+    private func encodeZero(_ commandBuffer: MTLCommandBuffer, _ buffer: MTLBuffer, bytes: Int)
+        throws
+    {
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            throw MetalError.commandEncoderFailed
         }
-        return layer
+        blit.fill(buffer: buffer, range: 0..<bytes, value: 0)
+        blit.endEncoding()
     }
 }

@@ -52,3 +52,27 @@ kernel void gguf_bf16_to_half(
     if (gid >= n) return;
     dst[gid] = half(float(src[gid]));
 }
+
+// Router logits in F32. The checkpoint stores `ffn_gate_inp` as F32 and the
+// top-10 of 512 experts is decided by probability gaps of ~1e-4, so neither
+// the weights (bf16 would cost ~0.4%) nor the logits (half) are rounded.
+// One SIMD group per row; `cols` is a multiple of 4.
+kernel void gguf_f32_gemv_rows(
+    device const float* w    [[buffer(0)]],
+    device const half*  x    [[buffer(1)]],
+    device float*       y    [[buffer(2)]],
+    constant uint&      cols [[buffer(3)]],
+    constant uint&      rows [[buffer(4)]],
+    uint row  [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    if (row >= rows) return;
+    device const float4* w4 = (device const float4*)(w + row * cols);
+    device const half4*  x4 = (device const half4*)x;
+    float acc = 0.0f;
+    for (uint i = lane; i < cols / 4u; i += 32u) {
+        acc += dot(w4[i], float4(x4[i]));
+    }
+    acc = simd_sum(acc);
+    if (lane == 0) y[row] = acc;
+}

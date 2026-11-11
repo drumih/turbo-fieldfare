@@ -54,6 +54,13 @@ package enum GGUFExpertBufferCacheError: Error, Equatable, CustomStringConvertib
 /// fetch has to assemble them and the GEMV has to be told each matrix's type.
 /// Reads go straight into the shared MTLBuffer, so the GPU sees the bytes the
 /// fused GEMV will read without a host copy.
+///
+/// unchecked-invariant: every mutable field (`descriptors`, `order`, `entries`,
+/// `slots`, `freeSlots`) is read and written only while `lock` is held - in
+/// `expert(layer:expert:)` and the `load`/`descriptor` calls it makes under the
+/// lock. A slot handed out is rewritten only when it is evicted, and with
+/// `capacity >= top-k` that happens on a later layer's fetch, after the caller
+/// has waited for the GPU work reading it.
 package final class GGUFExpertBufferCache: @unchecked Sendable {
     private let model: GGUFModel
     private let device: MTLDevice

@@ -25,14 +25,20 @@ package final class GGUFGDNDecodeStage {
     private let convOut: MTLBuffer
     private let yOut: MTLBuffer
     private let gdnOut: MTLBuffer
-    private let tail: MTLBuffer
-    private let state: MTLBuffer
+    /// The causal conv's tail and the delta rule's FP32 state, one pair per
+    /// GDN layer: both are recurrent, so a layer reading another layer's
+    /// state is wrong from the first token on.
+    private let tails: [Int: MTLBuffer]
+    private let states: [Int: MTLBuffer]
 
     package init(
         context: MetalContext, arch: ArchConfig, arena: GGUFResidentArena,
         mapped: GGUFMappedShards
     ) throws {
-        self.gdn = try GDN(context: context, config: arch.linearAttention)
+        // A llama.cpp GGUF stores `ssm_a` as -exp(A_log) and the value heads in
+        // tiled order; the delta kernels compile for that layout.
+        self.gdn = try GDN(
+            context: context, config: arch.linearAttention, storage: .llamaCppGGUF)
         self.gemv = try BF16GEMV(context: context)
         self.fused = try GGUFExpertGEMV(context: context)
         self.arena = arena
@@ -57,9 +63,17 @@ package final class GGUFGDNDecodeStage {
         self.convOut = try make(config.qkvDim * half, "gdn conv")
         self.yOut = try make(value * half, "gdn y")
         self.gdnOut = try make(value * half, "gdn out")
-        self.tail = try make((config.convKernelSize - 1) * config.qkvDim * half, "gdn tail")
-        self.state = try make(
-            config.numVHeads * config.valueHeadDim * config.keyHeadDim * 4, "gdn state")
+        var tails: [Int: MTLBuffer] = [:]
+        var states: [Int: MTLBuffer] = [:]
+        for layer in 0..<arch.numLayers where arch.fullAttentionLayerMask[layer] == 2 {
+            tails[layer] = try make(
+                (config.convKernelSize - 1) * config.qkvDim * half, "gdn tail \(layer)")
+            states[layer] = try make(
+                config.numVHeads * config.valueHeadDim * config.keyHeadDim * 4,
+                "gdn state \(layer)")
+        }
+        self.tails = tails
+        self.states = states
     }
 
     /// Exposed for the verification test: the intermediate rows this stage
@@ -78,6 +92,9 @@ package final class GGUFGDNDecodeStage {
         out: MTLBuffer,
         outOffset: Int = 0
     ) throws {
+        guard let tail = tails[layer], let state = states[layer] else {
+            throw MetalError.invalidState("layer \(layer) is not a GDN layer")
+        }
         let prefix = "blk.\(layer)."
         // The fused GEMV entry point takes whole buffers; every caller passes
         // base buffers, so an offset here would be a silent mis-read.
@@ -137,5 +154,11 @@ package final class GGUFGDNDecodeStage {
             commandBuffer: commandBuffer, weights: outWeight.buffer,
             weightsOffset: outWeight.offset, x: gdnOut, y: out,
             rows: hidden, columns: config.valueDim, type: outWeight.type)
+    }
+
+    /// Clears every layer's conv tail and recurrent state, for a new sequence.
+    package func resetState() {
+        for buffer in tails.values { memset(buffer.contents(), 0, buffer.length) }
+        for buffer in states.values { memset(buffer.contents(), 0, buffer.length) }
     }
 }

@@ -55,6 +55,21 @@ constant bool FC_GDN_SIGMOID_GATE [[function_constant(96)]];
 // Only those two: they are 48 rows each against qkv's 10,240, so the fused
 // dispatch keeps its shape and only the two narrow slots read differently.
 constant bool FC_GDN_AB_BF16 [[function_constant(97)]];
+// The decay multiplier the delta rule reads: the engine's installs store the
+// raw A_log, so the kernel exponentiates (`exp(-exp(A) * sp)`). GGUF
+// checkpoints carry `ssm_a` already as `-exp(A_log)` — llama.cpp consumes it
+// raw — so the GGUF route compiles the pre-exponentiated variant and the
+// kernel multiplies directly. Measured on the UD-IQ3_XXS checkpoint
+// (2026-11-10): blk.0.ssm_a holds values like -9.05 and -77.0, which are
+// `-exp(A_log)` and not log-space.
+constant bool FC_GDN_A_LOG_PREEXP [[function_constant(98)]];
+// Which key head a value head reads when there are more value heads than key
+// heads (48 against 16 here). The engine's installs keep the Hugging Face
+// order, value heads grouped by key head, so head h reads key head
+// h / (Hv / Hk). llama.cpp's converter (`_LinearAttentionVReorderBase`)
+// reorders every per-value-head tensor of a GGUF to the tiled order ggml's
+// broadcast wants, so there head h reads key head h % Hk.
+constant bool FC_GDN_V_TILED [[function_constant(99)]];
 
 static inline bool gdn_ab_bf16() {
     return is_function_constant_defined(FC_GDN_AB_BF16) && FC_GDN_AB_BF16;
@@ -120,6 +135,25 @@ static inline float gdn_softplus(float x) {
     // log1p(exp(x)) with the standard large-x shortcut; matches
     // mlx.nn.softplus to FP32 precision.
     return (x > 20.0f) ? x : log(1.0f + exp(x));
+}
+
+/// The decay factor `g` from the gate multiplier `a` and the softplus'd time
+/// step. The storage semantics of `a` are selected by FC_GDN_A_LOG_PREEXP:
+/// raw A_log (engine installs) vs `-exp(A_log)` (GGUF `ssm_a`).
+/// The key head value head `h` pairs with, under FC_GDN_V_TILED.
+static inline uint gdn_key_head(uint h, uint Hv, uint Hk) {
+    if (is_function_constant_defined(FC_GDN_V_TILED) && FC_GDN_V_TILED) {
+        return h % Hk;
+    }
+    return h / (Hv / Hk);
+}
+
+static inline float gdn_decay(float a, float dtBias, float aLog) {
+    const float sp = gdn_softplus(a + dtBias);
+    if (is_function_constant_defined(FC_GDN_A_LOG_PREEXP) && FC_GDN_A_LOG_PREEXP) {
+        return exp(aLog * sp);
+    }
+    return exp(-exp(aLog) * sp);
 }
 
 // ----------------------------------------------------------------------------
@@ -516,13 +550,13 @@ kernel void gdn_delta_step_decode(
     const uint lane = tpos.x;
     if (h >= Hv || dv >= Dv) return;
 
-    const uint hk = h / (Hv / Hk);
+    const uint hk = gdn_key_head(h, Hv, Hk);
     device const half* q = conv_out + hk * Dk;
     device const half* k = conv_out + Hk * Dk + hk * Dk;
     device const half* v = conv_out + 2u * Hk * Dk + h * Dv;
 
-    const float g = exp(-exp(float(A_log[h]))
-                        * gdn_softplus(float(a_proj[h]) + float(dt_bias[h])));
+    const float g = gdn_decay(
+        float(a_proj[h]), float(dt_bias[h]), float(A_log[h]));
     const float beta = 1.0f / (1.0f + exp(-float(b_proj[h])));
 
     const uint nPerLane = Dk / 32u;
@@ -583,8 +617,7 @@ kernel void gdn_delta_step_prefill(
     const uint lane = tpos.x;
     if (h >= Hv || dv >= Dv) return;
 
-    const uint hk = h / (Hv / Hk);
-    const float expA = exp(float(A_log[h]));
+    const uint hk = gdn_key_head(h, Hv, Hk);
     const float dtb = float(dt_bias[h]);
 
     const uint nPerLane = Dk / 32u;
@@ -600,7 +633,8 @@ kernel void gdn_delta_step_prefill(
         device const half* k = conv_out + t * C + Hk * Dk + hk * Dk;
         device const half* v = conv_out + t * C + 2u * Hk * Dk + h * Dv;
 
-        const float g = exp(-expA * gdn_softplus(float(a_proj[t * Hv + h]) + dtb));
+        const float g = gdn_decay(
+            float(a_proj[t * Hv + h]), dtb, float(A_log[h]));
         const float beta = 1.0f / (1.0f + exp(-float(b_proj[t * Hv + h])));
 
         float kv = 0.0f;

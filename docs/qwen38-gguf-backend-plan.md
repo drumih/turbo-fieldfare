@@ -746,3 +746,79 @@ prefill path will call.
   (IQ4_XS gate 870,400 bytes, IQ4_NL down 921,600), not the average.
 - A whole shard is 49.9 GB and Metal refuses one that large; mapping is per
   tensor.
+
+## Parity against llama.cpp (2026-11-11)
+
+**Until this date the as-is decoder produced wrong text.** Every stage had been
+checked against a CPU reference written in this tree, and every stage passed;
+none had been checked against the model's own reference implementation. The
+reference is llama.cpp on the same GGUF: `llama.cpp` `7c2653a`
+(`src/models/qwen4exp.cpp`, converter `conversion/qwen4exp.py` and
+`conversion/qwen.py`), `llama-debug -ngl 0 -t 8 --temp 0`, CPU backend, with a
+local patch to `common/debug.cpp` that writes each matched tensor as float32.
+TinyTitan's side is the new opt-in capture `GGUFStageDump`
+(`TINYTITAN_GGUF_DUMP_DIR`, optional `TINYTITAN_GGUF_DUMP_POSITION`), which
+commits and waits at each stage boundary so a dump holds that stage's output.
+
+Prompt "The capital of France is" (ids 760 6511 314 9338 369). Stage by stage,
+per position, five defects were found and fixed:
+
+| # | defect | where | effect before the fix |
+| ---: | --- | --- | --- |
+| 1 | The GDN kernels paired value head h with key head `h / (Hv/Hk)`; llama.cpp's converter (`_LinearAttentionVReorderBase`) stores the value heads **tiled**, so h reads key head `h % Hk` | `gdn.metal`, `GDNStorageConvention` | 44 of 48 value heads read the wrong q/k; layer 0's GDN output cosine 0.91 at position 0 |
+| 2 | One conv tail and one recurrent state served all 36 GDN layers | `GGUFGDNDecodeStage` | every layer read the state the previous layer had just written; layer 1 wrong from the first token |
+| 3 | The FFN output buffer was zeroed with a host `memset` before the command buffer ran, after which the attention wrote into it and the shared expert accumulated on top | `GGUFDecoder` | every layer's FFN output carried that layer's attention output as an extra term |
+| 4 | The PLE hash got one predecessor; `ple.ngram_size` is 3, so it needs two | `GGUFDecoder+Prefill`, the CLI | wrong 3-gram rows (heads 8-15) from position 2 on |
+| 5 | The CLI's decode loop gave the first generated token no predecessor at all | `RunGGUF.swift` | wrong 2- and 3-gram rows on the first generated token |
+
+The `ssm_a` semantics (it is `-exp(A_log)` in the GGUF, measured -9.05 and -77.0
+on `blk.0`) were already fixed on 2026-11-10 and now sit in the same
+`GDNStorageConvention.llamaCppGGUF` as defect 1, so the GGUF stage declares its
+layout once. The PLE window is derived in one place
+(`GGUFPLEStage.window(of:at:ngramSize:)`, from the checkpoint's own n-gram
+size), and `GGUFDecoder.decode(sequence:position:)` is the call every caller
+uses, so a caller cannot hand the hash a shorter context.
+
+**After the fixes** (`.build/parity` on this M3, under heavy unrelated load):
+
+| measure | position 0 | position 4 |
+| --- | ---: | ---: |
+| embedding broadcast, relative error | 0.0016 | 0.0016 |
+| layer 0 residual, relative error / cosine | 0.018 / 0.99992 | 0.017 / 0.99989 |
+| layer 20 residual | 0.021 / 0.99982 (l16) | 0.117 / 0.9933 |
+| layer 47 residual | — | 0.217 / 0.9794 |
+| final logits, relative error / cosine | — | 0.151 / 0.9891 |
+| top-1 | — | **11751 " Paris", identical** |
+| top-5 set | — | **identical** |
+
+The growth with depth is explained, not assumed: every expert-set difference
+between the two engines was dumped (`ffn_moe_topk`, `ffn_moe_probs` against
+`GGUFStageDump`'s `.topk`), and in every layer the experts that differ sit at
+the top-10 boundary, where the 10th and 11th router probabilities differ by
+~1e-4 (10 of 48 layers at position 0, 27 of 48 at position 4). A routing flip
+swaps one ~0.01-weight expert for another, which is what the per-layer jumps in
+the residual error look like. llama.cpp's CPU backend quantises the activations
+to 8 bits before every k-quant and IQ dot product; this decoder keeps them in
+half, so the two disagree at that level by construction. Keeping the router in
+F32 (the checkpoint's precision, previously bf16 weights and half logits) did
+not change the count of differing layers.
+
+What this does not yet establish is a **noise floor**: the llama.cpp build on
+this host is CPU-only (`GGML_METAL=OFF`), so there is no second reference whose
+disagreement with the first bounds what "within noise" means. Until one exists
+the acceptance bar for this route is the decision, not the bits: the same
+top-1, the same top-5 set, and top-5 logits within 1.0 - which
+`GGUFLogitProbeTests` pins against the reference values above
+(model-gated, `TINYTITAN_GGUF_MODEL`).
+
+**Traps recorded:**
+
+- A host read of a buffer between `encode` and `commit` sees what the buffer
+  held before the command buffer runs. The earlier ad-hoc dumps did exactly
+  that and reported stage errors that were stale data; `GGUFStageDump` commits
+  at each boundary instead.
+- A host `memset` of a buffer that a not-yet-committed command buffer writes is
+  not a reset: the GPU writes happen after it. Clear in GPU order (a blit
+  `fill`) or give the result its own buffer.
+- `/tmp/refdump` and `.build/parity/ref` were bit-identical: both CPU. A noise
+  floor needs a different backend, not a second run of the same one.

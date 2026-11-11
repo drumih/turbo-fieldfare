@@ -117,14 +117,19 @@ import TinyTitanValidationSupport
         var state = [Float](repeating: 0, count: Hv * Dv * Dk)
         var y = [Float](repeating: 0, count: valueDim)
         for h in 0..<Hv {
-            let hk = h / (Hv / Hk)
+            // llama.cpp's converter stores the value heads tiled across the
+            // key heads (`_LinearAttentionVReorderBase`): head h reads key
+            // head h % Hk, not the Hugging Face grouping h / (Hv / Hk).
+            let hk = h % Hk
             let qBase = hk * Dk
             let kBase = Hk * Dk + hk * Dk
             let vBase = 2 * Hk * Dk + h * Dv
             let ah = Float(Float16(a[h]))
             let dtv = Float(Float16(dt[h]))
             let softplus = (ah + dtv > 20) ? ah + dtv : log(1 + exp(ah + dtv))
-            let g = exp(-exp(Float(Float16(aLog[h]))) * softplus)
+            // The GGUF's ssm_a already holds -exp(A_log) (the value llama.cpp
+            // consumes raw), so the decay multiplies it directly.
+            let g = exp(Float(Float16(aLog[h])) * softplus)
             let beta = 1 / (1 + exp(-Float(Float16(b[h]))))
             for dv in 0..<Dv {
                 let base = (h * Dv + dv) * Dk

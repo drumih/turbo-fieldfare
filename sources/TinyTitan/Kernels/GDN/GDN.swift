@@ -33,10 +33,14 @@ final class GDN {
     /// input projection for the decode shape. Measured elsewhere in this
     /// package: an unspecialized INT4 GEMV runs ~102 GB/s against ~141 GB/s
     /// specialized, so the runtime path must not be the only one available.
+    ///
+    /// `storage` names how the checkpoint lays out what the delta kernels
+    /// read; `.engine` is bit-identical to the historical kernel.
     init(
         context: MetalContext, config: LinearAttentionConfig,
         specializedHiddenSize: Int? = nil,
-        abBF16: Bool = false
+        abBF16: Bool = false,
+        storage: GDNStorageConvention = .engine
     ) throws {
         precondition(
             config.keyHeadDim > 0 && config.keyHeadDim % 32 == 0,
@@ -62,8 +66,18 @@ final class GDN {
                     index: 95,
                     value: .uint32(Self.normThreadsPerGroup))
             ])
-        self.deltaDecodePSO = try context.pipeline("gdn_delta_step_decode")
-        self.deltaPrefillPSO = try context.pipeline("gdn_delta_step_prefill")
+        self.deltaDecodePSO = try context.pipeline(
+            "gdn_delta_step_decode",
+            constants: [
+                MetalFunctionConstant(index: 98, value: .bool(storage.aLogPreexponentiated)),
+                MetalFunctionConstant(index: 99, value: .bool(storage.valueHeadsTiled)),
+            ])
+        self.deltaPrefillPSO = try context.pipeline(
+            "gdn_delta_step_prefill",
+            constants: [
+                MetalFunctionConstant(index: 98, value: .bool(storage.aLogPreexponentiated)),
+                MetalFunctionConstant(index: 99, value: .bool(storage.valueHeadsTiled)),
+            ])
         self.gatedNormPSO = try context.pipeline(
             "gdn_gated_norm",
             constants: [
