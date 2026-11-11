@@ -34,6 +34,34 @@ It is ambitious but not physically excluded. If the GPU floor measures
 higher than 55 ms, the target becomes about 1000 / (GPU + 15) and this
 document records that.
 
+## Measured ceilings (2026-11-11)
+
+- **Drive.** Random 1 MiB `pread`s from the 50 GB shard reach 3.62 / 3.77 /
+  3.91 / 3.96 / 3.93 GB/s at 4 / 8 / 16 / 32 / 64 threads. At 10 tok/s that
+  is about 390 MB a token in total. The true misses alone are 220 MB (76.7%
+  hits at 57 slots), so the misses have to be read in full overlap with the
+  GPU, and wrong guesses fit only in the remaining ~170 MB.
+- **Advice width.** The drive sets this budget, and the measurement shows
+  it. Two interleaved rounds, 200 tokens:
+
+  | guesses advised per layer | fetch per token | decode (tok/s) |
+  | --- | --- | --- |
+  | 6 | 109 / 105 ms | 3.66 / 3.79 |
+  | 8 | 100 / 101 ms | 3.84 / 3.84 |
+  | 10 (default) | 91 / 91 ms, then 102 / 96 | 4.45 / 4.32, then 3.68 / 3.87 |
+  | 16 | 115 / 120 ms | 3.34 / 3.50 |
+  | 24 | 212 / 265 ms | 2.23 / 2.13 |
+
+  Wider guesses saturate the drive and lose. The levers that remain on the
+  I/O side are guesses that are *more precise* (recall at a fixed width),
+  not more of them, plus a higher hit rate (more of the 10 GB for the
+  cache).
+- **Consequence.** Even with perfect overlap the drive needs about 56 ms a
+  token for the true misses at today's hit rate. 10 tok/s requires the
+  GPU's 48 layers and the miss reads to overlap almost completely. That
+  pipelines the routed half of a layer against the next layer's reads,
+  which is the engine's 99.7% `io_hidden` state.
+
 ## Steps (each: measure first, then code, then verify; one commit each)
 
 ### 1. I/O off the critical path (target: exposed fetch at or below 15 ms)
@@ -101,6 +129,7 @@ document records that.
 | step | state |
 | --- | --- |
 | 1.1 advise next layer, top-10, concurrent issue | **landed**: fetch 115-124 -> 90-92 ms, tok/s 4.13 -> 4.22 and 3.35 -> 3.94 |
-| 1.1 deeper/wider advice | planned |
+| 1.1 wider advice (16, 24) | **rejected**: saturates the drive (table above) |
+| 1.1 two-layers-ahead advice | planned; only with a precision measurement first |
 | 2.x GPU kernels | planned |
 | 3.x overhead | planned |
