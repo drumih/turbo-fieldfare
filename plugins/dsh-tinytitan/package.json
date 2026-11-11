@@ -73,5 +73,8 @@
     "globals": "17.12.0",
     "js-yaml": "^4.3.2",
     "prettier": "3.9.9"
+  },
+  "overrides": {
+    "minimatch": "11.0.7"
   }
 }
