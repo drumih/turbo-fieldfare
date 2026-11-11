@@ -996,3 +996,43 @@ ms, embedding and PLE 2 ms.
 **Next:** use the SSD's idle time during each layer's GPU work to read the
 next layer's predicted experts (the engine's predictive ring). This is the
 one lever left that the fetch time points at.
+
+### Rejected and kept after 7194d24 (2026-11-11, late)
+
+The machine was shared with another project's builds and test runs all
+evening (`swiftpm-testing-helper` at 370% CPU, a Python worker at 95%), so
+these are interleaved A/Bs on a loaded machine. Each kept or rejected change
+was decided only within its own interleaved set. Text was identical in every
+run.
+
+- **Predictive prefetch, rejected again.** Layer L+1's router was run on
+  layer L's FFN input, and the guess was read while the GPU ran (slots
+  reserved, published when complete). With 10 guesses, 67% of the prefetched
+  experts were used and on-demand misses fell from 15.3k to 9.0k over 80
+  tokens. Decode was 3.81/3.82 tok/s against 4.05/3.63 without it, and 6
+  guesses gave 3.74/3.51. The wrong guesses add about 37% more bytes to a
+  drive that is the bottleneck. Removed. The engine's record says the same
+  for its own ring at 12 GB (+0.11 tok/s).
+- **Spin-waiting on the GPU, rejected.** Polling the command buffer status
+  instead of `waitUntilCompleted` gave 2.89/2.58 tok/s against 3.47/3.59.
+  Removed.
+- **Read piece size: 1 MiB.** Mean fetch per token, two rounds: 64 KiB
+  163/205 ms, 128 KiB 198/161, 256 KiB 157/165, 1 MiB 124/133. A matrix is
+  now one `pread`. The concurrent queue is what helped, not the cutting.
+- **The token embedding is read by row.** The 0.49 GB table is no longer
+  held; a token reads its 2,100-byte Q6_K row. At 10 GB the expert cache
+  grows from 52 to 57 slots per layer (5.3 GB). The budget breakdown is
+  printed under `TINYTITAN_GGUF_TRACE` (arena 265 MiB, 4.8 GiB outside the
+  cache including the margin).
+- **Replacement policy: LRU stays.** Replaying two 300-token routing logs at
+  57 slots: LRU 74.1/73.7%, LRU-2 71.6/73.2%, decayed LFU (0.9) 74.9/74.9%,
+  (0.97) 72.4/74.6%. One point is not worth a policy change.
+
+**Where 10 GB stands.** A 300-token essay settles at 76.7% hits, 112 misses
+a token (220 MB), and 229-268 ms a token (3.7-4.4 tok/s) on the loaded
+machine. Per token: fetch 103 ms (about 2.1 GB/s effective, since a layer's
+misses are a few short reads), GPU 90 ms, head 9 ms. The engine's 4-bit
+Qwen 3.8 campaign recorded 4.29 tok/s at 12 GB and called decode there
+SSD-bound (`docs/qwen38-decode-12gb-measurements.md`). 6 tok/s at 10 GB
+needs about 165 ms a token, so both the GPU half and the fetch half have to
+shrink.

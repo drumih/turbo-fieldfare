@@ -30,7 +30,12 @@ package final class GGUFDecoder {
     let ple: GGUFPLEStage
     let output: GGUFOutputStage
     let embedGather: GGUFEmbeddingGather
+    /// The one token-embedding row the current token needs, in its blocks.
     let embedTable: MTLBuffer
+    let embedDescriptor: Int32
+    let embedFileOffset: UInt64
+    let embedRowBytes: Int
+    let embedRows: Int
     let convert: MTLComputePipelineState
 
     let streams: MTLBuffer
@@ -138,16 +143,31 @@ package final class GGUFDecoder {
         guard let location = model.tensor(named: "token_embd.weight") else {
             throw MetalError.invalidState("missing token_embd.weight")
         }
+        // A token reads one row of the 0.49 GB table, so the row is read from
+        // the file per token rather than the table held: the half gigabyte
+        // goes to the expert cache instead.
         let shard = model.shards[location.shardIndex]
-        let handle = try FileHandle(forReadingFrom: shard.url)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: shard.dataOffset + location.tensor.offset)
-        let data = try handle.read(upToCount: Int(location.tensor.byteCount)) ?? Data()
+        let rows = location.tensor.dimensions.dropFirst().reduce(1) { $0 * Int($1) }
+        guard rows > 0, Int(location.tensor.byteCount) % rows == 0 else {
+            throw MetalError.invalidState("token_embd.weight rows do not divide its bytes")
+        }
+        self.embedRowBytes = Int(location.tensor.byteCount) / rows
+        self.embedRows = rows
+        self.embedFileOffset = shard.dataOffset + location.tensor.offset
+        let descriptor = open(shard.url.path, O_RDONLY | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw MetalError.invalidState(
+                "cannot open \(shard.url.lastPathComponent): errno \(errno)")
+        }
+        self.embedDescriptor = descriptor
         guard
-            let table = context.device.makeBuffer(
-                bytes: [UInt8](data), length: data.count, options: .storageModeShared)
-        else { throw MetalError.bufferAllocationFailed("token embedding table") }
-        self.embedTable = table
+            let row = context.device.makeBuffer(
+                length: embedRowBytes, options: .storageModeShared)
+        else {
+            close(descriptor)
+            throw MetalError.bufferAllocationFailed("token embedding row")
+        }
+        self.embedTable = row
 
         func make(_ bytes: Int, _ label: String) throws -> MTLBuffer {
             guard
@@ -171,7 +191,18 @@ package final class GGUFDecoder {
             // The budget counts these bytes; pin them so the system cannot
             // swap them out between dispatches (see ResidentMemoryLock).
             ResidentMemoryLock.lock(cache.poolBuffers, label: "the expert cache")
-            ResidentMemoryLock.lock([arena.buffer, embedTable], label: "the resident weights")
+            ResidentMemoryLock.lock([arena.buffer], label: "the resident weights")
+        }
+        if GGUFDecodeTiming.enabled {
+            let mib = 1_048_576
+            let outside = Self.residentBytesOutsideTheExpertCache(
+                model: model, arenaBytes: arena.buffer.length)
+            FileHandle.standardError.write(
+                Data(
+                    ("  memory: arena \(arena.buffer.length / mib) MiB, outside the expert "
+                        + "cache \(outside / mib) MiB (with the margin), expert cache "
+                        + "\(cache.residentBytes / mib) MiB in \(cache.capacity) slots/layer\n")
+                        .utf8))
         }
     }
 
@@ -229,88 +260,27 @@ package final class GGUFDecoder {
         return logits
     }
 
-    /// Expert slots per layer: the RAM budget (`TINYTITAN_GGUF_EXPERT_CACHE_GB`,
-    /// default a twelfth of physical memory) divided by what one slot costs
-    /// across all layers, at least two top-k sets (the pinned layer and the one
-    /// being fetched) and at most every expert.
-    ///
-    /// The default is measured, not guessed. The pool is wired Metal memory, so
-    /// every GiB it takes is a GiB the mmap'd attention and GDN weights lose to
-    /// the page cache. On the 24 GB M-series Mac (essay prompt, 80 tokens, two
-    /// rounds, 2026-11-11): 2 GiB 2.07/2.46 tok/s, 3 GiB 1.07/2.46, 4 GiB
-    /// 0.75/2.34 with wait(attn) doubling to 199 ms; the hit rate rose 52% -> 64%
-    /// and bought nothing. 6 GiB (the old quarter) drove free memory to 28% and
-    /// the GPU into page-fault stalls. A twelfth is 2 GiB there.
-    ///
-    /// With a process target (`ramBudgetBytes`, the CLI's `--ram-budget`, the
-    /// launcher's `--ram`) the cache gets what the target leaves after the rest
-    /// of the model: every non-expert tensor as stored (the mapped matrices are
-    /// paged in on use and count against the process), the bf16 arena built
-    /// from some of them, and a working margin for KV, scratch and the
-    /// runtime. A target that leaves less than the two-set floor is refused
-    /// with the floor named, rather than silently exceeded.
-    static func expertSlotsPerLayer(
-        model: GGUFModel, arch: ArchConfig, ramBudgetBytes: Int?, arenaBytes: Int
-    ) throws -> Int {
-        let perSlot = try GGUFExpertBufferCache.bytesPerSlotAcrossLayers(model: model)
-        let floor = 2 * arch.topKExperts
-        let budget: Double
-        if let ramBudgetBytes {
-            let resident = residentBytesOutsideTheExpertCache(
-                model: model, arenaBytes: arenaBytes)
-            let required = resident + floor * perSlot
-            guard ramBudgetBytes >= required else {
-                throw MetalError.invalidState(
-                    "--ram-budget \(ramBudgetBytes / 1_048_576) MiB is below this model's floor of "
-                        + "\(required / 1_048_576) MiB (\(resident / 1_048_576) MiB outside the "
-                        + "expert cache plus \(floor) expert slots per layer)")
-            }
-            budget = Double(ramBudgetBytes - resident)
-        } else if let value = ProcessInfo.processInfo.environment["TINYTITAN_GGUF_EXPERT_CACHE_GB"]
-            .flatMap(Double.init), value > 0
-        {
-            budget = value * 1_073_741_824
-        } else {
-            budget = Double(ProcessInfo.processInfo.physicalMemory) / 12
-        }
-        let slots = Int(budget / Double(perSlot))
-        return min(arch.numExperts, max(floor, slots))
-    }
-
-    /// What the process holds besides the expert pools: the non-expert
-    /// tensors as stored, the bf16 arena, and a 768 MiB margin (KV cache,
-    /// scratch, Metal and the runtime itself).
-    ///
-    /// The PLE n-gram table is left out: it is 26.8 GiB of this checkpoint's
-    /// 77.2, and the stage reads a handful of its rows per token from the
-    /// mapping, so what it costs the process is those pages, not the table.
-    /// Counting it would put every RAM target under 33 GiB below the floor.
-    static func residentBytesOutsideTheExpertCache(model: GGUFModel, arenaBytes: Int) -> Int {
-        let notResident = model.tensors.filter { name, _ in
-            name.contains("_exps.") || name.hasSuffix("per_layer_token_embd.weight")
-        }
-        .reduce(0) { $0 + Int($1.value.tensor.byteCount) }
-        let resident = Int(model.totalTensorBytes) - notResident
-        return resident + arenaBytes + 768 * 1_048_576
-    }
-
-    private static func openRoutingLog(_ path: String?) -> FileHandle? {
-        guard let path, !path.isEmpty else { return nil }
-        if !FileManager.default.fileExists(atPath: path) {
-            FileManager.default.createFile(atPath: path, contents: nil)
-        }
-        guard let handle = FileHandle(forWritingAtPath: path) else { return nil }
-        handle.seekToEndOfFile()
-        return handle
-    }
-
     /// The residual's element count: every hyper stream of the hidden width.
     var wideCount: Int { arch.hyperConnections.count * hidden }
 
     /// Embedding: gather the token's Q6_K row as bf16, convert to half, and
     /// place it in stream 0 for the broadcast.
     func embed(token: Int32) throws {
-        rowIndex.contents().assumingMemoryBound(to: UInt32.self)[0] = UInt32(bitPattern: token)
+        guard token >= 0, Int(token) < embedRows else {
+            throw MetalError.invalidState(
+                "token \(token) is outside the \(embedRows)-row vocabulary")
+        }
+        var done = 0
+        while done < embedRowBytes {
+            let got = pread(
+                embedDescriptor, embedTable.contents() + done, embedRowBytes - done,
+                off_t(embedFileOffset) + off_t(Int(token) * embedRowBytes + done))
+            guard got > 0 else {
+                throw MetalError.invalidState("short read of token \(token)'s embedding row")
+            }
+            done += got
+        }
+        rowIndex.contents().assumingMemoryBound(to: UInt32.self)[0] = 0
         try run { commandBuffer in
             try embedGather.encode(
                 commandBuffer: commandBuffer, table: embedTable, rows: rowIndex, count: 1,
@@ -411,6 +381,8 @@ package final class GGUFDecoder {
         try checkpoint(&commandBuffer, capture, tag + ".out", streams, wideCount)
         timing.add("routed", since: routedStart)
     }
+
+    deinit { close(embedDescriptor) }
 
     func makeCommandBuffer() throws -> MTLCommandBuffer {
         guard let commandBuffer = context.queue.makeCommandBuffer() else {

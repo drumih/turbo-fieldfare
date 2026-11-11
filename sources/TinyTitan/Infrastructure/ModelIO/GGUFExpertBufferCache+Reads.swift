@@ -50,8 +50,11 @@ extension GGUFExpertBufferCache {
         private var failure: Error?
 
         /// Bytes per `pread`. A layer's misses are a few matrices of 0.3-0.9
-        /// MB; cut into pieces of this size they keep the drive's queue deep.
-        static let pieceBytes = 256 << 10
+        /// MB, so at 1 MiB a matrix is one read. Measured at `--ram-budget
+        /// 10G`, two interleaved rounds, mean fetch per token: 64 KiB 163/205
+        /// ms, 128 KiB 198/161, 256 KiB 157/165, 1 MiB 124/133 - smaller
+        /// pieces only added syscalls and thread hand-offs.
+        static let pieceBytes = 1 << 20
 
         /// The pool the pieces run on. `concurrentPerform` runs one item per
         /// CPU core, so a blocking read held the queue depth at the core count;
