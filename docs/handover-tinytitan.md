@@ -1,31 +1,49 @@
-# Handover: the as-is GGUF route (2026-11-11)
+# Handover: the as-is GGUF route (2026-11-11, evening)
 
 **Read this block first; the release handover below it is older.** The Unsloth
 `Qwen3.8-Flash-Next-UD-IQ3_XXS` GGUF in `models/qwen3.8-flash-next-unsloth-iq3xxs`
 runs in place, CLI only: `.build/release/TinyTitanCLI --model
-models/qwen3.8-flash-next-unsloth-iq3xxs --prompt "..."` (a directory of `.gguf`
-shards with no `manifest.json` routes to `runGGUFAsIs`). The engineering record
-is `docs/qwen38-gguf-backend-plan.md`, its last three sections in particular.
+models/qwen3.8-flash-next-unsloth-iq3xxs --ram-budget 10G --prompt "..."`.
+The engineering record is `docs/qwen38-gguf-backend-plan.md`. The live target
+is `docs/plan-gguf-decode-10toks.md`: the owner wants **10 tok/s decode at
+`--ram-budget 10G`**. Test only at that budget.
 
-- **Correct against llama.cpp** since `203673c`: same top-1/top-5 and top-5
-  logits within 1.0 on the pinned prompt (`GGUFLogitProbeTests`, model-gated by
-  `TINYTITAN_GGUF_MODEL`). Five defects were fixed; the traps that hid them are
-  in the plan doc. Any change to this path re-runs that test.
-- **Speed**: 1.07 -> 2.6-3.8 tok/s decode on the 24 GB M3 (`e539c42`: one
-  concurrent fetch per layer, vectorised Q6_K/Q8_0 GEMV). The fetch now runs
-  near the drive's read limit; speculative prefetch was measured and rejected
-  (`f74d8c2`). `TINYTITAN_GGUF_TRACE=1` prints the per-phase split.
-- **Parity tooling**: `TINYTITAN_GGUF_DUMP_DIR` (+ `_POSITION`) captures every
-  stage; the llama.cpp side needs `llama-debug` with a local tensor-dump patch
-  (the plan doc names it). Comparison scripts used on 2026-11-11 lived in the
-  gitignored `.build/parity/`.
-- **Open** (wiki Project Tracker): TT-056 chunked prefill and the ANE sidecar
-  (the prompt still runs token by token), TT-057 decode speed, TT-058 serving
-  through `TinyTitanLib` and the server, TT-059 QSA beyond 2,048 tokens, TT-060
-  a measured noise floor (needs a Metal llama.cpp build).
-- **Machine**: this Mac is shared with other projects' builds and an ANE
-  compile; check `uptime` and the top CPU users before calling a number a
-  measurement, and A/B interleaved in one build.
+- **Correct against llama.cpp**: `GGUFLogitProbeTests` (model-gated by
+  `TINYTITAN_GGUF_MODEL`) plus the bit-identity suites
+  (`GGUFBatchedPrefillTests`, `GGUFMoEBatchedRouteTests`,
+  `GGUFDecoderDeterminismTests`). Re-run them for any change to this path.
+- **Speed at 10 GB**: 0.52 -> about 4 tok/s warm. The best paired runs were
+  4.45 and 4.32; the warm window reaches 4.7-4.8 (`3708153`). A warm token
+  is GPU 75-90 ms, exposed expert fetch about 91 ms, head about 12 ms,
+  waits about 20 ms.
+- **Measured ceilings**:
+  - The drive reads about 3.9 GB/s (random 1 MiB).
+  - True misses are 220 MB a token at 76.7% hits with 57 slots per layer.
+  - Advising more than ~10 guesses a layer saturates the drive and loses.
+- **Rejected on measurement**: slot-claiming prefetch, spin-waits, wider
+  advice, smaller read pieces, LFU-style eviction. The numbers are in the
+  plan docs.
+- **Next levers**, in order:
+  1. Overlap the miss reads with GPU work across the layer boundary (the
+     engine's `io_hidden` 99.7%).
+  2. Q6_K/Q8_0 mixer GEMVs from about 55-61 to about 75-80 GB/s.
+  3. Fewer encoders per layer (fused GDN small ops, one encoder per buffer).
+  4. Argmax on the GPU.
+  5. Batched two-token decode kernels (amortise the mixer weight reads),
+     which would make MTP from the shipped `mtp-*.gguf` pay. The engine's
+     MTP lost (-43%) because its verify pass did not amortise.
+- **Tooling**: `TINYTITAN_GGUF_TRACE=1` (per-phase split, memory breakdown).
+  The opt-in benchmarks are `GGUFRoutedKernelBenchmarkTests` and
+  `GGUFMixerStageBenchmarkTests` (`TINYTITAN_KERNEL_BENCH=1`). The analysis
+  scripts (`window.py`, `avg.py`, `ssd_bench.py`) are in the gitignored
+  `.build/m1/` and should be promoted into `benchmark/`.
+- **Open** (wiki Project Tracker): TT-056 ANE prefill (needs 4,096-token
+  chunks; the exported sidecar sits in `/tmp/gguf-ane-source` and must move
+  into the model directory), TT-057 decode speed, TT-058 serving through
+  `TinyTitanLib`, TT-059 QSA beyond 2,048 tokens, TT-060 noise floor.
+- **Machine**: shared with another project's builds and tests (FXAI). Check
+  the top CPU users before calling a number a measurement, and keep only
+  paired wins in both rounds.
 
 # Handover: after release 5.18, the pre-production audit
 
