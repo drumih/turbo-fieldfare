@@ -667,6 +667,28 @@ class SnapshotContractTests(unittest.TestCase):
 
 
 @requires_deps
+class ParallelFetchTests(unittest.TestCase):
+    """`--fetch-workers` changes download order, never the snapshot."""
+
+    def test_parallel_fetch_writes_the_clean_run_snapshot(self) -> None:
+        files, _plan = checkpoint()
+        root = pathlib.Path(tempfile.mkdtemp(prefix="tt-e2e-parallel-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        with mirror(files) as server:
+            code, log = run_converter(
+                root / "out",
+                root / "work",
+                server.base,
+                extra=("--fetch-workers", 3),
+                patch_sleep=False,
+            )
+        self.assertEqual(code, 0, log)
+        self.assertEqual(fingerprint(root / "out"), baseline_fingerprint())
+        leftovers = [p.name for p in (root / "work").glob("*.safetensors")]
+        self.assertEqual(leftovers, [])
+
+
+@requires_deps
 class TransportFaultTests(unittest.TestCase):
     """Transport failures during real downloads, and their recovery."""
 

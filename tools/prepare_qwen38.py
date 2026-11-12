@@ -1168,6 +1168,14 @@ def main() -> int:
         help="routed-expert width of the install being built",
     )
     ap.add_argument(
+        "--fetch-workers",
+        type=int,
+        default=1,
+        help="checkpoint shards downloaded concurrently (default 1). The Hub "
+        "serves one connection at a few MB/s on some links, so 4 keeps a "
+        "slow link busy; each in-flight shard costs ~3.4 GB of --work space",
+    )
+    ap.add_argument(
         "--rest-bf16",
         action="store_true",
         help="keep every tensor except the routed experts at bf16 "
@@ -1311,7 +1319,7 @@ def main() -> int:
         raise SystemExit(
             f"{args.output} holds a partial conversion with recipe {previous_recipe} "
             f"and this run is {recipe}. Adopting those shards would put two "
-            "recipes in one snapshot without recording it; delete the directory "
+            "widths in one snapshot without recording it; delete the directory "
             "or point --output at a new one."
         )
     marker.write_text(json.dumps(recipe, indent=1))
@@ -1377,7 +1385,15 @@ def main() -> int:
         sizes = list(pool.map(remote_size, shards))
     total = sum(size for size in sizes if size) if all(sizes) else None
     progress = Progress("converting", total)
-    queue: Queue = Queue(maxsize=1)
+    workers = max(1, args.fetch_workers)
+    queue: Queue = Queue(maxsize=workers)
+    # Bounds the shards on disk that are fetched but not yet converted, so a
+    # link faster than the converter cannot fill --work.
+    on_disk = threading.Semaphore(2 * workers)
+
+    def fetch_bounded(shard: str) -> Path:
+        on_disk.acquire()
+        return download(shard, work, None, 0.0)
 
     def fetcher() -> None:
         base = 0.0
@@ -1390,7 +1406,22 @@ def main() -> int:
             base += size or 0
         queue.put(None)
 
-    threading.Thread(target=fetcher, daemon=True).start()
+    def parallel_fetcher() -> None:
+        # Shards are converted in completion order: each checkpoint shard's
+        # tensors land in output shards the index names, so order does not
+        # change what the snapshot holds. The live byte counter assumes one
+        # download at a time, so the parallel path reports converted shards.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as fetch_pool:
+            futures = [fetch_pool.submit(fetch_bounded, shard) for shard in shards]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    queue.put(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    queue.put(exc)
+                    return
+        queue.put(None)
+
+    threading.Thread(target=fetcher if workers == 1 else parallel_fetcher, daemon=True).start()
     done = 0
     while True:
         item = queue.get()
@@ -1403,6 +1434,8 @@ def main() -> int:
         progress.show(f"{done}/{len(shards)} shards  {progress.amount}")
         convert_shard(item, writer, ngram, args.bits)
         item.unlink()
+        if workers > 1:
+            on_disk.release()
     progress.finish(f"  fetched and converted {done} of {len(shards)} shards")
 
     writer.finish()
