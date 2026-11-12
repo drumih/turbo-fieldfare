@@ -337,6 +337,19 @@ PROMOTE_TO_BF16_AT_8BIT = (
 )
 
 
+# `--rest-bf16`: every tensor except the routed experts stays at the
+# checkpoint's bf16. An evaluation build (requested 2026-11-12), not an
+# installer preset: on the 24 GB M3 it holds ~9.2 GiB resident instead of
+# ~3.2, so it cannot start under `--ram-budget 10G` and was projected at
+# about 2.5 tok/s against 4.5 at the default budget. It exists to measure
+# what 16-bit dense weights buy in quality against that cost.
+REST_BF16 = False
+
+
+def is_routed_expert(name: str) -> bool:
+    return ".mlp.switch_mlp." in name
+
+
 def promoted_to_bf16(name: str, width: int) -> bool:
     """Is this tensor kept unquantized in a build of this width?"""
     if width != BITS_8:
@@ -389,6 +402,8 @@ def quant_bits(name: str, width: int = BITS_4) -> int | None:
     keys), so the promotion is a decision per tensor rather than a switch.
     """
     if not name.endswith(".weight"):
+        return None
+    if REST_BF16 and not is_routed_expert(name):
         return None
     if name.endswith("conv1d.weight"):
         return None
@@ -1153,6 +1168,12 @@ def main() -> int:
         help="routed-expert width of the install being built",
     )
     ap.add_argument(
+        "--rest-bf16",
+        action="store_true",
+        help="keep every tensor except the routed experts at bf16 "
+        "(evaluation build; cannot start under --ram-budget 10G)",
+    )
+    ap.add_argument(
         "--rewrite-config", type=Path, help="regenerate config.json for an existing snapshot"
     )
     ap.add_argument("--output", type=Path)
@@ -1180,7 +1201,8 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    global HF_ENDPOINT, BASE
+    global HF_ENDPOINT, BASE, REST_BF16
+    REST_BF16 = args.rest_bf16
     HF_ENDPOINT = args.endpoint.rstrip("/")
     BASE = endpoint_base(HF_ENDPOINT)
 
@@ -1279,14 +1301,20 @@ def main() -> int:
     marker = args.output / "conversion.json"
     adoptable = list(args.output.glob("model-[0-9][0-9][0-9][0-9][0-9].safetensors"))
     previous_bits = read_json_file(marker)
-    if adoptable and previous_bits is not None and previous_bits.get("bits") != args.bits:
+    recipe = {"bits": args.bits, "rest_bf16": REST_BF16}
+    previous_recipe = (
+        {"bits": previous_bits.get("bits"), "rest_bf16": previous_bits.get("rest_bf16", False)}
+        if previous_bits is not None
+        else None
+    )
+    if adoptable and previous_recipe is not None and previous_recipe != recipe:
         raise SystemExit(
-            f"{args.output} holds a partial {previous_bits.get('bits')}-bit "
-            f"conversion and this run is {args.bits}-bit. Adopting those shards "
-            "would put two widths in one snapshot without recording it; delete "
-            "the directory or point --output at a new one."
+            f"{args.output} holds a partial conversion with recipe {previous_recipe} "
+            f"and this run is {recipe}. Adopting those shards would put two "
+            "recipes in one snapshot without recording it; delete the directory "
+            "or point --output at a new one."
         )
-    marker.write_text(json.dumps({"bits": args.bits}, indent=1))
+    marker.write_text(json.dumps(recipe, indent=1))
 
     writer = OutputWriter(args.output)
 
