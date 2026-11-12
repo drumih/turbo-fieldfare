@@ -22,6 +22,72 @@ extension RealForwardRunner {
                 ? Int(seqLen) : (selection?.count ?? Int(seqLen)))
     }
 
+    /// Where this step's K and V rows are written: straight into the cache
+    /// slot, or into the staging rows a quantized cache converts from.
+    func gatedFullKVWrites(
+        kv: KVCacheManager, layer: Int, position: Int, slot: Int
+    ) -> (k: (buffer: MTLBuffer, offset: Int), v: (buffer: MTLBuffer, offset: Int)) {
+        guard !kv.precision.isQuantized else {
+            return ((kStage, 0), (vStage, 0))
+        }
+        return (
+            kv.kSlot(layer: layer, position: position, slot: slot),
+            kv.vSlot(layer: layer, position: position, slot: slot)
+        )
+    }
+
+    /// One decode step's gated attention after q/k/v are in place: the cache
+    /// quantization, attention over `seqLen` keys into `attnOut`, and the
+    /// sigmoid output gate. The o-proj that follows is the caller's.
+    func encodeGatedFullAttentionAndGate(
+        _ cb: inout MTLCommandBuffer,
+        kv: KVCacheManager, layer L: Int, position: Int, slot: Int,
+        seqLen: UInt32, selection: DecodeKeySelection?
+    ) throws {
+        guard let elementwise, let attnGateScratch else {
+            throw ModelError.internalInconsistency(
+                detail:
+                    "attn_output_gate layer \(L) without gate kernels (arch mask misconfiguration)")
+        }
+        let headDim = cfg.fullHeadDim
+        let numKV = cfg.numFullKVHeads
+        if kv.precision.isQuantized {
+            try encodeQuantizedKV(
+                commandBuffer: cb, kv: kv, layer: L,
+                position: position, slot: slot, keySource: kStage,
+                valueSource: vStage, elementCount: numKV * headDim)
+        }
+        let keyView = kv.keyView(layer: L, slot: slot, validTokenCount: Int(seqLen))
+        let valueView = kv.valueView(layer: L, slot: slot, validTokenCount: Int(seqLen))
+        // Host-KV streaming: gather the keys this step will read into the
+        // window and let the indirection kernel iterate them. Without it the
+        // contiguous kernel keeps reading the same buffer it always has.
+        let windowSelection = try decodeWindowSelection(
+            kv: kv, layer: L, slot: slot, position: position,
+            seqLen: seqLen, selection: selection)
+        try attention.encodeFull(
+            commandBuffer: cb,
+            q: qScratch,
+            k: keyView.buffer, kOffset: keyView.offset,
+            v: valueView.buffer, vOffset: valueView.offset,
+            out: attnOut,
+            headDim: UInt32(headDim),
+            numQHeads: UInt32(cfg.numHeads),
+            numKVHeads: UInt32(numKV),
+            seqLen: seqLen,
+            scale: Float(cfg.attentionScale),
+            kvFormat: keyView,
+            keepMask: windowSelection == nil ? selection?.mask : nil,
+            windowSelection: windowSelection)
+        try rotate(&cb, role: "qsa.attention")
+        try elementwise.encodeSigmoidGateMul(
+            commandBuffer: cb,
+            out: attnOut,
+            gate: attnGateScratch,
+            count: cfg.numHeads * headDim)
+        try rotate(&cb, role: "qsa.gatemul")
+    }
+
     /// Packed q_proj split, per-head q/k norms, NeoX sub-dim RoPE.
     func encodeGatedFullPreAttention(
         _ cb: inout MTLCommandBuffer,

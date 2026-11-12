@@ -24,6 +24,9 @@ struct SlotGEMV {
     /// otherwise-8-bit slot, so both kernels have to be available at once and
     /// the choice made when the weights are known.
     private let bf16: BF16GEMV
+    /// Several activation rows with one weight read, in the single-row
+    /// kernel's per-row arithmetic (the wide verify's decode-order pass).
+    private let multiRow: MultiRowGEMV
     let weightBits: Int
 
     init(context: MetalContext, weightBits: Int) throws {
@@ -35,7 +38,38 @@ struct SlotGEMV {
             ? .int4(try DequantInt4GEMV(context: context))
             : .affine(try AffineQuantGEMV(context: context, weightBits: weightBits))
         self.bf16 = try BF16GEMV(context: context)
+        self.multiRow = MultiRowGEMV(context: context)
         self.weightBits = weightBits
+    }
+
+    /// `encode` for `rows` activation rows at once: row `r` reads
+    /// `x[xOffset + r * n]` and writes `y[yOffset + r * m]`, with the bytes
+    /// `encode` would give that row alone. The weights are read once per nine
+    /// rows rather than once per row.
+    func encodeRows(
+        commandBuffer: MTLCommandBuffer,
+        weights: MTLBuffer, weightsOffset: Int = 0,
+        scales: MTLBuffer, scalesOffset: Int = 0,
+        biases: MTLBuffer, biasesOffset: Int = 0,
+        x: MTLBuffer, xOffset: Int = 0,
+        y: MTLBuffer, yOffset: Int = 0,
+        m: Int, n: Int, rows: Int,
+        isBF16: Bool = false
+    ) throws {
+        let format: MultiRowGEMV.Format =
+            isBF16 ? .bf16 : (weightBits == 4 ? .int4 : .affine(bits: weightBits))
+        try multiRow.encode(
+            commandBuffer: commandBuffer,
+            segments: [
+                .init(
+                    weights: weights, weightsOffset: weightsOffset,
+                    scales: scales, scalesOffset: scalesOffset,
+                    biases: biases, biasesOffset: biasesOffset,
+                    format: format, rows: m,
+                    y: y, yOffset: yOffset, yRowStride: m)
+            ],
+            x: x, xOffset: xOffset, xRowStride: n,
+            activationRows: rows, columns: n)
     }
 
     /// `isBF16` comes from the tensor's own dtype in the resident index, not

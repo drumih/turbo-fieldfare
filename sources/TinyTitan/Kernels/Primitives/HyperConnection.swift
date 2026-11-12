@@ -140,24 +140,20 @@ final class HyperConnection {
     /// per-row GEMV. The residual is `[tokens, streams, dim]`, so a token's
     /// streams stay contiguous and the grouped norm indexes the same way it
     /// does for one token.
-    /// Decode's own gate GEMV applied one row at a time, as a batched
-    /// projection: a multi-row pass that must reproduce scalar decode's numbers
+    /// Decode's own gate GEMV arithmetic for every row, weights read once
+    /// (`SlotGEMV.encodeRows`), as a batched projection: a multi-row pass that
+    /// must reproduce scalar decode's numbers
     /// (the wide verify) hands this to `encodeReadRows`/`encodeWriteRows`
     /// instead of the prefill QMM, whose accumulation order differs.
     var decodeOrderProjection: BatchedProjection {
         { [gemv] commandBuffer, weights, x, y, rows, columns, tokens in
-            let half = MemoryLayout<Float16>.stride
-            for row in 0..<tokens {
-                try gemv.encode(
-                    commandBuffer: commandBuffer,
-                    weights: weights.weights, weightsOffset: weights.weightsOffset,
-                    scales: weights.scales, scalesOffset: weights.scalesOffset,
-                    biases: weights.biases, biasesOffset: weights.biasesOffset,
-                    x: x, xOffset: row * columns * half,
-                    y: y, yOffset: row * rows * half,
-                    m: UInt32(rows), n: UInt32(columns),
-                    isBF16: weights.isBF16)
-            }
+            try gemv.encodeRows(
+                commandBuffer: commandBuffer,
+                weights: weights.weights, weightsOffset: weights.weightsOffset,
+                scales: weights.scales, scalesOffset: weights.scalesOffset,
+                biases: weights.biases, biasesOffset: weights.biasesOffset,
+                x: x, y: y, m: rows, n: columns, rows: tokens,
+                isBF16: weights.isBF16)
         }
     }
 
