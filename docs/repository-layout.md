@@ -14,7 +14,7 @@ here was checked against the tree, and the counts are from that pass.
 | `docs/` | Engineering documentation: plans, profiles, the findings register, the runbooks | yes |
 | `tools/` | Build, install, verification and conversion drivers (`*.sh`, `*.py`) | yes |
 | `benchmark/` | Benchmark scripts, the golden outputs the baseline compares against, launch helpers | yes |
-| `plugins/` | Client-side bundles for tools that drive the server; `plugins/dsh-tinytitan/` is the DeepSeek Harness one | yes |
+| `plugins/` | Client-side bundles for tools that drive the server; `plugins/dsh-tinytitan/` is the DeepSeek Harness one, `plugins/opencode-tinytitan/` the OpenCode provider config | yes |
 | `examples/` | Consumer packages that use this one as a dependency: `examples/embedded/` is the fixture behind `tools/embedded-dependency-check.sh` (SwiftPM), and `examples/library-demo/` builds two terminal apps against the released `.a` and `.dylib` (no SwiftPM) | yes |
 | `assets/` | Brand assets (wordmark, slogans) | yes |
 | `.build/`, `models/` | SwiftPM's build directory and the installed models | **no** — ignored, and never a source of truth |
@@ -23,7 +23,12 @@ here was checked against the tree, and the counts are from that pass.
 non-Swift, non-Python deliverable here: it ships a `cordis.patch.yml`, a plugin
 entry, a compaction backend and its own `node --test` suite, and it is installed
 into a DSH profile as a `file:` dependency. It is plain ESM JavaScript because
-that is what the harness loads.
+that is what the harness loads. `plugins/opencode-tinytitan/` is not a package:
+it is one `opencode.json` (the `tinytitan` provider, its models keyed by the ids
+`GET /v1/models` reports, and the thinking variants each family's template
+renders) that a user copies into `~/.config/opencode/`. It is kept out of the
+repository root because OpenCode auto-loads a root `opencode.json` for anyone
+working in this checkout.
 
 The two ignored directories are the only large ones (`models/` is the whole
 point of the project and is hundreds of GB; `.build/` is disposable). Nothing
