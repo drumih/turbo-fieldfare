@@ -4,7 +4,8 @@ import Metal
 /// What a W-row verify pass produced: each row's greedy prediction and where
 /// the time went.
 package struct WideVerification: Sendable {
-    /// `predictions[i]` is the greedy token after row i's input.
+    /// `predictions[i]` is the greedy token after row i's input; empty when
+    /// the pass captured the rows' logits instead (`verifyRowLogits`).
     package let predictions: [Int32]
     package let backboneNanos: UInt64
     package let headNanos: UInt64
@@ -53,9 +54,13 @@ extension RealForwardRunner {
         }
     }
 
-    private func runVerifyGreedyRows(
+    /// `rowLogits`, when given, receives every row's FP16 logits
+    /// (`[rows, vocab]`, see `verifyRowLogits`) and the host argmax is skipped;
+    /// without it the pass is the greedy one, unchanged.
+    func runVerifyGreedyRows(
         _ tokens: [Int32],
-        startPosition: Int
+        startPosition: Int,
+        rowLogits: MTLBuffer? = nil
     ) async throws -> WideVerification {
         let rows = tokens.count
         let config = PrefillRuntimeConfig.production(chunkTokens: 32)
@@ -105,11 +110,15 @@ extension RealForwardRunner {
             blit.endEncoding()
             try encodeVerifyHeadPair(
                 commandBuffer: cb, hidden: verificationHidden, scratch: scratch)
+            if let rowLogits {
+                try encodeRowLogitsCapture(
+                    commandBuffer: cb, into: rowLogits, firstRow: row, rows: pairRows)
+            }
             cb.commit()
             try waitForCompletion(cb)
             recordKernelGPU(role: "wide_verify_head", cb)
             for offset in 0..<pairRows {
-                predictions.append(verificationArgmax(row: offset))
+                if rowLogits == nil { predictions.append(verificationArgmax(row: offset)) }
                 if activationDumpActive(position: startPosition + row + offset) {
                     dumpActivation(
                         "verify_logits", verificationLogits, count: cfg.vocabSize,
