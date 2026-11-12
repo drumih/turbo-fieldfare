@@ -153,6 +153,14 @@ extension RealForwardRunner {
             normQuery: vector(try model.pleNormQuery(layer: layer)),
             normConv: vector(try model.pleNormConv(layer: layer)),
             conv1d: vector(try model.pleConv(layer: layer)))
+        if decodeOrderVerify {
+            // A wide verify pass reproduces decode's per-row GEMV.
+            try ple.encodeRows(
+                commandBuffer: commandBuffer,
+                streamsBuffer: hidden, weights: weights,
+                tokens: tokens, eps: eps, project: ple.decodeOrderProjection)
+            return
+        }
         try ple.encodeRows(
             commandBuffer: commandBuffer,
             streamsBuffer: hidden, weights: weights,

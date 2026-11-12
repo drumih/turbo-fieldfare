@@ -209,11 +209,24 @@ the context; a version-1 payload (including disk-cached entries) is refused on
 restore, so the caller re-prefills rather than hashing the wrong rows. Re-probed
 on the model: layer-1 attention input now 0.001-0.002 in every row, and all 8
 rows' argmax agree with scalar decode (7 of 8 before).
-Next, in that order: the shared expert in the decode GEMV's order, then the
-multi-row projections (hyper-connection gates, attention/GDN, PLE key/value:
-`prefill_dequant_affine_qmm_f16_block` runs one thread per output over k,
-where decode's GEMV reduces across 32 SIMD lanes); each is done when the bisect
-reports 0 for its stage.
+**Sources 1 and 3, and the PLE projections, now take decode's kernels in a
+verify pass** (`decodeOrderVerify`, set only inside `verifyGreedyRows`): the
+shared expert runs decode's `encodeSharedExpert` per row; the hyper-connection
+read keeps its multi-row norm, SiLU and reduce but projects through decode's
+`SlotGEMV` per row (`HyperConnection.decodeOrderProjection`); the write uses
+decode's fused inject per row at that row's `normed` offset; and the PLE
+key/value projections use `PLEBlock.decodeOrderProjection`. The prefill QMM
+(`prefill_dequant_affine_qmm_f16_block`, one thread per output looping over k)
+is what they replace; decode's GEMV reduces across 32 SIMD lanes.
+
+Re-probed (W=8, position 1,493): all 8 rows' argmax agree; logits now within
+0.014-0.21 of scalar decode (0.17-0.67 before); layers 0-1 are exact for rows
+0 and 2-7, and row 0 is exact through layer 3's attention input. The first
+remaining divergence in every row is the attention block's *output* with an
+exact input -- the dense multi-row projections in `encodeAffineProjection`
+(GDN in/out projections, q/k/v/o), which is the next stage. The per-row loops
+cost a weight read per row; the speed pass replaces them with multi-row GEMVs
+that keep decode's per-row order.
 
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 

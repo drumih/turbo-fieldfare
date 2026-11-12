@@ -95,6 +95,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     package var activationDumpPositionCount = RealForwardRunner.dumpPositionCount
     /// Row 0's position during a wide verify pass, for its per-row stage dumps.
     var wideVerifyDumpStart: Int?
+    /// True during a wide verify pass: multi-row stages take decode's kernels.
+    var decodeOrderVerify = false
     let hyperConnection: HyperConnection?
     /// The n-gram (PLE) block, its row addressing, and the table it reads.
     /// All three or none: a family without PLE layers leaves them nil.

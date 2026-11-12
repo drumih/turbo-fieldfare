@@ -213,6 +213,16 @@ extension RealForwardRunner {
                 sublayer == .attention
                 ? try model.hcAttnMixUp(layer: layer)
                 : try model.hcMlpMixUp(layer: layer)
+            // A wide verify pass must reproduce decode, whose read is the
+            // composed path (the fused read cannot build; see canFuseRead):
+            // the same norm, silu and reduce, with decode's GEMV per row.
+            if decodeOrderVerify, hcFusedEnabled,
+                hc.canFuseRead(down: gateWeightsPublic(down), up: gateWeightsPublic(up))
+            {
+                throw PrefillError.chunkedUnsupported(
+                    "decode reads hyper-connections fused; the verify pass has no fused multi-row read"
+                )
+            }
             try hc.encodeReadRows(
                 commandBuffer: commandBuffer,
                 streamsBuffer: hidden,
@@ -222,7 +232,7 @@ extension RealForwardRunner {
                 up: gateWeightsPublic(up),
                 blockInput: out,
                 tokens: tokens, eps: eps,
-                project: prefillGateProjection)
+                project: decodeOrderVerify ? hc.decodeOrderProjection : prefillGateProjection)
             return
         }
         try prefillRMS.encodeBF16W(
@@ -250,13 +260,28 @@ extension RealForwardRunner {
                 sublayer == .attention
                 ? try model.hcAttnInject(layer: layer)
                 : try model.hcMlpInject(layer: layer)
+            let weights = gateWeightsPublic(inject)
+            // A wide verify pass writes each row the way decode does: the
+            // fused inject when decode would use it, at that row's offsets.
+            if decodeOrderVerify, hcFusedEnabled, hc.canFuseWrite(inject: weights) {
+                let half = MemoryLayout<Float16>.stride
+                for row in 0..<tokens {
+                    try hc.encodeWriteFused(
+                        commandBuffer: commandBuffer,
+                        streamsBuffer: hidden, streamsOffset: row * residualWidth * half,
+                        inject: weights,
+                        blockOut: delta, blockOutOffset: row * cfg.hiddenSize * half,
+                        normedOffset: row * residualWidth * half)
+                }
+                return
+            }
             try hc.encodeWriteRows(
                 commandBuffer: commandBuffer,
                 streamsBuffer: hidden,
-                inject: gateWeightsPublic(inject),
+                inject: weights,
                 blockOut: delta,
                 tokens: tokens,
-                project: prefillGateProjection)
+                project: decodeOrderVerify ? hc.decodeOrderProjection : prefillGateProjection)
             return
         }
         try requireElementwise().encodeResidualAdd(

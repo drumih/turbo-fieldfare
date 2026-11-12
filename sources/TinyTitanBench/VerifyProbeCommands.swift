@@ -117,4 +117,50 @@ extension TinyTitanBench {
             "compare: python3 benchmark/verify_identity_bisect.py \(dumpDirectory) "
                 + "\(position) \(width)")
     }
+
+    /// The wide-verify commands (docs/plan-wide-verify.md): `passcost` and
+    /// `verifyprobe`. Returns false for any other name.
+    static func runWideVerifyCommand(_ name: String) throws -> Bool {
+        switch name {
+        case "passcost":
+            // Gate 2 of docs/plan-wide-verify.md: install, rounds per width,
+            // pass path (chunked | dedicated | both), optional prompt file. Loads a model, so it runs before the
+            // kernel benches' Metal context like the other model commands.
+            let args = CommandLine.arguments
+            guard args.count > 2 else {
+                throw PassCostError.usage
+            }
+            let path: PassCostPath
+            if args.count > 4 {
+                guard let parsed = PassCostPath(rawValue: args[4]) else {
+                    throw PassCostError.usage
+                }
+                path = parsed
+            } else {
+                path = .chunked
+            }
+            try runPassCost(
+                install: args[2],
+                roundsPerWidth: args.count > 3 ? Int(args[3]) ?? 6 : 6,
+                path: path,
+                promptFile: args.count > 5 ? args[5] : nil)
+        case "verifyprobe":
+            // The wide-verify identity bisect: install, width, dump directory,
+            // optional prompt file. See VerifyProbeCommands.
+            let args = CommandLine.arguments
+            guard args.count > 2 else {
+                print(
+                    "usage: TinyTitanBench verifyprobe <install> [width=8] [dumpDir] [promptFile]")
+                return true
+            }
+            try runVerifyProbe(
+                install: args[2],
+                width: args.count > 3 ? Int(args[3]) ?? 8 : 8,
+                dumpDirectory: args.count > 4 ? args[4] : ".build/verify-probe",
+                promptFile: args.count > 5 ? args[5] : nil)
+        default:
+            return false
+        }
+        return true
+    }
 }

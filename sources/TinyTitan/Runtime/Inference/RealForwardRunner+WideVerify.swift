@@ -62,7 +62,11 @@ extension RealForwardRunner {
         let scratch = try ensurePrefillScratch(config: config)
         let tBackbone = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         wideVerifyDumpStart = startPosition
-        defer { wideVerifyDumpStart = nil }
+        decodeOrderVerify = true
+        defer {
+            wideVerifyDumpStart = nil
+            decodeOrderVerify = false
+        }
         do {
             try await executePrefillChunk(
                 tokens: tokens[...],

@@ -267,6 +267,7 @@ extension TinyTitanBench {
     /// The CPU side-engine's commands. Returns whether one ran, so `main`
     /// can dispatch them before it creates a Metal context.
     static func runCPUCommand(_ name: String, iterations: Int) throws -> Bool {
+        if try runWideVerifyCommand(name) { return true }
         switch name {
         case "cpuload":
             // Sustained load at one width, for measuring what the side-engine
@@ -335,42 +336,6 @@ extension TinyTitanBench {
                 CommandLine.arguments.count > 4
                 ? Int(CommandLine.arguments[4]) ?? 1 : 1
             try runLagunaGPU(install: install, prompt: prompt, limit: limit)
-        case "passcost":
-            // Gate 2 of docs/plan-wide-verify.md: install, rounds per width,
-            // pass path (chunked | dedicated | both), optional prompt file. Loads a model, so it runs before the
-            // kernel benches' Metal context like the other model commands.
-            let args = CommandLine.arguments
-            guard args.count > 2 else {
-                throw PassCostError.usage
-            }
-            let path: PassCostPath
-            if args.count > 4 {
-                guard let parsed = PassCostPath(rawValue: args[4]) else {
-                    throw PassCostError.usage
-                }
-                path = parsed
-            } else {
-                path = .chunked
-            }
-            try runPassCost(
-                install: args[2],
-                roundsPerWidth: args.count > 3 ? Int(args[3]) ?? 6 : 6,
-                path: path,
-                promptFile: args.count > 5 ? args[5] : nil)
-        case "verifyprobe":
-            // The wide-verify identity bisect: install, width, dump directory,
-            // optional prompt file. See VerifyProbeCommands.
-            let args = CommandLine.arguments
-            guard args.count > 2 else {
-                print(
-                    "usage: TinyTitanBench verifyprobe <install> [width=8] [dumpDir] [promptFile]")
-                return true
-            }
-            try runVerifyProbe(
-                install: args[2],
-                width: args.count > 3 ? Int(args[3]) ?? 8 : 8,
-                dumpDirectory: args.count > 4 ? args[4] : ".build/verify-probe",
-                promptFile: args.count > 5 ? args[5] : nil)
         case "cpu35ppl":
             // Held-out text through the CPU forward pass: mean NLL and
             // perplexity, the sharper instrument the twenty-prompt A/B was

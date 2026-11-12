@@ -140,6 +140,27 @@ final class HyperConnection {
     /// per-row GEMV. The residual is `[tokens, streams, dim]`, so a token's
     /// streams stay contiguous and the grouped norm indexes the same way it
     /// does for one token.
+    /// Decode's own gate GEMV applied one row at a time, as a batched
+    /// projection: a multi-row pass that must reproduce scalar decode's numbers
+    /// (the wide verify) hands this to `encodeReadRows`/`encodeWriteRows`
+    /// instead of the prefill QMM, whose accumulation order differs.
+    var decodeOrderProjection: BatchedProjection {
+        { [gemv] commandBuffer, weights, x, y, rows, columns, tokens in
+            let half = MemoryLayout<Float16>.stride
+            for row in 0..<tokens {
+                try gemv.encode(
+                    commandBuffer: commandBuffer,
+                    weights: weights.weights, weightsOffset: weights.weightsOffset,
+                    scales: weights.scales, scalesOffset: weights.scalesOffset,
+                    biases: weights.biases, biasesOffset: weights.biasesOffset,
+                    x: x, xOffset: row * columns * half,
+                    y: y, yOffset: row * rows * half,
+                    m: UInt32(rows), n: UInt32(columns),
+                    isBF16: weights.isBF16)
+            }
+        }
+    }
+
     func encodeReadRows(
         commandBuffer: MTLCommandBuffer,
         streamsBuffer: MTLBuffer, streamsOffset: Int = 0,
@@ -377,7 +398,8 @@ final class HyperConnection {
         commandBuffer: MTLCommandBuffer,
         streamsBuffer: MTLBuffer, streamsOffset: Int = 0,
         inject: Weights,
-        blockOut: MTLBuffer, blockOutOffset: Int = 0
+        blockOut: MTLBuffer, blockOutOffset: Int = 0,
+        normedOffset: Int = 0
     ) throws {
         guard let p = psoInject else { throw MetalError.noDevice }
         var d = UInt32(dim)
@@ -386,7 +408,7 @@ final class HyperConnection {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else { throw MetalError.noDevice }
         enc.setComputePipelineState(p)
         enc.setBuffer(streamsBuffer, offset: streamsOffset, index: 0)
-        enc.setBuffer(normed, offset: 0, index: 1)
+        enc.setBuffer(normed, offset: normedOffset, index: 1)
         enc.setBuffer(inject.weights, offset: inject.weightsOffset, index: 2)
         enc.setBuffer(inject.scales, offset: inject.scalesOffset, index: 3)
         enc.setBuffer(inject.biases, offset: inject.biasesOffset, index: 4)
