@@ -39,7 +39,9 @@ extension RealForwardRunner {
         .environment["TINYTITAN_ACT_DUMP_POSITIONS"].flatMap(Int.init) ?? 1
 
     func activationDumpActive(position: Int) -> Bool {
-        activationDumpDirectory != nil && position < Self.dumpPositionCount
+        activationDumpDirectory != nil
+            && position >= activationDumpFirstPosition
+            && position < activationDumpFirstPosition + activationDumpPositionCount
     }
 
     /// Each position writes into its own subdirectory, so a later token does

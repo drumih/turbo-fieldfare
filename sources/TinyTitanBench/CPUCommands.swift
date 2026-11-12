@@ -357,6 +357,20 @@ extension TinyTitanBench {
                 roundsPerWidth: args.count > 3 ? Int(args[3]) ?? 6 : 6,
                 path: path,
                 promptFile: args.count > 5 ? args[5] : nil)
+        case "verifyprobe":
+            // The wide-verify identity bisect: install, width, dump directory,
+            // optional prompt file. See VerifyProbeCommands.
+            let args = CommandLine.arguments
+            guard args.count > 2 else {
+                print(
+                    "usage: TinyTitanBench verifyprobe <install> [width=8] [dumpDir] [promptFile]")
+                return true
+            }
+            try runVerifyProbe(
+                install: args[2],
+                width: args.count > 3 ? Int(args[3]) ?? 8 : 8,
+                dumpDirectory: args.count > 4 ? args[4] : ".build/verify-probe",
+                promptFile: args.count > 5 ? args[5] : nil)
         case "cpu35ppl":
             // Held-out text through the CPU forward pass: mean NLL and
             // perplexity, the sharper instrument the twenty-prompt A/B was

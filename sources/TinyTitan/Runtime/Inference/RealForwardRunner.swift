@@ -90,6 +90,15 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     /// The runner is single-flight per generation, so this needs no lock; it is
     /// only ever touched from the encoding task.
     var pendingDumps: [PendingActivationDump] = []
+    /// The positions activation dumps cover: `[first, first + count)`. The
+    /// defaults (0 and `TINYTITAN_ACT_DUMP_POSITIONS`) are the bring-up window
+    /// from the first token; a probe deep in a context moves it.
+    package var activationDumpFirstPosition = 0
+    package var activationDumpPositionCount = RealForwardRunner.dumpPositionCount
+    /// The first row's position while a wide verify pass runs, so its routed
+    /// stage can dump per-row stage values beside scalar decode's; nil
+    /// otherwise.
+    var wideVerifyDumpStart: Int?
     let hyperConnection: HyperConnection?
     /// The n-gram (PLE) block, its row addressing, and the table it reads.
     /// All three or none: a family without PLE layers leaves them nil.

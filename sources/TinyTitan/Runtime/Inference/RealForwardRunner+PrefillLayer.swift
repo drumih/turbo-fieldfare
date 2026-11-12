@@ -426,6 +426,16 @@ extension RealForwardRunner {
         // The stage above awaits its own command buffers, so the layer's output
         // hidden is complete here. This is the number a reference dump compares
         // against (`layerN`), which is what localizes a wrong stage to a layer.
+        // Every row's residual after every layer, each in its own position's
+        // directory, so row i of a multi-row pass sits beside what scalar
+        // decode dumps for position startPosition + i (`L{L+1}_entry`). This is
+        // the wide-verify identity bisect (docs/plan-wide-verify.md, task 3).
+        for row in 0..<t where activationDumpActive(position: startPosition + row) {
+            dumpActivationPrivate(
+                "L\(L)_rows_after", scratch.hidden,
+                count: residualWidth, position: startPosition + row,
+                offset: row * residualWidth * MemoryLayout<Float16>.stride)
+        }
         if activationDumpActive(position: startPosition), L <= dumpLayerLimit {
             dumpActivationPrivate(
                 "L\(L)_after", scratch.hidden,

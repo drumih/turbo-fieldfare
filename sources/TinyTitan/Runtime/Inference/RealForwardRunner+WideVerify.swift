@@ -61,6 +61,8 @@ extension RealForwardRunner {
         let config = PrefillRuntimeConfig.production(chunkTokens: 32)
         let scratch = try ensurePrefillScratch(config: config)
         let tBackbone = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        wideVerifyDumpStart = startPosition
+        defer { wideVerifyDumpStart = nil }
         do {
             try await executePrefillChunk(
                 tokens: tokens[...],
@@ -104,6 +106,12 @@ extension RealForwardRunner {
             recordKernelGPU(role: "wide_verify_head", cb)
             for offset in 0..<pairRows {
                 predictions.append(verificationArgmax(row: offset))
+                if activationDumpActive(position: startPosition + row + offset) {
+                    dumpActivation(
+                        "verify_logits", verificationLogits, count: cfg.vocabSize,
+                        position: startPosition + row + offset,
+                        offset: offset * cfg.vocabSize * MemoryLayout<Float16>.stride)
+                }
             }
             row += pairRows
         }

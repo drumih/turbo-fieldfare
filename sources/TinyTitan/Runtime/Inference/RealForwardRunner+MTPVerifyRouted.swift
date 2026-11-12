@@ -45,6 +45,12 @@ extension RealForwardRunner {
             cb: &cb, layer: L, rows: rows, views: views, scratch: scratch,
             hiddenSize: D)
         try waitForCompletion(outcome.routedCB)
+        if let start = wideVerifyDumpStart, L <= dumpLayerLimit {
+            for row in 0..<rows where activationDumpActive(position: start + row) {
+                dumpActivationPrivate(
+                    "L\(L)_mlp_out_rows", verifyPairY[row], count: D, position: start + row)
+            }
+        }
         recordKernelGPU(role: "prefill_shared_expert", outcome.sharedCB)
         recordKernelGPU(role: "verify_routed_pair", outcome.routedCB)
         outcome.expertLease?.release()
@@ -106,6 +112,7 @@ extension RealForwardRunner {
             role: cfg.layerIsLinear(L)
                 ? "prefill_gdn_router"
                 : "prefill_attn_router", cb)
+        dumpVerifyStageRows(layer: L, rows: t, scratch: scratch, hiddenSize: D)
 
         let idPtr = scratch.routeIDs.contents()
             .bindMemory(to: UInt32.self, capacity: t * cfg.topKExperts)
@@ -318,5 +325,33 @@ extension RealForwardRunner {
         return VerifyPairOutcome(
             routedCB: routedCB, sharedCB: sharedCB, expertLease: lease,
             nextCB: nextCB)
+    }
+
+    /// Wide-verify identity bisect: each row's attention input and output, MoE
+    /// input and post-attention residual, dumped beside scalar decode's
+    /// `L{L}_attn_in` / `_attn_out` / `_mlp_in` / `_hidden_post_attn` for the
+    /// same position. Called once the router's command buffer has completed, so
+    /// every value the attention block and the MLP entry wrote is settled and
+    /// the shared expert has not yet overwritten `h1`.
+    private func dumpVerifyStageRows(
+        layer L: Int, rows t: Int, scratch: PrefillChunkScratchBuffers, hiddenSize D: Int
+    ) {
+        guard let start = wideVerifyDumpStart, L <= dumpLayerLimit else { return }
+        let half = MemoryLayout<Float16>.stride
+        for row in 0..<t where activationDumpActive(position: start + row) {
+            let position = start + row
+            dumpActivationPrivate(
+                "L\(L)_attn_in_rows", scratch.normed, count: D, position: position,
+                offset: row * D * half)
+            dumpActivationPrivate(
+                "L\(L)_attn_out_rows", scratch.h1, count: D, position: position,
+                offset: row * D * half)
+            dumpActivationPrivate(
+                "L\(L)_mlp_in_rows", scratch.routedX, count: D, position: position,
+                offset: row * D * half)
+            dumpActivationPrivate(
+                "L\(L)_hidden_post_attn_rows", scratch.hidden, count: residualWidth,
+                position: position, offset: row * residualWidth * half)
+        }
     }
 }

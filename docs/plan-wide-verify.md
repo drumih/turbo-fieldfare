@@ -173,6 +173,33 @@ Two things this does **not** show yet:
 default stays `measuredChunkedPrefill` until the dedicated path is a decode path
 that passes the identity gate.
 
+### Identity bisect (2026-11-12): where the pass leaves scalar decode
+
+Instrument: `TinyTitanBench verifyprobe <install> 8` decodes 8 tokens scalar at
+position 1,493 of the edit prompt with activation dumps on, restores, verifies
+the same inputs as one `verifyGreedyRows` pass with dumps on, and
+`benchmark/verify_identity_bisect.py .build/verify-probe 1493 8` compares each
+row with scalar decode: the residual after every layer (`L{L}_rows_after`
+against `L{L+1}_entry`) and, for layers 0-3, the attention input and output,
+post-attention residual, MoE input and MoE output. The dump window is now
+`activationDumpFirstPosition`/`activationDumpPositionCount` on the runner, so a
+probe can sit anywhere in a context.
+
+Result (7 of 8 rows' argmax agreed; row 0 flipped at a near-tie, logits 0.5
+apart): the drift is numeric and it has three sources, in order of size.
+
+| stage | pass vs scalar, max abs | reading |
+| --- | ---: | --- |
+| layer 0 attention: input, output, post-attention residual | **0** (rows 0-2) | the attention path is exact |
+| layer 0 MoE output | 3e-5 to 5e-4, every row | source 1: the routed experts already run decode's phase-1/2 kernels, so the shared expert's multi-row prefill block is the suspect |
+| layer 1 attention input | **0.8-1.4** (rows 0-1) from a 3e-5 residual | source 2, dominant: between layer 0's output and layer 1's attention -- where the layer-1 PLE n-gram block is injected |
+| layer 0 attention input, rows 3-7 | ~1e-3 (rows 0-2: 0) | source 3: the multi-row input mixer or norm diverges from row 3 |
+
+Everything after is propagation (final residual 0.1-0.4, logits up to 0.67).
+Next, in that order: the PLE injection for multi-row passes, the shared expert
+in the decode GEMV's order, then the input mixer for rows >= 3; each is done when
+the bisect reports 0 for its stage.
+
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 
 The pass must produce, for every row, the logits scalar decode would. Two
