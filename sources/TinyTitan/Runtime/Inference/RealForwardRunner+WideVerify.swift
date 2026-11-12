@@ -24,6 +24,19 @@ package struct WideVerification: Sendable {
 /// This is a cost instrument, not yet a decode path: it makes no claim of byte
 /// identity with scalar decode (task 3), and it leaves the KV cache and GDN
 /// state advanced by W rows -- the caller restores a snapshot.
+///
+/// Rollback window lifetime (task 9). Every pass opens a wide-verify rollback
+/// window before its backbone (`beginWideVerifyRollbackWindow`) and returns
+/// with it still open, so a caller can keep only the first k rows. Closing it
+/// is the caller's responsibility, by exactly one of
+/// `rollbackWideVerify(acceptedRows:tokens:startPosition:)` (a partial accept)
+/// or `endWideVerifyRollbackWindow()` (keep all W rows). A caller that never
+/// rolls back -- the `verifyprobe` and `passcost` benches -- need not: the
+/// window is also closed by `restoreInferenceState`, `prepareForContinuation`,
+/// `reset()` and any other `resetTransientState()`, and the next pass reopens
+/// it. A window left open after its pass is inert: every linear layer has
+/// retained its W rows, so the retention hooks of later passes do nothing.
+/// A pass that throws resets the runner, which closes the window.
 extension RealForwardRunner {
     /// The widest pass whose expert union is guaranteed to fit the routed slot
     /// cache, or 0 when there is no slot cache to plan against.
@@ -66,6 +79,11 @@ extension RealForwardRunner {
         let config = PrefillRuntimeConfig.production(chunkTokens: 32)
         let scratch = try ensurePrefillScratch(config: config)
         let tBackbone = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        // The rollback window's GDN snapshot is queued ahead of the pass and
+        // only reads live state; the pass's retention blits only read its
+        // projections, so the pass's outputs do not change. The window stays
+        // open when this returns (see the lifetime note on `verifyGreedyRows`).
+        try beginWideVerifyRollbackWindow(rows: rows, startPosition: startPosition)
         wideVerifyDumpStart = startPosition
         decodeOrderVerify = true
         defer {

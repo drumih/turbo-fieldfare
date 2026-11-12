@@ -14,7 +14,14 @@ import TinyTitanFormat
 enum QwenToySynthetic {
 
     /// Build the toy directory in a temp dir and return its URL.
-    static func write(weightBits: Int = 4, qsa: Bool = false) throws -> URL {
+    ///
+    /// `variedLinearAttention` fills each quantized `linear_attn` tensor with
+    /// its own deterministic byte pattern instead of the shared 0x11, so the
+    /// GDN projections differ by channel and `a` differs from `b`; a test
+    /// that must tell those rows apart needs it.
+    static func write(
+        weightBits: Int = 4, qsa: Bool = false, variedLinearAttention: Bool = false
+    ) throws -> URL {
         precondition([4, 8].contains(weightBits))
         let toy = qsa ? ArchConfig.qwenToyQSA() : ArchConfig.qwenToy()
         let dir = FileManager.default.temporaryDirectory
@@ -297,8 +304,15 @@ enum QwenToySynthetic {
             }
             // Quantized tensors: weight bytes 0x11 (nibbles/bytes of small
             // positive codes), scales 0.01, biases zero. BF16 tensors: 1.0.
-            for entry in entries where entry.dtype == 0 {
-                memset(base.advanced(by: Int(entry.fileOffset)), 0x11, Int(entry.sizeBytes))
+            for (index, entry) in entries.enumerated() where entry.dtype == 0 {
+                let weights = base.advanced(by: Int(entry.fileOffset))
+                memset(weights, 0x11, Int(entry.sizeBytes))
+                if variedLinearAttention, entry.name.contains(".linear_attn.") {
+                    let bytes = weights.assumingMemoryBound(to: UInt8.self)
+                    for i in 0..<Int(entry.sizeBytes) {
+                        bytes[i] = UInt8(truncatingIfNeeded: (i &* 37) &+ (index &* 101) &+ 7)
+                    }
+                }
                 if entry.scaleSize > 0 {
                     let scales = base.advanced(by: Int(entry.scaleOffset))
                         .assumingMemoryBound(to: UInt16.self)

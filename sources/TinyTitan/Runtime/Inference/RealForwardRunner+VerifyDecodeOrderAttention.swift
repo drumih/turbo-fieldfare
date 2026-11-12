@@ -66,7 +66,9 @@ extension RealForwardRunner {
     }
 
     /// Runs decode's linear-attention step once per row, in row order, reading
-    /// row `r` of `scratch.normed` and writing row `r` of `scratch.h1`.
+    /// row `r` of `scratch.normed` and writing row `r` of `scratch.h1`. With a
+    /// wide-verify rollback window open, each row's projections are retained
+    /// right after its step, before the next row overwrites them.
     func encodeLinearAttentionDecodeOrderRows(
         cb: MTLCommandBuffer, layer L: Int,
         scratch: PrefillChunkScratchBuffers,
@@ -79,7 +81,28 @@ extension RealForwardRunner {
                 &rowCB, layer: L, slot: slot,
                 input: scratch.normed, inputOffset: row * rowBytes,
                 output: scratch.h1, outputOffset: row * rowBytes)
+            try retainDecodeOrderRow(rowCB, layer: L)
         }
+    }
+
+    /// Hands the row decode's step just consumed to an open rollback window:
+    /// the raw `in_proj_qkv` row in `gdnQKVRaw` (the conv's input, read but not
+    /// written by `gdn_conv_mix_decode`) and the pre-softplus/pre-sigmoid `a`
+    /// and `b` rows in `gdnA`/`gdnB` (read-only to `gdn_delta_step_decode`).
+    /// These are exactly the rows the prefill replay feeds to its conv, tail
+    /// update and delta kernels, in the same FP16 layout. Encoded on the
+    /// command buffer the step ended on, so it lands before the next row's
+    /// projections overwrite those buffers.
+    private func retainDecodeOrderRow(_ cb: MTLCommandBuffer, layer L: Int) throws {
+        guard let window = wideVerifyRetain(layer: L) else { return }
+        guard let gdnQKVRaw, let gdnA, let gdnB else {
+            throw ModelError.internalInconsistency(
+                detail: "linear-attention layer \(L) without decode GDN buffers")
+        }
+        try window.encodeRetain(
+            commandBuffer: cb, layer: L,
+            qkv: .init(gdnQKVRaw), a: .init(gdnA), b: .init(gdnB),
+            rows: 1)
     }
 
     private func encodeRowCopy(

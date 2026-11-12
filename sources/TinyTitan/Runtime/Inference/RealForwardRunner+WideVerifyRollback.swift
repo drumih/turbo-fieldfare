@@ -64,7 +64,9 @@ import Metal
 // Calling contract (under `forwardStepGate`, like the verify pass itself):
 // begin -> verify pass (whose GDN branch retains rows) -> exactly one of
 // `rollbackWideVerify(acceptedRows:...)` or `endWideVerifyRollbackWindow()`.
-// A runner `reset()` closes an open window.
+// `runVerifyGreedyRows` does the begin itself and returns with the window
+// open; the lifetime note on it says who closes it. A runner `reset()` and
+// every `resetTransientState()` close an open window.
 
 extension RealForwardRunner {
     /// The open window when it still wants layer `L`'s rows, else nil. The GDN
