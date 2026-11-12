@@ -17,13 +17,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "low": { "reasoningEffort": "low" },
-            "medium": { "reasoningEffort": "medium" },
-            "xhigh": { "reasoningEffort": "xhigh" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "ornith-1.5-35b-a3b_8-Bit": {
@@ -32,11 +53,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "ornith-1.5-35b-a3b_4-Bit": {
@@ -45,11 +89,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "qwen3.6-35b-a3b_8-Bit": {
@@ -58,11 +125,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "qwen3.6-35b-a3b_4-Bit": {
@@ -71,11 +161,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "qwen3.5-9b_4-Bit": {
@@ -84,11 +197,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         },
         "qwen3.5-4b_4-Bit": {
@@ -97,11 +233,34 @@
           "reasoning": true,
           "temperature": false,
           "attachment": false,
-          "modalities": { "input": ["text"], "output": ["text"] },
-          "limit": { "context": 262144, "output": 32768 },
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
           "variants": {
-            "off": { "reasoningEffort": "off" },
-            "on": { "reasoningEffort": "on" }
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
           }
         }
       }
