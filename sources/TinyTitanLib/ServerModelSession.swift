@@ -73,6 +73,10 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// here so concurrent slots reach one `produceBatch` together.
     let batchedProducer: (any LogitProducer)?
     let mtpDecoder: StreamingMTPDecoder?
+    /// Opt-in wide verify (`TINYTITAN_WIDE_VERIFY=1`), read once at load. It
+    /// applies to single-slot runner generations only; `runRawCompletion`
+    /// leaves MTP, batched slots and constrained requests on scalar decode.
+    nonisolated let wideVerifyOptions = WideVerifyDecodeOptions.fromEnvironment()
     /// One raw-completion scratch per slot: its own logits/probs/token buffers
     /// and its own sampler, so concurrent slots cannot sample from each other's
     /// logits.
