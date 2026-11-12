@@ -291,5 +291,6 @@ extension RealForwardRunner {
         rdadviseAdaptiveState.reset()
         rdadviseAdaptivePosition = -1
         rdadviseAdaptivePositionBytes = 0
+        fusedDecodeState.wideVerifyRollback?.close()
     }
 }

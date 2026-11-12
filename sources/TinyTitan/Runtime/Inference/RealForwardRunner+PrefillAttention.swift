@@ -151,6 +151,12 @@ extension RealForwardRunner {
                 ? gdnState.speculativeStateBuffer(layer: L) : nil,
             y: scratch.gdnY,
             rows: t)
+        if let window = wideVerifyRetain(layer: L) {
+            try window.encodeRetain(
+                commandBuffer: cb, layer: L,
+                qkv: .init(scratch.q), a: .init(scratch.gdnA), b: .init(scratch.gdnB),
+                rows: t)
+        }
         let gatedNormW = linNorm
         try gdn.encodeGatedNorm(
             commandBuffer: cb,

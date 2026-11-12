@@ -8,6 +8,8 @@ final class FusedDecodeState {
     var pairScratch: [PrefillChunkScratchBuffers] = []
     var launches = 0
     var override: Bool?
+    /// The wide-verify rollback window (RealForwardRunner+WideVerifyRollback).
+    var wideVerifyRollback: WideVerifyGDNRollback?
 }
 
 // T34: the fused width-2 decode loop.
