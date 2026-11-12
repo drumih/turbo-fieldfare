@@ -363,9 +363,12 @@ import TinyTitanValidationSupport
             for i in 0..<cfg.valueDim {
                 let got = prefillOut[row * cfg.valueDim + i]
                 let want = decodeOutputs[row][i]
-                let tolerance = max(2e-2, abs(want) * 4e-2)
+                // Bit-identical, not merely close: the wide verify
+                // (docs/plan-wide-verify.md) rolls GDN back to an accepted row
+                // by re-stepping this prefill path, and its rows must equal
+                // scalar decode's. Measured exact on 2026-11-12.
                 #expect(
-                    abs(got - want) <= tolerance,
+                    got == want,
                     "row \(row) element \(i): prefill \(got), decode \(want)")
             }
         }
@@ -375,7 +378,7 @@ import TinyTitanValidationSupport
         let tailBH = Self.readHalves(tailB, count: (cfg.convKernelSize - 1) * cfg.qkvDim)
         for i in 0..<tailAH.count {
             #expect(
-                abs(tailAH[i] - tailBH[i]) <= 1e-3,
+                tailAH[i] == tailBH[i],
                 "conv tail mismatch at \(i)")
         }
         let stateAPtr = stateA.contents().bindMemory(to: Float.self, capacity: stateCount)
@@ -384,7 +387,7 @@ import TinyTitanValidationSupport
         for i in 0..<stateCount {
             maxErr = max(maxErr, abs(stateAPtr[i] - stateBPtr[i]))
         }
-        #expect(maxErr <= 5e-2, "state divergence \(maxErr)")
+        #expect(maxErr == 0, "state divergence \(maxErr)")
     }
 
     @Test func speculativeCheckpointMatchesFirstConfirmedRow() throws {
