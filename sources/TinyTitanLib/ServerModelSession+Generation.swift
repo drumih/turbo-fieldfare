@@ -275,6 +275,7 @@ extension ServerModelSession {
             slot: slot,
             checkpointPositions: interiorCapture.positions,
             onPrefillCheckpoint: interiorCapture.onCheckpoint,
+            wideVerify: wideVerifyOptions,
             // A watchdog stop is polled here, between tokens, alongside the
             // stop-string matcher's own flag.
             shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },

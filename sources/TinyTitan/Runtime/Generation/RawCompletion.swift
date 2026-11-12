@@ -28,6 +28,8 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    /// Wide verify's counters when the generation ran with it, else nil.
+    public var wideVerify: WideVerifyDecodeStats?
 }
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
@@ -108,6 +110,10 @@ public func runRawCompletion(
     /// other caller.
     checkpointPositions: [Int] = [],
     onPrefillCheckpoint: (@Sendable (Int) -> Void)? = nil,
+    /// Opt-in wide verify (`WideVerifyDecode.swift`); nil is scalar decode.
+    /// Ignored, leaving scalar decode, for any producer but a plain
+    /// `RealForwardRunner` on slot 0 and for constrained requests.
+    wideVerify: WideVerifyDecodeOptions? = nil,
     shouldStop: () -> Bool = { false },
     onProgress: (RawDecodeProgress) -> Void
 ) async throws -> RawDecodeResult {
@@ -317,13 +323,19 @@ public func runRawCompletion(
     var uncommittedBoundaryTokenIDs: [Int32] = []
     var toolCallMarkers = ToolCallMarkerCounter()
     var loopMark = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+    let wide = try WideVerifyDecodeDriver(
+        options: wideVerify, producer: producer, slot: slot, config: config,
+        scratch: scratch, context: context, fusedGreedy: fusedGreedy)
+    wide?.observe(history)
 
     while true {
         try Task.checkCancellation()
 
         let tokenID: Int32
         let tSample = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        if generated == 0, let seed = prefillSeed {
+        if let emitted = wide?.popEmitted() {
+            tokenID = emitted
+        } else if generated == 0, let seed = prefillSeed {
             switch seed {
             case .greedyToken(let token):
                 tokenID = Int32(bitPattern: token)
@@ -373,6 +385,7 @@ public func runRawCompletion(
             }
             let tail = stopMatcher.push(detok.flush()) + stopMatcher.finish()
             if !tail.isEmpty { onProgress(.tail(tail)) }
+            try wide?.settleAtStop()
             break
         }
 
@@ -394,10 +407,29 @@ public func runRawCompletion(
             } else {
                 reason = .maxTokens
             }
+            try wide?.settleAtStop()
             break
         }
 
         history.append(tokenID)
+        if let wide {
+            wide.observe(CollectionOfOne(tokenID))
+            // A pass row already fed this token: the KV holds it.
+            if try wide.consumeFed() {
+                position += 1
+                uncommittedBoundaryTokenIDs.removeAll(keepingCapacity: true)
+                continue
+            }
+            if try await wide.tryPass(
+                boundary: tokenID, history: history, position: position,
+                generated: generated, remaining: config.maxNewTokens - generated)
+            {
+                position += 1
+                uncommittedBoundaryTokenIDs.removeAll(keepingCapacity: true)
+                loopMark = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                continue
+            }
+        }
         // Everything since the previous produce returned that is neither the
         // sampler nor the callback: stop matching, detokenizing, bookkeeping.
         if let fusedRunner {
@@ -422,5 +454,6 @@ public func runRawCompletion(
         reason: reason,
         kvPosition: position,
         kvBackedTokenIDs: history,
-        uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs)
+        uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+        wideVerify: wide?.stats)
 }

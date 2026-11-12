@@ -315,6 +315,9 @@ extension ServerModelSession {
                     result.decodeSeconds,
                     decodeRate))
         }
+        if let wide = result.wideVerify {
+            ServerLog.diagnostic(wide.summary)
+        }
         if ProcessInfo.processInfo.environment["TINYTITAN_RUNNER_STATS"] != nil {
             emitRunnerDiagnostics(result: result, snapshot: runnerSnapshot)
         }
