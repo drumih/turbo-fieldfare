@@ -1546,7 +1546,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
     codex)    echo "  ~/.codex-tinytitan/config.toml -> $launch_model via $API at port $PORT" ;;
     claude)   echo "  ANTHROPIC_BASE_URL=http://127.0.0.1:$PORT, model $launch_model" ;;
     qwen)     echo "  ~/.qwen-tinytitan/settings.json -> $launch_model at port $PORT" ;;
-    opencode) echo "  ~/.config/opencode/opencode.jsonc provider 'tinytitan' (model $launch_model)" ;;
+    opencode) echo "  ~/.config/opencode/opencode.jsonc (or the opencode.json already there): provider"
+              echo "  'tinytitan' from plugins/opencode-tinytitan/opencode.json at http://127.0.0.1:$PORT/v1,"
+              echo "  'tinytitan' removed from disabled_providers, backup first; starts tinytitan/$launch_model" ;;
     zed)      echo "  ~/.config/zed/settings.json openai_compatible 'tinytitan' (model $launch_model)" ;;
   esac
   echo ""
@@ -1751,138 +1753,42 @@ EOF
   echo "  Qwen Code configured: $dir/settings.json"
 }
 
-# Merge the TinyTitan provider into a JSONC settings file, keeping everything
-# else. Comments and trailing commas are tolerated on read; the file is
-# rewritten as plain JSON (Zed and OpenCode both accept that) with a backup
-# kept beside it. Each client has its own schema, so the shape is passed in:
-#   zed       language_models.openai_compatible.<id> = {api_url, available_models}
-#   opencode  provider.<id> = {npm, name, options.baseURL, models}
-merge_client_config() {
-  local file="$1" schema="$2" provider="$3" model="$4" context="$5"
-  mkdir -p "$(dirname "$file")"
-  backup_once "$file"
-  TINYTITAN_MERGE_FILE="$file" TINYTITAN_MERGE_SCHEMA="$schema" TINYTITAN_MERGE_PROVIDER="$provider" \
-  TINYTITAN_MERGE_MODEL="$model" TINYTITAN_MERGE_URL="$BASE_URL" TINYTITAN_MERGE_CONTEXT="$context" \
-  python3 - <<'PY'
-import json, os, re, sys
-
-path = os.environ["TINYTITAN_MERGE_FILE"]
-schema = os.environ["TINYTITAN_MERGE_SCHEMA"]
-provider = os.environ["TINYTITAN_MERGE_PROVIDER"]
-model = os.environ["TINYTITAN_MERGE_MODEL"]
-base_url = os.environ["TINYTITAN_MERGE_URL"]
-context = int(os.environ["TINYTITAN_MERGE_CONTEXT"])
-
-
-def strip_comments(text):
-    """JSONC -> JSON: drop // and /* */ comments outside strings."""
-    out, i, n, in_str, esc = [], 0, len(text), False, False
-    while i < n:
-        c = text[i]
-        if in_str:
-            out.append(c)
-            if esc:
-                esc = False
-            elif c == "\\":
-                esc = True
-            elif c == '"':
-                in_str = False
-            i += 1
-            continue
-        if c == '"':
-            in_str = True
-            out.append(c)
-            i += 1
-            continue
-        if text.startswith("//", i):
-            j = text.find("\n", i)
-            i = n if j == -1 else j
-            continue
-        if text.startswith("/*", i):
-            j = text.find("*/", i)
-            i = n if j == -1 else j + 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-try:
-    raw = open(path, encoding="utf-8").read()
-except FileNotFoundError:
-    raw = "{}"
-text = re.sub(r",(\s*[}\]])", r"\1", strip_comments(raw))
-try:
-    data = json.loads(text) if text.strip() else {}
-except json.JSONDecodeError as error:
-    print(f"  WARNING: {path} is not parseable ({error}); left untouched.", file=sys.stderr)
-    sys.exit(0)
-if not isinstance(data, dict):
-    print(f"  WARNING: {path} is not a JSON object; left untouched.", file=sys.stderr)
-    sys.exit(0)
-
-
-def table(parent, key):
-    value = parent.get(key)
-    if not isinstance(value, dict):
-        value = {}
-        parent[key] = value
-    return value
-
-
-if schema == "opencode":
-    block = {
-        "npm": "@ai-sdk/openai-compatible",
-        "name": "TinyTitan (local)",
-        "options": {"baseURL": base_url, "apiKey": "tinytitan"},
-        "models": {
-            model: {
-                "name": f"TinyTitan — {model}",
-                "limit": {"context": context, "output": 65536},
-            }
-        },
-    }
-    table(table(data, "provider"), provider).update(block)
-else:  # zed
-    block = {
-        "api_url": base_url,
-        "available_models": [
-            {
-                "name": model,
-                "display_name": f"TinyTitan — {model}",
-                "max_tokens": context,
-                "capabilities": {
-                    "tools": True,
-                    "images": False,
-                    "parallel_tool_calls": False,
-                    "prompt_cache_key": False,
-                    "chat_completions": True,
-                    "interleaved_reasoning": False,
-                    "max_tokens_parameter": False,
-                },
-            }
-        ],
-    }
-    table(table(data, "language_models"), "openai_compatible")[provider] = block
-
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2)
-    handle.write("\n")
-PY
-}
+# OpenCode and Zed have no environment override for a provider, so the provider
+# is merged into the user's own config by tools/client_config_merge.py, which
+# keeps everything else in the file, rewrites it only when something changed,
+# and backs the current version up beside it before any write (its docstring has
+# the details).
 
 configure_opencode() {
-  local file="$HOME/.config/opencode/opencode.jsonc"
-  # OpenCode has no environment override for a provider, so the provider block
-  # is written into its config. The provider is named "tinytitan" so nothing of
-  # the user's own "openai" setup is touched.
-  merge_client_config "$file" opencode tinytitan "$launch_model" "${max_context:-262144}"
-  echo "  Pick \"$launch_model\" under the tinytitan provider in OpenCode's model list."
+  local dir="$HOME/.config/opencode" file
+  # OpenCode merges every global config file it finds, so the provider goes into
+  # the one the user already has -- opencode.jsonc, else opencode.json -- and a
+  # new opencode.jsonc only when there is none. The block itself is the
+  # checked-in plugins/opencode-tinytitan/opencode.json, not a copy kept here.
+  # A `tinytitan` left in `disabled_providers` hides the provider whatever the
+  # block says, so it is cleared in the other global files (and in the file
+  # OPENCODE_CONFIG names) as well.
+  if [[ -f "$dir/opencode.jsonc" ]]; then
+    file="$dir/opencode.jsonc"
+  elif [[ -f "$dir/opencode.json" ]]; then
+    file="$dir/opencode.json"
+  else
+    file="$dir/opencode.jsonc"
+  fi
+  local also=(--also "$dir/config.json" --also "$dir/opencode.json" --also "$dir/opencode.jsonc")
+  if [[ -n "${OPENCODE_CONFIG:-}" ]]; then also+=(--also "$OPENCODE_CONFIG"); fi
+  python3 "$SCRIPT_DIR/client_config_merge.py" opencode --file "$file" \
+    --source "$BASE_DIR/plugins/opencode-tinytitan/opencode.json" \
+    --model "$launch_model" --base-url "$BASE_URL" --context "${max_context:-262144}" \
+    "${also[@]+"${also[@]}"}" || echo "  WARNING: OpenCode config not updated; see above." >&2
+  echo "  OpenCode starts on tinytitan/$launch_model (switch models with /models)."
 }
 
 configure_zed() {
   local file="$HOME/.config/zed/settings.json"
-  merge_client_config "$file" zed tinytitan "$launch_model" "${max_context:-262144}"
+  python3 "$SCRIPT_DIR/client_config_merge.py" zed --file "$file" \
+    --model "$launch_model" --base-url "$BASE_URL" --context "${max_context:-262144}" ||
+    echo "  WARNING: Zed settings not updated; see above." >&2
   echo "  In Zed: Settings -> AI -> LLM Providers; choose the tinytitan provider's model."
 }
 
@@ -1966,6 +1872,6 @@ case "$CLIENT" in
   codex)    "$BIN" ;;
   claude)   "$BIN" ;;
   qwen)     "$BIN" -i ;;
-  opencode) "$BIN" ;;
+  opencode) "$BIN" -m "tinytitan/$launch_model" ;;
   zed)      "$BIN" "${ZED_PROJECT:-$PWD}" ;;
 esac

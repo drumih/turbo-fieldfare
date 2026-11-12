@@ -280,10 +280,11 @@ jobs:
         # bytes must stop the install. They drive the real scripts against a stub
         # `curl`, so they fetch nothing and need no token. None needs dependencies
         # beyond the runner's python3.
-        # The six `test_launcher_*`/`test_coder_clients`/`test_tinytitan_profile`
+        # The seven `test_launcher_*`/`test_coder_clients`/`test_tinytitan_profile`
         # suites are the launcher's own arithmetic — the RAM half and its warning
         # boundary, the port's three ways in, the concurrency width and its red
-        # warning, the client catalogue, the benchmark profile's server command,
+        # warning, the client catalogue, the OpenCode provider it merges from
+        # plugins/opencode-tinytitan/, the benchmark profile's server command,
         # and the lifetime of the server it starts (a stub binary through
         # `TINYTITAN_BIN_DIR`, so the suite proves the model dies with the
         # launcher without loading one). They name their model through
@@ -308,6 +309,7 @@ jobs:
             test_launcher_install test_launcher_ram test_launcher_port \
             test_models_memory_gate \
             test_launcher_concurrency test_launcher_lifetime test_coder_clients \
+            test_launcher_opencode \
             test_tinytitan_profile \
             launcher_fixture test_progress \
             test_release_installer_verification test_supply_chain

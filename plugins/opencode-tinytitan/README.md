@@ -14,8 +14,16 @@ cp plugins/opencode-tinytitan/opencode.json ~/.config/opencode/opencode.json   #
 opencode -m tinytitan/qwen3.8-flash-next-mtp_4-Bit
 ```
 
-`tools/server_launcher.sh --client opencode` writes a smaller version of the same
-block (one model, no variants) into `~/.config/opencode/opencode.jsonc`.
+`tools/server_launcher.sh --client opencode` does this for you: it merges this
+file's `tinytitan` provider into `~/.config/opencode/opencode.jsonc` (or into the
+`opencode.json` already there; a new config is a copy of this file), with only the
+`baseURL` port and the launched model's `limit.context` set from the server it
+starts, then runs `opencode -m tinytitan/<model>`. Your other settings and any
+models you added under `tinytitan` are kept, `tinytitan` is taken out of
+`disabled_providers` (which hides a provider whatever its block says) in every
+global config file and in `$OPENCODE_CONFIG`, and each file it changes is backed
+up beside itself first (`*.tinytitan-backup`, then `*.tinytitan-backup-<time>`).
+Comments do not survive the rewrite; they stay in the backup.
 
 ## What is wired
 
