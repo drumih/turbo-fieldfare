@@ -37,6 +37,12 @@ is `docs/plan-gguf-decode-10toks.md`: the owner wants **10 tok/s decode at
   `GGUFMixerStageBenchmarkTests` (`TINYTITAN_KERNEL_BENCH=1`). The analysis
   scripts (`window.py`, `avg.py`, `ssd_bench.py`) are in the gitignored
   `.build/m1/` and should be promoted into `benchmark/`.
+- **Pending todo — wiki push not done**: the GLM-5.3-Flash evaluation
+  (`docs/glm53-flash-port.md`, `1d5b1da`) is closed, but its tracker entry
+  never reached the wiki: the session that wrote it had no write access to
+  `TinyTitan.wiki`. Add the TT-061 block from that document's §8 at the top
+  of the wiki's `Tracker-Archive.md`, push `master`, then delete this bullet
+  and that section.
 - **Open** (wiki Project Tracker): TT-056 ANE prefill (needs 4,096-token
   chunks; the exported sidecar sits in `/tmp/gguf-ane-source` and must move
   into the model directory), TT-057 decode speed, TT-058 serving through
