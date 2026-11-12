@@ -23,6 +23,13 @@ public struct WideVerifyCostModel: Sendable, Equatable {
     public static let measuredChunkedPrefill = WideVerifyCostModel(
         scalarMilliseconds: 293.4, passBaseMilliseconds: 1352, passRowMilliseconds: 150.7)
 
+    /// The dedicated W-row verify (`verifyGreedyRows`), measured 2026-11-12
+    /// interleaved with the chunked path in one process (`passcost ... both`):
+    /// 299.2 ms scalar, W=8 at 3.53 scalar tokens. Not the default: that path
+    /// does not yet produce scalar decode's tokens (58% of rows at W=8).
+    public static let measuredDedicatedVerify = WideVerifyCostModel(
+        scalarMilliseconds: 299.2, passBaseMilliseconds: 259, passRowMilliseconds: 103.4)
+
     public init(
         scalarMilliseconds: Double, passBaseMilliseconds: Double, passRowMilliseconds: Double
     ) {

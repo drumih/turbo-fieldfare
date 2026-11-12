@@ -79,11 +79,9 @@ extension RealForwardRunner {
             writeFinalHead: false,
             snapshotGDNAfterFirstToken: true,
             useTwoRowProjection: true,
-            pairRoutedMoE: pairMoE)
+            verifyRoutedMoE: pairMoE)
         let tHead = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
 
-        let finalNorm = try model.finalNorm()
-        let lm = try model.lmHead()
         guard let cb = ctx.queue.makeCommandBuffer(),
             let blit = cb.makeBlitCommandEncoder()
         else {
@@ -96,6 +94,25 @@ extension RealForwardRunner {
             destinationOffset: 0,
             size: 2 * residualWidth * MemoryLayout<Float16>.stride)
         blit.endEncoding()
+        try encodeVerifyHeadPair(commandBuffer: cb, hidden: scratch.hidden, scratch: scratch)
+        cb.commit()
+        try waitForCompletion(cb)
+        recordKernelGPU(role: "verify_head", cb)
+        return try finishVerifyPair(tBackbone: tBackbone, tHead: tHead)
+    }
+
+    /// The verify head for two consecutive residual rows at the start of
+    /// `hidden`: final norm and lm_head into `verificationLogits` rows 0 and 1,
+    /// with one lm_head read. Shared by the pair verify and the W-row verify
+    /// (which walks its rows two at a time), so a head difference cannot become
+    /// a difference between the two.
+    func encodeVerifyHeadPair(
+        commandBuffer cb: MTLCommandBuffer,
+        hidden: MTLBuffer,
+        scratch: PrefillChunkScratchBuffers
+    ) throws {
+        let finalNorm = try model.finalNorm()
+        let lm = try model.lmHead()
         if let hc = hyperConnection {
             // This stack does not end in an RMSNorm: it ends in the gated
             // mixer that collapses the residual streams. The fused pair head
@@ -107,7 +124,7 @@ extension RealForwardRunner {
             for row in 0..<2 {
                 try hc.encodeRead(
                     commandBuffer: cb,
-                    streamsBuffer: scratch.hidden,
+                    streamsBuffer: hidden,
                     streamsOffset: row * rowBytes,
                     hcNorm: finalNorm.buffer,
                     hcNormOffset: Int(finalNorm.offset),
@@ -130,16 +147,13 @@ extension RealForwardRunner {
                     yOffset: row * cfg.vocabSize * MemoryLayout<Float16>.stride,
                     m: UInt32(cfg.vocabSize), n: UInt32(cfg.hiddenSize))
             }
-            cb.commit()
-            try waitForCompletion(cb)
-            recordKernelGPU(role: "verify_head", cb)
-            return try finishVerifyPair(tBackbone: tBackbone, tHead: tHead)
+            return
         }
         // One lm_head weight read for both rows. The former per-row loop
         // read the model's largest tensor twice per verify pass.
         try prefillFinalRowHead.encodeLogitsPair(
             commandBuffer: cb,
-            hiddenBlock: scratch.hidden,
+            hiddenBlock: hidden,
             rowStrideElements: cfg.hiddenSize,
             normWeight: finalNorm.buffer,
             normWeightOffset: Int(finalNorm.offset),
@@ -153,10 +167,6 @@ extension RealForwardRunner {
             d: UInt32(cfg.hiddenSize),
             vocab: UInt32(cfg.vocabSize),
             rmsEps: 1e-6)
-        cb.commit()
-        try waitForCompletion(cb)
-        recordKernelGPU(role: "verify_head", cb)
-        return try finishVerifyPair(tBackbone: tBackbone, tHead: tHead)
     }
 
     /// Argmax both verify rows and package the result. Shared by the two

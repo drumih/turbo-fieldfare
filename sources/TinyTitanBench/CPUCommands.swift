@@ -337,16 +337,26 @@ extension TinyTitanBench {
             try runLagunaGPU(install: install, prompt: prompt, limit: limit)
         case "passcost":
             // Gate 2 of docs/plan-wide-verify.md: install, rounds per width,
-            // optional prompt file. Loads a model, so it runs before the
+            // pass path (chunked | dedicated | both), optional prompt file. Loads a model, so it runs before the
             // kernel benches' Metal context like the other model commands.
             let args = CommandLine.arguments
             guard args.count > 2 else {
                 throw PassCostError.usage
             }
+            let path: PassCostPath
+            if args.count > 4 {
+                guard let parsed = PassCostPath(rawValue: args[4]) else {
+                    throw PassCostError.usage
+                }
+                path = parsed
+            } else {
+                path = .chunked
+            }
             try runPassCost(
                 install: args[2],
                 roundsPerWidth: args.count > 3 ? Int(args[3]) ?? 6 : 6,
-                promptFile: args.count > 4 ? args[4] : nil)
+                path: path,
+                promptFile: args.count > 5 ? args[5] : nil)
         case "cpu35ppl":
             // Held-out text through the CPU forward pass: mean NLL and
             // perplexity, the sharper instrument the twenty-prompt A/B was

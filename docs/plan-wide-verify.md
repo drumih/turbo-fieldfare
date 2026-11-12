@@ -1,11 +1,12 @@
 # Wide verify with prompt-copied drafts: Qwen3.8 decode on the 24 GB M3
 
-Status: **stopped at gate 2** (2026-11-12). A W=8 pass through the existing
-chunked prefill costs 7.61 scalar tokens against the 4.5 stop line (see "Gate 2
-result"). Gate 1 is unmeasured (no transcripts on this host). The model-free
-pieces (draft source, controller, sampler acceptance) are built and tested;
-task 3 is not started, pending the operator's decision on the open question
-below.
+Status: **gate 2 passed on the dedicated path** (2026-11-12). The existing
+chunked prefill fails it (W=8 at 4.62-7.61 scalar tokens), but a dedicated
+W-row verify -- the MTP pair schedule widened, `verifyGreedyRows` -- costs
+**3.53 scalar tokens at W=8**, measured interleaved with the chunked path in one
+process (see "Dedicated-path probe"). The same run shows the blocker: only 58%
+of the pass's rows agree with scalar decode, so task 3 (byte identity) is the
+next work. Gate 1 is unmeasured (no transcripts on this host).
 
 ## Goal and projection
 
@@ -56,8 +57,8 @@ W), and one pass carries up to W-1 accepted tokens instead of at most one.
 | # | Task | State |
 | --- | --- | --- |
 | 1 | Draft coverage replay (gate 1, stop under ~40% at min-run 8) | instrument built (`benchmark/draft_coverage_replay.py`); **no transcripts on this machine** -- run when real git-session transcripts exist |
-| 2 | Pass-cost curve (gate 2, stop if a W=8 pass > ~4.5 scalar tokens) | **measured: 7.61 -> stop** (below) |
-| 3 | Byte-identical W-row verify kernels | not started: gate 2 stopped the plan; design kept below for the open question |
+| 2 | Pass-cost curve (gate 2, stop if a W=8 pass > ~4.5 scalar tokens) | chunked path: stop (4.62-7.61); **dedicated path: pass (3.53)**, interleaved run below |
+| 3 | Byte-identical W-row verify kernels | **next**: the dedicated pass agrees with scalar decode on 58% of rows at W=8 |
 | 4 | Seeded-sampling verify | acceptance rule built and tested (`DraftAcceptance`); wiring lands with task 3 |
 | 5 | Draft source and controller | built and tested (`PromptLookupDrafter`, `WideVerifyController`) |
 | 6 | GPU-side fetch planning (~20 ms/layer turnaround) | last; small |
@@ -128,6 +129,49 @@ Building task 3 to find out is multi-day kernel work. The options are (a) close
 the plan here, or (b) fund a narrower probe first -- time the existing
 `verifyGreedyPair` schedule generalised to W rows (no identity work) to measure
 the dedicated-path base and per-row cost before committing to task 3.
+
+### Dedicated-path probe (2026-11-12): gate 2 passes
+
+The open question above was answered by option (b). `verifyGreedyRows` runs W
+rows through one backbone traversal with the routed experts of all rows planned
+as one union against the pinned decode slot cache
+(`encodeRoutedMoEVerifyRows`, the pair schedule with the row count as a
+parameter), and a head shared with the pair verify (`encodeVerifyHeadPair`,
+walked two rows at a time: W/2 lm_head reads, an upper bound). The union must
+fit the cache, so W <= slots / topK = 9 at 96 slots.
+
+`TinyTitanBench passcost <install> 6 both` alternates the chunked and dedicated
+paths round by round in one process, so both share one scalar baseline and one
+machine state. Idle M3, 96 slots, 1,461-token edit prompt; scalar token **299.2
+ms** median (592 samples). Raw record:
+`.build/pass-cost/passcost-20261112T135906Z.json`.
+
+| W | chunked ms | scalar tokens | dedicated ms | scalar tokens | dedicated head ms | dedicated rows = scalar |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 773.0 | 2.58 | **464.0** | **1.55** | 19.1 | 8/12 |
+| 4 | 1027.5 | 3.43 | **669.2** | **2.24** | 34.4 | 15/24 |
+| 8 | 1382.9 | 4.62 | **1057.5** | **3.53** | 68.3 | 28/48 |
+
+Fits: chunked **827 ms + 135.7 ms/row**, dedicated **259 ms + 103.4 ms/row**.
+The dedicated path clears the 4.5 line at W=8 (3.53). At that cost a W=8 pass
+breaks even at a per-token acceptance of about 0.75 and, fully accepted, emits
+8 tokens in 1.06 s (~7.6 tok/s against 3.34 scalar).
+
+Two things this does **not** show yet:
+
+- **Identity.** Only 28 of 48 rows at W=8 (58%) predicted the token scalar
+  decode produced, and the chunked path's last row matched 2 of 6. Wrong rows
+  reject correct drafts (acceptance falls) and, worse, change the emitted text,
+  which AGENTS.md forbids. The GDN recurrence is exact; the remaining suspects
+  are the dense projections (prefill fallback kernels on this M3, no MPP),
+  attention, and the head order. This is task 3 and the next work item.
+- **The chunked numbers moved between runs** (W=8: 2,234 ms alone this
+  morning, 1,383 ms interleaved here), so a single-path run on this machine is
+  not a reliable instrument; the interleaved `both` mode is the one to quote.
+
+`WideVerifyCostModel.measuredDedicatedVerify` holds this fit. The controller's
+default stays `measuredChunkedPrefill` until the dedicated path is a decode path
+that passes the identity gate.
 
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 

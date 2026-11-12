@@ -24,7 +24,7 @@ extension RealForwardRunner {
         preparedHidden: MTLBuffer? = nil,
         snapshotGDNAfterFirstToken: Bool = false,
         useTwoRowProjection: Bool = false,
-        pairRoutedMoE: Bool = false
+        verifyRoutedMoE: Bool = false
     ) async throws {
         // Layer-major prefill (one band of chunks walked layer by layer, with
         // a residual per chunk) is gone: every call runs the whole stack in
@@ -188,7 +188,7 @@ extension RealForwardRunner {
                 slot == 0,
                 !snapshotGDNAfterFirstToken,
                 !useTwoRowProjection,
-                !pairRoutedMoE,
+                !verifyRoutedMoE,
                 preparedHidden == nil,
                 ane.eligibleChunk(
                     startPosition: startPosition,
@@ -211,7 +211,7 @@ extension RealForwardRunner {
                 tokens: tokens, startPosition: startPosition, t: t, D: D,
                 eps: eps, useTwoRowProjection: useTwoRowProjection,
                 snapshotGDNAfterFirstToken: snapshotGDNAfterFirstToken,
-                aneChunk: aneChunk, pairRoutedMoE: pairRoutedMoE,
+                aneChunk: aneChunk, verifyRoutedMoE: verifyRoutedMoE,
                 prefillRouteNanos: &prefillRouteNanos,
                 prefillAttentionNanos: &prefillAttentionNanos,
                 prefillTileNanos: &prefillTileNanos,
@@ -274,7 +274,7 @@ extension RealForwardRunner {
         useTwoRowProjection: Bool,
         snapshotGDNAfterFirstToken: Bool,
         aneChunk: ANEPrefillAttention?,
-        pairRoutedMoE: Bool,
+        verifyRoutedMoE: Bool,
         prefillRouteNanos: inout UInt64,
         prefillAttentionNanos: inout UInt64,
         prefillTileNanos: inout UInt64,
@@ -332,9 +332,9 @@ extension RealForwardRunner {
         // The phase timer started before the attention block, so the split
         // between attention-plus-norms and the router is taken here.
         prefillAttentionNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - prefillLayerStart
-        if pairRoutedMoE, t == 2 {
-            try await encodeRoutedMoEVerifyPair(
-                cb: &cb, layer: L, views: views, scratch: scratch,
+        if verifyRoutedMoE {
+            try await encodeRoutedMoEVerifyRows(
+                cb: &cb, layer: L, rows: t, views: views, scratch: scratch,
                 hiddenSize: D)
         } else {
             try await encodeRoutedMoEPrefill(

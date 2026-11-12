@@ -30,16 +30,20 @@ extension RealForwardRunner {
         let nextCB: MTLCommandBuffer?
     }
 
-    /// The MTP verify caller: same pipeline, awaited to completion.
-    func encodeRoutedMoEVerifyPair(
+    /// The verify caller (the MTP pair, or a W-row wide verify): same
+    /// pipeline, awaited to completion. `rows` must leave the union plan
+    /// within the routed slot cache: `rows * topK <= slots`.
+    func encodeRoutedMoEVerifyRows(
         cb: inout MTLCommandBuffer,
         layer L: Int,
+        rows: Int,
         views: LayerPrefillQKVViews,
         scratch: PrefillChunkScratchBuffers,
         hiddenSize D: Int
     ) async throws {
         let outcome = try await encodeVerifyPairBody(
-            cb: &cb, layer: L, views: views, scratch: scratch, hiddenSize: D)
+            cb: &cb, layer: L, rows: rows, views: views, scratch: scratch,
+            hiddenSize: D)
         try waitForCompletion(outcome.routedCB)
         recordKernelGPU(role: "prefill_shared_expert", outcome.sharedCB)
         recordKernelGPU(role: "verify_routed_pair", outcome.routedCB)
@@ -56,11 +60,15 @@ extension RealForwardRunner {
     func encodeVerifyPairBody(
         cb: inout MTLCommandBuffer,
         layer L: Int,
+        rows t: Int,
         views: LayerPrefillQKVViews,
         scratch: PrefillChunkScratchBuffers,
         hiddenSize D: Int
     ) async throws -> VerifyPairOutcome {
-        let t = 2
+        guard t >= 1, t <= scratch.layout.chunkTokens else {
+            throw PrefillError.chunkedUnsupported(
+                "verify routed stage needs 1...\(scratch.layout.chunkTokens) rows, got \(t)")
+        }
         let topK = UInt32(cfg.topKExperts)
         let FmoE = UInt32(cfg.moeIntermediateSize)
         let halfBytes = MemoryLayout<Float16>.stride

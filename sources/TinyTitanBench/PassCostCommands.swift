@@ -11,7 +11,7 @@ enum PassCostError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "usage: TinyTitanBench passcost <install> [roundsPerWidth=6] [promptFile]"
+            "usage: TinyTitanBench passcost <install> [roundsPerWidth=6] [chunked|dedicated|both] [promptFile]"
         case .noDevice:
             "no Metal device"
         case .diverged(let position, let expected, let actual):
@@ -41,26 +41,50 @@ enum PassCostError: Error, CustomStringConvertible {
 /// The last row's greedy token is compared with the reference; a mismatch is
 /// reported, not hidden -- it is the byte-identity question (task 3) showing up.
 extension TinyTitanBench {
+    /// Which pass is timed: the production chunked prefill (gate 2 as the
+    /// plan defined it), or the dedicated W-row verify (`verifyGreedyRows`:
+    /// the MTP pair schedule widened, decode cache pinned).
+    /// `both` alternates the two round by round in one process, so they share
+    /// one scalar baseline and whatever else the machine is doing.
+    enum PassCostPath: String, Codable {
+        case chunked
+        case dedicated
+        case both
+    }
+
     struct PassCostRow: Codable {
+        let path: PassCostPath
         let width: Int
         let position: Int
         let passMilliseconds: Double
         let lastRowMatches: Bool
+        /// Dedicated path only: head time inside the pass, and how many rows'
+        /// greedy predictions equal scalar decode's.
+        var headMilliseconds: Double?
+        var rowsMatching: Int?
     }
 
     struct PassCostReport: Codable {
         let install: String
+        let paths: [PassCostPath]
+        let widths: [Int]
         let promptTokens: Int
         let scalarMillisecondsMedian: Double
         let scalarMillisecondsMean: Double
         let scalarSamples: Int
         let rows: [PassCostRow]
-        let fitBaseMilliseconds: Double
-        let fitPerRowMilliseconds: Double
+        let fits: [PassCostFit]
+    }
+
+    /// Least squares over one path's passes: cost = base + perRow * width.
+    struct PassCostFit: Codable {
+        let path: PassCostPath
+        let baseMilliseconds: Double
+        let perRowMilliseconds: Double
     }
 
     static func runPassCost(
-        install: String, roundsPerWidth: Int, promptFile: String?
+        install: String, roundsPerWidth: Int, path: PassCostPath, promptFile: String?
     ) throws {
         /// unchecked-invariant: written only inside the Task below and read
         /// only after `semaphore.wait()` returns; no concurrent access.
@@ -71,7 +95,7 @@ extension TinyTitanBench {
             do {
                 try await runPassCostAsync(
                     install: install, roundsPerWidth: max(1, roundsPerWidth),
-                    promptFile: promptFile)
+                    path: path, promptFile: promptFile)
             } catch {
                 box.error = error
             }
@@ -106,7 +130,7 @@ extension TinyTitanBench {
     /// with interleaved passes, report. The phases share the token stream and
     /// the logits buffer, and splitting them would only thread both through.
     private static func runPassCostAsync(
-        install: String, roundsPerWidth: Int, promptFile: String?
+        install: String, roundsPerWidth: Int, path: PassCostPath, promptFile: String?
     ) async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw PassCostError.noDevice
@@ -131,9 +155,21 @@ extension TinyTitanBench {
                 options: .storageModeShared)
         else { throw PassCostError.noDevice }
         let prefillConfig = PrefillRuntimeConfig.production(chunkTokens: 32)
+        // Every round advances 16 tokens whatever its width, so the expert
+        // cache turns over the same way between passes on both paths.
         let maxWidth = passCostWidths.max() ?? 16
+        // The dedicated pass plans its rows' expert union as one lease against
+        // the slot cache, so it is limited to what is guaranteed to fit.
+        let paths: [PassCostPath] = path == .both ? [.chunked, .dedicated] : [path]
+        let widths =
+            paths.contains(.dedicated)
+            ? passCostWidths.filter { $0 <= runner.wideVerifyMaximumRows } : passCostWidths
+        guard !widths.isEmpty else {
+            throw PrefillError.chunkedUnsupported(
+                "dedicated verify needs a routed slot cache of at least 2 * topK")
+        }
         let warmup = 32
-        let rounds = passCostWidths.count * roundsPerWidth
+        let rounds = widths.count * paths.count * roundsPerWidth
         let total = warmup + rounds * maxWidth + maxWidth
 
         func seedToken(_ result: PrefillResult) -> Int32 {
@@ -188,53 +224,75 @@ extension TinyTitanBench {
         var rows: [PassCostRow] = []
         var index = warmup
         for round in 0..<rounds {
-            let width = passCostWidths[round % passCostWidths.count]
+            // Paths alternate every round and widths every `paths.count`
+            // rounds, so each width's passes on the two paths are neighbours.
+            let roundPath = paths[round % paths.count]
+            let width = widths[(round / paths.count) % widths.count]
             let position = prompt.count + index
             let snapshot = try runner.captureInferenceState()
             let auxiliary = try runner.captureAuxiliaryState()
             try runner.prepareForContinuation(expectedPosition: position)
             let start = now()
-            let result = try await runner.prefillChunked(
-                tokens: reference[index..<(index + width)],
-                startPosition: position,
-                outputMode: .greedyIfAvailable, config: prefillConfig,
-                into: logits, onProgress: { _ in })
-            let passMs = ms(start)
-            let matches = seedToken(result) == reference[index + width]
+            var row: PassCostRow
+            switch roundPath {
+            case .chunked, .both:
+                let result = try await runner.prefillChunked(
+                    tokens: reference[index..<(index + width)],
+                    startPosition: position,
+                    outputMode: .greedyIfAvailable, config: prefillConfig,
+                    into: logits, onProgress: { _ in })
+                row = PassCostRow(
+                    path: .chunked, width: width, position: position,
+                    passMilliseconds: ms(start),
+                    lastRowMatches: seedToken(result) == reference[index + width])
+            case .dedicated:
+                let result = try await runner.verifyGreedyRows(
+                    Array(reference[index..<(index + width)]), startPosition: position)
+                row = PassCostRow(
+                    path: .dedicated, width: width, position: position,
+                    passMilliseconds: ms(start),
+                    lastRowMatches: result.predictions.last == reference[index + width])
+                row.headMilliseconds = Double(result.headNanos) / 1e6
+                row.rowsMatching =
+                    result.predictions.indices.filter {
+                        result.predictions[$0] == reference[index + $0 + 1]
+                    }.count
+            }
             try runner.restoreInferenceState(snapshot, auxiliary: auxiliary)
-            rows.append(
-                PassCostRow(
-                    width: width, position: position,
-                    passMilliseconds: passMs, lastRowMatches: matches))
+            rows.append(row)
             try await advance(from: index, count: maxWidth)
             index += maxWidth
         }
 
         let report = summarizePassCost(
-            install: install, promptTokens: prompt.count,
+            install: install, paths: paths, widths: widths, promptTokens: prompt.count,
             scalar: scalar, rows: rows)
         printPassCost(report)
         try writePassCost(report)
     }
 
     static func summarizePassCost(
-        install: String, promptTokens: Int, scalar: [Double], rows: [PassCostRow]
+        install: String, paths: [PassCostPath], widths: [Int], promptTokens: Int,
+        scalar: [Double], rows: [PassCostRow]
     ) -> PassCostReport {
-        // Least squares over every pass: cost = base + perRow * width.
-        let n = Double(rows.count)
-        let xs = rows.map { Double($0.width) }
-        let ys = rows.map(\.passMilliseconds)
-        let mx = xs.reduce(0, +) / max(n, 1)
-        let my = ys.reduce(0, +) / max(n, 1)
-        let sxy = zip(xs, ys).reduce(0) { $0 + ($1.0 - mx) * ($1.1 - my) }
-        let sxx = xs.reduce(0) { $0 + ($1 - mx) * ($1 - mx) }
-        let slope = sxx > 0 ? sxy / sxx : 0
+        let fits = paths.map { path in
+            let mine = rows.filter { $0.path == path }
+            let n = Double(mine.count)
+            let xs = mine.map { Double($0.width) }
+            let ys = mine.map(\.passMilliseconds)
+            let mx = xs.reduce(0, +) / max(n, 1)
+            let my = ys.reduce(0, +) / max(n, 1)
+            let sxy = zip(xs, ys).reduce(0) { $0 + ($1.0 - mx) * ($1.1 - my) }
+            let sxx = xs.reduce(0) { $0 + ($1 - mx) * ($1 - mx) }
+            let slope = sxx > 0 ? sxy / sxx : 0
+            return PassCostFit(
+                path: path, baseMilliseconds: my - slope * mx, perRowMilliseconds: slope)
+        }
         return PassCostReport(
-            install: install, promptTokens: promptTokens,
+            install: install, paths: paths, widths: widths, promptTokens: promptTokens,
             scalarMillisecondsMedian: median(scalar),
             scalarMillisecondsMean: scalar.reduce(0, +) / Double(max(scalar.count, 1)),
-            scalarSamples: scalar.count, rows: rows,
-            fitBaseMilliseconds: my - slope * mx, fitPerRowMilliseconds: slope)
+            scalarSamples: scalar.count, rows: rows, fits: fits)
     }
 
     static func printPassCost(_ report: PassCostReport) {
@@ -243,25 +301,35 @@ extension TinyTitanBench {
             String(
                 format: "scalar token: median %.1f ms, mean %.1f ms (%d samples)",
                 scalar, report.scalarMillisecondsMean, report.scalarSamples))
-        print("width  passes  median ms  scalar tokens  last-row match")
-        for width in passCostWidths {
-            let rows = report.rows.filter { $0.width == width }
-            let med = median(rows.map(\.passMilliseconds))
-            let matched = rows.filter(\.lastRowMatches).count
+        for fit in report.fits {
+            let path = fit.path
+            print("path: \(path.rawValue)")
+            print("width  passes  median ms  scalar tokens  last-row match  head ms  rows = scalar")
+            for width in report.widths {
+                let rows = report.rows.filter { $0.path == path && $0.width == width }
+                let med = median(rows.map(\.passMilliseconds))
+                let matched = rows.filter(\.lastRowMatches).count
+                let head = rows.compactMap(\.headMilliseconds)
+                let rowMatches = rows.compactMap(\.rowsMatching).reduce(0, +)
+                let detail =
+                    head.isEmpty
+                    ? "      -  -"
+                    : String(format: "%7.1f  %d/%d", median(head), rowMatches, width * rows.count)
+                print(
+                    String(
+                        format: "%5d  %6d  %9.1f  %13.2f  %d/%d",
+                        width, rows.count, med, med / scalar, matched, rows.count)
+                        + "  " + detail)
+            }
+            let w8 = median(
+                report.rows.filter { $0.path == path && $0.width == 8 }.map(\.passMilliseconds))
+            let verdict = w8 / scalar <= 4.5 ? "PASS" : "STOP"
             print(
                 String(
-                    format: "%5d  %6d  %9.1f  %13.2f  %d/%d",
-                    width, rows.count, med, med / scalar, matched, rows.count))
+                    format:
+                        "fit: %.0f ms + %.1f ms/row; gate 2 (W=8 <= 4.5 scalar tokens): %.2f -> %@",
+                    fit.baseMilliseconds, fit.perRowMilliseconds, w8 / scalar, verdict))
         }
-        print(
-            String(
-                format: "fit: %.0f ms + %.1f ms/row", report.fitBaseMilliseconds,
-                report.fitPerRowMilliseconds))
-        let w8 = median(report.rows.filter { $0.width == 8 }.map(\.passMilliseconds))
-        let verdict = w8 / scalar <= 4.5 ? "PASS" : "STOP"
-        print(
-            String(
-                format: "gate 2 (W=8 pass <= 4.5 scalar tokens): %.2f -> %@", w8 / scalar, verdict))
     }
 
     static func writePassCost(_ report: PassCostReport) throws {
