@@ -1,8 +1,11 @@
 # Wide verify with prompt-copied drafts: Qwen3.8 decode on the 24 GB M3
 
-Status: in progress (2026-11-12). Gates 1 and 2 are not yet measured; the
-model-free pieces (draft source, controller, sampler acceptance) are built and
-tested, and the gate-2 instrument is built and waiting on the 4-bit install.
+Status: **stopped at gate 2** (2026-11-12). A W=8 pass through the existing
+chunked prefill costs 7.61 scalar tokens against the 4.5 stop line (see "Gate 2
+result"). Gate 1 is unmeasured (no transcripts on this host). The model-free
+pieces (draft source, controller, sampler acceptance) are built and tested;
+task 3 is not started, pending the operator's decision on the open question
+below.
 
 ## Goal and projection
 
@@ -53,8 +56,8 @@ W), and one pass carries up to W-1 accepted tokens instead of at most one.
 | # | Task | State |
 | --- | --- | --- |
 | 1 | Draft coverage replay (gate 1, stop under ~40% at min-run 8) | instrument built (`benchmark/draft_coverage_replay.py`); **no transcripts on this machine** -- run when real git-session transcripts exist |
-| 2 | Pass-cost curve (gate 2, stop if a W=8 pass > ~4.5 scalar tokens) | instrument built (`TinyTitanBench passcost`); waits on the 4-bit install |
-| 3 | Byte-identical W-row verify kernels | design below; starts after gate 2 |
+| 2 | Pass-cost curve (gate 2, stop if a W=8 pass > ~4.5 scalar tokens) | **measured: 7.61 -> stop** (below) |
+| 3 | Byte-identical W-row verify kernels | not started: gate 2 stopped the plan; design kept below for the open question |
 | 4 | Seeded-sampling verify | acceptance rule built and tested (`DraftAcceptance`); wiring lands with task 3 |
 | 5 | Draft source and controller | built and tested (`PromptLookupDrafter`, `WideVerifyController`) |
 | 6 | GPU-side fetch planning (~20 ms/layer turnaround) | last; small |
@@ -77,6 +80,54 @@ so a pass never finds its own experts cached. Output: per-width median ms, the
 ratio to a scalar token, the linear fit, the gate verdict, the last-row greedy
 token against the reference (the byte-identity question as a rate), and a JSON
 record under `.build/pass-cost/`.
+
+### Gate 2 result (2026-11-12)
+
+Qwen3.8-Flash-Next 4-bit (`qwen38flash`, revision `478474da`), MacBook Pro M3
+24 GB, production runner (96 expert slots, 11.88 GB cache budget), 1,461-token
+edit prompt, six passes per width. The M3 has no MPP tensor ops, so the prefill
+projections ran the fallback kernels. Raw record:
+`.build/pass-cost/passcost-20261112T110630Z.json`.
+
+| W | passes (ms) | median | scalar tokens | last row = scalar |
+| ---: | --- | ---: | ---: | ---: |
+| 2 | 2432, 2219, 1286, 1065, 2551, 2207 | 2212.9 | 7.54 | 6/6 |
+| 4 | 1146, 1897, 2211, 2221, 1235, 1088 | 1566.2 | 5.34 | 4/6 |
+| 8 | 2146, 2322, 2026, 3276, 3394, 1857 | 2233.9 | **7.61** | 3/6 |
+| 16 | 3766, 3394, 4377, 4519, 3818, 3123 | 3791.9 | 12.92 | 5/6 |
+
+Scalar token: 293.4 ms median, 300.0 ms mean (400 samples, no passes in that
+phase). Fit: **1,352 ms + 150.7 ms/row**, against the projection's 370 + 55.
+
+Verdict by the plan's own line: **stop**. Even the fastest W=8 pass (1,857 ms)
+is 6.3 scalar tokens. At the fit, a pass beats scalar decode only at per-token
+acceptance of about 0.97 or more, and certain acceptance at W=16 is at best
+~1.25x (16 tokens in ~3.76 s). `WideVerifyCostModel.measuredChunkedPrefill` is
+now the controller's default, so it drafts only inside spans it has been
+copying perfectly.
+
+Two further findings:
+
+- **The existing path is not identical to scalar decode.** The last row's
+  greedy token differed from the scalar reference in 6 of 24 passes, on code
+  being copied. That is task 3's identity gap, measured: the GDN recurrence is
+  exact (pinned in `GDNKernelTests`), so it lies in the projections, attention,
+  routed MoE or head.
+- **The pass base, not the per-row cost, is the wall.** A two-row pass here
+  costs 1.1-2.6 s, while the purpose-built two-row MTP verify on the same model
+  measured 480 ms (`docs/qwen38-mtp-investigation-2026-11-09.md`). The generic
+  chunked prefill carries roughly a second of fixed cost per call that a
+  dedicated verify does not.
+
+**Open question for the operator.** The stop line was defined on "the existing
+edited-turn resume", and that path fails it clearly. Whether a purpose-built
+W-row verify (task 3's design) would pass is not measured: its base would start
+from the MTP pair's 480 ms, not 1,352 ms, but the same investigation found that
+pair still 2.22x a token and bounded by the expert union and serial row work.
+Building task 3 to find out is multi-day kernel work. The options are (a) close
+the plan here, or (b) fund a narrower probe first -- time the existing
+`verifyGreedyPair` schedule generalised to W rows (no identity work) to measure
+the dedicated-path base and per-row cost before committing to task 3.
 
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 

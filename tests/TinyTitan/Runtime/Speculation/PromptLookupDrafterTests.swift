@@ -106,7 +106,7 @@ import TinyTitanValidationSupport
 
     @Test func draftsOnlyWhenThePassPaysForItself() {
         // Plan projection: a W=8 pass costs 810 ms = 3.84 scalar tokens.
-        var controller = WideVerifyController(maxRows: 8)
+        var controller = WideVerifyController(costModel: .planProjection, maxRows: 8)
         // Near-certain acceptance: the widest pass wins.
         for _ in 0..<200 { controller.record(matchedN: 8, drafted: 7, acceptedCount: 7) }
         #expect(controller.draftLength(available: 7, matchedN: 8) == 7)
@@ -124,6 +124,26 @@ import TinyTitanValidationSupport
             scalarMilliseconds: 200, passBaseMilliseconds: 900, passRowMilliseconds: 100)
         let refused = WideVerifyController(costModel: dear, maxRows: 16, priorAcceptance: 0.6)
         #expect(refused.draftLength(available: 15, matchedN: 4) == 0)
+    }
+
+    /// Gate 2's verdict, held in the default: on the measured chunked-prefill
+    /// pass, 90% per-token acceptance loses to scalar decode at every width,
+    /// and only near-certain acceptance at W=16 pays, by at most ~1.25x.
+    @Test func theMeasuredDefaultDraftsOnlyNearCertainCopies() {
+        let model = WideVerifyCostModel.measuredChunkedPrefill
+        let scalarRate = 1 / model.scalarMilliseconds
+        for drafted in 1...15 {
+            let rate =
+                WideVerifyController.expectedEmitted(drafted: drafted, acceptance: 0.9)
+                / model.passMilliseconds(rows: drafted + 1)
+            #expect(rate < scalarRate, "W=\(drafted + 1) at p=0.9")
+        }
+        let best = 16 / model.passMilliseconds(rows: 16) / scalarRate
+        #expect(best > 1 && best < 1.3)
+        var controller = WideVerifyController(maxRows: 16, priorAcceptance: 0.9)
+        #expect(controller.draftLength(available: 15, matchedN: 8) == 0)
+        for _ in 0..<200 { controller.record(matchedN: 8, drafted: 15, acceptedCount: 15) }
+        #expect(controller.draftLength(available: 15, matchedN: 8) == 15)
     }
 
     @Test func estimatesForgetSoARegimeChangeIsFollowed() {
