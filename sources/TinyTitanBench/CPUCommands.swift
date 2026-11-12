@@ -335,6 +335,18 @@ extension TinyTitanBench {
                 CommandLine.arguments.count > 4
                 ? Int(CommandLine.arguments[4]) ?? 1 : 1
             try runLagunaGPU(install: install, prompt: prompt, limit: limit)
+        case "passcost":
+            // Gate 2 of docs/plan-wide-verify.md: install, rounds per width,
+            // optional prompt file. Loads a model, so it runs before the
+            // kernel benches' Metal context like the other model commands.
+            let args = CommandLine.arguments
+            guard args.count > 2 else {
+                throw PassCostError.usage
+            }
+            try runPassCost(
+                install: args[2],
+                roundsPerWidth: args.count > 3 ? Int(args[3]) ?? 6 : 6,
+                promptFile: args.count > 4 ? args[4] : nil)
         case "cpu35ppl":
             // Held-out text through the CPU forward pass: mean NLL and
             // perplexity, the sharper instrument the twenty-prompt A/B was

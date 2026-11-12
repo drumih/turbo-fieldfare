@@ -222,7 +222,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanBench",
-            dependencies: ["TinyTitan"],
+            dependencies: ["TinyTitan", "TinyTitanLib"],
             path: "sources/TinyTitanBench",
             swiftSettings: tinytitanLanguageStandard
         ),
