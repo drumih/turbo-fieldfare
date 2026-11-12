@@ -87,25 +87,9 @@ extension RealForwardRunner {
             throw ModelError.internalInconsistency(
                 detail: "MTP prefill stage reached for a model with no router")
         }
-        try prefillRouter.encodeBlock(
-            commandBuffer: cb,
-            weights: routerView.buffer,
-            weightsOffset: Int(routerView.offset),
-            scales: routerView.buffer,
-            scalesOffset: Int(routerView.scaleOffset),
-            biases: routerView.buffer,
-            biasesOffset: Int(routerView.biasOffset),
-            hidden: scratch.routedX,
-            effectiveScale: effectiveScaleBuffers[L],
-            perExpertScale: perExpertScale.buffer,
-            perExpertScaleOffset: perExpertScale.offset,
-            outIndices: scratch.routeIDs,
-            outWeights: scratch.routeWeights,
-            queryCount: UInt32(t),
-            numExperts: UInt32(cfg.numExperts),
-            d: UInt32(D),
-            topK: topK,
-            hiddenStrideElements: UInt32(D))
+        try encodeVerifyRouter(
+            cb: cb, layer: L, routerView: routerView, scratch: scratch,
+            rows: t, hiddenSize: D, perExpertScale: perExpertScale)
         cb.commit()
         try waitForCompletion(cb)
         recordKernelGPU(

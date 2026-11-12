@@ -27,6 +27,12 @@ extension RealForwardRunner {
         // projections, causal conv (+ tail carry), delta-rule
         // recurrence, gated norm, out_proj. No KV writes, no
         // attention, no blit.
+        if usesDecodeOrderLinearAttention(snapshot: snapshotGDNAfterFirstToken) {
+            try encodeLinearAttentionDecodeOrderRows(
+                cb: cb, layer: L, scratch: scratch, tokenCount: t,
+                hiddenSize: D, slot: slot)
+            return
+        }
         guard let gdn, let gdnState else {
             throw ModelError.internalInconsistency(
                 detail:
@@ -184,6 +190,12 @@ extension RealForwardRunner {
         keepMask: QSASelection? = nil,
         slot: Int = 0
     ) throws {
+        if usesDecodeOrderFullAttention(layer: L, keepMask: keepMask) {
+            try encodeFullAttentionDecodeOrderRows(
+                cb: cb, layer: L, scratch: scratch, tokenCount: t,
+                hiddenSize: D, startPosition: startPosition, slot: slot)
+            return
+        }
         let qProjRows = cfg.attnOutputGate ? 2 * qDim : qDim
         try encodeAffineProjection(
             commandBuffer: cb,

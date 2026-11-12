@@ -28,7 +28,13 @@ extension RealForwardRunner {
     /// layers and the first full-attention one. The residual at every layer
     /// entry is dumped regardless -- it is 20 KB a layer and it is what
     /// locates the first stage where a run leaves the reference.
-    var dumpLayerLimit: Int { 3 }
+    /// `TINYTITAN_ACT_DUMP_LAYER_LIMIT` raises it when a divergence starts
+    /// deeper in the stack.
+    var dumpLayerLimit: Int { Self.dumpLayerLimitSetting }
+
+    static let dumpLayerLimitSetting: Int =
+        ProcessInfo.processInfo.environment["TINYTITAN_ACT_DUMP_LAYER_LIMIT"]
+        .flatMap { Int($0) } ?? 3
 
     /// Positions to dump, from 0. One is enough to check the per-layer math;
     /// more is what catches state threaded between tokens -- the KV cache,
