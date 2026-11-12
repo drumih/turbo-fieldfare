@@ -1,12 +1,13 @@
 # Wide verify with prompt-copied drafts: Qwen3.8 decode on the 24 GB M3
 
-Status: **gate 2 passed on the dedicated path** (2026-11-12). The existing
-chunked prefill fails it (W=8 at 4.62-7.61 scalar tokens), but a dedicated
-W-row verify -- the MTP pair schedule widened, `verifyGreedyRows` -- costs
-**3.53 scalar tokens at W=8**, measured interleaved with the chunked path in one
-process (see "Dedicated-path probe"). The same run shows the blocker: only 58%
-of the pass's rows agree with scalar decode, so task 3 (byte identity) is the
-next work. Gate 1 is unmeasured (no transcripts on this host).
+Status: **byte identity reached** (2026-11-12, probe run 10). In decode-order
+mode every row of a W=8 verify pass equals scalar decode exactly -- all 48
+layers, every stage dump, and the logits (max |d| 0). Gate 2 passed earlier on
+the dedicated path (3.53 scalar tokens at W=8 with batched kernels); the exact
+path still loops decode's single-row kernels per row, so the speed pass (task 7
+below: multi-row kernels that keep decode's order) is what has to bring it back
+under the gate. Rollback and seeded-sampling verify are on main; decode-loop
+wiring is in progress. Gate 1 is unmeasured (no transcripts on this host).
 
 ## Goal and projection
 
@@ -58,8 +59,8 @@ W), and one pass carries up to W-1 accepted tokens instead of at most one.
 | --- | --- | --- |
 | 1 | Draft coverage replay (gate 1, stop under ~40% at min-run 8) | instrument built (`benchmark/draft_coverage_replay.py`); **no transcripts on this machine** -- run when real git-session transcripts exist |
 | 2 | Pass-cost curve (gate 2, stop if a W=8 pass > ~4.5 scalar tokens) | chunked path: stop (4.62-7.61); **dedicated path: pass (3.53)**, interleaved run below |
-| 3 | Byte-identical W-row verify kernels | **next**: the dedicated pass agrees with scalar decode on 58% of rows at W=8 |
-| 4 | Seeded-sampling verify | acceptance rule built and tested (`DraftAcceptance`); wiring lands with task 3 |
+| 3 | Byte-identical W-row verify kernels | **done** (decode-order mode, probe run 10: 8/8 rows exact, logits max \|d\| 0); speed pass with multi-row kernels in progress |
+| 4 | Seeded-sampling verify | built and tested (`verifyRowLogits`, `WideVerifySampler`); decode-loop wiring in progress |
 | 5 | Draft source and controller | built and tested (`PromptLookupDrafter`, `WideVerifyController`) |
 | 6 | GPU-side fetch planning (~20 ms/layer turnaround) | last; small |
 
@@ -228,6 +229,36 @@ exact input -- the dense multi-row projections in `encodeAffineProjection`
 cost a weight read per row; the speed pass replaces them with multi-row GEMVs
 that keep decode's per-row order.
 
+### Byte identity reached (2026-11-12, probe runs 8-10)
+
+Decode-order mode (`decodeOrderVerify`, set only inside the verify pass) now runs
+each row through scalar decode's own code, in row order, for every stage that
+reduces: the GDN layer as a whole decode step (`encodeLinearAttentionDecode`:
+fused in-projection, conv with tail shift, q/k norm, delta step, gated norm,
+out-projection), the gated full attention as decode's pipeline (fused QKV GEMV,
+split, per-head norms, RoPE, KV write, flash attention over `position + 1` keys,
+gate, o-proj), decode's router GEMV and top-k per row, the shared expert, the
+hyper-connection projections and the PLE projections. The routed experts keep
+the verify union plan (weights read once per unique expert) because their
+per-row phase-1/phase-2 already match decode.
+
+- Run 8 (GDN in/out projections per row): rows 0-1 exact through layers 19-20,
+  rows 2-7 through layers 3-4.
+- Run 9 (full attention per row, dumps to layer 23): the full attention was
+  already exact; every remaining first difference was `mlp_out` at an exact
+  `mlp_in` (row 0 at layer 20, row 2 at layer 4, about 3e-5), and every later
+  row inherited it through the GDN state. The batched prefill router reduces in
+  another order and moved routing weights by a few ULP.
+- Run 10 (decode's router per row): all 8 rows exact at every layer, stage and
+  logit.
+
+`TINYTITAN_ACT_DUMP_LAYER_LIMIT` widens the per-stage dumps beyond layer 3.
+Rollback after a partial accept (`RealForwardRunner+WideVerifyRollback.swift`)
+snapshots GDN state and conv tails before each pass (about 110 MiB on Qwen3.8),
+retains each row's raw qkv/a/b, and on a partial accept restores and replays
+the accepted rows with the prefill kernels, which are bit-identical to decode
+steps; KV rewinds by cursor and the PLE context is rebuilt from a saved copy.
+
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 
 The pass must produce, for every row, the logits scalar decode would. Two
@@ -260,8 +291,9 @@ attention layers rewind by cursor; PLE's rolling window by
 
 Speculation engaged only under `isPureGreedy`, and the default presence penalty
 of 1.5 switched it off. `DraftAcceptance.resolve` samples row i with the history
-scalar decode would have had (committed history plus drafts 0..<i) at position
-boundary + i, and stops at the first sample that differs from its draft. With a
+scalar decode would have had (committed history plus drafts 0..<i) at sample
+index `generated + i` (scalar decode seeds by the count of generated tokens,
+not the KV position), and stops at the first sample that differs from its draft. With a
 fixed `seed` the sampler's seed is a function of position alone
 (`Sampler.seedFor`) and the presence table folds multi-token appends and re-seeds
 on a shrink, so the emitted text is byte-identical to scalar decode given
