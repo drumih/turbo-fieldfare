@@ -143,43 +143,19 @@ extension RealForwardRunner {
         guard let sharedCB = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
-        let sharedProj = sharedExpertProjections[L]
-        try prefillSharedExpert.encodeBlock(
-            commandBuffer: sharedCB,
-            x: scratch.routedX,
-            y: scratch.h1,
-            gate: sharedProj.gate,
-            up: sharedProj.up,
-            down: sharedProj.down,
-            scratchGate: scratch.sharedGateScratch,
-            scratchUp: scratch.sharedUpScratch,
-            scratchAct: scratch.sharedActScratch,
-            queryCount: t,
-            d: D,
-            intermediate: cfg.intermediateSize,
-            xStrideElements: D,
-            yStrideElements: D)
-        if cfg.sharedExpertGated {
-            let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
-            for row in 0..<t {
-                try encodeScalarGate(
-                    commandBuffer: sharedCB,
-                    view: gateView,
-                    x: scratch.routedX,
-                    xOffset: row * D * halfBytes,
-                    y: scratch.sharedScalarGate,
-                    yOffset: row * halfBytes,
-                    n: UInt32(D))
-            }
-            for row in 0..<t {
-                try requireElementwise().encodeSigmoidScalarMul(
-                    commandBuffer: sharedCB,
-                    y: scratch.h1,
-                    yOffset: row * D * halfBytes,
-                    gate: scratch.sharedScalarGate,
-                    gateOffset: row * halfBytes,
-                    count: D)
-            }
+        // Decode's own shared-expert encode, one row at a time: the prefill
+        // block switches to a batched matmul at 8 rows, whose accumulation
+        // order differs from decode's GEMV, and every verify row must produce
+        // scalar decode's numbers (the wide-verify identity bisect measured
+        // the batched block as a source of drift). Rows are encoded in order
+        // on one command buffer, so decode's runner-wide scratch is safe.
+        let rowBytes = D * halfBytes
+        for row in 0..<t {
+            try encodeSharedExpert(
+                layer: L,
+                x: scratch.routedX, xOffset: row * rowBytes,
+                y: scratch.h1, yOffset: row * rowBytes,
+                commandBuffer: sharedCB)
         }
         sharedCB.commit()
 
