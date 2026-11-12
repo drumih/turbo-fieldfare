@@ -227,7 +227,11 @@ def replay(
                 stats.output_tokens += 1
                 continue
             accepted = 0
-            while accepted < len(draft) and i + accepted < len(tokens) and draft[accepted] == tokens[i + accepted]:
+            while (
+                accepted < len(draft)
+                and i + accepted < len(tokens)
+                and draft[accepted] == tokens[i + accepted]
+            ):
                 accepted += 1
             emitted = min(accepted + 1, len(tokens) - i)
             rows = len(draft) + 1
@@ -253,7 +257,9 @@ def summarize(stats: ReplayStats, scalar_ms: float) -> dict:
         "copy_share": round(stats.copied_tokens / stats.output_tokens, 4),
         "passes": stats.passes,
         "scalar_steps": stats.scalar_steps,
-        "mean_accepted_per_pass": round(stats.accepted_total / stats.passes, 3) if stats.passes else 0.0,
+        "mean_accepted_per_pass": round(stats.accepted_total / stats.passes, 3)
+        if stats.passes
+        else 0.0,
         "mean_rows_per_pass": round(stats.rows_total / stats.passes, 3) if stats.passes else 0.0,
         "projected_tok_s": round(1000.0 * stats.output_tokens / stats.time_ms, 3),
         "baseline_tok_s": round(1000.0 * stats.output_tokens / baseline_ms, 3),
@@ -264,9 +270,14 @@ def summarize(stats: ReplayStats, scalar_ms: float) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("transcripts", nargs="+", type=pathlib.Path)
-    parser.add_argument("--width", type=int, action="append", help="rows per pass (repeatable); default 8 and 16")
     parser.add_argument(
-        "--min-draft", type=int, action="append", help="controller threshold (repeatable); default 3 and 7"
+        "--width", type=int, action="append", help="rows per pass (repeatable); default 8 and 16"
+    )
+    parser.add_argument(
+        "--min-draft",
+        type=int,
+        action="append",
+        help="controller threshold (repeatable); default 3 and 7",
     )
     parser.add_argument("--min-run", type=int, default=8)
     parser.add_argument("--scalar-ms", type=float, default=211.0)
@@ -297,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
             if threshold > width - 1:
                 continue
             stats = ReplayStats()
-            for path, turns in sessions:
+            for _path, turns in sessions:
                 replay(
                     turns,
                     tokenize,
@@ -309,13 +320,19 @@ def main(argv: list[str] | None = None) -> int:
                     args.pass_row_ms,
                     stats,
                 )
-            rows.append({"width": width, "min_draft": threshold, **summarize(stats, args.scalar_ms)})
+            rows.append(
+                {"width": width, "min_draft": threshold, **summarize(stats, args.scalar_ms)}
+            )
 
     report = {
         "tokenizer": tokenizer_name,
         "files": len(sessions),
         "min_run": args.min_run,
-        "cost_model_ms": {"scalar": args.scalar_ms, "pass_base": args.pass_base_ms, "pass_row": args.pass_row_ms},
+        "cost_model_ms": {
+            "scalar": args.scalar_ms,
+            "pass_base": args.pass_base_ms,
+            "pass_row": args.pass_row_ms,
+        },
         "note": "projected_tok_s is a projection from the cost model, not a measurement",
         "rows": rows,
     }

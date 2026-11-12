@@ -50,7 +50,13 @@ class ParsingTests(unittest.TestCase):
                         ],
                     },
                 },
-                {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "done"}]}},
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "tool_result", "content": "done"}],
+                    },
+                },
             ]
         )
         turns = dcr.read_transcript(path)
@@ -63,17 +69,36 @@ class ParsingTests(unittest.TestCase):
             [
                 {
                     "type": "response_item",
-                    "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hi"}],
+                    },
                 },
-                {"type": "response_item", "payload": {"type": "function_call", "arguments": '{"cmd":1}'}},
-                {"type": "response_item", "payload": {"type": "function_call_output", "output": "x"}},
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call", "arguments": '{"cmd":1}'},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call_output", "output": "x"},
+                },
                 {"type": "session_meta", "payload": {}},
             ]
         )
         self.assertEqual([t.role for t in dcr.read_transcript(path)], ["user", "assistant", "tool"])
 
     def test_openai_messages_wrapper(self) -> None:
-        path = self.write([{"messages": [{"role": "system", "content": "s"}, {"role": "assistant", "content": "a"}]}])
+        path = self.write(
+            [
+                {
+                    "messages": [
+                        {"role": "system", "content": "s"},
+                        {"role": "assistant", "content": "a"},
+                    ]
+                }
+            ]
+        )
         self.assertEqual([t.role for t in dcr.read_transcript(path)], ["system", "assistant"])
 
     def test_refuses_a_line_that_is_not_json(self) -> None:

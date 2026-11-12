@@ -1000,6 +1000,7 @@ jobs:
             test_tinytitan_m5_sweep test_memory_reports \
             test_run_stamp_is_utc test_concurrent_sessions_verdict \
             test_mtp_phases_verdict test_sweep_driver_verdicts \
+            test_draft_coverage_replay \
             test_t28_distinct_expert_estimator \
             test_sampler_ab_verdict test_logged_metric_cells \
             test_knob_sweep_verdict test_guard_source_rate_verdict \
