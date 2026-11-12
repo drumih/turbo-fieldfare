@@ -24,8 +24,10 @@ import Testing
             ramBudgetBytes: 10 << 30)
         let repeats = 20
         func time(_ label: String, _ body: (MTLCommandBuffer) throws -> Void) throws -> Double {
-            // One warm-up pass, then the timed buffer.
-            for pass in 0..<2 {
+            // One warm-up pass, then the best of five timed buffers: the best
+            // keeps a shared host's background GPU load out of the figure.
+            var best = Double.infinity
+            for pass in 0..<6 {
                 guard let commandBuffer = context.queue.makeCommandBuffer() else {
                     throw MetalError.commandEncoderFailed
                 }
@@ -33,14 +35,13 @@ import Testing
                 commandBuffer.commit()
                 commandBuffer.waitUntilCompleted()
                 #expect(commandBuffer.error == nil, "\(label)")
-                if pass == 1 {
+                if pass > 0 {
                     let seconds = commandBuffer.gpuEndTime - commandBuffer.gpuStartTime
-                    let ms = seconds / Double(repeats) * 1000
-                    print(String(format: "%-28@ %.3f ms", label as NSString, ms))
-                    return ms
+                    best = min(best, seconds / Double(repeats) * 1000)
                 }
             }
-            return 0
+            print(String(format: "%-28@ %.3f ms", label as NSString, best))
+            return best
         }
         var total = 0.0
         for (layer, kind) in [(0, "gdn"), (3, "full")] {

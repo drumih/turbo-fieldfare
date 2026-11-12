@@ -33,7 +33,11 @@ your network — the server is `127.0.0.1`-only and has no authentication.
 2. **The complete local LLM engine — `TinyTitanCLI` + `TinyTitanServer`.** Run a
    35B, 122B or 125B model from the terminal and serve it on a loopback
    OpenAI-/Anthropic-compatible endpoint for Codex, Claude Code, Qwen Code,
-   OpenCode, Zed or the official SDKs. Native Swift and Metal: no MLX, no GGUF.
+   OpenCode, Zed or the official SDKs. Native Swift and Metal: no MLX, no GGUF
+   library. Experimental: the Unsloth Qwen3.8-Flash-Next UD-IQ3_XXS GGUF
+   shards also run as-is through `--model` (CLI only, same top-1/top-5 as
+   llama.cpp, decode at the converted model's speed — no conversion needed,
+   no speed gain).
 3. **The DeepSeek Harness plugin — [`plugins/dsh-tinytitan`](plugins/dsh-tinytitan).**
    The harness finds the models you have installed and keeps its route current,
    with a quiet compaction backend.

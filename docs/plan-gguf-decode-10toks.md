@@ -112,7 +112,53 @@ document records that.
    GPU at temperature 0 and with small k. This avoids the 248k-element
    conversion.
 
-## Verification protocol (every step)
+## GPU kernel profile (2026-11-12, `GGUFKernelBandwidthBenchmarkTests`)
+
+Best of five 20-dispatch command buffers per figure, so a shared host's load
+stays out. The earlier 55-61 GB/s mixer figures were single samples on a
+loaded host and overstated the kernel gap.
+
+| measurement | result |
+| --- | --- |
+| streaming-read ceiling (float4 sum, 512 MB) | **87-88 GB/s** |
+| Q6_K GEMVs, 12-26 MB (attn_qkv, attn_gate, ssm_out, attn_output, attn_q) | 57-84 GB/s; attn_q (12288 rows) is the low one at 57 |
+| Q6_K output head, 521 MB | 77 GB/s (6.76 ms) |
+| routed IQ2_S gate / up, 10 experts | 49-52 GB/s (0.10 ms each) |
+| routed IQ4_XS gate / up (L47) | 61 GB/s |
+| routed IQ4_NL down | 69 GB/s |
+| GDN mixer, whole stage | 0.73-0.76 ms, of which the three Q6_K GEMVs 0.64-0.67 ms |
+| GDN small ops (a/b, conv, qk-norm, delta step, gated norm) together | ~0.08 ms per layer (skip test, two rounds) |
+| encoder boundary | **none**: 4.50 us per dependent dispatch in separate encoders, one encoder, or one encoder with barriers |
+
+Consequences:
+- Step 2.3's "one compute encoder per command buffer" buys nothing on this
+  GPU and is dropped. The per-dispatch floor is ~4.5 us, about 5 ms a token
+  over ~1,200 dispatches.
+- Fusing the GDN small ops saves at most ~0.08 ms x 36 layers, ~3 ms.
+- The kernels already run at ~70-85% of the measured ceiling. Bringing every
+  GEMV to ~82 GB/s saves about 8-10 ms a token (IQ2_S routed ~3 ms, attn_q
+  ~1.3 ms, the rest spread thin). That is ~4% of today's 220-260 ms token.
+- The GPU floor is 4.35 GB / 88 GB/s ~ 49 ms plus ~5 ms of dispatch floor,
+  ~54 ms. The trace's 75-90 ms "GPU" therefore holds ~20-30 ms that the
+  isolated kernels do not explain; that sits in the per-layer CPU waits and
+  idle gaps between command buffers, which is step 1/3 territory, not kernels.
+
+## Verdict (2026-11-12): closed, the target is not reachable
+
+Alternating runs on the release build, 200 tokens, greedy, identical text:
+
+| budget | run 1 | run 2 | expert fetch ms/token | GPU layers ms/token |
+| --- | ---: | ---: | ---: | ---: |
+| `--ram-budget 10G` | 4.58 | 4.61 | 87-89 | 90-91 |
+| `--ram-budget 12G` | 4.82 | 4.81 | 75-79 | 89 |
+
+The converted model's 12 GB record is 4.29-4.81 tok/s
+(`docs/qwen38-decode-12gb-measurements.md`), so the as-is GGUF path runs at
+engine speed with no conversion, and no faster. A token is ~107 ms waiting on
+the GPU's attention half plus ~90 ms waiting on expert reads, serialised by the
+layer dependency; kernels sit at 70-85% of the 88 GB/s ceiling (above). The
+owner closed TT-057 as Won't Do and keeps the path as an experimental feature.
+ (every step)
 
 - Two interleaved rounds against the previous commit, 200 tokens, warm
   window reported (`.build/m1/window.py`-style; to be promoted into
@@ -133,3 +179,5 @@ document records that.
 | 1.1 two-layers-ahead advice | planned; only with a precision measurement first |
 | 2.x GPU kernels | planned |
 | 3.x overhead | planned |
+| two-token MTP decode (shared reads) | **rejected on recorded data**: the engine's verify already shares weight reads (`useTwoRowProjection`); the cost is the two tokens' expert union, 1.585x a scalar step against 1.574 tokens emitted (`docs/cpu-coexecution-plan.md`). Ceiling ~1.10-1.15x even at 75-80% acceptance, and on this path each extra expert is a drive read |
+| 2.2 Q6_K two rows per SIMD group, aligned ushort loads | **rejected**: within noise. Two interleaved rounds of `GGUFMixerStageBenchmarkTests` (host load ~5): head 8.69/8.75 ms (old) vs 8.32/8.96 ms (new); GDN mixer 1.12/1.36 vs 1.22/0.90 ms |
