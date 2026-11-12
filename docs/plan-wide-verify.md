@@ -196,9 +196,24 @@ apart): the drift is numeric and it has three sources, in order of size.
 | layer 0 attention input, rows 3-7 | ~1e-3 (rows 0-2: 0) | source 3: the multi-row input mixer or norm diverges from row 3 |
 
 Everything after is propagation (final residual 0.1-0.4, logits up to 0.67).
-Next, in that order: the PLE injection for multi-row passes, the shared expert
-in the decode GEMV's order, then the input mixer for rows >= 3; each is done when
-the bisect reports 0 for its stage.
+
+**Source 2 was a state-restore bug, not drift, and it is fixed.** The PLE
+n-gram hash reads the last `ngramSize` (3) tokens from `pleContext`, which
+lives on the runner and was not part of `InferenceAuxiliaryState`: after any
+restore, the first two tokens hashed whatever the runner had last processed.
+That is why rows 0-1 differed by 0.8-1.4 at layer 1 while row 2 (whose context
+is the pass's own tokens) differed by 0.001. It is not specific to speculation:
+every prompt-cache and interior-checkpoint resume of a Qwen3.8 install went
+through the same restore. `InferenceAuxiliaryState` is now version 2 and carries
+the context; a version-1 payload (including disk-cached entries) is refused on
+restore, so the caller re-prefills rather than hashing the wrong rows. Re-probed
+on the model: layer-1 attention input now 0.001-0.002 in every row, and all 8
+rows' argmax agree with scalar decode (7 of 8 before).
+Next, in that order: the shared expert in the decode GEMV's order, then the
+multi-row projections (hyper-connection gates, attention/GDN, PLE key/value:
+`prefill_dequant_affine_qmm_f16_block` runs one thread per output over k,
+where decode's GEMV reduces across 32 SIMD lanes); each is done when the bisect
+reports 0 for its stage.
 
 ### Task 3 design: W rows of one sequence, byte-identical to scalar decode
 

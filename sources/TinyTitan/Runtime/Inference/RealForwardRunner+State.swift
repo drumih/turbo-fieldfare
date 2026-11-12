@@ -137,6 +137,9 @@ extension RealForwardRunner {
         if let pleBlock {
             var ple = Data()
             pleBlock.appendSnapshotPayload(to: &ple)
+            // The n-gram hash reads the last `ngramSize` tokens; without them
+            // the first tokens after a restore gather the wrong rows.
+            AuxiliaryCoding.appendTokens(pleContext, to: &ple)
             AuxiliaryCoding.appendUInt32(1, to: &payload)
             AuxiliaryCoding.appendUInt32(ple.count, to: &payload)
             payload.append(ple)
@@ -191,6 +194,8 @@ extension RealForwardRunner {
                 let start = offset
                 try pleBlock.restoreSnapshotPayload(
                     bytes, offset: &offset)
+                pleContext = try AuxiliaryCoding.readTokens(
+                    bytes, offset: &offset, maximumCount: pleHash?.ngramSize ?? 0)
                 guard offset - start == length else {
                     throw InferenceAuxiliaryStateError.malformed(
                         "PLE payload is \(length) bytes, consumed \(offset - start)")
