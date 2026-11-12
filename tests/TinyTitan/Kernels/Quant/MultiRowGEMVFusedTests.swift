@@ -189,4 +189,59 @@ import Testing
             }
         }
     }
+
+    /// The shared expert's multi-row form (gate/up, activation, down) against
+    /// `SharedExpertRuntime.encode` per row, at Qwen3.8's 640 x 2560, for the
+    /// 4-bit slot and a bf16 promoted expert, with both activations.
+    @Test(arguments: [(false, true), (true, true), (false, false)] as [(Bool, Bool)])
+    func sharedExpertRowsMatchDecodePerRow(bf16: Bool, silu: Bool) throws {
+        let context = try MetalContext()
+        let runtime = try SharedExpertRuntime(
+            context: context, weightBits: 4, siluActivation: silu)
+        let (hidden, intermediate) = (2560, 640)
+        var generator = Fixtures.Generator(seed: 0x4D52_5E00 &+ (bf16 ? 1 : 0))
+        let format: MultiRowGEMV.Format = bf16 ? .bf16 : .int4
+        func projection(rows: Int, cols: Int) throws -> SharedExpertProjection {
+            let view = try Fixtures.matrix(
+                device: context.device, format: format, rows: rows, columns: cols, pad: 2,
+                generator: &generator)
+            return SharedExpertProjection(
+                weights: view.buffer, scales: view.buffer, biases: view.buffer,
+                weightsOffset: Int(view.offset), scalesOffset: Int(view.scaleOffset),
+                biasesOffset: Int(view.biasOffset),
+                rows: UInt32(rows), cols: UInt32(cols), dtype: bf16 ? 1 : 0)
+        }
+        let gate = try projection(rows: intermediate, cols: hidden)
+        let up = try projection(rows: intermediate, cols: hidden)
+        let down = try projection(rows: hidden, cols: intermediate)
+        let maxRows = Self.rowCounts.max() ?? 1
+        let x = try Fixtures.activations(
+            device: context.device, count: maxRows * hidden, generator: &generator)
+        let scratch = try (0..<3).map { _ in
+            try Fixtures.zeroed(device: context.device, halves: maxRows * intermediate)
+        }
+        for rows in Self.rowCounts {
+            let expected = try Fixtures.zeroed(device: context.device, halves: rows * hidden)
+            let actual = try Fixtures.zeroed(device: context.device, halves: rows * hidden)
+            var batched = false
+            try Fixtures.run(context) { cb in
+                for row in 0..<rows {
+                    try runtime.encode(
+                        commandBuffer: cb, x: x, xOffset: row * hidden * 2,
+                        gate: gate, up: up, down: down,
+                        y: expected, yOffset: row * hidden * 2,
+                        scratchGate: scratch[0], scratchUp: scratch[1], scratchAct: scratch[2])
+                }
+                batched = try runtime.encodeRows(
+                    commandBuffer: cb, x: x, rows: rows,
+                    gate: gate, up: up, down: down,
+                    y: actual, yRowStride: hidden,
+                    scratchGate: scratch[0], scratchUp: scratch[1], scratchAct: scratch[2])
+            }
+            #expect(batched)
+            Fixtures.expectIdentical(
+                expected, actual, halves: rows * hidden,
+                "shared expert bf16=\(bf16) silu=\(silu) W=\(rows)")
+        }
+    }
 }
