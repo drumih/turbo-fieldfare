@@ -127,20 +127,14 @@ extension RealForwardRunner {
         guard let sharedCB = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
-        // Decode's own shared-expert encode, one row at a time: the prefill
+        // Decode's own shared-expert arithmetic for every row: the prefill
         // block switches to a batched matmul at 8 rows, whose accumulation
         // order differs from decode's GEMV, and every verify row must produce
         // scalar decode's numbers (the wide-verify identity bisect measured
-        // the batched block as a source of drift). Rows are encoded in order
-        // on one command buffer, so decode's runner-wide scratch is safe.
-        let rowBytes = D * halfBytes
-        for row in 0..<t {
-            try encodeSharedExpert(
-                layer: L,
-                x: scratch.routedX, xOffset: row * rowBytes,
-                y: scratch.h1, yOffset: row * rowBytes,
-                commandBuffer: sharedCB)
-        }
+        // the batched block as a source of drift). The multi-row GEMVs keep
+        // decode's per-row order and read the weights once for all rows.
+        try encodeSharedExpertRows(
+            layer: L, scratch: scratch, rows: t, commandBuffer: sharedCB)
         sharedCB.commit()
 
         let blobs: [TensorView]

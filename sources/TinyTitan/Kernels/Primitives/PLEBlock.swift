@@ -251,23 +251,25 @@ final class PLEBlock {
             tokens: 1, eps: eps, project: nil)
     }
 
-    /// Decode's own GEMV applied one row at a time: the projection a
-    /// multi-row pass passes to `encodeRows` when it must reproduce scalar
-    /// decode's numbers (the wide verify), instead of the prefill QMM.
+    /// Compiles `decodeOrderProjection`'s multi-row pipelines for every row
+    /// count in `rows`, so a timed verify pass does not pay for them.
+    func prewarmDecodeOrderProjection(rows: ClosedRange<Int>) throws {
+        try gemv.prewarmRows(columns: [embedDim], rows: rows)
+    }
+
+    /// Decode's own GEMV arithmetic for every row, weights read once
+    /// (`SlotGEMV.encodeRows`): the projection a multi-row pass passes to
+    /// `encodeRows` when it must reproduce scalar decode's numbers (the wide
+    /// verify), instead of the prefill QMM.
     var decodeOrderProjection: BatchedProjection {
         { [gemv] commandBuffer, projection, x, y, rows, columns, tokens in
-            let half = MemoryLayout<Float16>.stride
-            for row in 0..<tokens {
-                try gemv.encode(
-                    commandBuffer: commandBuffer,
-                    weights: projection.weights, weightsOffset: projection.weightsOffset,
-                    scales: projection.scales, scalesOffset: projection.scalesOffset,
-                    biases: projection.biases, biasesOffset: projection.biasesOffset,
-                    x: x, xOffset: row * columns * half,
-                    y: y, yOffset: row * rows * half,
-                    m: UInt32(rows), n: UInt32(columns),
-                    isBF16: projection.isBF16)
-            }
+            try gemv.encodeRows(
+                commandBuffer: commandBuffer,
+                weights: projection.weights, weightsOffset: projection.weightsOffset,
+                scales: projection.scales, scalesOffset: projection.scalesOffset,
+                biases: projection.biases, biasesOffset: projection.biasesOffset,
+                x: x, y: y, m: rows, n: columns, rows: tokens,
+                isBF16: projection.isBF16)
         }
     }
 

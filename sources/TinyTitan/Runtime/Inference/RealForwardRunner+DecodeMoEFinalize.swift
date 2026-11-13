@@ -111,7 +111,6 @@ extension RealForwardRunner {
         commandBuffer: MTLCommandBuffer
     ) throws {
         let sharedProj = sharedExpertProjections[L]
-        let D = UInt32(cfg.hiddenSize)
         try shared.encode(
             commandBuffer: commandBuffer,
             x: x, xOffset: xOffset,
@@ -123,20 +122,70 @@ extension RealForwardRunner {
             scratchUp: denseScratchUp,
             scratchAct: denseScratchAct)
         if cfg.sharedExpertGated {
-            // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX)
-            let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
-            let gateBuf = try requireBuffer(sharedScalarGateBuf, "shared-expert gate buffer")
-            try encodeScalarGate(
-                commandBuffer: commandBuffer,
-                view: gateView,
-                x: x, xOffset: xOffset,
-                y: gateBuf, yOffset: 0,
-                n: D)
-            try requireElementwise().encodeSigmoidScalarMul(
-                commandBuffer: commandBuffer,
-                y: y, yOffset: yOffset,
-                gate: gateBuf, gateOffset: 0,
-                count: cfg.hiddenSize)
+            try encodeSharedExpertScalarGate(
+                layer: L, x: x, xOffset: xOffset, y: y, yOffset: yOffset,
+                commandBuffer: commandBuffer)
+        }
+    }
+
+    /// out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX), for one row
+    /// whose shared MLP output is already in `y`.
+    private func encodeSharedExpertScalarGate(
+        layer L: Int,
+        x: MTLBuffer, xOffset: Int,
+        y: MTLBuffer, yOffset: Int,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let sharedProj = sharedExpertProjections[L]
+        let gateView = try requireTensorView(sharedProj.scalarGate, "shared-expert scalar gate")
+        let gateBuf = try requireBuffer(sharedScalarGateBuf, "shared-expert gate buffer")
+        try encodeScalarGate(
+            commandBuffer: commandBuffer,
+            view: gateView,
+            x: x, xOffset: xOffset,
+            y: gateBuf, yOffset: 0,
+            n: UInt32(cfg.hiddenSize))
+        try requireElementwise().encodeSigmoidScalarMul(
+            commandBuffer: commandBuffer,
+            y: y, yOffset: yOffset,
+            gate: gateBuf, gateOffset: 0,
+            count: cfg.hiddenSize)
+    }
+
+    /// `encodeSharedExpert` for the wide verify's rows: `routedX` row `r` to
+    /// `h1` row `r`, every row with the bytes the single-row encode gives it.
+    /// The three projections run once for all rows (`SharedExpertRuntime
+    /// .encodeRows`); the scalar gate, one row of weights, stays per row. A
+    /// width without a multi-row form falls back to one encode per row.
+    func encodeSharedExpertRows(
+        layer L: Int,
+        scratch: PrefillChunkScratchBuffers, rows t: Int,
+        commandBuffer: MTLCommandBuffer
+    ) throws {
+        let sharedProj = sharedExpertProjections[L]
+        let rowBytes = cfg.hiddenSize * MemoryLayout<Float16>.stride
+        let batched = try shared.encodeRows(
+            commandBuffer: commandBuffer,
+            x: scratch.routedX, rows: t,
+            gate: sharedProj.gate, up: sharedProj.up, down: sharedProj.down,
+            y: scratch.h1, yRowStride: cfg.hiddenSize,
+            scratchGate: scratch.sharedGateScratch,
+            scratchUp: scratch.sharedUpScratch,
+            scratchAct: scratch.sharedActScratch)
+        for row in 0..<t {
+            if !batched {
+                try encodeSharedExpert(
+                    layer: L,
+                    x: scratch.routedX, xOffset: row * rowBytes,
+                    y: scratch.h1, yOffset: row * rowBytes,
+                    commandBuffer: commandBuffer)
+            } else if cfg.sharedExpertGated {
+                try encodeSharedExpertScalarGate(
+                    layer: L,
+                    x: scratch.routedX, xOffset: row * rowBytes,
+                    y: scratch.h1, yOffset: row * rowBytes,
+                    commandBuffer: commandBuffer)
+            }
         }
     }
 

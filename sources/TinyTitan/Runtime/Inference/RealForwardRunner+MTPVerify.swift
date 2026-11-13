@@ -103,9 +103,8 @@ extension RealForwardRunner {
 
     /// The verify head for two consecutive residual rows at the start of
     /// `hidden`: final norm and lm_head into `verificationLogits` rows 0 and 1,
-    /// with one lm_head read. Shared by the pair verify and the W-row verify
-    /// (which walks its rows two at a time), so a head difference cannot become
-    /// a difference between the two.
+    /// with one lm_head read. Used by the pair verify; the W-row verify reads
+    /// the head once for all its rows (`encodeVerifyHeadRows`).
     func encodeVerifyHeadPair(
         commandBuffer cb: MTLCommandBuffer,
         hidden: MTLBuffer,

@@ -107,44 +107,29 @@ extension RealForwardRunner {
         }
         let tHead = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
 
-        // The head two rows at a time through the pair head: W/2 lm_head reads
-        // where a W-row head would need one, so the head time here is an upper
-        // bound and is reported separately from the backbone.
-        let rowBytes = residualWidth * MemoryLayout<Float16>.stride
+        // One lm_head read for all rows (`encodeVerifyHeadRows`), each row
+        // with scalar decode's final norm and head arithmetic. With
+        // `rowLogits` the head writes the caller's buffer directly.
+        let headLogits = try rowLogits ?? wideVerifyHeadLogits(rows: rows)
+        guard let cb = ctx.queue.makeCommandBuffer() else {
+            throw ModelError.residentBufferWrapFailed
+        }
+        try encodeVerifyHeadRows(
+            commandBuffer: cb, hidden: scratch.hidden, rows: rows,
+            scratch: scratch, logits: headLogits)
+        cb.commit()
+        try waitForCompletion(cb)
+        recordKernelGPU(role: "wide_verify_head", cb)
         var predictions: [Int32] = []
         predictions.reserveCapacity(rows)
-        var row = 0
-        while row < rows {
-            let pairRows = min(2, rows - row)
-            guard let cb = ctx.queue.makeCommandBuffer(),
-                let blit = cb.makeBlitCommandEncoder()
-            else {
-                throw ModelError.residentBufferWrapFailed
+        for row in 0..<rows {
+            if rowLogits == nil { predictions.append(verificationArgmax(headLogits, row: row)) }
+            if activationDumpActive(position: startPosition + row) {
+                dumpActivation(
+                    "verify_logits", headLogits, count: cfg.vocabSize,
+                    position: startPosition + row,
+                    offset: row * cfg.vocabSize * MemoryLayout<Float16>.stride)
             }
-            blit.copy(
-                from: scratch.hidden, sourceOffset: row * rowBytes,
-                to: verificationHidden, destinationOffset: 0,
-                size: pairRows * rowBytes)
-            blit.endEncoding()
-            try encodeVerifyHeadPair(
-                commandBuffer: cb, hidden: verificationHidden, scratch: scratch)
-            if let rowLogits {
-                try encodeRowLogitsCapture(
-                    commandBuffer: cb, into: rowLogits, firstRow: row, rows: pairRows)
-            }
-            cb.commit()
-            try waitForCompletion(cb)
-            recordKernelGPU(role: "wide_verify_head", cb)
-            for offset in 0..<pairRows {
-                if rowLogits == nil { predictions.append(verificationArgmax(row: offset)) }
-                if activationDumpActive(position: startPosition + row + offset) {
-                    dumpActivation(
-                        "verify_logits", verificationLogits, count: cfg.vocabSize,
-                        position: startPosition + row + offset,
-                        offset: offset * cfg.vocabSize * MemoryLayout<Float16>.stride)
-                }
-            }
-            row += pairRows
         }
         return WideVerification(
             predictions: predictions,
@@ -152,8 +137,8 @@ extension RealForwardRunner {
             headNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) &- tHead)
     }
 
-    private func verificationArgmax(row: Int) -> Int32 {
-        let logits = verificationLogits.contents().assumingMemoryBound(to: Float16.self)
+    private func verificationArgmax(_ buffer: MTLBuffer, row: Int) -> Int32 {
+        let logits = buffer.contents().assumingMemoryBound(to: Float16.self)
         let base = row * cfg.vocabSize
         var best = 0
         var bestValue = Float(logits[base])

@@ -205,11 +205,6 @@ extension RealForwardRunner {
         seqLen: UInt32,
         selection: DecodeKeySelection? = nil
     ) throws {
-        guard let elementwise, let attnGateScratch else {
-            throw ModelError.internalInconsistency(
-                detail:
-                    "attn_output_gate layer \(L) without gate kernels (arch mask misconfiguration)")
-        }
         guard let kv else {
             throw ModelError.internalInconsistency(
                 detail: "full attention requires a KV cache")
@@ -220,52 +215,16 @@ extension RealForwardRunner {
         let numKV = cfg.numFullKVHeads
         let qDim = UInt32(cfg.numHeads * headDim)
         let kvDim = UInt32(numKV * headDim)
-        let kSlot = kv.kSlot(layer: L, position: position, slot: slot)
-        let vSlot = kv.vSlot(layer: L, position: position, slot: slot)
-        let quantizedKV = kv.precision.isQuantized
-        let kWrite = quantizedKV ? (buffer: kStage, offset: 0) : kSlot
-        let vWrite = quantizedKV ? (buffer: vStage, offset: 0) : vSlot
+        let writes = gatedFullKVWrites(kv: kv, layer: L, position: position, slot: slot)
         let o = try model.oProj(layer: L)
         try encodeGatedFullPreAttention(
             &cb, layer: L, position: position,
-            kWrite: kWrite, vWrite: vWrite,
+            kWrite: writes.k, vWrite: writes.v,
             qDim: qDim, kvDim: kvDim,
             headDim: headDim, numKV: numKV, eps: eps)
-        if quantizedKV {
-            try encodeQuantizedKV(
-                commandBuffer: cb, kv: kv, layer: L,
-                position: position, slot: slot, keySource: kStage,
-                valueSource: vStage, elementCount: Int(kvDim))
-        }
-        let keyView = kv.keyView(layer: L, slot: slot, validTokenCount: Int(seqLen))
-        let valueView = kv.valueView(layer: L, slot: slot, validTokenCount: Int(seqLen))
-        // Host-KV streaming: gather the keys this step will read into the
-        // window and let the indirection kernel iterate them. Without it the
-        // contiguous kernel keeps reading the same buffer it always has.
-        let windowSelection = try decodeWindowSelection(
-            kv: kv, layer: L, slot: slot, position: position,
+        try encodeGatedFullAttentionAndGate(
+            &cb, kv: kv, layer: L, position: position, slot: slot,
             seqLen: seqLen, selection: selection)
-        try attention.encodeFull(
-            commandBuffer: cb,
-            q: qScratch,
-            k: keyView.buffer, kOffset: keyView.offset,
-            v: valueView.buffer, vOffset: valueView.offset,
-            out: attnOut,
-            headDim: UInt32(headDim),
-            numQHeads: UInt32(cfg.numHeads),
-            numKVHeads: UInt32(numKV),
-            seqLen: seqLen,
-            scale: Float(cfg.attentionScale),
-            kvFormat: keyView,
-            keepMask: windowSelection == nil ? selection?.mask : nil,
-            windowSelection: windowSelection)
-        try rotate(&cb, role: "qsa.attention")
-        try elementwise.encodeSigmoidGateMul(
-            commandBuffer: cb,
-            out: attnOut,
-            gate: attnGateScratch,
-            count: Int(qDim))
-        try rotate(&cb, role: "qsa.gatemul")
         try encodePrimaryGEMV(
             commandBuffer: cb, projection: o,
             x: attnOut, y: oOut, m: D, n: qDim)
