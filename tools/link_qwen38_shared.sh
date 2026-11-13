@@ -43,7 +43,13 @@ place() {
   local from="$1" to="$2"
   if [[ -e "$to" ]]; then
     if [[ "$from" -ef "$to" ]]; then
-      skipped+=1
+      # Linked by an earlier run: a move just drops the old name.
+      if [[ "$MODE" == "move" ]]; then
+        rm "$from"
+        placed+=1
+      else
+        skipped+=1
+      fi
       return
     fi
     echo "error: $to exists and is a different file" >&2
