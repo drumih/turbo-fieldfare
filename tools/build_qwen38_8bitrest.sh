@@ -34,7 +34,7 @@ BASE_INSTALL="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit"
 BF16_INSTALL="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit_BF16Rest"
 DOWNLOAD=0
 [[ "${1:-}" == "--download" ]] && DOWNLOAD=1
-DEST="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit_8BitRest"
+DEST="$MODELS/qwen3.8-flash-next_125B_A6B_4E-8R-16N"
 SNAP="$WORK/qwen38-affine-4bit-8bitrest"
 SHARDS="$WORK/qwen38-shards-8bitrest"
 MODEL_ID="qwen3.8-flash-next-8bitrest"
@@ -131,4 +131,4 @@ TINYTITAN_RUNNER_STATS=1 TINYTITAN_EXPERT_PROFILE=0 .build/release/TinyTitanCLI 
 
 stamp "done. Disk use:"
 du -sh "$DEST"
-stamp "next: SMOKE_RAM-style matrix -> MODELS=\"qwen3.8-flash-next_125B_A6B_4Bit qwen3.8-flash-next_125B_A6B_4Bit_8BitRest\" bash tools/ram-matrix.sh"
+stamp "next: SMOKE_RAM-style matrix -> MODELS=\"qwen3.8-flash-next_125B_A6B_4Bit qwen3.8-flash-next_125B_A6B_4E-8R-16N\" bash tools/ram-matrix.sh"

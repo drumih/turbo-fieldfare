@@ -891,7 +891,7 @@ n-gram table stays fp16 in all three; the table is the same file, hardlinked.
 | Build | Converter flag | Rest | Resident floor |
 | --- | --- | --- | --- |
 | `qwen3.8-flash-next_125B_A6B_4Bit` | (default) | 4-bit; embedding, head, router 8-bit | 3.72 GiB |
-| `..._4Bit_8BitRest` | `--rest-8bit` | every quantised tensor 8-bit | ~6.1 GiB (computed) |
+| `..._4E-8R-16N` | `--rest-8bit` | every quantised tensor 8-bit | ~6.1 GiB (computed) |
 | `..._4Bit_BF16Rest` | `--rest-bf16` | bf16 | 9.72 GiB |
 
 `tools/build_qwen38_8bitrest.sh` builds the 8-bit-rest install. By default it

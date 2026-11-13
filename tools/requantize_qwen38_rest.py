@@ -4,7 +4,7 @@
     python3 tools/requantize_qwen38_rest.py \\
         --base   models/qwen3.8-flash-next_125B_A6B_4Bit \\
         --source models/qwen3.8-flash-next_125B_A6B_4Bit_BF16Rest \\
-        --output models/qwen3.8-flash-next_125B_A6B_4Bit_8BitRest --bits 8
+        --output models/qwen3.8-flash-next_125B_A6B_4E-8R-16N --bits 8
 
 No download. The two existing installs already hold everything:
 
