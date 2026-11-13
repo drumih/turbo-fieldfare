@@ -325,6 +325,11 @@ def rewrite_manifest(manifest: dict, bits: int, size: int, sha: str, model_id: s
 
 
 def populate(base: Path, output: Path) -> None:
+    """Hardlink the base's large files and copy its small ones into `output`.
+
+    A file already present (for example experts or the n-gram table linked in
+    by hand beforehand) is accepted only when it is the base's own file.
+    """
     for item in sorted(base.rglob("*")):
         rel = item.relative_to(base)
         if rel.parts[0] in (RESIDENT, "manifest.json", "verified-install.json"):
@@ -332,10 +337,19 @@ def populate(base: Path, output: Path) -> None:
         target = output / rel
         if item.is_dir():
             target.mkdir(parents=True, exist_ok=True)
+        elif target.exists():
+            if not (os.path.samefile(item, target) or same_bytes(item, target)):
+                raise SystemExit(f"{target} exists and is not {item}")
         elif item.stat().st_size >= LINK_MIN_BYTES:
             os.link(item, target)
         else:
             shutil.copy2(item, target)
+
+
+def same_bytes(a: Path, b: Path) -> bool:
+    if a.stat().st_size != b.stat().st_size or a.stat().st_size >= LINK_MIN_BYTES:
+        return False
+    return a.read_bytes() == b.read_bytes()
 
 
 def main() -> int:
@@ -347,8 +361,10 @@ def main() -> int:
     ap.add_argument("--model-id-suffix", default=None)
     args = ap.parse_args()
 
-    if args.output.exists():
-        raise SystemExit(f"{args.output} exists; remove it or choose another --output")
+    ours = [args.output / n for n in (RESIDENT, "manifest.json", "verified-install.json")]
+    if any(p.exists() for p in ours):
+        raise SystemExit(f"{args.output} already holds an install; remove it first")
+    created = not args.output.exists()
     base = read_resident(args.base / RESIDENT)
     source = read_resident(args.source / RESIDENT)
     align = payload_alignment(base)
@@ -356,7 +372,7 @@ def main() -> int:
 
     entries = plan_entries(base, source, args.bits)
 
-    args.output.mkdir(parents=True)
+    args.output.mkdir(parents=True, exist_ok=True)
     try:
         populate(args.base, args.output)
         size, sha = ResidentWriter(args.output / RESIDENT, entries, align).write()
@@ -365,7 +381,11 @@ def main() -> int:
         manifest = rewrite_manifest(manifest, args.bits, size, sha, model_id)
         (args.output / "manifest.json").write_text(json.dumps(manifest, indent=1, sort_keys=True))
     except BaseException:
-        shutil.rmtree(args.output, ignore_errors=True)
+        if created:
+            shutil.rmtree(args.output, ignore_errors=True)
+        else:
+            for path in ours + [args.output / (RESIDENT[:-4] + ".bin.partial")]:
+                path.unlink(missing_ok=True)
         raise
     print(f"wrote {args.output}: {RESIDENT} {size / 1e9:.2f} GB, modelID {model_id}")
     print(f"next: TinyTitanRepack --verify-install --input-ssdai {args.output}")

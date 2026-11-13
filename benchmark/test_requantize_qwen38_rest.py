@@ -132,6 +132,21 @@ class RequantizeRestTests(unittest.TestCase):
             os.stat(self.tmp / "base" / "tokenizer.json").st_ino,
         )
 
+    def test_files_linked_in_beforehand_are_accepted(self) -> None:
+        write_install(self.tmp / "src", bf16=True)
+        (self.tmp / "out").mkdir()
+        os.link(self.tmp / "base" / "big.bin", self.tmp / "out" / "big.bin")
+        out = self.run_tool(self.tmp / "src")
+        self.assertTrue((out / rq.RESIDENT).exists())
+
+    def test_a_foreign_file_in_the_output_is_refused(self) -> None:
+        write_install(self.tmp / "src", bf16=True)
+        (self.tmp / "out").mkdir()
+        (self.tmp / "out" / "tokenizer.json").write_text("other")
+        with self.assertRaises(SystemExit):
+            self.run_tool(self.tmp / "src")
+        self.assertFalse((self.tmp / "out" / rq.RESIDENT).exists())
+
     def test_a_source_that_is_not_the_bases_input_writes_nothing(self) -> None:
         write_install(self.tmp / "src", bf16=True, corrupt=True)
         with self.assertRaises(SystemExit) as raised:
