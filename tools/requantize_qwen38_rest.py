@@ -170,32 +170,69 @@ def shape_at(entry: Entry, cols: int, old: int, bits: int) -> tuple[int, int, in
 def quantize_rows(value: np.ndarray, bits: int) -> tuple[bytes, bytes, bytes]:
     packed, scales, biases = [], [], []
     for start in range(0, value.shape[0], ROW_CHUNK):
-        p, s, b = prepare.quantize_affine(np.asarray(value[start : start + ROW_CHUNK]), bits)
+        chunk = np.asarray(value[start : start + ROW_CHUNK])
+        p, s, b = prepare.quantize_affine(chunk, bits)
+        deq, step = dequantize(p.tobytes(), s.tobytes(), b.tobytes(), *chunk.shape, bits)
+        diff = np.abs(deq - chunk.astype(np.float32).reshape(deq.shape)).max(-1)
+        if float((diff / np.maximum(step[..., 0], 1e-12)).max()) > MAX_STEPS:
+            raise SystemExit(f"rows {start}+ do not decode back from {bits}-bit")
         packed.append(p.tobytes())
         scales.append(s.tobytes())
         biases.append(b.tobytes())
     return b"".join(packed), b"".join(scales), b"".join(biases)
 
 
+def dequantize(words: bytes, scales: bytes, biases: bytes, rows: int, cols: int, bits: int):
+    """The runtime's affine read: q * scale + bias, bf16 scale and bias per 64."""
+    packed = np.frombuffer(words, dtype=np.uint32).reshape(rows, -1)
+    lanes = 32 // bits
+    q = np.stack([(packed >> np.uint32(bits * k)) & ((1 << bits) - 1) for k in range(lanes)], -1)
+    q = q.reshape(rows, cols // GROUP, GROUP).astype(np.float32)
+    scale = np.frombuffer(scales, dtype=ml_dtypes.bfloat16).astype(np.float32)
+    bias = np.frombuffer(biases, dtype=ml_dtypes.bfloat16).astype(np.float32)
+    scale = scale.reshape(rows, cols // GROUP, 1)
+    return q * scale + bias.reshape(scale.shape), np.abs(scale)
+
+
+# A base tensor counts as "this bf16, quantised" when its dequantised values sit
+# within these many quantisation steps of the bf16. Measured on the real 4-bit
+# install: median 0.50 / p99 0.96 steps at 4 bits, 0.76 / 1.40 at 8 (bf16 scale
+# and bias rounding). A different tensor, a row permutation or another scale
+# convention lands at 7+ steps median.
+MEDIAN_STEPS, MAX_STEPS = 1.0, 4.0
+
+
 def self_check(base: Resident, entry: Entry, value: np.ndarray, bits: int) -> None:
+    """Prove the base entry is this bf16 tensor, quantised, read the runtime's way.
+
+    Byte equality is too strict: the 4-bit install was quantised with a
+    sign-flipping affine (MLX picks the edge with the larger magnitude), so its
+    codes differ from `quantize_affine`'s while both decode to the same values.
+    What must hold is the decode -- and that check also pins the layout this
+    tool writes in: packed LSB-first u32 words, bf16 scales and biases.
+    """
     rows, cols = value.shape
     word_bytes = cols * bits // 8
     group_bytes = cols // GROUP * 2
-    blocks = {0, max(0, rows - CHECK_ROWS)}
-    for start in sorted(blocks):
+    for start in sorted({0, max(0, rows - CHECK_ROWS)}):
         stop = min(rows, start + CHECK_ROWS)
-        p, s, b = prepare.quantize_affine(np.asarray(value[start:stop]), bits)
         n = stop - start
-        expect = (
+        deq, step = dequantize(
             read_bytes(base.path, entry.offset + start * word_bytes, n * word_bytes),
             read_bytes(base.path, entry.scale_offset + start * group_bytes, n * group_bytes),
             read_bytes(base.path, entry.bias_offset + start * group_bytes, n * group_bytes),
+            n,
+            cols,
+            bits,
         )
-        if (p.tobytes(), s.tobytes(), b.tobytes()) != expect:
+        src = np.asarray(value[start:stop]).astype(np.float32).reshape(deq.shape)
+        steps = np.abs(deq - src).max(-1) / np.maximum(step[..., 0], 1e-12)
+        median, worst = float(np.median(steps)), float(steps.max())
+        if median > MEDIAN_STEPS or worst > MAX_STEPS:
             raise SystemExit(
-                f"self-check failed: {entry.name} rows {start}-{stop} re-quantised at "
-                f"{bits} bits from --source do not reproduce --base. The bf16 tensor is "
-                "not the converter's input as-is; nothing was written."
+                f"self-check failed: {entry.name} rows {start}-{stop}: --base decodes "
+                f"{median:.2f} steps (median) / {worst:.2f} (max) away from --source's "
+                "bf16. It is not this tensor quantised; nothing was written."
             )
 
 
@@ -317,7 +354,7 @@ def plan_entries(base: Resident, source: Resident, bits: int) -> list[Planned]:
         )
         quantised += 1
         changed += old != bits
-    print(f"{quantised} quantised tensors self-checked against --base, {changed} change width")
+    print(f"{quantised} quantised tensors decode-checked against --base, {changed} change width")
     return out
 
 

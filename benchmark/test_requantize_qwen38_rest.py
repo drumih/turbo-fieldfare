@@ -39,7 +39,24 @@ def toy_values(rows: int, cols: int, seed: int) -> np.ndarray:
     return rng.standard_normal((rows, cols)).astype(ml_dtypes.bfloat16)
 
 
-def write_install(root: Path, *, bf16: bool, corrupt: bool = False) -> None:
+def sign_flipped(p, s, b, bits):
+    """The same values coded MLX's other way: q' = L - q, scale' = -scale."""
+    levels = (1 << bits) - 1
+    lanes = 32 // bits
+    q = np.stack([(p >> np.uint32(bits * k)) & levels for k in range(lanes)], -1)
+    q = (levels - q).astype(np.uint32)
+    packed = np.zeros(p.shape, dtype=np.uint32)
+    for k in range(lanes):
+        packed |= q[..., k] << np.uint32(bits * k)
+    top = b.astype(np.float32) + levels * s.astype(np.float32)
+    return (
+        packed,
+        (-s.astype(np.float32)).astype(ml_dtypes.bfloat16),
+        top.astype(ml_dtypes.bfloat16),
+    )
+
+
+def write_install(root: Path, *, bf16: bool, corrupt: bool = False, flipped: bool = False) -> None:
     root.mkdir()
     items = []
     norm = np.ones(256, dtype=ml_dtypes.bfloat16).tobytes()
@@ -53,13 +70,16 @@ def write_install(root: Path, *, bf16: bool, corrupt: bool = False) -> None:
     for seed, (name, rows, cols, bits) in enumerate(QUANTISED):
         value = toy_values(rows, cols, seed)
         if corrupt:
-            value = (value.astype(np.float32) * 1.01).astype(ml_dtypes.bfloat16)
+            value = value[::-1].copy()  # rows permuted: same values, wrong tensor layout
         if bf16:
             blob = value.tobytes()
             entry = rq.Entry(name, rq.DTYPE_BF16, 0, len(blob), (rows, cols, 0, 0), 0, 0, 0, 0)
             items.append((entry, (len(blob),), lambda b=blob: [b]))
         else:
-            p, s, b = (x.tobytes() for x in prepare.quantize_affine(value, bits))
+            p, s, b = prepare.quantize_affine(value, bits)
+            if flipped:
+                p, s, b = sign_flipped(p, s, b, bits)
+            p, s, b = p.tobytes(), s.tobytes(), b.tobytes()
             entry = rq.Entry(name, rq.DTYPE_U32, 0, len(p), (rows, cols, 0, 0), 0, 0, 0, 0)
             items.append((entry, (len(p), len(s), len(b)), lambda t=(p, s, b): list(t)))
     rq.ResidentWriter(root / rq.RESIDENT, items, 64).write()
@@ -154,6 +174,15 @@ class RequantizeRestTests(unittest.TestCase):
             self.run_tool(self.tmp / "src")
         self.assertIn("self-check failed", str(raised.exception))
         self.assertFalse((self.tmp / "out").exists())
+
+    def test_a_differently_rounded_base_is_accepted(self) -> None:
+        # The real 4-bit install codes differ from quantize_affine's (sign-flipped
+        # affine); only the decode has to agree.
+        __import__("shutil").rmtree(self.tmp / "base")
+        write_install(self.tmp / "base", bf16=False, flipped=True)
+        write_install(self.tmp / "src", bf16=True)
+        out = self.run_tool(self.tmp / "src")
+        self.assertTrue((out / rq.RESIDENT).exists())
 
 
 if __name__ == "__main__":
