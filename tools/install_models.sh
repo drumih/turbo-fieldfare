@@ -314,10 +314,11 @@ CATALOGUE=(
   # hardcoded per type, not a --bits dial: the "4-bit" type routes its experts
   # at 4 bits and keeps every always-resident tensor (attention, GDN,
   # hyper-connection, PLE, indexer, shared expert, embedding, LM head, router)
-  # at 8 bits, the n-gram table at its fp16 -- the 4E-8R-16N hybrid. The
-  # "8-bit" type is uniform 8-bit with the same fp16 table. The MTP draft head
-  # is no longer an install type.
-  "qwen38flash|qwen3.8-flash-next_125B_A6B_4E-8R-16N|4|convert"
+  # at 8 bits, the n-gram table at its fp16 -- the 4/8/16 recipe. The
+  # "8-bit" type is uniform 8-bit with the same fp16 table. The directory keeps
+  # the canonical `_4Bit` spelling; the recipe lives in the manifest, not the
+  # name. The MTP draft head is no longer an install type.
+  "qwen38flash|qwen3.8-flash-next_125B_A6B_4Bit|4|convert"
   "qwen38flash-8bit|qwen3.8-flash-next_125B_A6B_8Bit|8|convert"
   "katcoder|kat-coder-v2.5_35B_A3B_4Bit|4|convert_qwen35moe|katcoder|katcoder-8bit"
   "katcoder-8bit|kat-coder-v2.5_35B_A3B_8Bit|8|convert_qwen35moe|katcoder|katcoder"

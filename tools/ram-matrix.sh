@@ -10,7 +10,7 @@ cd "$(dirname "$0")/.." 2>/dev/null || true
 [ -x .build/release/TinyTitanCLI ] || { echo "error: .build/release/TinyTitanCLI not found; run from the TinyTitan repo or build release first"; exit 1; }
 
 BUDGETS=${BUDGETS:-"8 10 12 14 16 18 default"}
-MODELS=${MODELS:-"qwen3.8-flash-next_125B_A6B_4Bit qwen3.8-flash-next_125B_A6B_4Bit_BF16Rest"}
+MODELS=${MODELS:-"qwen3.8-flash-next_125B_A6B_4Bit"}
 MAX_NEW=${MAX_NEW:-200}
 RAM_FLAG=${RAM_FLAG:---ram-budget}
 OUT=.build/ram-matrix
