@@ -197,7 +197,9 @@ extension Model {
                 checks: checks, quant: quant,
                 config: config)
         case .qwen36:
-            try checks.requireAffine(
+            // Either may be kept at bf16: the runner reads a bf16 table or head
+            // from the tensor's dtype (`BF16RestKernels`), not from the slot.
+            try checks.requireAffineOrBF16(
                 "language_model.model.embed_tokens.weight",
                 rows: config.vocabSize,
                 columns: config.hiddenSize,
@@ -206,7 +208,7 @@ extension Model {
             // (padded to the same vocab rows). `Model.lmHeadWeightBits` falls
             // back to that slot, so the coupling is validated here — the
             // fallback is only reachable when this check already passed.
-            try checks.requireAffine(
+            try checks.requireAffineOrBF16(
                 "language_model.lm_head.weight",
                 rows: config.vocabSize,
                 columns: config.hiddenSize,
@@ -251,15 +253,17 @@ extension Model {
     ) throws {
         // Embedding and head are 8-bit in this checkpoint while the body is
         // 4-bit, so both are validated against the embedding slot the manifest
-        // declares rather than an assumed width.
-        try checks.requireAffine(
+        // declares rather than an assumed width. A bf16-rest install keeps both
+        // at the checkpoint's bf16, which the runtime reads from the tensor's
+        // dtype (`Model.embeddingWeightBits` / `lmHeadWeightBits` == 16).
+        try checks.requireAffineOrBF16(
             "model.language_model.embed_tokens.weight",
             rows: config.vocabSize,
             columns: config.hiddenSize,
             slot: quant.embedding)
         // `lm_head` sits at the archive root in this family, not under the
         // language-model prefix.
-        try checks.requireAffine(
+        try checks.requireAffineOrBF16(
             "lm_head.weight",
             rows: config.vocabSize,
             columns: config.hiddenSize,
@@ -307,14 +311,14 @@ extension Model {
         quant: ManifestQuant,
         manifest: Manifest
     ) throws {
-        try checks.requireAffine(
+        try checks.requireAffineOrBF16(
             TensorSchema.schema(for: .qwen4flash).embedding,
             rows: config.vocabSize,
             columns: config.hiddenSize,
             slot: quant.embedding)
         // `lm_head` sits at the archive root in this family, not under the
         // language-model prefix.
-        try checks.requireAffine(
+        try checks.requireAffineOrBF16(
             TensorSchema.schema(for: .qwen4flash).lmHead,
             rows: config.vocabSize,
             columns: config.hiddenSize,

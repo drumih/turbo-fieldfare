@@ -301,29 +301,10 @@ extension RealForwardRunner {
         totalPreambleNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tPreamble
         let tEmbed = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         // Embed lookup + sqrt(H) fused.
-        let emb = try model.embedding()
         let embedCB = try runSync { cb in
-            if let affineEmbed {
-                try affineEmbed.encode(
-                    commandBuffer: cb,
-                    table: emb.buffer, tableOffset: Int(emb.offset),
-                    scales: emb.buffer, scalesOffset: Int(emb.scaleOffset),
-                    biases: emb.buffer, biasesOffset: Int(emb.biasOffset),
-                    out: hidden, tokenId: UInt32(bitPattern: token),
-                    d: D, outScale: embedOutScale,
-                    vocab: UInt32(cfg.vocabSize))
-            } else {
-                try embedInt4.encode(
-                    commandBuffer: cb,
-                    table: emb.buffer, tableOffset: Int(emb.offset),
-                    scales: emb.buffer, scalesOffset: Int(emb.scaleOffset),
-                    biases: emb.buffer, biasesOffset: Int(emb.biasOffset),
-                    out: hidden,
-                    tokenId: UInt32(bitPattern: token),
-                    d: D,
-                    outScale: embedOutScale,
-                    vocab: UInt32(cfg.vocabSize))
-            }
+            try encodeEmbeddingLookup(
+                commandBuffer: cb, tokenId: UInt32(bitPattern: token),
+                out: hidden, outScale: embedOutScale)
         }
         guard embedCB != nil else {
             throw ModelError.residentBufferWrapFailed

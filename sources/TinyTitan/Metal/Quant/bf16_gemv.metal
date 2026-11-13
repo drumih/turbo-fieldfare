@@ -117,3 +117,48 @@ kernel void bf16_gemv_multirow_simd(
     accumulator = simd_sum(accumulator);
     if (lane == 0u) y[tg.y * y_stride + row] = half(accumulator);
 }
+
+// One embedding row from a table kept at the checkpoint's bf16: the bf16
+// counterpart of `embed_lookup_int4`, with the same buffers minus the scales
+// and biases, the same fused output scale and the same out-of-range guard.
+// Each element is one widen, one multiply and one rounding to half.
+kernel void embed_lookup_bf16(
+    device const bfloat* table     [[buffer(0)]],   // [V, D] BF16
+    device half*         out       [[buffer(1)]],   // [D] FP16
+    constant uint&       token_id  [[buffer(2)]],
+    constant uint&       D         [[buffer(3)]],
+    constant float&      out_scale [[buffer(4)]],   // pass 1.0 to disable
+    constant uint&       vocab     [[buffer(5)]],   // [V] row count
+    uint                 gid       [[thread_position_in_grid]]
+) {
+    if (gid >= D) return;
+    if (token_id >= vocab) {
+        out[gid] = half(0.0f);
+        return;
+    }
+    out[gid] = half(float(table[ulong(token_id) * ulong(D) + gid]) * out_scale);
+}
+
+// The prompt form: one row per token of a chunk, `[T, D]` token-major, as
+// `prefill_embed_lookup_affine_block` writes it. Per element it is exactly
+// `embed_lookup_bf16`, so a prefilled and a decoded embedding agree.
+kernel void prefill_embed_lookup_bf16_block(
+    device const bfloat* table     [[buffer(0)]],
+    device const uint*   tokens    [[buffer(1)]],
+    device half*         out       [[buffer(2)]],
+    constant uint&       T         [[buffer(3)]],
+    constant uint&       D         [[buffer(4)]],
+    constant float&      out_scale [[buffer(5)]],
+    constant uint&       vocab     [[buffer(6)]],
+    uint2                gid       [[thread_position_in_grid]]
+) {
+    const uint d = gid.x;
+    const uint t = gid.y;
+    if (t >= T || d >= D) return;
+    const uint token = tokens[t];
+    if (token >= vocab) {
+        out[t * D + d] = half(0.0f);
+        return;
+    }
+    out[t * D + d] = half(float(table[ulong(token) * ulong(D) + d]) * out_scale);
+}

@@ -143,31 +143,14 @@ extension RealForwardRunner {
             out: collapsed,
             dim: D, streamCount: residualStreamCount,
             tokens: rows)
-        let hiddenProjection = try model.mtpHiddenProjection()
-        try prefillQMM.encode(
-            commandBuffer: cb,
-            weights: hiddenProjection.buffer,
-            weightsOffset: Int(hiddenProjection.offset),
-            scales: hiddenProjection.buffer,
-            scalesOffset: Int(hiddenProjection.scaleOffset),
-            biases: hiddenProjection.buffer,
-            biasesOffset: Int(hiddenProjection.biasOffset),
-            x: collapsed, y: projected,
-            t: rows, n: D, k: D)
+        try encodeDraftFusionProjection(
+            commandBuffer: cb, projection: try model.mtpHiddenProjection(),
+            x: collapsed, y: projected, rows: rows)
 
         // Token branch: embed, plain norm, project.
-        let emb = try model.embedding()
-        try prefillEmbed.encode(
-            commandBuffer: cb,
-            table: emb.buffer, tableOffset: Int(emb.offset),
-            scales: emb.buffer,
-            scalesOffset: Int(emb.scaleOffset),
-            biases: emb.buffer,
-            biasesOffset: Int(emb.biasOffset),
-            tokens: tokenBuffer,
-            out: embeddingBlock,
-            t: UInt32(rows), d: UInt32(D),
-            outScale: 1, vocab: UInt32(cfg.vocabSize))
+        try encodeEmbeddingBlock(
+            commandBuffer: cb, tokens: tokenBuffer,
+            out: embeddingBlock, t: rows, outScale: 1)
         let tokenNorm = try model.mtpTokenNorm()
         try prefillRMS.encodeBF16W(
             commandBuffer: cb,
@@ -176,17 +159,9 @@ extension RealForwardRunner {
             weightOffset: Int(tokenNorm.offset),
             out: normalizedEmbedding,
             t: UInt32(rows), d: UInt32(D), eps: 1e-6)
-        let tokenProjection = try model.mtpEmbeddingProjection()
-        try prefillQMM.encode(
-            commandBuffer: cb,
-            weights: tokenProjection.buffer,
-            weightsOffset: Int(tokenProjection.offset),
-            scales: tokenProjection.buffer,
-            scalesOffset: Int(tokenProjection.scaleOffset),
-            biases: tokenProjection.buffer,
-            biasesOffset: Int(tokenProjection.biasOffset),
-            x: normalizedEmbedding, y: embeddingBlock,
-            t: rows, n: D, k: D)
+        try encodeDraftFusionProjection(
+            commandBuffer: cb, projection: try model.mtpEmbeddingProjection(),
+            x: normalizedEmbedding, y: embeddingBlock, rows: rows)
         // Sum the branches in place: `projected` becomes the fused input the
         // draft layer starts from.
         try elementwise.encodeResidualAdd(

@@ -30,6 +30,7 @@ extension RealForwardRunner {
         var kv: KVCacheManager??
         var embedInt4: EmbedLookupInt4?
         var affineEmbed: AffineQuantEmbeddingLookup??
+        var bf16Rest: BF16RestKernels?
         var rms: RMSNorm?
         var int4: DequantInt4GEMV?
         var affineByWidth: [Int: AffineQuantGEMV]?

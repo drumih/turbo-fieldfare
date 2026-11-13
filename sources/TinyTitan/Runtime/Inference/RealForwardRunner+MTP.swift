@@ -105,21 +105,9 @@ extension RealForwardRunner {
         guard let cb = ctx.queue.makeCommandBuffer() else {
             throw ModelError.residentBufferWrapFailed
         }
-        let emb = try model.embedding()
-        try prefillEmbed.encode(
-            commandBuffer: cb,
-            table: emb.buffer,
-            tableOffset: Int(emb.offset),
-            scales: emb.buffer,
-            scalesOffset: Int(emb.scaleOffset),
-            biases: emb.buffer,
-            biasesOffset: Int(emb.biasOffset),
-            tokens: tokenBuffer,
-            out: embeddingBlock,
-            t: UInt32(tokens.count),
-            d: UInt32(D),
-            outScale: 1,
-            vocab: UInt32(cfg.vocabSize))
+        try encodeEmbeddingBlock(
+            commandBuffer: cb, tokens: tokenBuffer,
+            out: embeddingBlock, t: tokens.count, outScale: 1)
         let embeddingNorm = try model.mtpEmbeddingNorm()
         let hiddenNorm = try model.mtpHiddenNorm()
         try prefillRMS.encodeBF16W(

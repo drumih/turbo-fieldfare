@@ -99,30 +99,12 @@ extension RealForwardRunner {
         token: Int32, into out: MTLBuffer, outOffset: Int,
         commandBuffer cb: MTLCommandBuffer
     ) throws {
-        let D = UInt32(cfg.hiddenSize)
         let scale =
             cfg.embeddingScaledBySqrtHidden
             ? Float(cfg.hiddenSize).squareRoot() : 1.0
-        let emb = try model.embedding()
-        if let affineEmbed {
-            try affineEmbed.encode(
-                commandBuffer: cb,
-                table: emb.buffer, tableOffset: Int(emb.offset),
-                scales: emb.buffer, scalesOffset: Int(emb.scaleOffset),
-                biases: emb.buffer, biasesOffset: Int(emb.biasOffset),
-                out: out, outOffset: outOffset,
-                tokenId: UInt32(bitPattern: token),
-                d: D, outScale: scale, vocab: UInt32(cfg.vocabSize))
-        } else {
-            try embedInt4.encode(
-                commandBuffer: cb,
-                table: emb.buffer, tableOffset: Int(emb.offset),
-                scales: emb.buffer, scalesOffset: Int(emb.scaleOffset),
-                biases: emb.buffer, biasesOffset: Int(emb.biasOffset),
-                out: out, outOffset: outOffset,
-                tokenId: UInt32(bitPattern: token),
-                d: D, outScale: scale, vocab: UInt32(cfg.vocabSize))
-        }
+        try encodeEmbeddingLookup(
+            commandBuffer: cb, tokenId: UInt32(bitPattern: token),
+            out: out, outOffset: outOffset, outScale: scale)
     }
 
     /// One decode-shaped union-fetch FFN for both rows.

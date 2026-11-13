@@ -1,7 +1,6 @@
 sources/TinyTitan/Kernels/Attention/Attention.swift:encodeSplit: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitan/Runtime/Generation/RawCompletionHelpers.swift:runStreamingMTPCompletion: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitan/Runtime/Inference/Model+SchemaValidation.swift:validateLayerTensors: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
-sources/TinyTitan/Runtime/Inference/RealForwardRunner+MTP.swift:advanceMTP: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitan/Runtime/Inference/RealForwardRunner+PrefillProjection.swift:encodeAffineProjection: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanBench/TinyTitanBench.swift:main: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanFormat/SSDAIPackedExpertsLayoutV1.swift:validate: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added

@@ -1,9 +1,8 @@
 import Foundation
 import Metal
 
-/// Compatible Qwen3.5-MoE real-forward decode pass.
-///
-/// Composes the production kernels against the `.ssdai` model:
+/// Compatible Qwen3.5-MoE real-forward decode pass, composing the production
+/// kernels against the `.ssdai` model:
 ///
 ///   embed_lookup_int4(token) * sqrt(H)
 ///   for L in 0..<40:
@@ -23,8 +22,7 @@ import Metal
 ///     h2 = moe_fused_ffn_streamed_routed(h2, residual=h1, routedBlobs=fetch(idx), w)
 ///     h = h + h2
 ///     h = h * layer_scalar[L]
-///   logits = DequantInt4GEMV(rmsnorm_bf16w(h, model.norm), lm_head^T)
-///   // final softmax happens in the Sampler.
+///   logits = DequantInt4GEMV(rmsnorm_bf16w(h, model.norm), lm_head^T)  // softmax: Sampler
 ///
 /// Direct against `Model`; this is the only production decode forward path.
 /// unchecked-invariant: exclusively owned by one caller for its lifetime and
@@ -60,6 +58,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
     // Kernels
     let embedInt4: EmbedLookupInt4
     let affineEmbed: AffineQuantEmbeddingLookup?
+    let bf16Rest: BF16RestKernels  // a bf16 embedding / lm_head (+BF16Rest.swift)
     let rms: RMSNorm
     let int4: DequantInt4GEMV
     let affine: AffineQuantGEMV?
@@ -309,6 +308,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporti
         self.kv = Self.staged(bp.kv, "kv")
         self.embedInt4 = Self.staged(bp.embedInt4, "embedInt4")
         self.affineEmbed = Self.staged(bp.affineEmbed, "affineEmbed")
+        self.bf16Rest = Self.staged(bp.bf16Rest, "bf16Rest")
         self.rms = Self.staged(bp.rms, "rms")
         self.int4 = Self.staged(bp.int4, "int4")
         self.affineByWidth = Self.staged(bp.affineByWidth, "affineByWidth")
