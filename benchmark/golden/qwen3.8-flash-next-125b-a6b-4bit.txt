@@ -3,20 +3,15 @@
 # temperature: 0 (greedy)
 # seed:        1234
 # target:      qwen38-4 (4-bit)
-# captured-on: Mac15,3, 24 GB, macOS 27.0
-# commit:      f55d07f
+# captured-on: Mac15,3, 24 GB, macOS 27.2
+# commit:      b7c5e6ca
 ---
 
 
 <think>
-
+The user is asking about mutexes - a fundamental concept in concurrent programming. I need to explain what it is clearly and give practical guidance on when to use one. Let me structure this well: definition, how it works, and practical use cases. I'll aim for clarity without being overly academic.
 </think>
 
-# Mutex (Mutual Exclusion Lock)
+## Mutex (Mutual Exclusion Lock)
 
-## What Is a Mutex?
-
-A **mutex** (short for **mutual exclusion**) is a synchronization primitive that ensures only **one thread at a time** can access a shared resource or critical section of code. It acts as a lock:
-
-- When a thread **acquires** the mutex, it gains exclusive access to the protected resource.
-- Any other thread attempting to acquire the same
+A **mutex** is a synchronization primitive that ensures only **one thread at a time** can access
