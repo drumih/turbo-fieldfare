@@ -879,3 +879,41 @@ All three were silent, and one was the third instance of a single mistake.
 prediction after each row, accepted). Speculative decoding is meant to be
 exact, so when its output differs from scalar the question is always which of
 those is wrong, and the text cannot answer it.
+
+## Evaluation builds: precision of the non-expert weights (2026-11-13)
+
+Two builds sit beside the 4-bit install to measure what the non-expert
+weights ("the rest": attention, GDN, hyper-connection, PLE projections,
+indexer, shared expert, router, embedding, LM head) buy at higher precision.
+Neither changes the installer default. Routed experts stay 4-bit and the
+n-gram table stays fp16 in all three; the table is the same file, hardlinked.
+
+| Build | Converter flag | Rest | Resident floor |
+| --- | --- | --- | --- |
+| `qwen3.8-flash-next_125B_A6B_4Bit` | (default) | 4-bit; embedding, head, router 8-bit | 3.72 GiB |
+| `..._4Bit_8BitRest` | `--rest-8bit` | every quantised tensor 8-bit | ~6.1 GiB (computed) |
+| `..._4Bit_BF16Rest` | `--rest-bf16` | bf16 | 9.72 GiB |
+
+`tools/build_qwen38_8bitrest.sh` builds the 8-bit-rest install (resumable;
+reuses the 4-bit install's n-gram table and consumes its snapshot while
+repacking). With every attention-slot tensor at 8 bits the repacker derives an
+8-bit attention slot, so the GDN a/b pair is at the slot's own width, which
+`Model.validateRoleUniformity` accepts.
+
+Decode, 200 tokens greedy, expert profile off, M3 24 GB
+(`tools/ram-matrix.sh`; mutex / Swift-rename prompts, tok/s):
+
+| `--ram` | 4-bit | BF16Rest |
+| --- | --- | --- |
+| 8 | 3.40 / 3.36 | fails (8 slots < top-10) |
+| 10 | 3.86 / 3.57 | fails |
+| 12 | 4.18 / 3.99 | 2.50 / 2.23 |
+| 14 | 4.26 / 4.11 | 2.80 / 2.60 |
+| 16 | 4.85 / 4.50 | 3.01 / 2.81 |
+| 18 | 5.19 / 4.78 | 3.24 / 2.91 |
+| default | 5.16 / 4.75 | 1.18 / 0.98 (oversubscribed) |
+
+At equal slots and hit rate (64, 0.73) BF16Rest costs ~70 ms/token, which is
+the extra ~8 GB of dense reads at the M3's bandwidth. The default budget does
+not count the bf16 floor and swaps. The 8-bit-rest row and a quality
+comparison (KL and top-1 agreement against BF16Rest) are open.

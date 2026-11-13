@@ -345,6 +345,17 @@ PROMOTE_TO_BF16_AT_8BIT = (
 # what 16-bit dense weights buy in quality against that cost.
 REST_BF16 = False
 
+# `--rest-8bit`: routed experts at the build width, every other quantised
+# tensor at 8 bits -- the attention, GDN, hyper-connection, PLE, indexer and
+# shared-expert families move from 4 to 8, and the embedding, LM head and
+# router stay at the 8 they already have. Requested 2026-11-13 as the middle
+# ground between the 4-bit install and `--rest-bf16`: about +2.6 GB resident
+# against +6 GB for bf16. Because every attention-slot tensor is 8-bit, the
+# repacker derives an 8-bit attention slot, so the GDN a/b pair sits at the
+# slot's own width, which `Model.validateRoleUniformity` accepts. Norms and
+# conv1d stay bf16 as in every build.
+REST_8BIT = False
+
 
 def is_routed_expert(name: str) -> bool:
     return ".mlp.switch_mlp." in name
@@ -405,6 +416,10 @@ def quant_bits(name: str, width: int = BITS_4) -> int | None:
         return None
     if REST_BF16 and not is_routed_expert(name):
         return None
+    if REST_8BIT and not is_routed_expert(name):
+        if name.endswith("conv1d.weight") or name.endswith("norm.weight"):
+            return None
+        return BITS_8
     if name.endswith("conv1d.weight"):
         return None
     if name.endswith("norm.weight"):
@@ -1182,6 +1197,12 @@ def main() -> int:
         "(evaluation build; cannot start under --ram-budget 10G)",
     )
     ap.add_argument(
+        "--rest-8bit",
+        action="store_true",
+        help="quantise every tensor except the routed experts at 8 bits "
+        "(experts stay at --bits; ~+2.6 GB resident against the 4-bit install)",
+    )
+    ap.add_argument(
         "--rewrite-config", type=Path, help="regenerate config.json for an existing snapshot"
     )
     ap.add_argument("--output", type=Path)
@@ -1209,8 +1230,11 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    global HF_ENDPOINT, BASE, REST_BF16
+    global HF_ENDPOINT, BASE, REST_BF16, REST_8BIT
+    if args.rest_bf16 and args.rest_8bit:
+        ap.error("--rest-bf16 and --rest-8bit are exclusive")
     REST_BF16 = args.rest_bf16
+    REST_8BIT = args.rest_8bit
     HF_ENDPOINT = args.endpoint.rstrip("/")
     BASE = endpoint_base(HF_ENDPOINT)
 
@@ -1309,9 +1333,13 @@ def main() -> int:
     marker = args.output / "conversion.json"
     adoptable = list(args.output.glob("model-[0-9][0-9][0-9][0-9][0-9].safetensors"))
     previous_bits = read_json_file(marker)
-    recipe = {"bits": args.bits, "rest_bf16": REST_BF16}
+    recipe = {"bits": args.bits, "rest_bf16": REST_BF16, "rest_8bit": REST_8BIT}
     previous_recipe = (
-        {"bits": previous_bits.get("bits"), "rest_bf16": previous_bits.get("rest_bf16", False)}
+        {
+            "bits": previous_bits.get("bits"),
+            "rest_bf16": previous_bits.get("rest_bf16", False),
+            "rest_8bit": previous_bits.get("rest_8bit", False),
+        }
         if previous_bits is not None
         else None
     )

@@ -342,6 +342,61 @@ class RestBf16RecipeTests(unittest.TestCase):
         )
 
 
+@unittest.skipIf(prepare is None, f"prepare_qwen38 unavailable: {IMPORT_ERROR}")
+class Rest8BitRecipeTests(unittest.TestCase):
+    """`--rest-8bit`: routed experts at the build width, the rest at 8 bits."""
+
+    def setUp(self) -> None:
+        self.addCleanup(setattr, prepare, "REST_8BIT", prepare.REST_8BIT)
+        prepare.REST_8BIT = True
+
+    def test_routed_experts_keep_the_build_width(self) -> None:
+        for name in (
+            "model.language_model.layers.0.mlp.switch_mlp.gate_proj.weight",
+            "model.language_model.layers.47.mlp.switch_mlp.down_proj.weight",
+        ):
+            self.assertEqual(prepare.quant_bits(name, 4), 4)
+
+    def test_every_other_quantised_family_is_8bit(self) -> None:
+        for name in (
+            "model.language_model.embed_tokens.weight",
+            "lm_head.weight",
+            "model.language_model.layers.0.mlp.gate.weight",
+            "model.language_model.layers.0.mlp.shared_expert.up_proj.weight",
+            "model.language_model.layers.0.mlp.shared_expert_gate.weight",
+            "model.language_model.layers.3.self_attn.q_proj.weight",
+            "model.language_model.layers.3.self_attn.indexer.index_q_proj.weight",
+            "model.language_model.layers.0.linear_attn.in_proj_qkv.weight",
+            "model.language_model.layers.0.linear_attn.in_proj_a.weight",
+            "model.language_model.layers.0.attn_hyper_connection.block_inject_weight.weight",
+            "model.language_model.layers.0.attn_hyper_connection.input_mix_weight_up.weight",
+            "model.language_model.hyper_connection_mixer.input_mix_weight_down.weight",
+            "model.language_model.layers.1.ple.key_proj.weight",
+            "model.language_model.layers.1.ple.value_proj.weight",
+        ):
+            self.assertEqual(prepare.quant_bits(name, 4), 8, name)
+
+    def test_norms_and_convolutions_stay_unquantised(self) -> None:
+        for name in (
+            "model.language_model.layers.0.linear_attn.conv1d.weight",
+            "model.language_model.layers.0.input_layernorm.weight",
+        ):
+            self.assertIsNone(prepare.quant_bits(name, 4), name)
+
+    def test_attention_slot_members_share_one_width(self) -> None:
+        # The repacker derives the attention slot from q/k/v/o and the GDN
+        # projections; a/b must match it or the loader refuses the install.
+        widths = {
+            prepare.quant_bits(f"model.language_model.layers.0.linear_attn.{t}.weight", 4)
+            for t in ("in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj")
+        }
+        widths |= {
+            prepare.quant_bits(f"model.language_model.layers.3.self_attn.{t}.weight", 4)
+            for t in ("q_proj", "k_proj", "v_proj", "o_proj")
+        }
+        self.assertEqual(widths, {8})
+
+
 class LocalTableReuseTests(unittest.TestCase):
     """The decision to reuse the table a previous run finished in the output
     directory: size and constants, both read from disk."""
