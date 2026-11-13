@@ -21,10 +21,11 @@ import Testing
 
     // MARK: - Policy
 
-    @Test func theDefaultIsTheSlotCountMinusASixteenth() {
-        #expect(ExpertWarmup.perLayer(requested: nil, slotCount: 48, expertsPerLayer: 512) == 45)
-        #expect(ExpertWarmup.perLayer(requested: nil, slotCount: 16, expertsPerLayer: 512) == 15)
-        #expect(ExpertWarmup.perLayer(requested: nil, slotCount: 8, expertsPerLayer: 8) == 7)
+    @Test func offUnlessRequestedWithTheSuggestedValueTheSlotCountMinusASixteenth() {
+        #expect(ExpertWarmup.perLayer(requested: nil, slotCount: 48, expertsPerLayer: 512) == 0)
+        #expect(ExpertWarmup.defaultPerLayer(slotCount: 48) == 45)
+        #expect(ExpertWarmup.defaultPerLayer(slotCount: 16) == 15)
+        #expect(ExpertWarmup.defaultPerLayer(slotCount: 8) == 7)
         #expect(ExpertWarmup.perLayer(requested: 0, slotCount: 48, expertsPerLayer: 512) == 0)
         #expect(ExpertWarmup.perLayer(requested: -3, slotCount: 48, expertsPerLayer: 512) == 0)
         #expect(ExpertWarmup.perLayer(requested: 100, slotCount: 48, expertsPerLayer: 512) == 48)

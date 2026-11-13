@@ -92,13 +92,19 @@ public enum ExpertWarmup {
         return value
     }
 
-    /// The count in force: the request, or the default, capped by the slot
-    /// count (a warm-up cannot hold more than the cache) and the layer's
-    /// experts. 0 means off.
+    /// The count in force, capped by the slot count (a warm-up cannot hold
+    /// more than the cache) and the layer's experts. 0 means off.
+    ///
+    /// Off unless requested. Measured on 4-bit Qwen3.8 at `--ram 10` with the
+    /// install's profile (2026-11-13, three Swift/git prompts): warming 45 of
+    /// 48 slots moved the hit rate by +0.009, -0.011 and -0.035 -- the profile
+    /// is diffuse (its top 48 cover about 46 % of a layer's routings), so the
+    /// warmed experts outlast the prompt's own working set. `defaultPerLayer`
+    /// stays as the suggested value for an operator who opts in.
     public static func perLayer(
         requested: Int?, slotCount: Int, expertsPerLayer: Int
     ) -> Int {
-        let wanted = requested ?? defaultPerLayer(slotCount: slotCount)
+        let wanted = requested ?? 0
         guard wanted > 0 else { return 0 }
         return max(0, min(wanted, slotCount, expertsPerLayer))
     }
