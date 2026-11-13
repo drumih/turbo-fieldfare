@@ -158,6 +158,9 @@ extension TinyTitanBench {
         // Every round advances 16 tokens whatever its width, so the expert
         // cache turns over the same way between passes on both paths.
         let maxWidth = passCostWidths.max() ?? 16
+        // Compile the decode-order multi-row pipelines up front so no timed
+        // pass pays a first-use compile.
+        try runner.prewarmWideVerifyPipelines()
         // The dedicated pass plans its rows' expert union as one lease against
         // the slot cache, so it is limited to what is guaranteed to fit.
         let paths: [PassCostPath] = path == .both ? [.chunked, .dedicated] : [path]
