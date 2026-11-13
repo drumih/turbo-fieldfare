@@ -32,8 +32,30 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "tools/server_launcher.sh"
 MERGE = ROOT / "tools/client_config_merge.py"
 SOURCE = ROOT / "plugins/opencode-tinytitan/opencode.json"
-DEFAULT_MODEL = "qwen3.8-flash-next-mtp_4-Bit"
+LAUNCHER_LIB = ROOT / "tools/tinytitan_models.sh"
 URL = "http://127.0.0.1:8080/v1"
+
+
+def default_model() -> str:
+    """The file's own default id, without the `tinytitan/` prefix.
+
+    Derived, not a literal: the id changes when the checked-in install recipe
+    changes (6.3's `qwen3.8-flash-next-8bitrest_4-Bit`), and a literal here
+    would fail every such change with a test that is not about the id.
+    """
+    return source()["model"].split("/", 1)[1]
+
+
+def installer_menu_rows() -> int:
+    """The number of models `tools/install_models.sh --choose` offers.
+
+    The provider file must carry one entry per launcher-menu row — that is the
+    coupling TT-066 shipped — so the expected count is read from the menu list
+    itself rather than restated here.
+    """
+    text = LAUNCHER_LIB.read_text()
+    block = text.split("TINYTITAN_MODEL_CHOICES=(", 1)[1].split("\n)", 1)[0]
+    return sum(1 for line in block.splitlines() if line.strip().startswith('"'))
 
 
 def source() -> dict:
@@ -55,13 +77,14 @@ class SourceOfTruthTests(unittest.TestCase):
 
     def test_the_provider_block(self) -> None:
         data = source()
-        self.assertEqual(data["model"], f"tinytitan/{DEFAULT_MODEL}")
+        self.assertEqual(data["model"], f"tinytitan/{default_model()}")
         block = data["provider"]["tinytitan"]
         self.assertEqual(block["name"], "TinyTitan")
         self.assertEqual(block["npm"], "@ai-sdk/openai-compatible")
         self.assertEqual(block["options"]["baseURL"], URL)
         self.assertIs(block["options"]["timeout"], False)
-        self.assertEqual(len(block["models"]), 7)
+        self.assertEqual(len(block["models"]), installer_menu_rows())
+        self.assertIn(default_model(), block["models"])
         for model_id, model in block["models"].items():
             with self.subTest(model=model_id):
                 self.assertEqual(model["limit"], {"context": 262144, "output": 32768})
@@ -76,7 +99,7 @@ class MergeTests(unittest.TestCase):
         self.dir = pathlib.Path(self.tmp.name)
         self.file = self.dir / "opencode.jsonc"
 
-    def run_merge(self, *extra: str, model: str = DEFAULT_MODEL, url: str = URL) -> str:
+    def run_merge(self, *extra: str, model: str | None = None, url: str = URL) -> str:
         run = merge(
             "opencode",
             "--file",
@@ -84,7 +107,7 @@ class MergeTests(unittest.TestCase):
             "--source",
             str(SOURCE),
             "--model",
-            model,
+            model or default_model(),
             "--base-url",
             url,
             *extra,
@@ -155,7 +178,7 @@ class MergeTests(unittest.TestCase):
         self.run_merge("--context", "524288", url="http://127.0.0.1:9090/v1")
         block = json.loads(self.file.read_text())["provider"]["tinytitan"]
         self.assertEqual(block["options"]["baseURL"], "http://127.0.0.1:9090/v1")
-        self.assertEqual(block["models"][DEFAULT_MODEL]["limit"]["context"], 524288)
+        self.assertEqual(block["models"][default_model()]["limit"]["context"], 524288)
         self.file.unlink()
         self.run_merge(model="katcoder-x_4-Bit")
         data = json.loads(self.file.read_text())
@@ -179,7 +202,7 @@ class MergeTests(unittest.TestCase):
         self.file.write_text("{ not json")
         run = merge(
             "opencode", "--file", str(self.file), "--source", str(SOURCE),
-            "--model", DEFAULT_MODEL, "--base-url", URL,
+            "--model", default_model(), "--base-url", URL,
         )  # fmt: skip
         self.assertEqual(run.returncode, 1)
         self.assertIn("not parseable", run.stderr)
@@ -207,7 +230,7 @@ class LauncherConfigureTests(unittest.TestCase):
     def configure(self, **env: str) -> subprocess.CompletedProcess[str]:
         script = (
             f"SCRIPT_DIR={str(ROOT / 'tools')!r}; BASE_DIR={str(ROOT)!r}\n"
-            f"launch_model={DEFAULT_MODEL}; BASE_URL={URL}; max_context=''\n"
+            f"launch_model={default_model()}; BASE_URL={URL}; max_context=''\n"
             + configure_opencode_source()
             + "configure_opencode\n"
         )
