@@ -60,7 +60,7 @@ def write_install(root: Path, *, bf16: bool, corrupt: bool = False) -> None:
             items.append((entry, (len(blob),), lambda b=blob: [b]))
         else:
             p, s, b = (x.tobytes() for x in prepare.quantize_affine(value, bits))
-            entry = rq.Entry(name, rq.DTYPE_U32, 0, 0, (rows, cols * bits // 32, 0, 0), 0, 0, 0, 0)
+            entry = rq.Entry(name, rq.DTYPE_U32, 0, len(p), (rows, cols, 0, 0), 0, 0, 0, 0)
             items.append((entry, (len(p), len(s), len(b)), lambda t=(p, s, b): list(t)))
     rq.ResidentWriter(root / rq.RESIDENT, items, 64).write()
     quant = {slot: {"weightBits": 4} for slot in rq.SLOTS}
@@ -102,7 +102,8 @@ class RequantizeRestTests(unittest.TestCase):
         entries = resident.by_name()
         for seed, (name, rows, cols, _) in enumerate(QUANTISED):
             entry = entries[name]
-            self.assertEqual(entry.shape, (rows, cols // 4, 0, 0))
+            self.assertEqual(entry.shape, (rows, cols, 0, 0))
+            self.assertEqual(entry.size, rows * cols)
             p, s, b = prepare.quantize_affine(toy_values(rows, cols, seed), 8)
             self.assertEqual(
                 rq.read_bytes(out / rq.RESIDENT, entry.offset, entry.size), p.tobytes()

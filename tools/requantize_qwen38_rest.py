@@ -142,14 +142,29 @@ def bf16_rows(source: Resident, entry: Entry) -> np.ndarray:
 
 
 def width_of(entry: Entry, cols: int) -> int:
-    """The base entry's bit width, from its packed columns and the bf16 width."""
-    bits = entry.shape[1] * 32 // cols
-    if bits not in (4, 8) or entry.shape[1] * 32 != bits * cols:
-        raise SystemExit(f"{entry.name}: packed width {entry.shape[1]} does not divide {cols}")
-    groups = entry.shape[0] * (cols // GROUP) * 2
+    """The base entry's bit width, from its payload size and the bf16 shape.
+
+    Installs record a quantised tensor's *logical* shape ([rows, cols], as the
+    bf16 tensor has it); the width is what the packed payload's size implies.
+    The packed convention ([rows, cols * bits / 32]) is accepted as well.
+    """
+    rows = entry.shape[0]
+    bits, rem = divmod(entry.size * 8, rows * cols)
+    if rem or bits not in (4, 8):
+        raise SystemExit(f"{entry.name}: {entry.size} bytes is not a 4- or 8-bit {rows}x{cols}")
+    if entry.shape[1] not in (cols, cols * bits // 32):
+        raise SystemExit(f"{entry.name}: shape {entry.shape} matches neither convention")
+    groups = rows * (cols // GROUP) * 2
     if entry.scale_size != groups or entry.bias_size != groups:
-        raise SystemExit(f"{entry.name}: scale/bias sizes do not match {entry.shape[0]}x{cols}")
+        raise SystemExit(f"{entry.name}: scale/bias sizes do not match {rows}x{cols}")
     return bits
+
+
+def shape_at(entry: Entry, cols: int, old: int, bits: int) -> tuple[int, int, int, int]:
+    """The entry's shape at the new width, in whichever convention it uses."""
+    if entry.shape[1] == cols:
+        return entry.shape
+    return (entry.shape[0], cols * bits // 32, *entry.shape[2:])
 
 
 def quantize_rows(value: np.ndarray, bits: int) -> tuple[bytes, bytes, bytes]:
@@ -291,7 +306,7 @@ def plan_entries(base: Resident, source: Resident, bits: int) -> list[Planned]:
             raise SystemExit(f"{entry.name}: {rows} rows in --source, {entry.shape[0]} in --base")
         old = width_of(entry, cols)
         self_check(base, entry, value, old)
-        new = replace(entry, shape=(rows, cols * bits // 32, 0, 0))
+        new = replace(entry, shape=shape_at(entry, cols, old, bits))
         groups = rows * (cols // GROUP) * 2
         out.append(
             (
