@@ -106,6 +106,16 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// Concise-mode system prompt injected into every completion, or nil when
     /// concise mode is off. Selected per quantization (see ConcisePrompt).
     nonisolated let concisePrompt: String?
+    /// The startup expert warm-up while it may still be running; see
+    /// `ServerModelSession+ExpertWarmup.swift`. A request stops it before it
+    /// touches the runner, so the two never plan the slot cache at once.
+    var expertWarmupTask: Task<ExpertWarmupReport?, Never>?
+
+    deinit {
+        // A session dropped mid-warm (a catalog switch, `Engine.unload`) must
+        // not keep reading into a cache nobody will use.
+        expertWarmupTask?.cancel()
+    }
 
     /// A pure function of its arguments, so a caller can reproduce the
     /// effective cache mode for the startup banner without loading a model.

@@ -141,7 +141,8 @@ extension TinyTitanBench {
             maxContext: 8192,
             expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: false,
-            device: device)
+            device: device,
+            warmExperts: false)
         let runner = session.benchmarkRunner
         let prompt = session.benchmarkTokenizer.encode(
             try passCostPrompt(promptFile: promptFile), addBOS: true)

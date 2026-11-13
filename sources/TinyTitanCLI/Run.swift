@@ -158,6 +158,10 @@ public func run(
         }
         let engine = try await Engine(
             directory: modelURL, device: device, configuration: configuration)
+        // The one request would arrive before any layer is warm and stop the
+        // warm-up at once, so the CLI lets it finish (it logs its own line;
+        // TINYTITAN_WARM_EXPERTS=0 skips it).
+        await engine.awaitExpertWarmup()
         let session = await engine.session()
         // The engine's resolved row and the pre-load peek agree; asserting it
         // here would change no output, so the plan above is what runs.

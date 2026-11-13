@@ -152,6 +152,14 @@ public actor Engine {
         modelSession = nil
     }
 
+    /// Wait for the startup expert warm-up to finish instead of letting the
+    /// first request stop it. For a one-shot caller (the CLI) whose only
+    /// request would otherwise arrive before any layer is warm. `package`: the
+    /// warm-up is not part of the facade's promise.
+    package func awaitExpertWarmup() async {
+        await modelSession?.awaitExpertWarmup()
+    }
+
     /// The sampling row an install declares, resolved for `thinkingMode`.
     ///
     /// Read from `manifest.json` alone — no weights, no Metal, no load — so a

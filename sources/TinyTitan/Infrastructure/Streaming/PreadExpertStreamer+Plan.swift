@@ -14,10 +14,14 @@ extension PreadExpertStreamer {
         layer: Int,
         experts: [Int],
         avoidingSlots rawAvoidingSlots: Set<Int>,
-        prefetched: [Int: UnsafeMutableRawPointer]
+        prefetched: [Int: UnsafeMutableRawPointer],
+        recordsUse: Bool = true
     )
         -> ExpertCachePlan?
     {
+        // `recordsUse: false` is the startup warm-up (`planWarmupExperts`):
+        // the same placement, but no LFU score and no hit/miss statistics,
+        // because no token routed to these experts.
         // K10: too few slots for the requested expert set is a recoverable
         // placement failure, not a programming error, and both entry points are
         // already built to handle it -- `planExpertsCached` turns nil into
@@ -62,7 +66,7 @@ extension PreadExpertStreamer {
         guard candidateMisses.count <= evictable.count else { return nil }
 
         useClock = clock
-        for expert in experts where expert >= 0 && expert < expertUseCount.count {
+        for expert in experts where recordsUse && expert >= 0 && expert < expertUseCount.count {
             expertUseCount[expert] &+= 1
         }
         for slot in assignedSlots where slot >= 0 {
@@ -107,14 +111,9 @@ extension PreadExpertStreamer {
         }
 
         recordPrefetchAdoptionsUnlocked(adoptedPrefetches)
-
-        statisticsPlans &+= 1
-        statisticsRequestedExperts &+= UInt64(experts.count)
-        statisticsHits &+= UInt64(experts.count - misses.count)
-        statisticsMisses &+= UInt64(misses.count)
-        statisticsPeakLoadingSlots = max(
-            statisticsPeakLoadingSlots,
-            slotState.count(where: { $0 == .loading }))
+        if recordsUse {
+            recordPlanStatisticsUnlocked(requested: experts.count, misses: misses.count)
+        }
 
         return ExpertCachePlan(
             experts: experts,
@@ -123,6 +122,28 @@ extension PreadExpertStreamer {
             misses: misses,
             hits: experts.count - misses.count,
             layer: layer)
+    }
+
+    /// The startup warm-up's placement: the plan a decode routing exactly
+    /// these experts would get from the same cache state, minus the LFU bump
+    /// and the hit/miss statistics. Nil when they cannot all be placed.
+    /// Layer 0 as in `Model.planRoutedExperts`: a streamer's file offsets are
+    /// relative to its own layer.
+    public func planWarmupExperts(_ experts: [Int]) -> ExpertCachePlan? {
+        makeExpertCachePlan(
+            layer: 0, experts: experts, avoidingSlots: [], prefetched: [:],
+            recordsUse: false)
+    }
+
+    /// One routed plan's hit/miss accounting. Caller holds `cacheLock`.
+    func recordPlanStatisticsUnlocked(requested: Int, misses: Int) {
+        statisticsPlans &+= 1
+        statisticsRequestedExperts &+= UInt64(requested)
+        statisticsHits &+= UInt64(requested - misses)
+        statisticsMisses &+= UInt64(misses)
+        statisticsPeakLoadingSlots = max(
+            statisticsPeakLoadingSlots,
+            slotState.count(where: { $0 == .loading }))
     }
 
     public func executeExpertCachePlan(

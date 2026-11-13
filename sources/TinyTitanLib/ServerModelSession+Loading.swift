@@ -72,7 +72,8 @@ extension ServerModelSession {
         mtpModelDirectory: URL? = nil,
         mtpMemoryMiB: Int = StreamingMTPMemoryPlan.defaultBudgetMiB,
         device: MTLDevice? = nil,
-        reusingContext: MetalContext? = nil
+        reusingContext: MetalContext? = nil,
+        warmExperts: Bool = true
     ) async throws -> ServerModelSession {
         _ = try GFTokenizer.requireModelDirectory(modelDirectory)
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
@@ -446,7 +447,7 @@ extension ServerModelSession {
             promptCheckpointStore = nil
             promptCache = ServerPromptCache(maximumEntries: 1)
         }
-        return ServerModelSession(
+        let session = ServerModelSession(
             context: context,
             model: model,
             tokenizer: tokenizer,
@@ -468,5 +469,11 @@ extension ServerModelSession {
             promptCheckpointStore: promptCheckpointStore,
             concisePrompt: conciseModeEnabled()
                 ? ConcisePrompt.standard : nil)
+        // In the background: the session is ready now, and the first request
+        // stops the warm-up rather than waiting behind it. A bench that drives
+        // the runner directly passes `warmExperts: false`, because nothing
+        // would keep it out of the planner.
+        if warmExperts { await session.startExpertWarmup() }
+        return session
     }
 }
