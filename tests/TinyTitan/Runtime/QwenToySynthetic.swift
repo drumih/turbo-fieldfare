@@ -23,9 +23,17 @@ enum QwenToySynthetic {
     /// `variedHead` does the same for the lm_head (packed values, scales and
     /// biases) and the final norm, so logits differ by vocabulary row; with
     /// the constant pattern every logit is equal.
+    ///
+    /// `bf16Rest` mirrors the Qwen3.8 BF16Rest install: routed experts stay
+    /// affine, and every dense matrix -- embedding, lm_head, router, scalar
+    /// gate, shared expert, attention and GDN projections -- is kept at bf16
+    /// with no scales or biases, filled with small varied values
+    /// (`fillBF16Projections`). The manifest's slots still say `weightBits`
+    /// and its `promoted` list names every bf16 matrix but the lm_head, as the
+    /// real install's does, so the runtime has to read the head's dtype.
     static func write(
         weightBits: Int = 4, qsa: Bool = false, variedLinearAttention: Bool = false,
-        variedHead: Bool = false
+        variedHead: Bool = false, bf16Rest: Bool = false
     ) throws -> URL {
         precondition([4, 8].contains(weightBits))
         let toy = qsa ? ArchConfig.qwenToyQSA() : ArchConfig.qwenToy()
@@ -50,6 +58,7 @@ enum QwenToySynthetic {
             _ name: String, rows: Int, cols: Int,
             bits: Int = weightBits
         ) -> ResidentSpec {
+            if bf16Rest { return bf16Matrix(name, rows: rows, cols: cols) }
             // Runtime only supports 4 or 8-bit affine.
             let usedBits = bits <= 4 ? 4 : 8
             let groups = cols / Quantization.groupSize
@@ -64,6 +73,7 @@ enum QwenToySynthetic {
         }
 
         func int8AffineSpec(_ name: String, rows: Int, cols: Int) -> ResidentSpec {
+            if bf16Rest { return bf16Matrix(name, rows: rows, cols: cols) }
             let groups = cols / Quantization.groupSize
             let auxBytes = UInt64(rows * groups * u16)
             return ResidentSpec(
@@ -83,6 +93,10 @@ enum QwenToySynthetic {
                 weightBytes: UInt64(count * u16),
                 scaleBytes: 0,
                 biasBytes: 0)
+        }
+
+        func bf16Matrix(_ name: String, rows: Int, cols: Int) -> ResidentSpec {
+            bf16Spec(name, shape: [UInt32(rows), UInt32(cols), 0, 0], count: rows * cols)
         }
 
         // 1. Resident specs.
@@ -337,6 +351,7 @@ enum QwenToySynthetic {
                     dst[i] = Quantization.bf16Bits(varied ? 0.75 + 0.04 * Float(i % 13) : 1.0)
                 }
             }
+            if bf16Rest { fillBF16Projections(entries, base: base) }
         }
         let weightsURL = dir.appendingPathComponent("model_weights.bin")
         try Data(fileBuf).write(to: weightsURL)
@@ -494,21 +509,24 @@ enum QwenToySynthetic {
             archDict["indexerBudget"] = toy.sparseIndexer.budget
             archDict["indexerCompressRatio"] = toy.sparseIndexer.compressRatio
         }
+        var quant: [String: Any] = [
+            "embedding": quantSlot(weightBits),
+            "attention": quantSlot(weightBits),
+            "router": quantSlot(8),
+            "sharedExpert": quantSlot(weightBits),
+            "routedExpert": quantSlot(weightBits),
+        ]
+        if bf16Rest { quant["promoted"] = promotedStems(entries) }
         let manifestRoot: [String: Any] = [
             "magic": "SSDAI",
             "versionMajor": 1,
             "versionMinor": 0,
             "flags": ["streamingPresent": true, "turboQuantKV": false, "aneSharedExpert": false],
-            "modelID": qsa
-                ? "qwen-toy-qsa-\(weightBits)bit" : "qwen-toy-\(weightBits)bit",
+            "modelID": bf16Rest
+                ? "qwen-toy-\(weightBits)bit-bf16rest"
+                : qsa ? "qwen-toy-qsa-\(weightBits)bit" : "qwen-toy-\(weightBits)bit",
             "arch": archDict,
-            "quant": [
-                "embedding": quantSlot(weightBits),
-                "attention": quantSlot(weightBits),
-                "router": quantSlot(8),
-                "sharedExpert": quantSlot(weightBits),
-                "routedExpert": quantSlot(weightBits),
-            ],
+            "quant": quant,
             "files": files,
             "expertsPerLayer": toy.numExperts,
             "numLayers": toy.numLayers,
@@ -929,6 +947,37 @@ enum QwenToySynthetic {
         for i in 0..<(Int(entry.biasSize) / 2) {
             biases[i] = Quantization.bf16Bits(0.02 * Float((i % 11) - 5))
         }
+    }
+
+    /// The bf16 matrices of a `bf16Rest` toy: two-dimensional bf16 tensors
+    /// (norms are one-dimensional, the conv kernel three), each with its own
+    /// deterministic pattern in [-0.05, 0.05] so rows, tokens and projections
+    /// all differ.
+    static func isBF16Matrix(_ entry: ResidentEntry) -> Bool {
+        entry.dtype == 1 && entry.logicalShape4[1] > 0 && entry.logicalShape4[2] == 0
+    }
+
+    /// The value `fillBF16Projections` writes at element `i` of entry `index`.
+    static func bf16RestValue(_ i: Int, entry index: Int) -> Float {
+        0.05 * Float(((i &* 37 &+ index &* 101 &+ 7) % 23) - 11) / 11
+    }
+
+    private static func fillBF16Projections(
+        _ entries: [ResidentEntry], base: UnsafeMutableRawPointer
+    ) {
+        for (index, entry) in entries.enumerated() where isBF16Matrix(entry) {
+            let dst = base.advanced(by: Int(entry.fileOffset)).assumingMemoryBound(to: UInt16.self)
+            for i in 0..<(Int(entry.sizeBytes) / 2) {
+                dst[i] = Quantization.bf16Bits(bf16RestValue(i, entry: index))
+            }
+        }
+    }
+
+    /// The manifest's `promoted` stems: every bf16 matrix but the lm_head,
+    /// which the real BF16Rest install leaves out of the list too.
+    private static func promotedStems(_ entries: [ResidentEntry]) -> [String] {
+        entries.filter { isBF16Matrix($0) && !$0.name.hasSuffix("lm_head.weight") }
+            .map { String($0.name.dropLast(".weight".count)) }
     }
 }
 

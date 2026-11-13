@@ -109,7 +109,6 @@ extension RealForwardRunner {
             ? Float(D).squareRoot()
             : 1.0
         let t = tokens.count
-        let emb = try model.embedding()
 
         if runPrologue {
             prefillChunkState.markDirty(
@@ -153,20 +152,9 @@ extension RealForwardRunner {
                 // and is widened from there. `normed` is free until the first
                 // layer's read gate writes it.
                 let embedTarget = hyperConnection == nil ? scratch.hidden : scratch.normed
-                try prefillEmbed.encode(
-                    commandBuffer: cb,
-                    table: emb.buffer,
-                    tableOffset: Int(emb.offset),
-                    scales: emb.buffer,
-                    scalesOffset: Int(emb.scaleOffset),
-                    biases: emb.buffer,
-                    biasesOffset: Int(emb.biasOffset),
-                    tokens: tokenBuffer,
-                    out: embedTarget,
-                    t: UInt32(t),
-                    d: UInt32(D),
-                    outScale: embedOutScale,
-                    vocab: UInt32(cfg.vocabSize))
+                try encodeEmbeddingBlock(
+                    commandBuffer: cb, tokens: tokenBuffer,
+                    out: embedTarget, t: t, outScale: embedOutScale)
                 if hyperConnection != nil {
                     try requireElementwise().encodeHCExpand(
                         commandBuffer: cb,

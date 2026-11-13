@@ -206,8 +206,11 @@ extension RealForwardRunner {
 
         let silu = cfg.hiddenActivation == "silu"
         bp.embedInt4 = try EmbedLookupInt4(context: context)
+        // 16 is a bf16 table: `bf16Rest` serves it and no affine lookup is
+        // built (one at 16 would trap on the packing precondition).
+        bp.bf16Rest = try BF16RestKernels(model: model, context: context)
         bp.affineEmbed =
-            model.embeddingWeightBits == 4
+            model.embeddingWeightBits == 4 || model.embeddingWeightBits == 16
             ? nil
             : try AffineQuantEmbeddingLookup(
                 context: context,
@@ -250,7 +253,7 @@ extension RealForwardRunner {
         // logit vector of confident nonsense, so the width is selected here
         // rather than inherited.
         bp.affineHead =
-            model.lmHeadWeightBits == 4
+            model.lmHeadWeightBits == 4 || model.lmHeadWeightBits == 16
             ? nil
             : try AffineQuantGEMV(
                 context: context,
@@ -295,9 +298,11 @@ extension RealForwardRunner {
             maxVocab: cfg.vocabSize)
         bp.fusedQKVGEMV = try FusedQKVGEMV(context: context)
         bp.fusedQKVEpilogue = try FusedQKVEpilogue(context: context)
+        // A bf16 table never reaches this lookup (`encodeEmbeddingBlock` takes
+        // `bf16Rest`'s), so it is built at 4 bits and left unused.
         bp.prefillEmbed = try PrefillEmbedLookupInt4(
             context: context,
-            weightBits: model.embeddingWeightBits)
+            weightBits: model.embeddingWeightBits == 16 ? 4 : model.embeddingWeightBits)
         bp.prefillRMS = try PrefillRMSNorm(context: context)
         bp.prefillQMM = try PrefillInt4QMM(
             context: context,

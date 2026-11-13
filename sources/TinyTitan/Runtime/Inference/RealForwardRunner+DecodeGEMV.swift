@@ -169,6 +169,15 @@ extension RealForwardRunner {
         y: MTLBuffer, yOffset: Int = 0,
         m: UInt32, n: UInt32
     ) throws {
+        // A bf16 head has no scales or biases; the bf16 GEMV ignores them.
+        if headIsBF16 {
+            try bf16Projection.encode(
+                commandBuffer: cb,
+                weights: weights, weightsOffset: weightsOffset,
+                x: x, xOffset: xOffset, y: y, yOffset: yOffset,
+                m: m, n: n)
+            return
+        }
         if let affineHead {
             try affineHead.encode(
                 commandBuffer: cb,
@@ -225,6 +234,24 @@ extension RealForwardRunner {
         y: MTLBuffer, yOffset: Int,
         m: UInt32, n: UInt32
     ) throws {
+        // The bf16 head reads both rows in one dispatch through the multi-row
+        // GEMV, which keeps `bf16_gemv_simd`'s per-row arithmetic: each row's
+        // logits are the bytes the single-row head gives it.
+        if headIsBF16 {
+            try multiRowGEMV.encode(
+                commandBuffer: cb,
+                segments: [
+                    .init(
+                        weights: weights, weightsOffset: weightsOffset,
+                        scales: scales, scalesOffset: scalesOffset,
+                        biases: biases, biasesOffset: biasesOffset,
+                        format: .bf16, rows: Int(m),
+                        y: y, yOffset: yOffset, yRowStride: Int(m))
+                ],
+                x: x, xOffset: xOffset, xRowStride: Int(n),
+                activationRows: 2, columns: Int(n))
+            return
+        }
         if let affineHead {
             try affineHead.encodeTwoRows(
                 commandBuffer: cb,

@@ -5,19 +5,23 @@ final class PrefillFinalRowHeadInt4 {
     private let rms: RMSNorm
     private let int4: DequantInt4GEMV?
     private let affine: AffineQuantGEMV?
+    /// A head kept at the checkpoint's bf16 (`weightBits == 16`): no scales or
+    /// biases, and neither quantized GEMV is built.
+    private let bf16: BF16GEMV?
     private let normed: MTLBuffer
     private let normedPair: MTLBuffer
     private let maxD: Int
 
     init(context: MetalContext, maxD: Int = 2816, weightBits: Int = 4) throws {
         precondition(maxD > 0, "maxD must be positive")
-        precondition([4, 8].contains(weightBits))
+        precondition([4, 8, 16].contains(weightBits))
         self.rms = try RMSNorm(context: context)
         self.int4 = weightBits == 4 ? try DequantInt4GEMV(context: context) : nil
         self.affine =
-            weightBits == 4
-            ? nil
-            : try AffineQuantGEMV(context: context, weightBits: weightBits)
+            weightBits == 8
+            ? try AffineQuantGEMV(context: context, weightBits: weightBits)
+            : nil
+        self.bf16 = weightBits == 16 ? try BF16GEMV(context: context) : nil
         self.maxD = maxD
         guard
             let normed = context.device.makeBuffer(
@@ -74,6 +78,17 @@ final class PrefillFinalRowHeadInt4 {
                 outOffset: row * Int(d) * halfBytes,
                 d: d,
                 eps: rmsEps)
+        }
+        if let bf16 {
+            for row in 0..<2 {
+                try bf16.encode(
+                    commandBuffer: commandBuffer,
+                    weights: weights, weightsOffset: weightsOffset,
+                    x: normedPair, xOffset: row * Int(d) * halfBytes,
+                    y: logits, yOffset: row * Int(vocab) * halfBytes,
+                    m: vocab, n: d)
+            }
+            return
         }
         if let affine {
             try affine.encodeTwoRows(
@@ -144,6 +159,14 @@ final class PrefillFinalRowHeadInt4 {
             out: normed,
             d: d,
             eps: rmsEps)
+        if let bf16 {
+            try bf16.encode(
+                commandBuffer: commandBuffer,
+                weights: weights, weightsOffset: weightsOffset,
+                x: normed, y: logits, yOffset: logitsOffset,
+                m: vocab, n: d)
+            return
+        }
         if let affine {
             try affine.encode(
                 commandBuffer: commandBuffer,

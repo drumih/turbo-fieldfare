@@ -28,8 +28,9 @@ import Testing
         let tokenizer: GFTokenizer
         let scratch: RawCompletionScratch
 
-        init(fusedHead: Bool) async throws {
-            directory = try QwenToySynthetic.write(weightBits: 4, variedLinearAttention: true)
+        init(fusedHead: Bool, bf16Rest: Bool = false) async throws {
+            directory = try QwenToySynthetic.write(
+                weightBits: 4, variedLinearAttention: true, bf16Rest: bf16Rest)
             context = try MetalContext()
             let model = try Model.load(
                 directoryURL: directory, device: context.device, expecting: .qwenToy())
@@ -120,6 +121,25 @@ import Testing
         #expect(scalar.result?.wideVerify == nil)
         try expectIdentical(scalar, wide)
         try expectDraftsJudged(wide)
+    }
+
+    /// The bf16-rest toy (bf16 embedding, lm_head and dense projections): the
+    /// W-row head and the multi-row projections read every bf16 matrix the way
+    /// scalar decode does, so greedy and sampled wide verify emit scalar's
+    /// tokens and leave its state.
+    @Test func bf16RestMatchesScalar() async throws {
+        let harness = try await Harness(fusedHead: false, bf16Rest: true)
+        #expect(harness.runner.headIsBF16)
+        let greedy = GenerationConfig(
+            maxNewTokens: 48, temperature: 0, topK: nil, topP: nil, presencePenalty: 0)
+        let sampledPrompt = Self.sampledPrompt(vocab: harness.runner.cfg.vocabSize)
+        for (prompt, config) in [(Self.prompt, greedy), (sampledPrompt, Self.sampled(seed: 1234))] {
+            let scalar = try await harness.run(prompt, config: config, wide: nil)
+            let wide = try await harness.run(prompt, config: config, wide: Self.eager)
+            try expectIdentical(scalar, wide)
+            let stats = try #require(wide.result?.wideVerify)
+            #expect(stats.passes > 0, "\(stats.summary) \(wide.tokens)")
+        }
     }
 
     @Test func seededSamplingWithPresencePenaltyMatchesScalar() async throws {

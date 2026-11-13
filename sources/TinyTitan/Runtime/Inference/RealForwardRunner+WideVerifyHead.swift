@@ -14,6 +14,7 @@ import Metal
 extension RealForwardRunner {
     /// What `encodeHeadGEMV` reads the lm_head with.
     var headGEMVFormat: MultiRowGEMV.Format {
+        if headIsBF16 { return .bf16 }
         if let affineHead { return .affine(bits: affineHead.weightBits) }
         return .int4
     }

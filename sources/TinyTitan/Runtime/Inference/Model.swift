@@ -47,8 +47,14 @@ public struct Model {
     public let integrityPolicy: ModelIntegrityPolicy
     public var modelID: String { manifest.modelID }
     public var sourceSnapshotHash: String? { manifest.sourceSnapshotHash }
+    /// 16 when the table is kept at the checkpoint's bf16. Read from the
+    /// tensor, like `effectiveRouterWeightBits`: a bf16-rest install keeps the
+    /// embedding unquantized inside a slot that still says 4 bits, and the
+    /// lookup has to match the bytes, not the slot.
     public var embeddingWeightBits: Int {
-        sharedTargetWeights?.embeddingBits ?? manifest.quant?.embedding.weightBits ?? 4
+        if let sharedTargetWeights { return sharedTargetWeights.embeddingBits }
+        if (try? embedding())?.dtype == 1 { return 16 }
+        return manifest.quant?.embedding.weightBits ?? 4
     }
     public var lmHeadWeightBits: Int {
         // The head is a role of its own: a manifest can declare it separately
@@ -56,11 +62,13 @@ public struct Model {
         // resolved by name first. The embedding slot is the fallback because
         // the repacker quantizes a separate lm_head with the embedding's layout
         // (padded to the same vocab rows), which `validateRuntimeSchema`
-        // checks.
-        sharedTargetWeights?.lmHeadBits
-            ?? roleWeightBits(
-                roleSuffix: ".lm_head",
-                fallback: manifest.quant?.embedding.weightBits ?? 4)
+        // checks. A head kept at bf16 is 16 whatever the manifest says, for the
+        // same reason as `embeddingWeightBits`.
+        if let sharedTargetWeights { return sharedTargetWeights.lmHeadBits }
+        if (try? lmHead())?.dtype == 1 { return 16 }
+        return roleWeightBits(
+            roleSuffix: ".lm_head",
+            fallback: manifest.quant?.embedding.weightBits ?? 4)
     }
     public var attentionWeightBits: Int { manifest.quant?.attention.weightBits ?? 4 }
     public var routerWeightBits: Int { manifest.quant?.router.weightBits ?? 8 }
@@ -351,13 +359,14 @@ public struct Model {
         // [D, D], not [D, hc_dim]: the wide residual is mean-collapsed to one
         // stream before this projection sees it. The reference's prose says
         // otherwise and its own code works out that the prose cannot be right;
-        // the tensor shape settles it.
-        try checks.requireAffine(
+        // the tensor shape settles it. Either may be kept at bf16
+        // (`encodeDraftFusionProjection` dispatches on the dtype).
+        try checks.requireAffineOrBF16(
             "fc_hidden.weight",
             rows: config.hiddenSize,
             columns: config.hiddenSize,
             slot: quant.attention)
-        try checks.requireAffine(
+        try checks.requireAffineOrBF16(
             "fc_embedding.weight",
             rows: config.hiddenSize,
             columns: config.hiddenSize,
