@@ -275,7 +275,7 @@ linters:
   input.
 - `func-length` — no function over 120 lines without an inline `lint:allow-long
   <reason>`. The ratchet file `tools/func-length-baseline.txt` carries the
-  audited exemptions (14 rows, all from the formatter sweep that expanded
+  audited exemptions (13 rows, all from the formatter sweep that expanded
   their bodies; the as-is GGUF decoder's AUD-025 row was dropped when its
   pipeline split into per-layer helpers), and the gate fails on a stale exemption row as well as on a new offender.
 - `file-length` — no production source under `sources/` over 500 physical lines,
