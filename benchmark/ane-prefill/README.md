@@ -306,8 +306,11 @@ true. Compare a run only against another run of the same model and prompt.
 
 A differing digest is therefore not evidence of a bug, and a matching one is not
 evidence of correctness. Whether the two arms generate the *same text* is the
-separate measurement above (`ane-correctness-*.json`), and even *that* is not
+separate measurement above (the `ane-correctness-*.json` record, removed in
+the 2026-11-13 cleanup with its per-run data; the run that produced it is in
+git history), and even *that* is not
 enough on a prompt whose continuation is nearly deterministic: on 3.8 the
 causal-only control agreed with the GPU for all 32 tokens too. The per-arm
-activation comparison (`ane-layer-diff-*.json`) is what separates them, via
+activation comparison (the `ane-layer-diff-*.json` record, likewise removed)
+is what separates them, via
 `prefill_logits`.
