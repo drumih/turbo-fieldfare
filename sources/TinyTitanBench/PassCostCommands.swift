@@ -178,6 +178,14 @@ extension TinyTitanBench {
             case .logitsWritten: return argmaxHalf(logits, count: vocab)
             }
         }
+        // The token scalar decode produced: the fused head's greedy token, or
+        // the argmax of the logits when the runner takes the logits head (a
+        // hyper-connection family always does, and `lastGreedyToken` is then
+        // never written -- the reference used to repeat that stale value).
+        func producedToken() -> Int32 {
+            runner.usesFusedGreedyHead
+                ? Int32(bitPattern: runner.lastGreedyToken) : argmaxHalf(logits, count: vocab)
+        }
         func now() -> UInt64 { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
         func ms(_ start: UInt64) -> Double { Double(now() &- start) / 1e6 }
 
@@ -198,7 +206,7 @@ extension TinyTitanBench {
                 token: reference[index], position: prompt.count + index,
                 into: logits)
             if index >= warmup { scalar.append(ms(start)) }
-            reference.append(Int32(bitPattern: runner.lastGreedyToken))
+            reference.append(producedToken())
         }
 
         // Phase 2: replay to the first boundary, then one pass per round.
@@ -212,7 +220,7 @@ extension TinyTitanBench {
                 try await runner.produce(
                     token: reference[step], position: prompt.count + step,
                     into: logits)
-                let got = Int32(bitPattern: runner.lastGreedyToken)
+                let got = producedToken()
                 guard got == reference[step + 1] else {
                     throw PassCostError.diverged(
                         position: prompt.count + step + 1,
