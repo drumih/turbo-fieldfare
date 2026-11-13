@@ -894,9 +894,12 @@ n-gram table stays fp16 in all three; the table is the same file, hardlinked.
 | `..._4Bit_8BitRest` | `--rest-8bit` | every quantised tensor 8-bit | ~6.1 GiB (computed) |
 | `..._4Bit_BF16Rest` | `--rest-bf16` | bf16 | 9.72 GiB |
 
-`tools/build_qwen38_8bitrest.sh` builds the 8-bit-rest install (resumable;
-reuses the 4-bit install's n-gram table and consumes its snapshot while
-repacking). With every attention-slot tensor at 8 bits the repacker derives an
+`tools/build_qwen38_8bitrest.sh` builds the 8-bit-rest install. By default it
+needs no download: `tools/requantize_qwen38_rest.py` quantises BF16Rest's bf16
+rest to 8 bits and hardlinks the experts, n-gram table and tokenizer from the
+4-bit install, after checking that every bf16 tensor re-quantised at the 4-bit
+install's width reproduces that install's bytes. `--download` instead runs
+`prepare_qwen38.py --rest-8bit` from Qwen's checkpoint. With every attention-slot tensor at 8 bits the repacker derives an
 8-bit attention slot, so the GDN a/b pair is at the slot's own width, which
 `Model.validateRoleUniformity` accepts.
 

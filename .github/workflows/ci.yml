@@ -178,7 +178,8 @@ jobs:
         # maps to its nearest 2-bit level (k*5), that a random stream halves in
         # length and expands back to the same levels, and that a stream that is
         # not a multiple of four bytes is refused. No model, no install.
-        # Measured on this Mac with the six suites together: 118 tests, 42.3 s.
+        # Measured on this Mac with the six suites together: 118 tests, 42.3 s;
+        # test_requantize_qwen38_rest (2 tests, <1 s) was added after.
         # A venv because the runner does not carry the converter's three
         # dependencies. No real shard is ever fetched.
         run: |
@@ -188,7 +189,7 @@ jobs:
           cd benchmark
           /tmp/tt-converter/bin/python -m unittest test_prepare_qwen38 test_qwen38_resume_e2e \
             test_prepare_agentworld test_tinytitan_quant_fidelity \
-            test_reconcile_snapshot_verdict test_two_bit_pack
+            test_reconcile_snapshot_verdict test_two_bit_pack test_requantize_qwen38_rest
       - name: Installer and launcher gates (model-menu and launcher choices)
         # These tests pin the installer's and launcher's choice handling: a
         # factory-new Mac is not written outside the install root, and the model

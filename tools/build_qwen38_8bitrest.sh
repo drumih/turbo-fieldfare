@@ -2,16 +2,24 @@
 # Build the Qwen3.8-Flash-Next 4/8/16 install: routed experts 4-bit, every
 # other quantised tensor 8-bit, the n-gram table at its original fp16.
 #
-#   bash tools/build_qwen38_8bitrest.sh
+#   bash tools/build_qwen38_8bitrest.sh            # local, from the two installs
+#   bash tools/build_qwen38_8bitrest.sh --download # fresh 258 GB conversion
 #
 # Evaluation build next to the 4-bit install; the installer default is not
-# changed. Steps, each resumable by running the script again:
-#   1. tools/prepare_qwen38.py --rest-8bit: fetch Qwen's bf16 checkpoint and
-#      quantise it. The n-gram table is hardlinked from the 4-bit install, so its
-#      ~102 GB of shards are not fetched (~258 GB download instead of ~360).
-#   2. TinyTitanRepack --input-snapshot --consume-snapshot --share-ngram-table:
-#      the snapshot is deleted shard by shard as the install is written.
-#   3. --verify-install, then one short greedy generation as a smoke test.
+# changed.
+#
+# Local route (default, minutes, ~7 GB of new disk): when the BF16Rest install
+# is present, tools/requantize_qwen38_rest.py quantises its bf16 rest to 8 bits
+# and hardlinks the experts, n-gram table and tokenizer from the 4-bit install.
+# Every tensor is self-checked first (its bf16 re-quantised at the base width
+# must reproduce the 4-bit install's bytes).
+#
+# Download route: tools/prepare_qwen38.py --rest-8bit fetches Qwen's checkpoint
+# (the n-gram shards are skipped by reusing the 4-bit install's table), then
+# TinyTitanRepack --consume-snapshot writes the install.
+#
+# Both end with --verify-install (which writes the receipt) and a short greedy
+# generation as a smoke test.
 #
 # Env: FETCH_WORKERS (default 6), SMOKE_RAM (default 12G),
 #      TINYTITAN_MODELS_DIR / TINYTITAN_WORK_DIR as for install_models.sh.
@@ -23,6 +31,9 @@ cd "$ROOT"
 MODELS="${TINYTITAN_MODELS_DIR:-$ROOT/models}"
 WORK="${TINYTITAN_WORK_DIR:-$ROOT/.build}"
 BASE_INSTALL="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit"
+BF16_INSTALL="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit_BF16Rest"
+DOWNLOAD=0
+[[ "${1:-}" == "--download" ]] && DOWNLOAD=1
 DEST="$MODELS/qwen3.8-flash-next_125B_A6B_4Bit_8BitRest"
 SNAP="$WORK/qwen38-affine-4bit-8bitrest"
 SHARDS="$WORK/qwen38-shards-8bitrest"
@@ -42,6 +53,18 @@ stamp "Qwen3.8 4/8/16 build -> $DEST"
 [[ -d "$BASE_INSTALL" ]] || { echo "error: $BASE_INSTALL missing (needed for the n-gram table)"; exit 1; }
 if [[ -f "$DEST/manifest.json" ]]; then
   stamp "install already present; skipping to verification"
+elif (( DOWNLOAD == 0 )); then
+  [[ -f "$BF16_INSTALL/manifest.json" ]] || {
+    echo "error: $BF16_INSTALL missing; run with --download for a fresh conversion"
+    exit 1
+  }
+  # shellcheck source=tools/lib/python.sh
+  source "$ROOT/tools/lib/python.sh"
+  PY="$(tinytitan_resolve_python)" || exit 1
+  [[ -x .build/release/TinyTitanCLI ]] || swift build -c release
+  stamp "local requantisation: rest bf16 -> 8-bit (python: $PY)"
+  "$PY" tools/requantize_qwen38_rest.py --base "$BASE_INSTALL" --source "$BF16_INSTALL" \
+    --output "$DEST" --bits 8
 else
   # shellcheck source=tools/lib/python.sh
   source "$ROOT/tools/lib/python.sh"
@@ -68,24 +91,24 @@ else
 
   # --- 1. convert -----------------------------------------------------------
   if [[ ! -f "$SNAP/model.safetensors.index.json" ]]; then
-    stamp "step 1/3: fetch + quantise (rest 8-bit, experts 4-bit), $FETCH_WORKERS workers"
+    stamp "download step 1/2: fetch + quantise (rest 8-bit, experts 4-bit), $FETCH_WORKERS workers"
     "$PY" tools/prepare_qwen38.py --bits 4 --rest-8bit \
       --reuse-ngram-table "$BASE_INSTALL" \
       --fetch-workers "$FETCH_WORKERS" \
       --output "$SNAP" --work "$SHARDS" ${HF_ENDPOINT:+--endpoint="$HF_ENDPOINT"}
     rmdir "$SHARDS" 2>/dev/null || true
   else
-    stamp "step 1/3: snapshot already complete"
+    stamp "download step 1/2: snapshot already complete"
   fi
 
   # --- 2. repack ------------------------------------------------------------
-  stamp "step 2/3: repack into $DEST (consumes the snapshot)"
+  stamp "download step 2/2: repack into $DEST (consumes the snapshot)"
   .build/release/TinyTitanRepack --input-snapshot "$SNAP" --model-id "$MODEL_ID" \
     --share-ngram-table --consume-snapshot --output "$DEST"
 fi
 
 # --- 3. verify + smoke ------------------------------------------------------
-stamp "step 3/3: verify install"
+stamp "verify install (hashes every file, writes the receipt)"
 .build/release/TinyTitanRepack --verify-install --input-ssdai "$DEST"
 
 stamp "quant slots in the manifest:"
