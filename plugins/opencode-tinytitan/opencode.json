@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "tinytitan/qwen3.8-flash-next-mtp_4-Bit",
+  "model": "tinytitan/qwen3.8-flash-next-8bitrest_4-Bit",
   "provider": {
     "tinytitan": {
       "npm": "@ai-sdk/openai-compatible",
@@ -11,8 +11,44 @@
         "timeout": false
       },
       "models": {
-        "qwen3.8-flash-next-mtp_4-Bit": {
-          "name": "Qwen3.8-Flash-Next 125B-A6B 4-bit",
+        "qwen3.8-flash-next-8bitrest_4-Bit": {
+          "name": "Qwen3.8-Flash-Next 125B-A6B 4-bit (4/8/16)",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.8-flash-next_8-Bit": {
+          "name": "Qwen3.8-Flash-Next 125B-A6B 8-bit",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -119,6 +155,42 @@
             }
           }
         },
+        "ornith-1.5-35b-a3b-bf16dense_4-Bit": {
+          "name": "Ornith 1.5 35B-A3B bf16 dense 4-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
         "qwen3.6-35b-a3b_8-Bit": {
           "name": "Qwen 3.6 35B-A3B 8-bit",
           "tool_call": true,
@@ -191,8 +263,116 @@
             }
           }
         },
-        "qwen3.5-9b_4-Bit": {
-          "name": "Qwen 3.5 9B 4-bit",
+        "qwen-agentworld_8-Bit": {
+          "name": "Qwen-AgentWorld 35B-A3B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen-agentworld_4-Bit": {
+          "name": "Qwen-AgentWorld 35B-A3B 4-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "kat-coder-v2.5_8-Bit": {
+          "name": "KAT-Coder-V2.5-Dev 35B-A3B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "kat-coder-v2.5_4-Bit": {
+          "name": "KAT-Coder-V2.5-Dev 35B-A3B 4-bit",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
@@ -229,6 +409,258 @@
         },
         "qwen3.5-4b_4-Bit": {
           "name": "Qwen 3.5 4B 4-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.5-4b_8-Bit": {
+          "name": "Qwen 3.5 4B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.5-9b_4-Bit": {
+          "name": "Qwen 3.5 9B 4-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.5-9b_8-Bit": {
+          "name": "Qwen 3.5 9B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.5-2b_4-Bit": {
+          "name": "Qwen 3.5 2B 4-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "qwen3.5-2b_8-Bit": {
+          "name": "Qwen 3.5 2B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "ornith-1.5-122b_8-Bit": {
+          "name": "Ornith 1.5 122B 8-bit",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "on": {
+              "reasoningEffort": "on"
+            },
+            "low": {
+              "disabled": true
+            },
+            "medium": {
+              "disabled": true
+            },
+            "high": {
+              "disabled": true
+            }
+          }
+        },
+        "ornith-1.5-122b_4-Bit": {
+          "name": "Ornith 1.5 122B 4-bit",
           "tool_call": true,
           "reasoning": true,
           "temperature": false,
