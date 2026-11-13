@@ -27,6 +27,11 @@ DEST="$MODELS/qwen3.8-flash-next_125B_A6B_4E-8R-16N"
 MODE="link"
 [[ "${1:-}" == "--move" ]] && MODE="move"
 
+if [[ ! -f "$SRC/ngram_table.bin" && -f "$DEST/ngram_table.bin" ]] &&
+  ! compgen -G "$SRC/packed_experts/*" >/dev/null && compgen -G "$DEST/packed_experts/*" >/dev/null; then
+  echo "already moved: $DEST holds packed_experts/ and ngram_table.bin"
+  exit 0
+fi
 [[ -d "$SRC/packed_experts" && -f "$SRC/ngram_table.bin" ]] || {
   echo "error: $SRC has no packed_experts/ or ngram_table.bin" >&2
   exit 1
