@@ -51,7 +51,8 @@ extension TinyTitanBench {
             maxContext: 8192,
             expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: true,
-            device: device)
+            device: device,
+            warmExperts: false)
         let runner = session.benchmarkRunner
         // Nothing is dumped until the window is moved onto the probe.
         runner.activationDumpPositionCount = 0

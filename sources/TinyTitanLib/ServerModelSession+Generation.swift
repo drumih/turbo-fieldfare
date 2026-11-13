@@ -23,6 +23,9 @@ extension ServerModelSession {
         // wait is a safety net if the two ever disagree.
         let slot = try await acquireSlot()
         defer { releaseSlot(slot) }
+        // The startup warm-up and a request must not plan the slot cache at
+        // once; this waits for at most its in-flight layer.
+        await stopExpertWarmup()
         // The routing history this request produced follows the install to the
         // next start (Project Maya's expert profile). Best effort, after the
         // response is complete; `TINYTITAN_EXPERT_PROFILE=0` disables it.
