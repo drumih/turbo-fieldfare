@@ -10,5 +10,5 @@
 /// `docs/release-process.md` step 1 is that step. Nothing else in the tree
 /// holds a version, so nothing can drift from this one.
 public enum ServerVersion {
-    public static let current = "6.2"
+    public static let current = "6.3"
 }
