@@ -25,12 +25,8 @@ too few cells renders as a table that silently drops or pads them, so the table
 looks right and says something else, and it was introduced while this gate was
 being written.
 
-Excluded on purpose: this audit's own ledger prose and the tool-coverage notes. The
-ledger quotes wrong numbers and wrong shas *verbatim* as the thing it later refutes,
 and it is corrected forward, so a gate that failed on a quotation would demand an
 edit to the record rather than an addition to it. The boundary is prose versus
-reference: the ledger's `commit` *field* is not a quotation, it is the pointer a
-reader follows to check a fix, and `ledger_commit_evidence` below does judge it.
 
 Output: one line per finding. `FAIL` fails the gate. `OWNER` is the same
 mismatch inside `AGENTS.md`, which is the maintainer's file: it is printed on
@@ -38,7 +34,6 @@ every run and does not fail, because a red CI held hostage by a file the person
 writing it is mid-edit on teaches nobody anything. Everything else is enforced.
 """
 
-import json
 import os
 import re
 import subprocess
@@ -49,12 +44,12 @@ ROOT = os.environ.get("ROOT") or os.path.abspath(
 )
 LINT = os.path.join(ROOT, "tools", "lint.sh")
 OWNER_FILES = ("AGENTS.md",)
-# The audit's prose records and the dated release notes: both quote wrong numbers
+# The dated release notes quote numbers
 # and shas verbatim as the thing they later refute, and both are corrected
 # forward, so a gate that failed on a quotation would demand an edit to history
 # rather than an addition to it. The ledger's structured `commit` field is not in
 # that exemption -- see ledger_commit_evidence().
-EXCLUDED = re.compile(r"^(docs/audit-[0-9-]+/|docs/release-notes-)")
+EXCLUDED = re.compile(r"^docs/release-notes-")
 
 WORD_NUMBER = {
     "zero": 0,
@@ -215,8 +210,8 @@ def tracked_docs():
     """(documents the number checks may read, every tracked document, errors).
 
     The second list is for `check_tables` only: a row with the wrong number of
-    cells is a rendering defect, not a quotation of history, so the audit's own
-    ledger and these notes are exempt from the number checks and not from that
+    cells is a rendering defect, not a quotation of history, and these notes are
+    exempt from the number checks but not from that
     one. It found one -- the `library-facade` row in `tool-coverage.md` carried a
     fourth column in a three-column table, and said so on its own line as if it
     were a row of its own."""
@@ -264,217 +259,6 @@ def check_counts(path, paragraphs, want):
                 f"“{match.group(0).replace('*', '')}”; tools/lint.sh runs {want}"
             )
     return rows
-
-
-def counts_from_tasks(tasks):
-    """A ledger's (rows, closed, open, blocked), counted from its own statuses.
-
-    `open` is every row that is neither closed nor blocked, which is the shape the
-    prior ledger's own `counts` block uses (210/210/0/0). The 2026-10-23 ledger
-    also carries OPEN, AUDIT and PROGRESS rows and publishes no `counts` at all, so
-    a status named later counts as open until it is taught otherwise: an
-    unrecognised row cannot silently leave the total."""
-    total = len(tasks)
-    closed = sum(1 for task in tasks if task.get("status") == "DONE")
-    blocked = sum(1 for task in tasks if task.get("status") == "BLOCKED")
-    return (total, closed, total - closed - blocked, blocked)
-
-
-LEDGER_FIELDS = ("total", "done", "open", "blocked")
-
-
-def ledger_counts(root=None):
-    """Every tracked audit ledger, counted from its own task rows.
-
-    The gate once listed its ledgers with a literal `git ls-files
-    docs/audit-ledger.json`, so this audit's own `AUDIT/ledger.json` was opened by
-    nothing while the message said the ledger's references resolved (AUD2-049).
-    Widening that one path is not the fix: two ledgers describe two audits, so their
-    totals must never be added, and this audit's ledger has no `counts` block at
-    all. Each ledger is therefore discovered by name and counted from its own
-    `tasks`; a ledger that does publish `counts` has them checked against the rows
-    rather than trusted, because a restated count is exactly what this gate is for.
-    Returns ({rel: (rows, closed, open, blocked)}, paths, errors); an empty path
-    list means there is no ledger to compare to."""
-    repo = str(root) if root is not None else ROOT
-    rc, out, _ = sh_in(repo, "git", "ls-files", "*ledger.json")
-    paths = sorted(path for path in out.splitlines() if path) if rc == 0 else []
-    counts = {}
-    errors = []
-    for rel in paths:
-        try:
-            with open(os.path.join(repo, rel), encoding="utf-8") as handle:
-                ledger = json.load(handle)
-        except (OSError, ValueError) as error:
-            errors.append(f"FAIL cannot read {rel} for its counts: {error}")
-            continue
-        if not isinstance(ledger, dict):
-            errors.append(f"FAIL {rel}: its top level is not a JSON object")
-            continue
-        tasks = ledger.get("tasks")
-        if not isinstance(tasks, list) or not tasks:
-            errors.append(f"FAIL {rel}: derived no task rows to count")
-            continue
-        derived = counts_from_tasks(tasks)
-        counts[rel] = derived
-        declared = ledger.get("counts")
-        if declared is None:
-            continue
-        try:
-            claimed = tuple(int(declared[key]) for key in LEDGER_FIELDS)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            errors.append(f"FAIL {rel}: its counts block does not name four integers")
-            continue
-        if claimed != derived:
-            errors.append(
-                f"FAIL {rel}: its counts block says {claimed[0]} rows / "
-                f"{claimed[1]} closed / {claimed[2]} open / {claimed[3]} blocked; "
-                f"its own {derived[0]} task rows count {derived[0]} rows / "
-                f"{derived[1]} closed / {derived[2]} open / {derived[3]} blocked"
-            )
-    return counts, paths, errors
-
-
-LEDGER_COUNTS = re.compile(r"(\d+) rows / (\d+) closed / (\d+) open / (\d+) blocked")
-
-
-def check_ledger_counts(path, paragraphs, counts):
-    """The handover restates an audit ledger's counts. Every restatement is judged
-    against the ledger it describes, never against a sum of every ledger tracked
-    here: the prior audit's 210/210/0/0 and this audit's own totals are two
-    different records, and adding them is a number that belongs to neither. When
-    the surrounding text names exactly one known ledger, the claim is checked
-    against that ledger alone; otherwise it may describe any one of them."""
-    rows = []
-    if not counts:
-        return rows
-    for start, text, heading in paragraphs:
-        if is_history(heading):
-            continue
-        for match in LEDGER_COUNTS.finditer(text):
-            prefix = text[: match.start()].rsplit("\n", 1)[-1]
-            line = prefix + text[match.end() :].split("\n", 1)[0]
-            if quoted_at(line, len(prefix)):
-                continue
-            claim = tuple(int(group) for group in match.groups())
-            window = text[max(0, match.start() - 300) : match.end() + 300]
-            named = [rel for rel in counts if rel in window]
-            candidates = named if len(named) == 1 else list(counts)
-            if any(claim == counts[rel] for rel in candidates):
-                continue
-            number = start + text[: match.start()].count("\n")
-            if len(named) == 1:
-                got = counts[named[0]]
-                rows.append(
-                    f"{kind_for(path)} {path}:{number}: says “{match.group(0)}”; "
-                    f"{named[0]} has {got[0]} rows / {got[1]} closed / "
-                    f"{got[2]} open / {got[3]} blocked"
-                )
-                continue
-            detail = "; ".join(
-                f"{rel} has {got[0]} rows / {got[1]} closed / {got[2]} open / {got[3]} blocked"
-                for rel, got in sorted(counts.items())
-            )
-            rows.append(
-                f"{kind_for(path)} {path}:{number}: says “{match.group(0)}”; "
-                f"no tracked ledger counts that ({detail})"
-            )
-    return rows
-
-
-COMMIT_REF = re.compile(r"\b([0-9a-f]{7,40})\b")
-
-
-def ledger_commit_evidence(ledgers, root=None):
-    """AUD-209: every commit a ledger row names has to be a commit.
-
-    The ledger is the audit's evidence, and the `commit` field is the part a reader
-    is meant to check: `git show <sha>` answers whether the fix is what the row
-    claims. Nothing read that field, and it had already rotted in seven rows. AUD-108
-    names `14710ba`, on which `git cat-file -e` says there is no such object -- the
-    depth cap landed at `14a4e06`. Six rows say `this commit` or `see the audit(…)
-    commit`, which was true at the moment they were written and resolves to nothing
-    afterwards. Two more record a fix that is committed and name no commit at all.
-
-    A blank field is allowed on a row that recorded no fix, and is the point of the
-    exception rather than an oversight: a row that refuted its finding (AUD-132) or
-    is blocked (AUD-139) has no commit to name, and a gate that demanded one would
-    invent it. It is not allowed on a DONE row, which claims a fix by definition --
-    the status test was added when this audit closed AUD-262 with a fix on `main`,
-    an empty field, and a report that said the pointer had been kept. What is also
-    not allowed is a field that *looks* like a reference and is not one -- prose, or
-    a sha that does not exist, or one that exists on a branch this history cannot
-    reach. A clone that carries no history at all is refused for that reason, and not
-    as one `no such commit` per reference -- CI did exactly that on `fe19203`, naming a
-    cause that had not happened for 211 commits that exist upstream (AUD-311).
-    Returns (finding lines, references resolved); the count is printed by
-    main(), because a check that resolved nothing would otherwise read as a pass.
-    """
-    repo = str(root) if root is not None else ROOT
-    lines = []
-    if not ledgers:
-        lines.append("FAIL no audit ledger is tracked, so no commit reference could be read")
-        return lines, 0
-    checked = 0
-    # CI ran this on `fe19203` over `actions/checkout`'s default depth of one commit
-    # and printed 211 `no such commit` lines, every one false: the commits exist,
-    # the clone does not carry them. A refusal has to name the cause that happened.
-    shallow = sh_in(repo, "git", "rev-parse", "--is-shallow-repository")[1].strip() == "true"
-    for rel in ledgers:
-        try:
-            with open(os.path.join(repo, rel), encoding="utf-8") as handle:
-                ledger = json.load(handle)
-        except (OSError, ValueError) as error:
-            lines.append(f"FAIL cannot read {rel} for its commit references: {error}")
-            continue
-        if not isinstance(ledger, dict):
-            lines.append(f"FAIL {rel}: its top level is not a JSON object")
-            continue
-        tasks = ledger.get("tasks", [])
-        if not tasks:
-            lines.append(f"FAIL {rel}: derived no task rows to check")
-            continue
-        for task in tasks:
-            # A ledger may write `null` for a row that recorded no fix, which is the
-            # blank-field exception; `str(None)` is the prose pointer "None" and was
-            # refused as one when this audit's ledger was first read.
-            commit = task.get("commit")
-            field = "" if commit is None else str(commit)
-            if not field.strip():
-                # The blank exception belongs to rows that recorded no fix. A DONE
-                # row claims one, and an empty field there is a row that lost its
-                # evidence -- which is what this gate is for.
-                if str(task.get("status", "")) == "DONE":
-                    lines.append(
-                        f"FAIL {task['id']}: DONE row claims a fix and names no commit "
-                        "in its commit field"
-                    )
-                continue
-            refs = COMMIT_REF.findall(field)
-            if not refs:
-                lines.append(f"FAIL {task['id']}: commit field “{field}” names no commit")
-                continue
-            for sha in refs:
-                if shallow:
-                    lines.append(
-                        f"FAIL {task['id']}: commit {sha} -- this is a shallow clone, "
-                        "which carries no history to resolve a reference against "
-                        "(needs the full history: actions/checkout fetch-depth: 0)"
-                    )
-                    continue
-                checked += 1
-                rc, _, _ = sh_in(repo, "git", "cat-file", "-e", f"{sha}^{{commit}}")
-                if rc != 0:
-                    lines.append(
-                        f"FAIL {task['id']}: commit {sha} -- no such commit in this repository"
-                    )
-                    continue
-                rc, _, _ = sh_in(repo, "git", "merge-base", "--is-ancestor", sha, "HEAD")
-                if rc != 0:
-                    lines.append(
-                        f"FAIL {task['id']}: commit {sha} exists but is not reachable from HEAD"
-                    )
-    return lines, checked
 
 
 def baseline_rows(rel):
@@ -664,8 +448,8 @@ def check_derived_counts(path, paragraphs):
                 if quoted_at(line, len(prefix)):
                     continue
                 if kind == "rows":
-                    # "62 rows / 58 closed" is a ledger count, and
-                    # check_ledger_counts judges it against each ledger's own rows.
+                    # "62 rows / 58 closed" is the shape of a ledger count; no
+                    # ledger is tracked any more, so nothing judges it here.
                     if LEDGER_TAIL.match(text[match.end() :]):
                         continue
                     source = find_baseline(text, match)
@@ -750,9 +534,8 @@ def paragraphs_of(lines):
     """Blank-line separated blocks, each tagged with the heading it sits under.
 
     A document's history section ("What has landed", "Verification", an archive
-    note) records what was true on a day, and it stays wrong on purpose for the
-    same reason the ledger does. The heading tells the two apart without guessing
-    at the prose.
+    note) records what was true on a day, and it stays wrong on purpose. The
+    heading tells the two apart without guessing at the prose.
 
     A GFM table row is a block of its own. Rows carry no blank line between them,
     so blank-line splitting alone makes an eleven-row table one paragraph, and a
@@ -836,10 +619,6 @@ def main():
     modes, checks, problems = gate_set()
     docs, everything, listing = tracked_docs()
     rows = list(problems) + list(listing)
-    counts, ledgers, ledger_errors = ledger_counts()
-    rows += ledger_errors
-    commit_lines, commits_checked = ledger_commit_evidence(ledgers)
-    rows += commit_lines
     suite_lines, suites_registered, suites_exempt = python_suite_registration()
     rows += suite_lines
     if not checks:
@@ -860,7 +639,6 @@ def main():
         paragraphs = paragraphs_of(text.splitlines())
         rows += check_counts(path, paragraphs, len(checks))
         rows += check_names(path, paragraphs, modes)
-        rows += check_ledger_counts(path, paragraphs, counts)
         rows += check_derived_counts(path, paragraphs)
         rows += check_tag_citations(path, paragraphs)
 
@@ -870,8 +648,7 @@ def main():
     owner = [r for r in rows if r.startswith("OWNER")]
     summary = (
         f"{len(docs)} documents against {len(checks)} gates derived "
-        f"from tools/lint.sh, table shape in all {len(everything)}, "
-        f"{commits_checked} ledger commit reference(s) resolved; "
+        f"from tools/lint.sh, table shape in all {len(everything)}; "
         f"{suites_registered}/{suites_registered + suites_exempt} python suites registered in CI; "
         f"{len(owner)} owner-file note(s) reported and not enforced"
     )

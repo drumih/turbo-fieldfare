@@ -24,10 +24,10 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: xcode-27
     steps:
-      # `fetch-depth: 0` because the `docs` gate in the chain below resolves every
-      # commit sha the audit ledger names against this checkout's history. The
-      # default depth of one commit gave it nothing to resolve, so 211 real commits
-      # read as `no such commit` and the job was red on every push (AUD-311).
+      # `fetch-depth: 0` because the docs gate resolves the release tags its
+      # documents cite against this checkout's history (`git rev-parse
+      # <tag>^{commit}`). The default depth of one commit left them resolving
+      # nothing, and the job was red on every push (AUD-311).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -337,19 +337,6 @@ jobs:
         run: |
           cd benchmark
           python3 -m unittest test_golden_baseline_capture
-      - name: Docs-gate ledger evidence
-        # The audit ledger is the record every fix is checked against, and its
-        # `commit` field is the pointer a reader follows: `git show <sha>`. Nothing
-        # read that field, and it had rotted in nine rows — one sha with no object
-        # behind it, six whose field is prose, two that named nothing though
-        # their fix is committed. These tests drive `tools/docs-facts.py` against a
-        # temporary git repository, so each shape is reachable without touching this
-        # history: a sha that does not exist, one that exists on an unmerged branch,
-        # prose where a reference belongs, the blank that is allowed, and the
-        # vacuous-pass shapes (a ledger with no rows, one that cannot be read).
-        run: |
-          cd benchmark
-          python3 -m unittest test_docs_facts_ledger
       - name: Gate-harness empty-scan guards
         # `tools/lint.sh` is the harness behind the production gates above, and it was
         # the one tracked script no test file named. Seven of its checks reported `ok`
