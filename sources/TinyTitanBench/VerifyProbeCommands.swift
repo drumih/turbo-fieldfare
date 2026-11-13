@@ -49,6 +49,7 @@ extension TinyTitanBench {
         let session = try await ServerModelSession.load(
             modelDirectory: URL(fileURLWithPath: install),
             maxContext: 8192,
+            expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: true,
             device: device)
         let runner = session.benchmarkRunner

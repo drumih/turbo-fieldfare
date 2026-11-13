@@ -105,7 +105,7 @@ extension TinyTitanBench {
         if let error = box.error { throw error }
     }
 
-    static let passCostWidths = [2, 4, 8, 16]
+    static let passCostWidths = [2, 3, 4, 5, 6, 8, 16]
 
     /// Code the model is asked to restate: an edit-shaped prompt, so routing
     /// looks like the git-session workload rather than open prose.
@@ -139,6 +139,7 @@ extension TinyTitanBench {
         let session = try await ServerModelSession.load(
             modelDirectory: URL(fileURLWithPath: install),
             maxContext: 8192,
+            expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: false,
             device: device)
         let runner = session.benchmarkRunner
@@ -332,8 +333,17 @@ extension TinyTitanBench {
                         width, rows.count, med, med / scalar, matched, rows.count)
                         + "  " + detail)
             }
-            let w8 = median(
-                report.rows.filter { $0.path == path && $0.width == 8 }.map(\.passMilliseconds))
+            let w8Rows = report.rows.filter { $0.path == path && $0.width == 8 }
+            // A width the slot cache cannot fit (a small --ram budget) is never
+            // timed; the gate has no measurement then, not a zero-cost pass.
+            guard !w8Rows.isEmpty else {
+                print(
+                    String(
+                        format: "fit: %.0f ms + %.1f ms/row; gate 2: W=8 not measured (n/a)",
+                        fit.baseMilliseconds, fit.perRowMilliseconds))
+                continue
+            }
+            let w8 = median(w8Rows.map(\.passMilliseconds))
             let verdict = w8 / scalar <= 4.5 ? "PASS" : "STOP"
             print(
                 String(
@@ -376,4 +386,18 @@ extension TinyTitanBench {
         }
         return Int32(best)
     }
+}
+
+/// `TINYTITAN_BENCH_RAM_BUDGET` (bytes, or a number with a K/M/G suffix): the
+/// whole-process RAM target the CLI's `--ram-budget` passes, so the wide-verify
+/// benches can run at the production budget (`--ram 10` on the 24 GB M3).
+func benchRAMBudgetBytes() -> Int? {
+    guard let raw = ProcessInfo.processInfo.environment["TINYTITAN_BENCH_RAM_BUDGET"],
+        let last = raw.uppercased().last
+    else { return nil }
+    let units: [Character: Double] = ["K": 1_024, "M": 1_048_576, "G": 1_073_741_824]
+    if let unit = units[last], let value = Double(raw.dropLast()) {
+        return Int(value * unit)
+    }
+    return Int(raw)
 }
