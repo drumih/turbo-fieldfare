@@ -173,6 +173,25 @@ class StagingPathTests(unittest.TestCase):
             with self.subTest(argument=argument):
                 self.assertIn(argument, self.script)
 
+    def test_qwen38_ships_exactly_two_types_with_hardcoded_recipes(self) -> None:
+        # The 4-bit type is the 4E-8R-16N hybrid (experts 4-bit, the rest 8-bit,
+        # the n-gram table fp16) and installs under a directory named for the
+        # recipe; the 8-bit type is uniform. The MTP draft head is not an
+        # install type, and the repacker's no-Python streaming hint must not
+        # offer a qwen38 build the installer would not produce.
+        for fragment in (
+            '"qwen38flash|qwen3.8-flash-next_125B_A6B_4E-8R-16N|4|convert"',
+            '"qwen38flash-8bit|qwen3.8-flash-next_125B_A6B_8Bit|8|convert"',
+            'rest8_arg="--rest-8bit"',
+            'model_id="qwen3.8-flash-next-8bitrest"',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.script)
+        self.assertNotIn("convert_qwen38_mtp", self.script)
+        self.assertNotIn("qwen3.8-flash-next_125B_A6B_4Bit", self.script)
+        self.assertNotIn("qwen38flash-mtp", self.script)
+        self.assertNotIn("qwen3.8-flash-next_125B_A6B_MTP_4Bit", self.script)
+
     def test_relative_staging_paths_are_not_quoted_in_a_command(self) -> None:
         # Belt and braces for a future edit that reintroduces the old spelling.
         self.assertIsNone(re.search(r'"\.build/(?!release)', self.script))

@@ -679,7 +679,7 @@ if [[ -z "$MODEL_ARG" ]]; then
     if ! tinytitan_load_catalog "$BINARY" "$MODELS_DIR" \
       || ! tinytitan_resolve_model "$m_name" 2>/dev/null \
       || ! tinytitan_resolve_quant "$m_bits" 2>/dev/null \
-      || ! idx="$(tinytitan_catalog_find_dir "${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR}")"; then
+      || ! idx="$(tinytitan_catalog_find_dir "$(tinytitan_install_dirname)")"; then
       echo "ERROR: installed $m_key, but the catalog does not list it under $MODELS_DIR." >&2
       exit 1
     fi
@@ -723,8 +723,8 @@ else
       echo "       \`tools/install_models.sh --help\` lists the widths each model ships." >&2
       exit 2
     fi
-    if ! idx="$(tinytitan_catalog_find_dir "${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR}")"; then
-      echo "ERROR: $TINYTITAN_MODEL_LABEL ${TINYTITAN_QUANT%bit}-bit is not installed (no ${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR} under $MODELS_DIR)" >&2
+    if ! idx="$(tinytitan_catalog_find_dir "$(tinytitan_install_dirname)")"; then
+      echo "ERROR: $TINYTITAN_MODEL_LABEL ${TINYTITAN_QUANT%bit}-bit is not installed (no $(tinytitan_install_dirname) under $MODELS_DIR)" >&2
       # Name the widths that are here: "not installed" alone reads like the
       # whole model is missing when only the one asked for is.
       installed_widths=""
@@ -741,7 +741,7 @@ else
       # to name before the rest of this script can use it.
       if install_missing_model "$TINYTITAN_MODEL_STEM" "${TINYTITAN_QUANT%bit}" "$TINYTITAN_MODEL_LABEL"; then
         if ! tinytitan_load_catalog "$BINARY" "$MODELS_DIR" \
-          || ! idx="$(tinytitan_catalog_find_dir "${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR}")"; then
+          || ! idx="$(tinytitan_catalog_find_dir "$(tinytitan_install_dirname)")"; then
           echo "ERROR: $TINYTITAN_MODEL_LABEL ${TINYTITAN_QUANT%bit}-bit installed, but the" >&2
           echo "       catalog still does not list it under $MODELS_DIR." >&2
           exit 1

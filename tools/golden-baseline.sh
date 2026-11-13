@@ -362,7 +362,7 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     # missing, demanded by release.sh the moment it is there.
     ornith122-4) dir="ornith-1.5_122B_4Bit"; file="ornith-1.5-122b-4bit.txt"; q=4 ;;
     ornith122-8) dir="ornith-1.5_122B_8Bit"; file="ornith-1.5-122b-8bit.txt"; q=8 ;;
-    qwen38-4)   dir="qwen3.8-flash-next_125B_A6B_4Bit"
+    qwen38-4)   dir="qwen3.8-flash-next_125B_A6B_4E-8R-16N"
                 file="qwen3.8-flash-next-125b-a6b-4bit.txt"; q=4 ;;
     qwen38-8)   dir="qwen3.8-flash-next_125B_A6B_8Bit"
                 file="qwen3.8-flash-next-125b-a6b-8bit.txt"; q=8 ;;

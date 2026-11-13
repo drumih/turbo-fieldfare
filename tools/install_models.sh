@@ -83,7 +83,7 @@ require_gb() {
 # `clean` claim 12 GB it had nothing to do with.
 staging_paths() {
   local dir
-  for dir in "$WORK"/*-affine* "$WORK"/*-shards "$WORK"/qwen38-mtp-affine "$WORK"/ornith-mtp-src; do
+  for dir in "$WORK"/*-affine* "$WORK"/*-shards "$WORK"/ornith-mtp-src; do
     [[ -e "$dir" ]] && printf '%s\n' "$dir"
   done
 }
@@ -159,7 +159,6 @@ row_staging_dirs() {
     IFS='|' read -r _n _dir _w source preset _ <<<"$row"
     [[ "$_n" == "$name" ]] || continue
     case "$source" in
-      convert_qwen38_mtp)  printf 'drop:%s\n' "$WORK/qwen38-mtp-affine" ;;
       convert_qwen36_mtp)  printf 'drop:%s\n' "$WORK/qwen36-mtp-affine" ;;
       prepare_ornith_mtp)  printf 'drop:%s\n' "$WORK/ornith-mtp-affine" "$WORK/ornith-mtp-src" ;;
       convert)             printf 'drop:%s\n' "$WORK/qwen38-affine-${_w}bit"
@@ -311,9 +310,15 @@ CATALOGUE=(
   "qwen36|qwen3.6_35B_A3B_4Bit|4|convert_qwen35moe|qwen36|qwen36-8bit"
   "qwen36-8bit|qwen3.6_35B_A3B_8Bit|8|convert_qwen35moe|qwen36|qwen36"
   "qwen36-mtp|qwen3.6_35B_A3B_MTP_4Bit|4|convert_qwen36_mtp"
-  "qwen38flash|qwen3.8-flash-next_125B_A6B_4Bit|4|convert"
+  # Qwen3.8-Flash-Next ships two install types and the quant recipe is
+  # hardcoded per type, not a --bits dial: the "4-bit" type routes its experts
+  # at 4 bits and keeps every always-resident tensor (attention, GDN,
+  # hyper-connection, PLE, indexer, shared expert, embedding, LM head, router)
+  # at 8 bits, the n-gram table at its fp16 -- the 4E-8R-16N hybrid. The
+  # "8-bit" type is uniform 8-bit with the same fp16 table. The MTP draft head
+  # is no longer an install type.
+  "qwen38flash|qwen3.8-flash-next_125B_A6B_4E-8R-16N|4|convert"
   "qwen38flash-8bit|qwen3.8-flash-next_125B_A6B_8Bit|8|convert"
-  "qwen38flash-mtp|qwen3.8-flash-next_125B_A6B_MTP_4Bit|4|convert_qwen38_mtp"
   "katcoder|kat-coder-v2.5_35B_A3B_4Bit|4|convert_qwen35moe|katcoder|katcoder-8bit"
   "katcoder-8bit|kat-coder-v2.5_35B_A3B_8Bit|8|convert_qwen35moe|katcoder|katcoder"
   "agentworld|qwen-agentworld_35B_A3B_4Bit|4|convert_qwen35moe|agentworld|agentworld-8bit"
@@ -375,7 +380,7 @@ Coverage
   Ornith 1.5 35B-A3B        4-bit, 8-bit, bf16 dense (4-bit experts), MTP draft
   Ornith 1.5 122B           4-bit, 8-bit (one width per run)
   Qwen 3.6 35B-A3B          4-bit, 8-bit, MTP draft
-  Qwen3.8-Flash-Next        4-bit, 8-bit, MTP draft
+  Qwen3.8-Flash-Next        4-bit (experts 4-bit, the rest 8-bit), 8-bit
   Qwen-AgentWorld 35B-A3B   4-bit, 8-bit
   KAT-Coder-V2.5-Dev 35B-A3B 4-bit, 8-bit
   Qwen 3.5 2B / 4B / 9B     4-bit, 8-bit (CPU models)
@@ -416,11 +421,14 @@ Sources
                       tools/repack_dense.sh re-runs the repack and the
                       equivalence check against a retained snapshot.
   convert             tools/prepare_qwen38.py, one 360 GB fetch per width.
-                      Qwen's own FP8 build is not used either: it quantizes
-                      only the routed experts, in [128, 128] blocks that do
-                      not map onto affine group-64.
+                      The quant recipe is hardcoded per width: 4-bit keeps the
+                      routed experts at 4 and moves the rest to 8 (--rest-8bit,
+                      the 4E-8R-16N hybrid); 8-bit quantizes everything at 8.
+                      The n-gram table stays fp16 and the norms and conv1d stay
+                      bf16 in both. Qwen's own FP8 build is not used either: it
+                      quantizes only the routed experts, in [128, 128] blocks
+                      that do not map onto affine group-64.
   convert_qwen36_mtp  the same converter's --draft-head mode (two shards).
-  convert_qwen38_mtp  tools/prepare_qwen38_mtp.py (31 tensors, range-fetched).
   prepare_ornith_mtp  tools/prepare_ornith_mtp.py (shard 16 of the original).
 
 USAGE
@@ -433,7 +441,7 @@ source_label() {
   case "$1" in
     convert|convert_qwen35|convert_qwen35moe|convert_qwen35moe_solo|convert_qwen35moe_dense16)
       printf 'download + convert' ;;
-    convert_qwen36_mtp|convert_qwen38_mtp|prepare_ornith_mtp)
+    convert_qwen36_mtp|prepare_ornith_mtp)
       printf 'download + convert (draft head)' ;;
     repack)
       printf 'download + install' ;;
@@ -479,7 +487,7 @@ status() {
 # `TinyTitanRepack --help` accepts.
 tinytitan_repack_streams() {
   case "$1" in
-    qwen36|qwen36-8bit|qwen36-mtp|ornith15|ornith15-8bit|qwen38flash|qwen38flash-mtp) return 0 ;;
+    qwen36|qwen36-8bit|qwen36-mtp|ornith15|ornith15-8bit) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -502,7 +510,7 @@ tinytitan_no_python_fallback() {
     else
       echo "  This one is quantized here from its bf16 release by a Python" >&2
       echo "  converter, so it does need Python 3.10+. The repacker can stream" >&2
-      echo "  qwen36, ornith15 and qwen38flash without any Python at all." >&2
+      echo "  qwen36 and ornith15 without any Python at all." >&2
     fi
     return 0
   done
@@ -615,7 +623,16 @@ install_one() {
       convert)
         # Qwen's own bf16 release, quantized one shard at a time by
         # tools/prepare_qwen38.py (a 360 GB fetch per width), then repacked.
+        # The quant recipe is hardcoded per width (see the CATALOGUE comment):
+        # at 4 bits the routed experts keep the build width and the rest moves
+        # to 8, so the snapshot is the 4E-8R-16N hybrid and the install is
+        # named for it; at 8 bits everything quantised is 8.
         [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
+        local rest8_arg="" model_id="qwen3.8-flash-next"
+        if [[ "$width" == 4 ]]; then
+          rest8_arg="--rest-8bit"
+          model_id="qwen3.8-flash-next-8bitrest"
+        fi
         # A mirror: HF_ENDPOINT is the Hub's own variable, and the converter
         # fetches the checkpoint and its small JSON files from it when set.
         local endpoint_arg=""
@@ -624,7 +641,7 @@ install_one() {
           echo "downloading and converting $name (360 GB fetch) -> $WORK/qwen38-affine-${width}bit"
           # A run killed mid-conversion resumes: finished output shards are kept
           # and the checkpoint shards they came from are not fetched again.
-          "$python" "$ROOT/tools/prepare_qwen38.py" --bits "$width" \
+          "$python" "$ROOT/tools/prepare_qwen38.py" --bits "$width" ${rest8_arg:+"$rest8_arg"} \
               --output "$WORK/qwen38-affine-${width}bit" \
               --work "$WORK/qwen38-shards" ${endpoint_arg:+"$endpoint_arg"} || return 1
         fi
@@ -645,20 +662,7 @@ install_one() {
         fi
         echo "installing $name -> models/$dir"
         "$BIN" --input-snapshot "$WORK/qwen38-affine-${width}bit" \
-            --model-id qwen3.8-flash-next ${share_arg:+"$share_arg"} --output "$MODELS/$dir"
-        ;;
-      convert_qwen38_mtp)
-        # The draft head's 31 tensors, range-fetched from Qwen's original by
-        # tools/prepare_qwen38_mtp.py, then imported as a draft-head sidecar.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
-        if [[ ! -f "$WORK/qwen38-mtp-affine/model.safetensors.index.json" ]]; then
-          echo "downloading the draft head (31 tensors) and converting $name -> $WORK/qwen38-mtp-affine"
-          "$python" "$ROOT/tools/prepare_qwen38_mtp.py" --bits "$width" \
-              --output "$WORK/qwen38-mtp-affine" || return 1
-        fi
-        echo "installing $name -> models/$dir"
-        "$BIN" --input-snapshot "$WORK/qwen38-mtp-affine" --draft-head \
-            --model-id qwen3.8-flash-next-4bit --output "$MODELS/$dir"
+            --model-id "$model_id" ${share_arg:+"$share_arg"} --output "$MODELS/$dir"
         ;;
       convert_qwen36_mtp)
         # Qwen3.6's draft head: 19 tensors of the `mtp.*` namespace in two

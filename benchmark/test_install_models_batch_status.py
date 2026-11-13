@@ -41,7 +41,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "install_models.sh"
 
-WIDTHS = {"4": 13, "8": 9}
+# Four-bit rows: 13 until the Qwen3.8 MTP draft left the catalogue (2026-11-13,
+# when the qwen3.8 install types became the two hardcoded recipes only).
+WIDTHS = {"4": 12, "8": 9}
 ROWS = re.compile(r'^\s*"([a-z0-9-]+)\|[^|]*\|([48])\|', re.M).findall(SCRIPT.read_text())
 CATALOGUE_WIDTHS = {name: width for name, width in ROWS}
 

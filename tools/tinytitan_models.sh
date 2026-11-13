@@ -74,7 +74,7 @@ TINYTITAN_MODEL_CHOICES=(
   "qwen35-2b-8bit|Qwen 3.5 2B|8|2.2|Dense 2B at 8-bit."
   "ornith122-8bit|Ornith 1.5 122B|8|123.0|The 122B at 8-bit. Highest Terminal-Bench 2.1 score here; slowest decode."
   "ornith122|Ornith 1.5 122B|4|66.0|The 122B at 4-bit: half the disk, and about twice the decode of 8-bit."
-  "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|162.0|The largest model, and the most disk."
+  "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|163.0|Routed experts 4-bit, every resident tensor 8-bit (the 4E-8R-16N hybrid). The largest model, and the most disk."
   "qwen38flash-8bit|Qwen3.8-Flash-Next 125B-A6B|8|220.0|The largest model at 8-bit."
 )
 
@@ -222,6 +222,23 @@ tinytitan_resolve_quant() {
     8|8bit) TINYTITAN_QUANT=8bit; TINYTITAN_QUANT_DIR=8Bit ;;
     *) echo "unknown quantization: ${1:-} (4|8)" >&2; return 2 ;;
   esac
+}
+
+# tinytitan_install_dirname -> the install directory NAME under models/ for the
+# model tinytitan_resolve_model and tinytitan_resolve_quant have selected.
+#
+# One place for the spelling, so the launcher's catalog, its install lookup and
+# the installer's CATALOGUE cannot disagree. Every model is `<stem>_<4Bit|8Bit>`
+# except the Qwen3.8-Flash-Next 4-bit type: that one is the 4E-8R-16N hybrid
+# (routed experts 4-bit, every resident tensor 8-bit, the n-gram table fp16),
+# and its directory is named for the recipe rather than the expert width.
+tinytitan_install_dirname() {
+  if [[ "${TINYTITAN_MODEL_STEM:-}" == "qwen3.8-flash-next_125B_A6B" \
+        && "${TINYTITAN_QUANT_DIR:-}" == "4Bit" ]]; then
+    printf 'qwen3.8-flash-next_125B_A6B_4E-8R-16N'
+  else
+    printf '%s_%s' "${TINYTITAN_MODEL_STEM:-}" "${TINYTITAN_QUANT_DIR:-}"
+  fi
 }
 
 # tinytitan_install_key <stem> <4|8> -> the install_models.sh target for it.
@@ -466,7 +483,7 @@ tinytitan_static_catalog() {
     added=0
     for bits in 8 4; do
       tinytitan_resolve_quant "$bits"
-      dir="$models_dir/${TINYTITAN_MODEL_STEM}_${TINYTITAN_QUANT_DIR}"
+      dir="$models_dir/$(tinytitan_install_dirname)"
       [[ -e "$dir" ]] || continue
       TINYTITAN_CAT_ID+=("-"); TINYTITAN_CAT_NAME+=("$TINYTITAN_MODEL_LABEL"); TINYTITAN_CAT_QUANT+=("$bits")
       TINYTITAN_CAT_BACKEND+=("${TINYTITAN_MODEL_ENGINES%%,*}")

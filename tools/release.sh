@@ -271,7 +271,6 @@ SKIP_GOLDENS_REASON="${TINYTITAN_RELEASE_SKIP_GOLDENS_REASON:-}"
 # space to match on. That bug survived a full dry run once -- the names are
 # wrapped, not guessed at.
 NON_GOLDEN_INSTALLS="
-  qwen3.8-flash-next_125B_A6B_MTP_4Bit
   ornith-1.5_35B_A3B_MTP_4Bit
 "
 NON_GOLDEN_SET=" $(printf '%s' "$NON_GOLDEN_INSTALLS" | tr -s '[:space:]' ' ') "
@@ -329,7 +328,9 @@ check_golden ornith-1.5_35B_A3B_4Bit ornith-4
 check_golden ornith-1.5_35B_A3B-bf16dense_4Bit ornith-bf16dense-4
 check_golden qwen3.6_35B_A3B_4Bit qwen36-4
 check_golden qwen3.6_35B_A3B_8Bit qwen36-8
-check_golden qwen3.8-flash-next_125B_A6B_4Bit qwen38-4
+# The 4-bit type is the 4E-8R-16N hybrid (experts 4-bit, the rest 8-bit), named
+# for its recipe; 8-bit is uniform.
+check_golden qwen3.8-flash-next_125B_A6B_4E-8R-16N qwen38-4
 check_golden qwen3.8-flash-next_125B_A6B_8Bit qwen38-8
 check_golden k2-horizon-4bit.ssdai k2-4
 check_golden k2-horizon-8bit.ssdai k2-8
