@@ -205,26 +205,6 @@ is decode speed on low-RAM Macs.
   be the whole job, and this record is the starting point.
 - A measured expert-usage trace showing a far higher hit rate than §5 assumes.
 
-## 8. Pending todo: the wiki tracker entry
-
-**Not done.** The archive entry below was written on 2026-11-12 but could not
-be pushed: that session had no write access to the wiki repository. Add it at
-the top of the wiki's `Tracker-Archive.md`, above TT-057, push `master`, and
-delete this section. TT-061 was the next free ID when it was written; check
-that it still is.
-
-```markdown
-## TT-061 closed Won't Do (2026-11-12): GLM-5.3-Flash is not ported
-
-`zai-org/GLM-5.3-Flash` (320B, 18B active) was planned through the normal
-converter path with 4-bit routed experts and an 8-bit remainder, and closed
-before any code or download. It is a runtime port, not a wiring job: KDA linear
-attention, MLA attention without positional encoding, the DSA indexer and mHC
-have no kernel in the engine. The install would be about 181 GB, and the decode
-projection on the 24 GB M3, calibrated on the Qwen3.8-Flash-Next measurements,
-is **1.0-1.6 tok/s at uniform 4-bit and 0.8-1.2 tok/s with the 8-bit
-remainder** — a calculation, not a measurement. Each expert is about 14 MB, so
-a token reads 2.4-3.1 GB from an SSD that tops out at 3.9 GB/s. Evidence, the
-unstarted plan and what would reopen it: `docs/glm53-flash-port.md` in the
-source repository (commit `1d5b1da`).
-```
+*(The wiki tracker archive entry was pushed on 2026-11-13 as **TT-062** — the
+draft's TT-061 had been taken by the wide-verify task before this section could
+be cleared.)*

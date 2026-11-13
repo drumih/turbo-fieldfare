@@ -37,12 +37,17 @@ is `docs/plan-gguf-decode-10toks.md`: the owner wants **10 tok/s decode at
   `GGUFMixerStageBenchmarkTests` (`TINYTITAN_KERNEL_BENCH=1`). The analysis
   scripts (`window.py`, `avg.py`, `ssd_bench.py`) are in the gitignored
   `.build/m1/` and should be promoted into `benchmark/`.
-- **Pending todo — wiki push not done**: the GLM-5.3-Flash evaluation
-  (`docs/glm53-flash-port.md`, `1d5b1da`) is closed, but its tracker entry
-  never reached the wiki: the session that wrote it had no write access to
-  `TinyTitan.wiki`. Add the TT-061 block from that document's §8 at the top
-  of the wiki's `Tracker-Archive.md`, push `master`, then delete this bullet
-  and that section.
+- **2026-11-13**: the 4E-8R-16N hybrid install is built, receipt-verified and
+  smoke-tested (wiki archive TT-063): the 4-bit install's experts and n-gram
+  table were moved into it, the rest was requantised bf16 -> 8-bit from the
+  BF16Rest install (`tools/requantize_qwen38_rest.py`), and the smoke run gave
+  3.09 tok/s cold at `--ram-budget 12G` with coherent text. The qwen38-4
+  install no longer exists — its golden target's final baseline is the
+  2026-11-13 re-capture (`5488ee02`), and that target can never be re-captured
+  or checked again. Still to run: the RAM matrix (`tools/ram-matrix.sh`,
+  ~30 min, `SKIP_MATRIX=1 bash start.sh` skips it too). `start.sh` and
+  `benchmark/route_cache_bound.py` landed in `909cfcc1`; the GLM tracker entry
+  reached the wiki as TT-062 (renumbered from the draft's TT-061).
 - **Open** (wiki Project Tracker): TT-056 ANE prefill (needs 4,096-token
   chunks; the exported sidecar sits in `/tmp/gguf-ane-source` and must move
   into the model directory), TT-057 decode speed, TT-058 serving through
