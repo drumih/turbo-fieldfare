@@ -47,9 +47,10 @@ is `docs/plan-gguf-decode-10toks.md`: the owner wants **10 tok/s decode at
   (`--rest-8bit`, modelID `qwen3.8-flash-next-8bitrest`); the old 4/4/16 build
   and the MTP draft head are no longer install types. `start.sh` and
   `link_qwen38_shared.sh` are retired — a rerun of the move would have gutted
-  the renamed install. Still to run: the RAM matrix (`tools/ram-matrix.sh`,
-  ~30 min, now defaulting to the surviving install). The GLM tracker entry
-  reached the wiki as TT-062.
+  the renamed install. The RAM matrix (`tools/ram-matrix.sh`) was dropped on
+  the owner's decision the same day — no `--ram-budget` sweep was measured;
+  the smoke run's 3.09 tok/s at 12 GB is the only number this install has.
+  The GLM tracker entry reached the wiki as TT-062.
 - **Open** (wiki Project Tracker): TT-056 ANE prefill (needs 4,096-token
   chunks; the exported sidecar sits in `/tmp/gguf-ane-source` and must move
   into the model directory), TT-057 decode speed, TT-058 serving through
