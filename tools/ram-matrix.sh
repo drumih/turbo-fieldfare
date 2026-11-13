@@ -14,7 +14,7 @@ MODELS=${MODELS:-"qwen3.8-flash-next_125B_A6B_4Bit"}
 MAX_NEW=${MAX_NEW:-200}
 RAM_FLAG=${RAM_FLAG:---ram-budget}
 OUT=.build/ram-matrix
-STAMP=$(date +%Y%m%d-%H%M%S)
+STAMP=$(date -u +%Y%m%d-%H%M%S)
 MD=$OUT/RESULTS-$STAMP.md
 mkdir -p "$OUT"
 

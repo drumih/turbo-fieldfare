@@ -30,12 +30,12 @@ from __future__ import annotations
 
 import argparse
 import copy
+from datetime import datetime, timezone
 import json
 import os
 import re
 import shutil
 import sys
-import time
 
 PROVIDER = "tinytitan"
 
@@ -104,14 +104,17 @@ def load_jsonc(path):
 
 
 def backup(path):
-    """Copy `path` beside itself before it is rewritten; return the copy's path."""
+    """Copy `path` beside itself before it is rewritten; return the copy's path.
+
+    The stamp is UTC (the shared-stamp gate's rule): a local-time name repeats
+    an hour when the zone repeats it, and two runs would share one backup."""
     target = f"{path}.tinytitan-backup"
     if os.path.exists(target):
-        target = f"{path}.tinytitan-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+        target = f"{path}.tinytitan-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         suffix = 1
         while os.path.exists(target):
             suffix += 1
-            target = f"{path}.tinytitan-backup-{time.strftime('%Y%m%d-%H%M%S')}-{suffix}"
+            target = f"{path}.tinytitan-backup-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{suffix}"
     shutil.copy2(path, target)
     return target
 

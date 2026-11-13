@@ -15,24 +15,40 @@ absolute difference per layer, and whether the logits' argmax agrees.
 from __future__ import annotations
 
 import argparse
+import math
 import pathlib
+import struct
 import sys
-from array import array
 
 
-def read_f16(path: pathlib.Path) -> array:
-    values = array("e")
-    values.frombytes(path.read_bytes())
-    return values
+def unpack_f16(data: bytes) -> list[float]:
+    """IEEE 754 half -> float, packed by hand: the runner's Python has no
+    half-float `array` typecode, so the reader cannot lean on one."""
+    out = []
+    for (bits,) in struct.iter_unpack(">H", data):
+        sign = -1.0 if bits & 0x8000 else 1.0
+        exponent = (bits >> 10) & 0x1F
+        fraction = bits & 0x3FF
+        if exponent == 0:
+            out.append(sign * fraction * 2.0**-24)
+        elif exponent == 31:
+            out.append(math.nan if fraction else sign * math.inf)
+        else:
+            out.append(sign * (1.0 + fraction / 1024.0) * 2.0 ** (exponent - 15))
+    return out
 
 
-def max_abs_diff(a: array, b: array) -> float:
+def read_f16(path: pathlib.Path) -> list[float]:
+    return unpack_f16(path.read_bytes())
+
+
+def max_abs_diff(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         raise ValueError(f"length mismatch {len(a)} != {len(b)}")
     return max((abs(x - y) for x, y in zip(a, b, strict=True)), default=0.0)
 
 
-def argmax(values: array) -> int:
+def argmax(values: list[float]) -> int:
     best = 0
     for index in range(1, len(values)):
         if values[index] > values[best]:

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import io
+import math
 import pathlib
+import struct
 import sys
 import tempfile
 import unittest
-from array import array
 from contextlib import redirect_stdout
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -15,8 +16,29 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import verify_identity_bisect as bisect  # noqa: E402
 
 
+def _f16_bits(value: float) -> int:
+    if math.isnan(value):
+        return 0x7E00
+    if math.isinf(value):
+        return 0x7C00 | (0x8000 if value < 0 else 0)
+    sign = 0x8000 if math.copysign(1.0, value) < 0 else 0
+    value = abs(value)
+    if value == 0.0:
+        return sign
+    mantissa, exponent = math.frexp(value)
+    exponent -= 1
+    if exponent >= 16:
+        return sign | 0x7C00
+    if exponent >= -14:
+        fraction = int((mantissa - 0.5) * 2048 + 0.5)
+        return sign | ((exponent + 15) << 10) | (fraction & 0x3FF)
+    return sign | int(value / 2.0**-24 + 0.5)
+
+
 def write_f16(path: pathlib.Path, values: list[float]) -> None:
-    path.write_bytes(array("e", values).tobytes())
+    # IEEE 754 half packed by hand: the runner's Python has no half-float
+    # `array` typecode (array("e") raises "bad typecode" there).
+    path.write_bytes(b"".join(struct.pack(">H", _f16_bits(v)) for v in values))
 
 
 class BisectTests(unittest.TestCase):
