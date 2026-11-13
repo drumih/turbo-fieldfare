@@ -133,6 +133,12 @@ final class HyperConnection {
         MTLBuffer, Int, Int, Int
     ) throws -> Void
 
+    /// Compiles `decodeOrderProjection`'s multi-row pipelines for every row
+    /// count in `rows`, so a timed verify pass does not pay for them.
+    func prewarmDecodeOrderProjection(rows: ClosedRange<Int>) throws {
+        try gemv.prewarmRows(columns: [dim * streams, lowRank], rows: rows)
+    }
+
     /// Residual -> block input for a whole prefill chunk.
     ///
     /// Identical arithmetic to `encodeRead`, with every stage taking `tokens`

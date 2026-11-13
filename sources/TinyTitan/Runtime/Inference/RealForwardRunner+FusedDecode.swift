@@ -10,6 +10,9 @@ final class FusedDecodeState {
     var override: Bool?
     /// The wide-verify rollback window (RealForwardRunner+WideVerifyRollback).
     var wideVerifyRollback: WideVerifyGDNRollback?
+    /// `[rows, vocab]` FP16 logits of the greedy W-row verify head, grown to
+    /// the widest pass seen (RealForwardRunner+WideVerifyHead).
+    var wideVerifyHeadLogits: MTLBuffer?
 }
 
 // T34: the fused width-2 decode loop.

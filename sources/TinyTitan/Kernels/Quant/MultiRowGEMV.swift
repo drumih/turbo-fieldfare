@@ -23,7 +23,7 @@ final class MultiRowGEMV {
 
     /// How a segment's weights are stored, and so which decode kernel's
     /// arithmetic its rows follow.
-    enum Format: Equatable, Sendable {
+    enum Format: Hashable, Sendable {
         /// `dequant_int4_gemv_simd`: MLX affine 4-bit, group 64.
         case int4
         /// `affine_quant_gemv_simd` at 2 or 8 bits.
@@ -145,23 +145,41 @@ final class MultiRowGEMV {
         }
     }
 
+    /// Compiles the pipelines `encode` would use for `formats` (one per
+    /// segment) at `columns`, for every row count in `rows`, so a timed pass
+    /// does not pay first-use compilation. Pipelines are cached by
+    /// `MetalContext`; compiling one already cached costs a lookup.
+    func prewarm(formats: [Format], columns: Int, rows: ClosedRange<Int>) throws {
+        for count in rows where count >= 1 {
+            _ = try pipeline(
+                rows: min(count, Self.maxRowsPerDispatch), columns: columns, formats: formats)
+        }
+    }
+
+    private func pipeline(
+        rows: Int, columns n: Int, formats: [Format]
+    ) throws -> MTLComputePipelineState {
+        var constants = [
+            MetalFunctionConstant(index: 130, value: .uint32(UInt32(rows))),
+            MetalFunctionConstant(index: 131, value: .uint32(UInt32(n))),
+        ]
+        for (index, format) in formats.enumerated() {
+            constants.append(
+                MetalFunctionConstant(index: 132 + index, value: .uint32(format.code)))
+        }
+        return try context.pipeline(
+            "multirow_gemv_simd", constants: constants,
+            maxTotalThreadsPerThreadgroup: 32 * Self.rowsPerThreadgroup)
+    }
+
     private func encodeTile(
         commandBuffer: MTLCommandBuffer,
         segments: [Segment],
         x: MTLBuffer, xOffset: Int, xRowStride: Int,
         firstRow: Int, rows: Int, columns n: Int
     ) throws {
-        var constants = [
-            MetalFunctionConstant(index: 130, value: .uint32(UInt32(rows))),
-            MetalFunctionConstant(index: 131, value: .uint32(UInt32(n))),
-        ]
-        for (index, segment) in segments.enumerated() {
-            constants.append(
-                MetalFunctionConstant(index: 132 + index, value: .uint32(segment.format.code)))
-        }
-        let pipeline = try context.pipeline(
-            "multirow_gemv_simd", constants: constants,
-            maxTotalThreadsPerThreadgroup: 32 * Self.rowsPerThreadgroup)
+        let pipeline = try pipeline(
+            rows: rows, columns: n, formats: segments.map(\.format))
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }

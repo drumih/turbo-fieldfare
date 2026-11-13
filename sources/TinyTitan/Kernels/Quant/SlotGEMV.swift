@@ -46,6 +46,16 @@ struct SlotGEMV {
     /// `x[xOffset + r * n]` and writes `y[yOffset + r * m]`, with the bytes
     /// `encode` would give that row alone. The weights are read once per nine
     /// rows rather than once per row.
+    /// Compiles `encodeRows`'s pipelines at `columns` for every row count in
+    /// `rows`, for this slot's width and for a promoted bf16 tensor.
+    func prewarmRows(columns: [Int], rows: ClosedRange<Int>) throws {
+        let quantized: MultiRowGEMV.Format = weightBits == 4 ? .int4 : .affine(bits: weightBits)
+        for n in columns {
+            try multiRow.prewarm(formats: [quantized], columns: n, rows: rows)
+            try multiRow.prewarm(formats: [.bf16], columns: n, rows: rows)
+        }
+    }
+
     func encodeRows(
         commandBuffer: MTLCommandBuffer,
         weights: MTLBuffer, weightsOffset: Int = 0,

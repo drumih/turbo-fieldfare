@@ -6,10 +6,9 @@ import Metal
 /// logits are kept so `WideVerifySampler` can run scalar decode's own sampler
 /// on them, penalties and seeded draw included.
 ///
-/// The head writes the rows into `verificationLogits` two at a time -- the very
-/// buffer `verifyGreedyRows` argmaxes on the host -- and a blit in the same
-/// command buffer copies each pair out to the caller's `[rows, vocab]` buffer.
-/// The greedy pass encodes no blit and is unchanged.
+/// The W-row head (`encodeVerifyHeadRows`) writes every row's logits straight
+/// into the caller's `[rows, vocab]` buffer; the greedy pass writes the same
+/// head's rows into its own buffer and argmaxes them on the host.
 extension RealForwardRunner {
     /// Bytes of one row of verify logits: FP16 `[vocab]`, the layout the
     /// scalar sampler reads from `RawCompletionScratch.logits`.
@@ -62,23 +61,5 @@ extension RealForwardRunner {
             await forwardStepGate.release()
             throw error
         }
-    }
-
-    /// Copies the pair head's `rows` rows out of `verificationLogits` into
-    /// `rowLogits` starting at row `firstRow`, on `cb` after the head.
-    func encodeRowLogitsCapture(
-        commandBuffer cb: MTLCommandBuffer,
-        into rowLogits: MTLBuffer,
-        firstRow: Int,
-        rows: Int
-    ) throws {
-        guard let blit = cb.makeBlitCommandEncoder() else {
-            throw ModelError.residentBufferWrapFailed
-        }
-        blit.copy(
-            from: verificationLogits, sourceOffset: 0,
-            to: rowLogits, destinationOffset: firstRow * wideVerifyRowLogitsStride,
-            size: rows * wideVerifyRowLogitsStride)
-        blit.endEncoding()
     }
 }

@@ -251,6 +251,12 @@ final class PLEBlock {
             tokens: 1, eps: eps, project: nil)
     }
 
+    /// Compiles `decodeOrderProjection`'s multi-row pipelines for every row
+    /// count in `rows`, so a timed verify pass does not pay for them.
+    func prewarmDecodeOrderProjection(rows: ClosedRange<Int>) throws {
+        try gemv.prewarmRows(columns: [embedDim], rows: rows)
+    }
+
     /// Decode's own GEMV arithmetic for every row, weights read once
     /// (`SlotGEMV.encodeRows`): the projection a multi-row pass passes to
     /// `encodeRows` when it must reproduce scalar decode's numbers (the wide

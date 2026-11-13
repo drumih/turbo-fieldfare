@@ -257,6 +257,21 @@ public final class SharedExpertRuntime {
         }
     }
 
+    /// The multi-row GEMV format `encodeRows` reads a projection of `dtype`
+    /// with, or nil where it has no multi-row form (the 8-bit path).
+    func multiRowFormat(dtype: Int) -> MultiRowGEMV.Format? {
+        if dtype == 1 { return .bf16 }
+        if case .int4 = implementation { return .int4 }
+        return nil
+    }
+
+    /// Compiles `encodeRows`'s pipelines for every row count in `rows`.
+    func prewarmRows(dtype: Int, hidden: Int, intermediate: Int, rows: ClosedRange<Int>) throws {
+        guard let format = multiRowFormat(dtype: dtype) else { return }
+        try multiRow.prewarm(formats: [format, format], columns: hidden, rows: rows)
+        try multiRow.prewarm(formats: [format], columns: intermediate, rows: rows)
+    }
+
     /// `encode` for `rows` activation rows at once, weights read once: row `r`
     /// reads `x[xOffset + r * cols]` and writes `y[yOffset + r * yRowStride]`
     /// with the bytes `encode` gives that row alone. The scratch buffers hold
@@ -274,14 +289,7 @@ public final class SharedExpertRuntime {
         y: MTLBuffer, yOffset: Int = 0, yRowStride: Int,
         scratchGate: MTLBuffer, scratchUp: MTLBuffer, scratchAct: MTLBuffer
     ) throws -> Bool {
-        let format: MultiRowGEMV.Format
-        if gate.dtype == 1 {
-            format = .bf16
-        } else if case .int4 = implementation {
-            format = .int4
-        } else {
-            return false
-        }
+        guard let format = multiRowFormat(dtype: gate.dtype) else { return false }
         guard gate.rows == up.rows, gate.cols == up.cols,
             down.rows == gate.cols, down.cols == gate.rows
         else {

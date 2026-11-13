@@ -19,8 +19,13 @@ enum QwenToySynthetic {
     /// its own deterministic byte pattern instead of the shared 0x11, so the
     /// GDN projections differ by channel and `a` differs from `b`; a test
     /// that must tell those rows apart needs it.
+    ///
+    /// `variedHead` does the same for the lm_head (packed values, scales and
+    /// biases) and the final norm, so logits differ by vocabulary row; with
+    /// the constant pattern every logit is equal.
     static func write(
-        weightBits: Int = 4, qsa: Bool = false, variedLinearAttention: Bool = false
+        weightBits: Int = 4, qsa: Bool = false, variedLinearAttention: Bool = false,
+        variedHead: Bool = false
     ) throws -> URL {
         precondition([4, 8].contains(weightBits))
         let toy = qsa ? ArchConfig.qwenToyQSA() : ArchConfig.qwenToy()
@@ -320,12 +325,16 @@ enum QwenToySynthetic {
                         scales[i] = Quantization.bf16Bits(0.01)
                     }
                 }
+                if variedHead, entry.name == "language_model.lm_head.weight" {
+                    variedHeadFill(entry, base: base)
+                }
             }
             for entry in entries where entry.dtype == 1 {
                 let dst = base.advanced(by: Int(entry.fileOffset))
                     .assumingMemoryBound(to: UInt16.self)
+                let varied = variedHead && entry.name == "language_model.model.norm.weight"
                 for i in 0..<(Int(entry.sizeBytes) / u16) {
-                    dst[i] = Quantization.bf16Bits(1.0)
+                    dst[i] = Quantization.bf16Bits(varied ? 0.75 + 0.04 * Float(i % 13) : 1.0)
                 }
             }
         }
@@ -904,6 +913,22 @@ enum QwenToySynthetic {
             options: [.sortedKeys, .withoutEscapingSlashes])
         try manifestData.write(to: dir.appendingPathComponent("manifest.json"))
         return dir
+    }
+
+    /// Deterministic, row-varying lm_head bytes, scales and biases.
+    private static func variedHeadFill(_ entry: ResidentEntry, base: UnsafeMutableRawPointer) {
+        let bytes = base.advanced(by: Int(entry.fileOffset)).assumingMemoryBound(to: UInt8.self)
+        for i in 0..<Int(entry.sizeBytes) {
+            bytes[i] = UInt8(truncatingIfNeeded: (i &* 131) ^ (i >> 7) &+ 13)
+        }
+        let scales = base.advanced(by: Int(entry.scaleOffset)).assumingMemoryBound(to: UInt16.self)
+        for i in 0..<(Int(entry.scaleSize) / 2) {
+            scales[i] = Quantization.bf16Bits(0.01 + 0.0007 * Float((i % 17) - 8))
+        }
+        let biases = base.advanced(by: Int(entry.biasOffset)).assumingMemoryBound(to: UInt16.self)
+        for i in 0..<(Int(entry.biasSize) / 2) {
+            biases[i] = Quantization.bf16Bits(0.02 * Float((i % 11) - 5))
+        }
     }
 }
 
