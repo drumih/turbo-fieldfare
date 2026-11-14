@@ -3,6 +3,34 @@ import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct MacAppSettingsTests {
+    // Explicit preferences from earlier builds must survive the new default.
+    @MainActor
+    @Test(arguments: [false, true])
+    func expertPrefetchExplicitSettingSurvivesRelaunch(_ enabled: Bool) throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = AppDataLocation.settingsURL(in: root)
+        try MacAppSettingsFileStore.save(.init(expertPrefetchEnabled: enabled), at: file)
+        let model = AppModel(appDataDirectory: root,
+                             environment: ["TURBO_FIELDFARE_APP_DATA_PATH": root.path],
+                             client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(model.runtimeOptions.expertPrefetchEnabled == enabled)
+        #expect(try MacAppSettingsFileStore.load(at: file)?.expertPrefetchEnabled == enabled)
+    }
+
+    @Test(arguments: ["null", "1", "\"true\"", "{}", "[]"])
+    func invalidExpertPrefetchIsRejected(_ value: String) throws {
+        let encoded = try JSONEncoder().encode(MacAppSettings())
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["expertPrefetchEnabled"] = try JSONSerialization.jsonObject(
+            with: Data(value.utf8), options: .fragmentsAllowed)
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MacAppSettings.self, from: data)
+        }
+    }
+
     @Test func settingsFileLivesBesideModelDirectory() {
         let model = URL(fileURLWithPath: "/tmp/TurboFieldfare/gemma4.gturbo",
                         isDirectory: true)
@@ -19,6 +47,7 @@ import Testing
         let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
         let decoded = try JSONDecoder().decode(
             MacAppSettings.self,
@@ -26,7 +55,7 @@ import Testing
         #expect(decoded == MacAppSettings())
     }
 
-    @Test func malformedFileIsReplacedWithDefaults() throws {
+    @Test func malformedFileIsPreserved() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
@@ -36,13 +65,11 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
-        let decoded = try JSONDecoder().decode(
-            MacAppSettings.self,
-            from: Data(contentsOf: fileURL))
-        #expect(decoded == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
+        #expect(try Data(contentsOf: fileURL) == Data("not json".utf8))
     }
 
-    @Test func invalidValuesAreReplacedWithDefaults() throws {
+    @Test func invalidValuesArePreserved() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
@@ -53,6 +80,7 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
     }
 
     @Test func legacySettingsDefaultToReturnWithoutLosingValues() throws {
@@ -80,6 +108,7 @@ import Testing
         #expect(!settings.topPEnabled)
         #expect(settings.topP == 0.8)
         #expect(!settings.prefillEnabled)
+        #expect(!settings.expertPrefetchEnabled)
         #expect(settings.newlineShortcut == .return)
         #expect(settings.showPromptExamples)
         #expect(settings.visionResidencyPolicy == .onDemand)
@@ -129,7 +158,7 @@ import Testing
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("model.gturbo", isDirectory: true)
-        let model = AppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), settingsPersistenceEnabled: true)
 
         model.setMaxContextTokens(4_096)
 
@@ -250,7 +279,7 @@ import Testing
         let persisted = try JSONDecoder().decode(
             MacAppSettings.self, from: Data(contentsOf: fileURL))
 
-        #expect(settings.version == 3)
+        #expect(settings.version == MacAppSettings.currentVersion)
         #expect(settings.contextTokens == 4_096,
                 "the version bump rewrote a deliberately chosen context")
         #expect(settings.expertCacheSlots == 24)
@@ -296,7 +325,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
         let model = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let stored = MacAppSettings(contextTokens: 262_144)
-        #expect(stored.version == 3)
+        #expect(stored.version == MacAppSettings.currentVersion)
 
         try MacAppSettingsFileStore.save(stored, forModelDirectory: model)
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
@@ -372,6 +401,7 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
     }
 
     @MainActor
@@ -397,6 +427,7 @@ import Testing
 
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
         #expect(model.maxContextTokens == 8_192)
         #expect(model.runtimeOptions.expertCacheSlots == 24)
@@ -437,6 +468,7 @@ import Testing
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
 
         model.setNewlineShortcut(.shiftReturn)
@@ -447,12 +479,43 @@ import Testing
     }
 
     @MainActor
+    @Test func expertPrefetchPersistsAcrossModelSelectionsAndRelaunch() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = root.appendingPathComponent("app-data", isDirectory: true)
+        let file = AppDataLocation.settingsURL(in: data)
+        let environment = ["TURBO_FIELDFARE_APP_DATA_PATH": data.path]
+        try MacAppSettingsFileStore.save(.init(expertPrefetchEnabled: false), at: file)
+        let model = AppModel(appDataDirectory: data, environment: environment,
+                             client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(!model.runtimeOptions.expertPrefetchEnabled)
+        for name in ["prefetch-first", "prefetch-second"] {
+            let parent = root.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            await model.selectModelLocation(parent, intent: .download)
+            #expect(model.modelPathText == parent.appendingPathComponent("gemma4.gturbo").path)
+            #expect(!model.runtimeOptions.expertPrefetchEnabled)
+        }
+        model.setExpertPrefetchEnabled(true)
+        #expect(try MacAppSettingsFileStore.load(at: file)?.expertPrefetchEnabled == true)
+        model.setExpertPrefetchEnabled(false)
+        let persisted = try MacAppSettingsFileStore.load(at: file)
+        let saved = try #require(persisted)
+        #expect(!saved.expertPrefetchEnabled)
+        #expect(try JSONDecoder().decode(MacAppSettings.self, from: JSONEncoder().encode(saved)) == saved)
+        let relaunched = AppModel(appDataDirectory: data, environment: environment,
+                                  client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(!relaunched.runtimeOptions.expertPrefetchEnabled)
+    }
+
+    @MainActor
     @Test func showPromptExamplesPersistsImmediately() throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let modelDirectory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         let model = AppModel(
             modelDirectory: modelDirectory,
+            appDataDirectory: modelDirectory.deletingLastPathComponent(),
             settingsPersistenceEnabled: true)
 
         model.setShowPromptExamples(false)
@@ -463,7 +526,7 @@ import Testing
     }
 
     @MainActor
-    @Test func changingModelDirectoryLoadsItsNewlineShortcut() throws {
+    @Test func changingModelDirectoryPreservesItsNewlineShortcut() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
@@ -474,14 +537,14 @@ import Testing
         try MacAppSettingsFileStore.save(
             MacAppSettings(newlineShortcut: .shiftReturn, showPromptExamples: false),
             forModelDirectory: second)
-        let model = AppModel(modelDirectory: first, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: first, appDataDirectory: first.deletingLastPathComponent(), settingsPersistenceEnabled: true)
         #expect(model.newlineShortcut == .return)
         #expect(model.showPromptExamples)
 
-        model.setModelURL(second)
+        await model.setModelURL(second)
 
-        #expect(model.newlineShortcut == .shiftReturn)
-        #expect(!model.showPromptExamples)
+        #expect(model.newlineShortcut == .return)
+        #expect(model.showPromptExamples)
     }
 
     /// Phase D item 15. The newer-version branch says "Every key decodes with
@@ -559,7 +622,7 @@ import Testing
     }
 
     @MainActor
-    @Test func changingModelDirectoryStillReleasesTheImageTower() throws {
+    @Test func changingModelDirectoryStillReleasesTheImageTower() async throws {
         let root = try makeTemporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = root.appendingPathComponent("first/model.gturbo", isDirectory: true)
@@ -570,10 +633,12 @@ import Testing
         try MacAppSettingsFileStore.save(
             MacAppSettings(visionResidencyPolicy: .keepReady),
             forModelDirectory: second)
-        let model = AppModel(modelDirectory: first, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: first,
+                             appDataDirectory: root.appendingPathComponent("app-data"),
+                             settingsPersistenceEnabled: true)
         #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand)
 
-        model.setModelURL(second)
+        await model.setModelURL(second)
 
         #expect(model.runtimeOptions.visionResidencyPolicy == .onDemand,
                 "a persisted keep-ready came back through the model path change")

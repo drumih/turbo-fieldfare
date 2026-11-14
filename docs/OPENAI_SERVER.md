@@ -63,8 +63,11 @@ defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
 ```
 
 Without these flags the server runs the production defaults: 16 expert-cache
-slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
-off. `--prefill-chunk-tokens auto` runs at the cap,
+slots, LFU eviction, chunked prefill on with 128-token chunks, and prefetch and
+read advice off. `--early-expert-read router` opts in at server startup; it is
+not a Chat Completions request field.
+
+`--prefill-chunk-tokens auto` runs at the cap,
 256, on the server: a per-request size is the smallest allowed size covering the
 span being prefilled, so the cap prefills every prompt in exactly those spans,
 and it costs about 32.5 MB of prefill scratch against about 16.4 MB at the 128
@@ -183,6 +186,11 @@ usage.prompt_tokens_details.cached_tokens
 The server retains one prefix. A different or incompatible history replaces
 it. Use `--prompt-cache-mode off` to disable reuse.
 
+Cache misses and rejected prefix publication include a reason code in the
+server log, such as `history-diverged` or `stop-string-filtered`. These cache
+diagnostics contain no prompt, response, tool payload or image content. Cache
+diagnostics are silent when prompt reuse is disabled.
+
 ## Tool calls
 
 The server can return OpenAI-style function calls, but it cannot authorize or
@@ -222,6 +230,9 @@ Chat Completions supports JSON and Server-Sent Events responses. Set
 `"stream_options": {"include_usage": true}` to receive a final usage chunk.
 
 Requests may contain system, developer, user, assistant, and tool messages.
+Multiple leading system messages retain their order. System and developer
+guidance must precede the conversation; guidance inserted after a user,
+assistant or tool message is rejected.
 Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
 `max_completion_tokens`, and function-tool fields.

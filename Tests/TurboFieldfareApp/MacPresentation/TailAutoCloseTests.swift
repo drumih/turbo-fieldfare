@@ -264,6 +264,28 @@ import Testing
         #expect(TailAutoClose.close("") == "")
     }
 
+    @Test func lazyIndentedProseEndingInInlineCodeStillClosesItsEmphasis() {
+        // Inline code at the end does not make the containing paragraph a code block.
+        #expect(TailAutoClose.close("paragraph\n    **bold `code`") == "paragraph\n    **bold `code`**")
+    }
+
+    @Test func returningToParentQuotePreservesItsListContext() {
+        let source = "> - list\n> > child quote\n>     **bold"
+        #expect(TailAutoClose.close(source) == source + "**")
+    }
+
+    @Test(arguments: ["\n", "\r", "\r\n"])
+    func finalLineEndingKeepsTheQuotedFenceOpen(_ newline: String) {
+        let source = "> ```" + newline + "> x" + newline
+        #expect(TailAutoClose.close(source) == source + "> ```")
+    }
+
+    @Test func quoteIndentationUsesTabStopsFromTheSourceColumn() {
+        #expect(ContainerPrefix.strippingQuoteMarkers("\t>").depth == 0)
+        #expect(ContainerPrefix.strippingQuoteMarkers("> \t>").depth == 2)
+        #expect(ContainerPrefix.strippingQuoteMarkers(">\t>").depth == 2)
+    }
+
     /// A finished answer must survive the pass untouched: whatever the model
     /// closed itself is the text the finalize render will see. The
     /// source-keeping call is the one the tail render makes and holds for every

@@ -130,7 +130,7 @@ internal enum PrefillProjectionDispatchPolicy {
     }
 }
 
-public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, @unchecked Sendable {
+public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, RequestFinishingProducer, @unchecked Sendable {
     private struct LayerSharedExpertProjections {
         let gate: SharedExpertInt8Proj
         let up: SharedExpertInt8Proj
@@ -217,6 +217,13 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private let earlyExpertReads: NextLayerExpertPrefetcher?
     /// Early-read counts since this runner was created; nil when it is off.
     public var earlyExpertReadStats: EarlyExpertReadStats? { earlyExpertReads?.stats }
+
+    /// Join speculative readers before a caller reports request success or
+    /// reuses/disposes the runner after an error. No-op when early reads are off.
+    /// Shared completion and standalone restore call this before recovery.
+    public func finishRequest() throws {
+        try earlyExpertReads?.finishRequest()
+    }
 
     public let maxContext: Int
 
@@ -396,6 +403,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     /// Abandons the newest KV tokens so a stateful conversation can resume at
     /// an earlier visible boundary.
     public func rewind(to position: Int) throws {
+        try finishPendingBeforeReuse()
         guard let kv else {
             throw PrefillError.prefillCursorMismatch(
                 "rewind requires an initialized KV cache")
@@ -416,6 +424,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     }
 
     public func prepareForContinuation(expectedPosition: Int) throws {
+        try finishPendingBeforeReuse()
         guard let kv else {
             throw PrefillError.prefillCursorMismatch(
                 "continuation requires an initialized KV cache")
@@ -433,6 +442,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         rdadviseAdaptiveState.reset()
         rdadviseAdaptivePosition = -1
         rdadviseAdaptivePositionBytes = 0
+    }
+
+    /// reset() only changes KV/transient metadata. Direct callers must join
+    /// old speculative writers before any throwing path can reuse slots.
+    private func finishPendingBeforeReuse() throws {
+        try earlyExpertReads?.finishBeforeReuse()
     }
 
     public private(set) var totalIoNanos: UInt64 = 0
@@ -520,6 +535,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                config: PrefillRuntimeConfig,
                                into logits: MTLBuffer,
                                onProgress: (Int) -> Void) async throws -> PrefillResult {
+        try finishPendingBeforeReuse()
         try prefillChunkState.requireClean(operation: "prefillChunked")
         guard config.mode == .chunked else {
             throw PrefillError.chunkedUnsupported(
@@ -574,6 +590,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                   config: PrefillRuntimeConfig,
                                   into logits: MTLBuffer,
                                   onProgress: (Int) -> Void) async throws -> PrefillResult {
+        try finishPendingBeforeReuse()
         try prefillChunkState.requireClean(operation: "prefillMultimodal")
         // The same property `coercedForImagePrompt()` repairs, so the guard and
         // the coercion cannot drift apart.
@@ -1658,7 +1675,6 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             for i in 0..<cfg.topKExperts {
                 experts[i] = min(Int(idxPtr[i]), cfg.numExperts - 1)
             }
-
             var earlyGuess: (streamer: PreadExpertStreamer, experts: [Int])?
             if let earlyLayer, let early = earlyExpertReads {
                 let streamer = try model.routedExpertStreamer(layer: earlyLayer)

@@ -26,7 +26,7 @@
   <a href="docs/IMPLEMENTATION_REFERENCES.md">References</a>
 </p>
 
-![TurboFieldfare Mac app generating text with Gemma 4 26B-A4B](docs/assets/turbofieldfare-app.webp)
+![TurboFieldfare Mac app with local chat history, LaTeX rendering, and run statistics](docs/assets/turbofieldfare-app.webp)
 
 Memory got expensive. So I gave a 26-billion-parameter model a ~2 GB budget.
 
@@ -56,7 +56,7 @@ On the first run, Swift Package Manager downloads and builds the Swift packages
 required by the tokenizer. The complete release build includes the foreground
 Mac app and its sibling decode-service executable.
 
-When the app opens, choose **Download** and let TurboFieldfare fetch and repack
+When the app opens, choose **Download Model** and let TurboFieldfare fetch and repack
 the pinned model (about 15 GB). Once it is ready, choose **Load Model**, type
 your prompt, and press **Generate**.
 
@@ -70,8 +70,8 @@ your prompt, and press **Generate**.
 | Storage         | About 14.3 GB for the text model, plus about 1.1 GB for the optional image pack                                          |
 | Hardware        | Apple Silicon Mac; 8 GB of RAM                                                                                            |
 | Platform        | macOS 26, Metal 4, Swift 6.2                                                                                             |
-| M2 measured decode | [5.1-6.3 tok/s](docs/BENCHMARKS.md#m2-measured-decode) on an 8 GB M2 MacBook Air |
-| M5 measured decode | [31-35 tok/s](docs/BENCHMARKS.md#m5-measured-decode) on a 24 GB M5 Pro |
+| M2 measured decode | [5.5–6.8 tok/s](docs/BENCHMARKS.md#full-generation-measurements) on an 8 GB M2 MacBook Air, expert prefetch on |
+| M5 measured decode | [35.3–39.2 tok/s](docs/BENCHMARKS.md#full-generation-measurements) on a 24 GB M5 Pro, expert prefetch off |
 | Community Reports | [Here](docs/COMMUNITY_BENCHMARKS.md#community-results) |
 
 The measured result is a reference point, not a performance ceiling. Prompt
@@ -101,7 +101,7 @@ The Swift package exposes six products:
 
 - An Apple Silicon Mac; the validated target is an 8 GB M2 MacBook Air
 - macOS 26 with Metal 4
-- Xcode 26 and Swift 6.2 or newer
+- Apple Command Line Tools or Xcode with Swift 6.2+ and the macOS 26 SDK or newer
 - Enough free storage for the ~14.3 GB model installation
 - An internet connection for the first model install
 
@@ -143,13 +143,30 @@ swift build -c release
 ```
 
 Build the complete package so the app and its sibling decode service are both
-available. When launched from this checkout, the app stores the model in
-`scratch/gemma4.gturbo`.
+available. New installs from this checkout default to `scratch/gemma4.gturbo`;
+the app remembers a location you choose.
+
+#### Build a Mac app
+
+From the repository root, run:
+
+```bash
+Scripts/build_app.sh
+```
+
+This creates `dist/TurboFieldfare.app`, which you can double-click or move to
+Applications. Add `--install` to also copy it to `~/Applications`.
+The bundle includes the decode service and resources; model weights stay in
+their selected folder. The script uses ad-hoc signing, so no Apple developer
+account is required.
 
 #### Install the model
 
-On first launch, the app checks the available storage and shows the download
-and installed sizes. Choose **Download** to begin.
+Choose **Download Model** to install, or **Change…** to pick a destination.
+To reuse a model, choose **Use Existing Model…** and select its `.gturbo`
+folder or parent folder. If several models are found, pick one.
+Keep the optional image pack beside its text model: `gemma4.gturbo` and
+`gemma4.vision.gturbo`.
 
 The installer never materializes the full source checkpoint. It streams the
 required byte ranges from the pinned Hugging Face revision and repacks them
@@ -177,6 +194,8 @@ right pane to configure sampling, context length, expert-cache slots, and
 runtime options. See [Runtime controls](docs/RUNTIME_CONTROLS.md) for details
 and defaults.
 
+**Expert prefetch** is off by default. Enable it in Runtime, then reload the model.
+
 Use **Settings → Text Size** to enlarge conversation and message-editor text
 from 100% to 200%. Changes apply immediately and are remembered across launches.
 
@@ -188,11 +207,15 @@ sidebar. Every launch opens an empty chat. Only one conversation's model context
 Browsing other chats keeps that cache intact; continuing another chat replaces
 it. **New Chat** starts fresh.
 
+Settings and chats live in `~/Library/Application Support/TurboFieldfare/`
+(`mac-app-settings.json` and `conversations/`). A standalone app also uses
+this folder for new model downloads by default. Moving the app does not move
+these files or change a saved model location.
+
 ### Command-line interface
 
-The CLI uses an existing `.gturbo` installation. If you installed the model
-through the Mac app, it is already available at `scratch/gemma4.gturbo`.
-Otherwise, install it from the command line:
+The CLI uses an existing `.gturbo` installation. For a model installed through
+the Mac app, pass its location with `--model`. To install from the command line:
 
 ```bash
 swift run -c release TurboFieldfareRepack \

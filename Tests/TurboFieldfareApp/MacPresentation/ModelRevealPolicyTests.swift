@@ -46,4 +46,19 @@ import Testing
         #expect(ModelRevealPolicy.target(forModelPath: "/",
                                          fileExists: { _ in false }) == .unavailable)
     }
+
+    @Test func existingDirectoryWithTrailingSpaceKeepsItsExactName() {
+        // A folder picked from Finder can end with a space. Trimming it would
+        // reveal a different model or its parent instead of the selected item.
+        let path = "/Volumes/Models/модель.gturbo "
+        #expect(ModelRevealPolicy.target(forModelPath: path,
+                                         fileExists: { $0 == path }) == .selectItem(
+            URL(fileURLWithPath: path, isDirectory: true)))
+    }
+
+    @Test func disconnectedVolumeDoesNotRevealUnrelatedVolumesDirectory() {
+        #expect(ModelRevealPolicy.target(
+            forModelPath: "/Volumes/Disconnected/gemma4.gturbo",
+            fileExists: { $0 == "/Volumes" || $0 == "/" }) == .unavailable)
+    }
 }

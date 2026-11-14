@@ -269,7 +269,10 @@ public final class InstructionTranscriptDocumentController {
             || displaysPrefillPlaceholder != self.showsPrefillPlaceholder
         var appendedDelta: String?
         if !needsRebuild, response.utf8.count > self.response.utf8.count {
-            appendedDelta = Self.appendedSuffix(of: response, after: self.response)
+            // The progressive scanner consumes UTF-8 offsets itself. Requiring
+            // a Character boundary here rebuilt a fence when CR and LF arrived
+            // separately, losing its identity despite an exact byte append.
+            appendedDelta = progressiveRendering ? "" : Self.appendedSuffix(of: response, after: self.response)
             needsRebuild = appendedDelta == nil
         }
 
@@ -531,6 +534,8 @@ public final class InstructionTranscriptDocumentController {
         /// UTF-8 offset of the open block the drawn tail was made from.
         var tailStart: Int?
         var fence: FenceTail?
+        var codeStyle: (bodyStart: Int, attributes: [NSAttributedString.Key: Any])?
+        var nestedCodes: (start: Int, blocks: [TranscriptCodeBlock])?
         /// Rendered blocks keyed by position and text. Position is part of the
         /// key because two identical tables must not share one `NSTextTable`,
         /// which TextKit would draw as a single merged table.
@@ -542,6 +547,8 @@ public final class InstructionTranscriptDocumentController {
             prefixLength = 0
             tailStart = nil
             fence = nil
+            codeStyle = nil
+            nestedCodes = nil
         }
     }
 
@@ -819,6 +826,45 @@ public final class InstructionTranscriptDocumentController {
         return renderer.blockSeparator(trailingNewlines: trailingNewlines)
     }
 
+    private func codeAttributes(for fence: ResponseBlockSplitter.Fence) -> [NSAttributedString.Key: Any] {
+        if let style = progressive.codeStyle, style.bodyStart == fence.bodyStart { return style.attributes }
+        let attributes = renderer.streamingCodeAttributes()
+        progressive.codeStyle = (fence.bodyStart, attributes)
+        return attributes
+    }
+
+    private func preservingCodeIdentity(_ rendered: NSAttributedString, blockStart: Int) -> NSAttributedString {
+        // Lists and quotes are reparsed as their tail grows. Reuse identities
+        // by code order within that same block so a focused button survives.
+        let previous = progressive.nestedCodes?.start == blockStart ? progressive.nestedCodes?.blocks ?? [] : []
+        var blocks: [TranscriptCodeBlock] = []
+        var replacement: NSMutableAttributedString?
+        rendered.enumerateAttribute(.transcriptCodeBlock, in: NSRange(location: 0, length: rendered.length)) { value, range, _ in
+            guard let fresh = value as? TranscriptCodeBlock else { return }
+            let stable = previous[safe: blocks.count] ?? fresh
+            stable.syntheticTerminator = fresh.syntheticTerminator
+            blocks.append(stable)
+            if stable !== fresh {
+                if replacement == nil { replacement = NSMutableAttributedString(attributedString: rendered) }
+                replacement?.addAttribute(.transcriptCodeBlock, value: stable, range: range)
+            }
+        }
+        progressive.nestedCodes = (blockStart, blocks)
+        return replacement ?? rendered
+    }
+
+    private func blockSource(_ block: ResponseBlockSplitter.Block, in response: String) -> String {
+        var text = ResponseBlockSplitter.text(block.utf8Range, in: response)
+        // Splitter ranges omit line terminators. Markdown needs that last real
+        // newline to distinguish indented code from a synthetic paragraph end.
+        guard block.kind == .indentedCode || block.kind == .list || block.kind == .quote else { return text }
+        let suffix = ResponseBlockSplitter.text(block.end..<min(block.end + 2, response.utf8.count), in: response)
+        if suffix.hasPrefix("\r\n") { text += "\r\n" }
+        else if suffix.hasPrefix("\n") { text += "\n" }
+        else if suffix.hasPrefix("\r") { text += "\r" }
+        return text
+    }
+
     private func renderedBlock(
         _ block: ResponseBlockSplitter.Block,
         of response: String
@@ -828,16 +874,23 @@ public final class InstructionTranscriptDocumentController {
         // which the renderer turns into raw fallback, so a rebuild mid-answer
         // put "```" back on screen where the streamed render had drawn nothing.
         if let fence = block.fence {
-            return code(fence, of: response, attributes: renderer.streamingCodeAttributes()).text
+            return code(fence, of: response, attributes: codeAttributes(for: fence)).text
         }
-        let text = ResponseBlockSplitter.text(block.utf8Range, in: response)
+        let text = blockSource(block, in: response)
         let key = BlockKey(start: block.start, text: text)
         if let cached = progressive.cache[key] { return cached }
-        let rendered = renderer.render(text, typesetsMath: true).attributedString
+        let rendered = preservingCodeIdentity(
+            renderer.render(text, typesetsMath: true).attributedString, blockStart: block.start)
         // A session cannot grow this without bound; block renders are already
         // held by the storage, and dropping the whole table beats ageing it.
         if progressive.cache.count >= 512 { progressive.cache.removeAll(keepingCapacity: true) }
-        progressive.cache[key] = rendered
+        // Code runs carry mutable occurrence identities and TextKit cells.
+        // Reusing them across turns or resets resurrects obsolete controls.
+        var containsCode = false
+        rendered.enumerateAttribute(.transcriptCodeBlock, in: NSRange(location: 0, length: rendered.length)) { value, _, stop in
+            if value != nil { containsCode = true; stop.pointee = true }
+        }
+        if !containsCode { progressive.cache[key] = rendered }
         return rendered
     }
 
@@ -853,14 +906,19 @@ public final class InstructionTranscriptDocumentController {
             let drawn = code(
                 fence,
                 of: response,
-                attributes: renderer.streamingCodeAttributes())
+                attributes: codeAttributes(for: fence))
             progressive.fence = drawn.state
             return drawn.text
         }
         progressive.fence = nil
-        let text = ResponseBlockSplitter.text(block.utf8Range, in: response)
+        let text = blockSource(block, in: response)
         let closed = TailAutoClose.close(text, typesetsMath: false)
-        return renderer.render(closed, typesetsMath: false).attributedString
+        let rendered = renderer.render(closed, typesetsMath: false).attributedString
+        if !TranscriptCodeBlock.endsWithLineBreak(text), closed.hasPrefix(text + "\n"), rendered.length > 0,
+           let block = rendered.attribute(.transcriptCodeBlock, at: rendered.length - 1, effectiveRange: nil) as? TranscriptCodeBlock {
+            block.syntheticTerminator = true
+        }
+        return preservingCodeIdentity(rendered, blockStart: block.start)
     }
 
     private func code(
@@ -876,6 +934,7 @@ public final class InstructionTranscriptDocumentController {
         // the container closes mid-line.
         let synthetic = !filter.endsWithNewline
         if synthetic { body.append("\n") }
+        (attributes[.transcriptCodeBlock] as? TranscriptCodeBlock)?.syntheticTerminator = synthetic
         return (
             NSAttributedString(string: body, attributes: attributes),
             FenceTail(
@@ -921,6 +980,7 @@ public final class InstructionTranscriptDocumentController {
             length: drawn.synthetic ? 1 : 0)
         drawn.bodyEnd = fence.bodyEnd
         drawn.synthetic = synthetic
+        (drawn.attributes[.transcriptCodeBlock] as? TranscriptCodeBlock)?.syntheticTerminator = synthetic
         progressive.fence = drawn
         guard !delta.isEmpty || removal.length > 0 else {
             return ProgressiveUpdate(mutation: .none)

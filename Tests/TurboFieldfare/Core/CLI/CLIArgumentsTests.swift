@@ -19,6 +19,8 @@ import TurboFieldfare
         #expect(arguments.seed == nil)
         #expect(arguments.stops.isEmpty)
         #expect(!arguments.quiet)
+        #expect(arguments.earlyExpertRead == .off)
+        #expect(Args.usage.contains("off or router (default off)"))
 
         let runtime = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         #expect(runtime == RuntimeConfiguration.production)

@@ -164,6 +164,7 @@ Streamed expert resources:
 | Resource | Current size or capacity | Ownership and behavior |
 | --- | ---: | --- |
 | Routed-expert slots | 16 per opened layer; one page-rounded 3,358,720-byte blob per slot | App-owned buffers allocated with 2 MiB alignment and wrapped by Metal without another copy. Opening all 30 layer streamers reserves about 1.50 GiB of slot capacity; pages become resident as reads fill them. |
+| Next-layer expert stage | One page-rounded 3,358,720-byte buffer (about 3.20 MiB) by default in router mode | Runner-owned and reused across layers; separate from all 16 cache slots. The off mode allocates no early-read stage. Pages become resident when the speculative read fills them. |
 | Routed-expert files | 12,897,484,800 bytes (12.01 GiB) on disk | Thirty per-layer files. Only selected blobs enter explicit slots; the files are not mapped as one resident pool. |
 | macOS unified file cache | Dynamic | OS-owned second-chance cache. It may make a `pread` cheap, but it is not a guaranteed part of the app budget. |
 
@@ -187,6 +188,13 @@ least-frequently used (LFU) eviction with recency as the tie-breaker. A hit
 reuses the existing buffer. A miss assigns an evictable slot and starts a
 bounded read. Distinct misses can run in parallel, but no two reads may write
 the same slot concurrently.
+
+Router prefetch is optional. Its reader captures a separate stage's address
+before dispatch. An exact native-route miss may swap that stage into its
+assigned slot before Metal binding; the stage takes the slot's old buffer.
+Adoption does not change the writer's destination. Adopted writers join before
+cache admission, even if foreground I/O fails. All speculative writers join
+before request completion, recovery or storage reuse.
 
 ```mermaid
 flowchart LR
@@ -282,9 +290,12 @@ final prompt row needed to start generation.
 ## Decode
 
 Decode generates one token at a time. In each layer, the first Metal
-command-buffer phase, `cb1`, produces the router's top-8 result. The CPU must
-read those expert IDs before it knows which files to access, creating a CPU and
-I/O handoff before `cb2`.
+command-buffer phase, `cb1`, produces the native router's top-8 result. The
+CPU must read those expert IDs before it knows which files to access, creating
+a CPU and I/O handoff before `cb2`. In router mode, the same `cb1` also scores
+layer L+1's router using layer L's router input. That score is a prediction;
+layer L+1 later computes its own authoritative top-8 IDs and FP16 weights
+from its actual hidden state. Prefetch never changes routing or reduction.
 
 The resident router normalizes and scales the layer's post-attention hidden
 state, then projects it to 128 expert scores:
@@ -304,8 +315,8 @@ The implementation labels this handoff as three phases:
 
 | Phase | Work |
 | --- | --- |
-| `cb1` | Metal runs input norm, Q/K/V projections, RoPE and KV writes, attention, output projection, post-attention setup, and the router. It completes when the top-8 IDs are ready for CPU readback. |
-| `io` | The CPU looks up the top-8 experts in the layer cache and fills only missing slots with `pread`. Metal starts the resident shared-expert branch after `cb1` so it overlaps these reads. Cached routed-expert work can also begin early. |
+| `cb1` | Metal runs input norm, Q/K/V projections, RoPE and KV writes, attention, output projection, post-attention setup, and the native router. In router mode it also scores L+1's router for early-read candidates. It completes when the native top-8 IDs are ready for CPU readback. |
+| `io` | The CPU plans native top-8 cache hits and misses. An exact matching staged miss can supply its assigned slot; other misses use foreground `pread`. After this layer's reads, the speculative reader can start its separate stage for L+1. Metal runs the resident shared-expert branch and cached routed work while reads proceed. |
 | `cb2` | Metal finishes the routed top-8 branch, reduces it with the router weights, combines it with the shared branch, and applies the post-FFN norms, residual, and layer scalar. |
 
 Work overlaps across these phases. The command-buffer pipeline can delay
@@ -398,6 +409,8 @@ references lead to the supporting code and tests.
   [`ModelExpertIO`](../Sources/TurboFieldfare/Runtime/Inference/ModelExpertIO.swift),
   and [`PreadExpertStreamer`](../Sources/TurboFieldfare/Infrastructure/Streaming/PreadExpertStreamer.swift)
   own common weights, expert-cache planning, slots, and parallel bounded reads.
+  [`NextLayerExpertPrefetcher`](../Sources/TurboFieldfare/Runtime/Inference/NextLayerExpertPrefetcher.swift)
+  owns the separate stage, early reader, exact-match adoption, and join points.
 - **KV cache and attention.** [`KVCacheManager`](../Sources/TurboFieldfare/Runtime/KVCache/KVCacheManager.swift)
   owns bounded circular SWA storage and linear full-attention storage.
   [`Attention`](../Sources/TurboFieldfare/Kernels/Attention/Attention.swift) and

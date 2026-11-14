@@ -13,14 +13,14 @@ import Testing
         let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = AppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
         // Slider bindings update the model without invoking a persistence action.
         model.temperature = 0.35
         model.topK = 17
         model.topP = 0.8
         model.shutdownForTermination()
-        let reopened = AppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        let reopened = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), settingsPersistenceEnabled: true)
         #expect(reopened.temperature == 0.35)
         #expect(reopened.topK == 17)
         #expect(reopened.topP == 0.8)
@@ -35,7 +35,7 @@ import Testing
             at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let model = AppModel(modelDirectory: directory,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(),
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
         #expect(model.isSidebarVisible, "the list is shown by default")
@@ -45,12 +45,12 @@ import Testing
 
         // A new model over the same directory has to come back hidden: the
         // window remembering its shape is the whole reason this is persisted.
-        let reopened = AppModel(modelDirectory: directory,
+        let reopened = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(),
                                 settingsPersistenceEnabled: true)
         #expect(!reopened.isSidebarVisible)
 
         model.setSidebarVisible(true)
-        let again = AppModel(modelDirectory: directory,
+        let again = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(),
                              settingsPersistenceEnabled: true)
         #expect(again.isSidebarVisible)
     }
@@ -67,7 +67,7 @@ import Testing
             at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let model = AppModel(modelDirectory: directory,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(),
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
         #expect(model.isInspectorVisible, "the Inspector is shown by default")
@@ -76,7 +76,7 @@ import Testing
         #expect(!model.isInspectorVisible)
         #expect(model.isSidebarVisible, "hiding one panel moved the other")
 
-        let reopened = AppModel(modelDirectory: directory,
+        let reopened = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(),
                                 settingsPersistenceEnabled: true)
         #expect(!reopened.isInspectorVisible)
         #expect(reopened.isSidebarVisible)

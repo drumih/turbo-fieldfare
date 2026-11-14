@@ -6,6 +6,12 @@ import Foundation
 /// answer: a fence at the column is the item's own listing, one before it ends
 /// the list.
 enum ContainerPrefix {
+    static func markdownLines(_ source: String) -> [Substring] {
+        // CommonMark line endings exclude Unicode separators such as U+2028,
+        // which remain literal characters in code even though isNewline is true.
+        source.split(omittingEmptySubsequences: false) { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }
+    }
+
     struct ListItem: Equatable {
         /// Columns of indentation before the marker.
         let markerIndent: Int
@@ -111,21 +117,27 @@ enum ContainerPrefix {
     /// The line with its blockquote markers removed, and how many there were.
     /// A closer written back into the tail has to carry them again or the
     /// parser reads it as prose after the quote.
-    static func strippingQuoteMarkers(_ line: Substring) -> (depth: Int, rest: Substring) {
+    static func strippingQuoteMarkers(_ line: Substring, limit: Int = .max) -> (depth: Int, rest: Substring) {
         var rest = line
         var depth = 0
-        while true {
+        var column = 0
+        while depth < limit {
             var probe = rest
-            var indent = 0
-            while let first = probe.first, first == " " || first == "\t", indent < 3 {
-                indent += first == "\t" ? 4 : 1
+            var probeColumn = column
+            while let first = probe.first, first == " " || first == "\t", probeColumn - column < 3 {
+                probeColumn += first == "\t" ? 4 - probeColumn % 4 : 1
                 probe = probe.dropFirst()
             }
-            guard probe.first == ">" else { return (depth, rest) }
+            guard probeColumn - column <= 3, probe.first == ">" else { return (depth, rest) }
+            column = probeColumn + 1
             probe = probe.dropFirst()
-            if probe.first == " " { probe = probe.dropFirst() }
+            if probe.first == " " {
+                probe = probe.dropFirst()
+                column += 1
+            }
             depth += 1
             rest = probe
         }
+        return (depth, rest)
     }
 }

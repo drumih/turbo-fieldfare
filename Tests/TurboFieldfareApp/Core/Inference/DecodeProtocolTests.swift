@@ -1,13 +1,48 @@
 import Foundation
 import Testing
 import TurboFieldfareDecodeProtocol
+@testable import TurboFieldfareAppCore
 
 @Suite struct DecodeProtocolTests {
+    @Test(arguments: ["null", "1", "\"true\"", "{}", "[]"])
+    func invalidExpertPrefetchIsRejected(_ value: String) throws {
+        let encoded = try JSONEncoder().encode(DecodeRuntimeOptions())
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["expertPrefetchEnabled"] = try JSONSerialization.jsonObject(
+            with: Data(value.utf8), options: .fragmentsAllowed)
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(DecodeRuntimeOptions.self, from: data)
+        }
+    }
+
+    @Test func expertPrefetchWireDefaultAndLegacyDecodeAreOff() throws {
+        #expect(!DecodeRuntimeOptions().expertPrefetchEnabled)
+        let legacy = Data("""
+        {"expertCacheSlots":16,"expertCachePolicy":"lfu","prefillEnabled":true,
+         "prefillChunkTokens":128,"rdadvisePolicy":"off","modelVerification":"full-sha256"}
+        """.utf8)
+        #expect(try !JSONDecoder().decode(DecodeRuntimeOptions.self, from: legacy).expertPrefetchEnabled)
+    }
+
+    @Test func outboundRuntimeMappingPreservesExpertPrefetchChoice() throws {
+        for enabled in [false, true] {
+            let options = AppRuntimeOptions(expertPrefetchEnabled: enabled)
+            let wire = DecodeServiceInferenceClient.decodeRuntimeOptions(options)
+            #expect(wire.expertPrefetchEnabled == enabled)
+            let decoded = try JSONDecoder().decode(DecodeRuntimeOptions.self, from: JSONEncoder().encode(wire))
+            #expect(decoded == wire)
+            #expect(decoded.expertPrefetchEnabled == enabled)
+        }
+    }
+
     @Test func loadRequestRoundTripPreservesEveryPublicRuntimeOption() throws {
         let options = DecodeRuntimeOptions(
             expertCacheSlots: 32,
             expertCachePolicy: "lru",
             prefillEnabled: false,
+            expertPrefetchEnabled: false,
             prefillChunkTokens: 64,
             rdadvisePolicy: "adaptive",
             modelVerification: "trusted-install")

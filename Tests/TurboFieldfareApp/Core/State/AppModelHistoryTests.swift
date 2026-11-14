@@ -494,7 +494,7 @@ import TurboFieldfare
         let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
-        let model = AppModel(modelDirectory: directory, client: client,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: client,
                              attachmentStore: attachmentStore,
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
@@ -610,7 +610,7 @@ import TurboFieldfare
     }
 
     @MainActor
-    @Test func deletionWaitingOnAnOldBindingDoesNotMutateEitherStore() async throws {
+    @Test func modelSwitchIsRefusedWhileDeletionOwnsTheStore() async throws {
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let (model, root) = try await readyModel(client)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -626,12 +626,12 @@ import TurboFieldfare
         let deletion = try #require(model.conversationDeletionTask)
         await Task.yield()
         let newDirectory = root.appendingPathComponent("other/gemma4.gturbo")
-        model.setModelURL(newDirectory)
+        await model.setModelURL(newDirectory)
         await gate.open()
         await deletion.value
         try await model.waitForHistory(count: 0)
-        #expect(FileManager.default.fileExists(atPath: folder.path))
-        #expect(model.modelPathText == newDirectory.path)
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+        #expect(model.modelPathText != newDirectory.path)
         #expect(model.storedConversationID == nil)
         #expect(model.conversationDeletionTask == nil)
         #expect(model.historyDiagnostic == nil)
@@ -755,7 +755,7 @@ import TurboFieldfare
     }
 
     @MainActor
-    @Test func rootSwitchCancelsAQueuedTurnBeforeItCanAppendOrReport() async throws {
+    @Test func modelSwitchWaitsForQueuedTurnAndKeepsTheStore() async throws {
         let client = FakeInferenceClient(eventDelay: .milliseconds(20))
         let (model, root) = try await readyModel(client)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -777,21 +777,24 @@ import TurboFieldfare
         let newDirectory = root.appendingPathComponent("other/model.gturbo", isDirectory: true)
         try FileManager.default.createDirectory(
             at: newDirectory, withIntermediateDirectories: true)
-        model.setModelURL(newDirectory)
+        let switching = Task { await model.setModelURL(newDirectory) }
+        await Task.yield()
+        #expect(model.conversationStore === oldStore)
         await gate.open()
         await oldTail.value
+        await switching.value
 
         let oldTurns = try await oldStore.open(id: oldID).records.filter {
             if case .turn = $0 { return true }
             return false
         }
-        #expect(oldTurns.isEmpty)
+        #expect(!oldTurns.isEmpty)
         #expect(model.conversationBinding?.modelDirectory == newDirectory.standardizedFileURL)
         #expect(model.historyDiagnostic == nil)
     }
 
     @MainActor
-    @Test func rootSwitchCancelsAnOlderWriteAtTheBatchBoundary() async throws {
+    @Test func modelSwitchWaitsAtBatchBoundaryAndKeepsTheStore() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("history-batch-cancel-\(UUID())", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -801,6 +804,7 @@ import TurboFieldfare
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: client,
             settingsPersistenceEnabled: true,
             conversationStoreProvider: { root in
@@ -829,16 +833,18 @@ import TurboFieldfare
         let newDirectory = root.appendingPathComponent("other/model.gturbo", isDirectory: true)
         try FileManager.default.createDirectory(
             at: newDirectory, withIntermediateDirectories: true)
-        model.setModelURL(newDirectory)
+        let switching = Task { await model.setModelURL(newDirectory) }
+        await Task.yield()
+        #expect(model.conversationStore === oldStore)
         await gate.open()
         await oldTail.value
+        await switching.value
 
         let oldTurns = try await oldStore.open(id: oldID).records.filter {
             if case .turn = $0 { return true }
             return false
         }
-        #expect(oldTurns.isEmpty,
-                "cancellation after entering append must stop the old-root batch")
+        #expect(!oldTurns.isEmpty, "model switching must let the committed batch finish")
         #expect(model.conversationBinding?.modelDirectory == newDirectory.standardizedFileURL)
         #expect(model.historyDiagnostic == nil)
     }
@@ -854,6 +860,7 @@ import TurboFieldfare
         let client = FakeInferenceClient(eventDelay: .milliseconds(1))
         let model = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: client,
             settingsPersistenceEnabled: true,
             conversationStoreProvider: { root in
@@ -950,6 +957,7 @@ import TurboFieldfare
 
         let model = AppModel(
             modelDirectory: directoryA,
+            appDataDirectory: directoryA.deletingLastPathComponent(),
             client: FakeInferenceClient(),
             settingsPersistenceEnabled: true,
             conversationIdentityProvider: { directory in
@@ -961,15 +969,16 @@ import TurboFieldfare
                     ? storeA : storeB
             })
         await gate.waitUntilEntered()
-        model.setModelURL(directoryB)
-        try await model.waitForHistory(count: 1)
+        await model.setModelURL(directoryB)
         await gate.open()
+        try await model.waitForHistory(count: 1)
         try await Task.sleep(for: .milliseconds(30))
 
         #expect(model.conversationBinding?.modelDirectory == directoryB.standardizedFileURL)
         #expect(model.conversationIdentity == identityB)
-        #expect(model.history.entries.map(\.id) == [metaB.id])
-        #expect(model.history.entry(metaA.id) == nil)
+        #expect(model.history.entries.map(\.id) == [metaA.id])
+        #expect(model.history.entry(metaB.id) == nil)
+        #expect(model.conversationStore === storeA)
     }
 
     @MainActor
@@ -989,6 +998,7 @@ import TurboFieldfare
 
         let model = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: FakeInferenceClient(),
             settingsPersistenceEnabled: true)
         try await waitUntil { await model.history.discardedLegacyTrashCount == 2 }
@@ -1038,6 +1048,7 @@ import TurboFieldfare
 
         let model = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: FakeInferenceClient(),
             settingsPersistenceEnabled: true,
             conversationIdentityProvider: { _ in
@@ -1199,6 +1210,7 @@ import TurboFieldfare
         let firstClient = FakeInferenceClient(eventDelay: .milliseconds(1))
         var first: AppModel? = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: firstClient,
             settingsPersistenceEnabled: true)
         first?.conversationIdentity = Self.identity
@@ -1226,6 +1238,7 @@ import TurboFieldfare
 
         let second = AppModel(
             modelDirectory: directory,
+            appDataDirectory: directory.deletingLastPathComponent(),
             client: FakeInferenceClient(eventDelay: .milliseconds(1)),
             settingsPersistenceEnabled: true)
         second.conversationIdentity = Self.identity
@@ -2268,7 +2281,7 @@ import TurboFieldfare
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let model = AppModel(modelDirectory: directory, client: client,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: client,
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
         model.conversationIdentity = Self.identity
@@ -3083,7 +3096,7 @@ extension AppModelHistoryTests {
             rootURL: ConversationStoreLocation.url(forModelDirectory: directory))
         try await holder.activate()
 
-        let model = AppModel(modelDirectory: directory, client: client,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: client,
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path
         model.conversationIdentity = Self.identity

@@ -25,11 +25,12 @@ enum TailAutoClose {
         guard !tail.isEmpty else { return tail }
         if let fence = unclosedFence(tail) {
             var closed = tail
-            if !closed.hasSuffix("\n") { closed.append("\n") }
+            if !TranscriptCodeBlock.endsWithLineBreak(closed) { closed.append("\n") }
             closed.append(fence.closerPrefix)
             closed.append(String(repeating: fence.run.character, count: fence.run.length))
             return closed
         }
+        guard !endsInIndentedCode(tail) else { return tail }
         var text = strippingIncompleteTag(tail)
         text = flatteningIncompleteLink(text)
         text = balancingInlineMarkers(text, typesetsMath: typesetsMath)
@@ -38,10 +39,32 @@ enum TailAutoClose {
 
     // MARK: - Fences
 
+    static func endsWithClosedFence(_ text: String) -> Bool { fenceState(text).closedAtEnd }
+
+    private static func endsInIndentedCode(_ text: String) -> Bool {
+        let lines = ContainerPrefix.markdownLines(text)
+        guard let last = lines.last(where: { !$0.isEmpty }) else { return false }
+        let container = ContainerPrefix.strippingQuoteMarkers(last)
+        let tail = container.rest
+        let indentation = tail.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+        guard indentation >= 4 else { return false }
+        // Classify within the final quote's own context. Parent lists cannot
+        // set its indentation; returning from a child retains the parent list.
+        var unquoted: [Substring] = []
+        for line in lines {
+            let quote = ContainerPrefix.strippingQuoteMarkers(line)
+            if quote.depth < container.depth { unquoted.removeAll(keepingCapacity: true) }
+            else if quote.depth == container.depth { unquoted.append(quote.rest) }
+            else if unquoted.last?.isEmpty == false { unquoted.append("") }
+        }
+        return MathSpanDetector.endsInCodeBlock(unquoted.joined(separator: "\n"))
+    }
+
     private struct OpenFence {
         let run: FenceLine.Run
         /// Content column of the item the fence was opened in.
         let containerIndent: Int
+        let quoteDepth: Int
         /// What a closing line needs in front of the marker to be read as this
         /// fence's closer. Written flush left instead, the parser reads it as
         /// prose after the item and the listing keeps its markers on screen.
@@ -51,29 +74,57 @@ enum TailAutoClose {
     /// The fence a tail ends inside, if any. Nothing inside a fenced block is
     /// markdown, so this case returns before every other rule.
     private static func unclosedFence(_ text: String) -> OpenFence? {
+        fenceState(text).open
+    }
+
+    private static func fenceState(_ text: String) -> (open: OpenFence?, closedAtEnd: Bool) {
         var open: OpenFence?
-        var column = 0
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let quote = ContainerPrefix.strippingQuoteMarkers(line)
+        var columns: [Int: Int] = [:]
+        var previousDepth = 0
+        var closedAtEnd = false
+        var lines = ContainerPrefix.markdownLines(text)
+        // A terminal delimiter has not started a new container-less line yet.
+        if lines.last?.isEmpty == true { lines.removeLast() }
+        for line in lines {
+            closedAtEnd = false
             if let current = open {
-                if let run = FenceLine.run(quote.rest, containerIndent: current.containerIndent),
-                   run.closes(marker: current.run.marker, length: current.run.length) {
-                    open = nil
+                // Additional '>' characters inside a fence are code, not a
+                // deeper quote. Leaving its actual quote ends that container.
+                let quote = ContainerPrefix.strippingQuoteMarkers(line, limit: current.quoteDepth)
+                if quote.depth == current.quoteDepth {
+                    if let run = FenceLine.run(quote.rest, containerIndent: current.containerIndent),
+                       run.closes(marker: current.run.marker, length: current.run.length) {
+                        open = nil
+                        closedAtEnd = true
+                    }
+                    continue
                 }
-                continue
+                open = nil
             }
+            let quote = ContainerPrefix.strippingQuoteMarkers(line)
+            if quote.depth < previousDepth { columns = columns.filter { $0.key <= quote.depth } }
+            else if quote.depth > previousDepth { columns[quote.depth] = 0 }
+            previousDepth = quote.depth
+            var column = columns[quote.depth] ?? 0
             if let item = ContainerPrefix.listItem(quote.rest),
                item.markerIndent < column || column == 0 {
                 column = item.contentColumn
             }
-            guard let run = FenceLine.run(quote.rest, containerIndent: column) else { continue }
+            var candidate = FenceLine.run(quote.rest, containerIndent: column)
+            if candidate == nil, column > 0, let dedented = FenceLine.run(quote.rest) {
+                column = 0
+                candidate = dedented
+            }
+            columns[quote.depth] = column
+            guard let run = candidate else { continue }
             open = OpenFence(
                 run: run,
                 containerIndent: column,
+                quoteDepth: quote.depth,
                 closerPrefix: String(repeating: "> ", count: quote.depth)
                     + String(repeating: " ", count: run.indent))
         }
-        return open
+        return (open, closedAtEnd)
     }
 
     // MARK: - Trailing fragments

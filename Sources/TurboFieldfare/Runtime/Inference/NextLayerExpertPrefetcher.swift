@@ -22,8 +22,8 @@ public struct EarlyExpertReadStats: Sendable, Equatable {
 }
 
 /// Decode control: read the next layer's likeliest routed experts while
-/// storage would otherwise sit idle. On by default;
-/// `RuntimeConfiguration.earlyExpertRead` turns it off.
+/// storage would otherwise sit idle. Off by default;
+/// `RuntimeConfiguration.earlyExpertRead` explicitly enables it.
 ///
 /// Per layer L < last: cb1(L) also scores layer L+1's experts with L+1's router
 /// over L's router input. After L's own reads finish, the best-scoring experts
@@ -59,15 +59,29 @@ final class NextLayerExpertPrefetcher: @unchecked Sendable {
     private var pendingLayer: Int?
     private var pending: [Pending] = []
     private(set) var stats = EarlyExpertReadStats()
+    // The owner serializes every method. Workers only fill their captured
+    // destination and Outcome, which the owner reads after group completion.
+    // Keep this existing Dispatch boundary until the reader gains an owned
+    // Sendable destination type; no actor hop belongs in the layer hot path.
+    private let readEarly: @Sendable (PreadExpertStreamer, Int, UnsafeMutableRawPointer) throws -> Void
 
     /// Early reads per layer.
     var readsPerLayer: Int { staging.count }
 
-    init(model: Model,
-         environment: [String: String] = ProcessInfo.processInfo.environment) throws {
+    convenience init(model: Model,
+                     environment: [String: String] = ProcessInfo.processInfo.environment) throws {
+        try self.init(streamer: model.routedExpertStreamer(layer: 0), environment: environment)
+    }
+
+    /// Narrow injection for synthetic-file tests; production uses the real reader.
+    init(streamer: PreadExpertStreamer,
+         environment: [String: String] = ProcessInfo.processInfo.environment,
+         readEarly: @escaping @Sendable (PreadExpertStreamer, Int, UnsafeMutableRawPointer) throws -> Void = {
+             try $0.readEarly(expert: $1, into: $2)
+         }) throws {
         let count = Self.readsPerLayer(environment: environment)
-        let streamer = try model.routedExpertStreamer(layer: 0)
         staging = try (0..<count).map { _ in try streamer.makeStagingBuffer() }
+        self.readEarly = readEarly
     }
 
     deinit {
@@ -123,10 +137,11 @@ final class NextLayerExpertPrefetcher: @unchecked Sendable {
             // Captured now: an adoption swaps `staging[index].pointer`, but this
             // read's destination must stay the memory it started into.
             nonisolated(unsafe) let destination = staging[index].pointer
+            let readEarly = self.readEarly
             done.enter()
             queue.async {
                 do {
-                    try streamer.readEarly(expert: expert, into: destination)
+                    try readEarly(streamer, expert, destination)
                 } catch {
                     outcome.error = error
                 }
@@ -161,6 +176,22 @@ final class NextLayerExpertPrefetcher: @unchecked Sendable {
     /// first error.
     func waitForAdopted() throws {
         try wait(for: pending.filter(\.adopted))
+    }
+
+    /// Explicit request boundary: join every writer before reporting success
+    /// or disposing/reusing this runner, including after operation failure.
+    func finishRequest() throws {
+        defer {
+            pending = []
+            pendingLayer = nil
+        }
+        try waitForPending()
+    }
+
+    /// A direct runner reuse fence has no work when completion already drained.
+    func finishBeforeReuse() throws {
+        guard !pending.isEmpty else { return }
+        try finishRequest()
     }
 
     /// Blocks until every pending early read has finished, and rethrows the

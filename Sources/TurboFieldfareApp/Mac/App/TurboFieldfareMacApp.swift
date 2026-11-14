@@ -88,8 +88,26 @@ struct TurboFieldfareMacApp: App {
     @StoredState private var model: AppModel
 
     init() {
+        if CommandLine.arguments.contains("--check-resources") {
+            do {
+                try AppBundledResources.verify()
+                guard MacAppIcon.load() != nil else {
+                    throw AppInferenceError.invalidRequest("Bundled app icon could not be read.")
+                }
+                guard SwiftMathTypesetter().render(latex: "x^2 + 1", fontSize: 18, tint: .textColor, mode: .inline) != nil else {
+                    throw AppInferenceError.invalidRequest("Bundled math fonts could not render a formula.")
+                }
+                print("PASS app resources: prompts, Metal shaders, icon and math fonts")
+                Foundation.exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("App resource check failed: \(error)\n".utf8))
+                Foundation.exit(1)
+            }
+        }
+        let dataRoot = AppDataLocation.resolve()
         let model = AppModel(
-            client: DecodeServiceInferenceClient(),
+            appDataDirectory: dataRoot,
+            client: DecodeServiceInferenceClient(appDataDirectory: dataRoot),
             visionRuntimeSupported: AppModel.currentDeviceSupportsVisionRuntime,
             settingsPersistenceEnabled: true)
         _model = StoredState(initialValue: model)
@@ -105,6 +123,10 @@ struct TurboFieldfareMacApp: App {
                 // from disk in init, and loadModelAtLaunchIfEnabled ignores a
                 // model that is missing or already busy.
                 .task { model.loadModelAtLaunchIfEnabled() }
+                .sheet(item: Bindable(model).existingModelReview) { review in
+                    ExistingModelSelectionView(model: model, review: review)
+                        .id(review.id)
+                }
                 // On the window, not in the Inspector: the menu item works
                 // whether or not the Inspector is open.
                 .confirmationDialog(
@@ -187,6 +209,15 @@ struct TurboFieldfareMacApp: App {
                     .disabled(!model.canRemoveVisionPack)
             }
             CommandMenu("Settings") {
+                Button("Change Model Location…") {
+                    ModelLocationPanels.choose(model: model, intent: .existing, title: "Change Model Location")
+                }
+                .disabled(!model.canChangeModelLocation)
+                .accessibilityIdentifier(.modelChangeLocation)
+                Button("Import Legacy Chats…") { ModelLocationPanels.importHistory(model: model) }
+                    .disabled(!model.canChangeModelLocation)
+                    .accessibilityIdentifier(.historyImportLegacy)
+                Divider()
                 Picker("Text Size", selection: textSizeBinding) {
                     ForEach(AppTextSize.allCases) { size in
                         Text(size.label).tag(size)

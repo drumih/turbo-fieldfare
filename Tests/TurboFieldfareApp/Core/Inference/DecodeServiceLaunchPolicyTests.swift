@@ -1,7 +1,13 @@
+import Foundation
 import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct DecodeServiceLaunchPolicyTests {
+    @Test func appDataRootIsATrustedLaunchArgumentIndependentOfTheModel() {
+        let root = URL(fileURLWithPath: "/tmp/app data тест")
+        #expect(DecodeServiceInferenceClient.appDataArguments(root) == ["--app-data-directory", root.path])
+    }
+
     @Test func kickstartTargetsGUIJobWithoutRestartingIt() {
         let arguments = DecodeServiceInferenceClient.kickstartArguments(
             uid: 501, label: "com.turbofieldfare.decode.test")

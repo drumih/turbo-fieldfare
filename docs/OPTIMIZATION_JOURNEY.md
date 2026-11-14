@@ -110,16 +110,20 @@ default. [The cache policy
 record](experiments/summaries/03-expert-cache-prediction-and-layout.md#cache-01)
 keeps the throughput rows, long-run results, and other controls.
 
-Repeated selections made experts cacheable, but not predictable. Adjacent
-layers within one token shared almost no experts.
+Repeated selections made experts cacheable, but did not make direct copying
+of one layer's choices a useful prediction for the next. Adjacent layers
+within one token shared almost no experts.
 
 Copying one layer's choices predicted only 7% of the next layer's experts.
 That [offline
 analysis](experiments/summaries/03-expert-cache-prediction-and-layout.md#cache-05)
-stopped speculative cross-layer prefetch before it reached the runtime.
+stopped the copied-choice candidate before it reached the runtime.
 
-Past routing decisions identified weights worth keeping. The tested signal
-could not identify the next layer's weights early enough to prefetch them.
+Past routing decisions identified weights worth keeping. Copying those
+decisions could not identify the next layer's weights early enough.
+
+A later [router-based predictor](experiments/summaries/03-expert-cache-prediction-and-layout.md#cache-10)
+helped the tested M2 but slowed the tested M5 Pro. It remains opt-in, off by default.
 
 The always-resident shared MLP offered a safer way to hide read time. The GPU
 can execute it while the CPU fills routed-expert misses. In a later paired
@@ -259,10 +263,10 @@ record](experiments/summaries/04-rdadvise.md) shows both the wins and why it is
 not the default.
 
 Other read-side candidates followed the same pattern. Cache and read-ahead
-flags were neutral. Speculative reads looked fast in isolation, then slowed
-decode and stretched prefill from 82.50 to 123.64 seconds. Sorting reads by
-file offset won once and lost on repetition. MTLIO was fast when data was
-already warm, but few observed misses met that condition.
+flags were neutral. An earlier speculative-read probe looked fast in isolation,
+then slowed decode and stretched prefill from 82.50 to 123.64 seconds. Sorting
+reads by file offset won once and lost on repetition. MTLIO was fast when data
+was already warm, but few observed misses met that condition.
 
 Bounded parallel `pread` remained the simplest design that worked across the
 full workload. [The expert I/O

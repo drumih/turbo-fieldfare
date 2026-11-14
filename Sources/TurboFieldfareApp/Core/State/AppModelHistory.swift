@@ -59,10 +59,6 @@ extension AppModel {
             historyDiagnostic = nil
         }
 
-        pendingTurnImageWrite?.cancel()
-        pendingTurnImageWrite = nil
-        persistenceTail?.cancel()
-        persistenceTail = nil
         quarantinedPersistenceLineages.removeAll()
         storedConversationID = nil
         serviceEpoch = nil
@@ -75,6 +71,8 @@ extension AppModel {
         history.setReadOnlyStore(false)
         conversationBinding = ConversationStoreBinding(
             modelDirectory: modelDirectory,
+            appDataDirectory: appDataDirectory,
+            store: conversationStore,
             identity: identity,
             generation: conversationBindingGeneration,
             storeProvider: conversationStoreProvider)
@@ -539,7 +537,7 @@ extension AppModel {
     /// A conversation that could not continue anyway is never replayed at all;
     /// the row says why instead.
     public func openConversation(id: UUID) {
-        guard !isTurnInFlight, conversationStore != nil else { return }
+        guard !isChangingModelLocation, !isTurnInFlight, conversationStore != nil else { return }
         guard let meta = history.entry(id) else { return }
         if id == storedConversationID,
            serviceEpoch == conversation.epoch,
@@ -1066,7 +1064,7 @@ extension AppModel {
     }
 
     public func canMutateConversation(id: UUID) -> Bool {
-        conversationStore != nil && history.entry(id) != nil
+        !isChangingModelLocation && conversationStore != nil && history.entry(id) != nil
             && !history.isReadOnlyStore && !isTurnInFlight
             && conversationDeletionTask == nil
     }

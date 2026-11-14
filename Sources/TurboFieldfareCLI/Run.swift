@@ -255,24 +255,27 @@ public func run(args: Args,
         let effectiveMaxNew = min(args.maxNew, args.maxContext - promptIds.count)
         let config = makeConfig(maxNewTokens: effectiveMaxNew)
 
-        let stats = try await runRawCompletion(
-            producer: runner,
-            tokenizer: tokenizer,
-            promptIds: promptIds,
-            multimodalInput: multimodalInput,
-            config: config,
-            context: context,
-            scratch: scratch,
-            prefillConfig: runtime.prefillConfig) { progress in
-                switch progress {
-                case .prefill:
-                    break
-                case .token(_, _, let delta):
-                    if !delta.isEmpty { stdout.write(Data(delta.utf8)) }
-                case .tail(let tail):
-                    stdout.write(Data(tail.utf8))
+        let completed = try await withFinishedRequest(operation: {
+            try await runRawCompletion(
+                producer: runner,
+                tokenizer: tokenizer,
+                promptIds: promptIds,
+                multimodalInput: multimodalInput,
+                config: config,
+                context: context,
+                scratch: scratch,
+                prefillConfig: runtime.prefillConfig) { progress in
+                    switch progress {
+                    case .prefill:
+                        break
+                    case .token(_, _, let delta):
+                        if !delta.isEmpty { stdout.write(Data(delta.utf8)) }
+                    case .tail(let tail):
+                        stdout.write(Data(tail.utf8))
+                    }
                 }
-            }
+        }, finish: { try runner.finishRequest() })
+        let stats = completed.value
 
         if !args.quiet {
             let tokensPerSecond = stats.decodeSeconds > 0
@@ -280,22 +283,24 @@ public func run(args: Args,
                 : 0
             let footer = "\n[stop=\(String(describing: stats.reason)) prefill=\(stats.prefillTokens)tok new=\(stats.newTokens)tok decode=\(String(format: "%.2f", stats.decodeSeconds))s tok/s=\(String(format: "%.3f", tokensPerSecond))]\n"
             stderr.write(Data(footer.utf8))
+            stderr.write(Data(loadedRequestFooter(completed.timing).utf8))
             if let early = runner.earlyExpertReadStats {
                 stderr.write(Data(earlyExpertReadFooter(early).utf8))
             }
         }
         return RunResult(exitCode: 0)
-    } catch let error as ArgsError {
-        return errored(stderr, "\(error)", 2)
-    } catch let error as VisionImageError {
-        return errored(stderr, "\(error)", 3)
-    } catch let error as VisionPackError {
-        return errored(stderr, "\(error)", 4)
-    } catch is CancellationError {
-        stdout.write(Data("\n".utf8))
-        return RunResult(exitCode: 130)
     } catch {
-        return errored(stderr, "\(error)", 1)
+        if error is RequestCompletionFailure {
+            // A demand failure and a later request drain can each contribute
+            // cleanup context. Keep the complete chain before classifying it.
+            stderr.write(Data("error: request cleanup: \(error)\n".utf8))
+        }
+        let primary = requestPrimaryError(error)
+        if primary is CancellationError {
+            stdout.write(Data("\n".utf8))
+            return RunResult(exitCode: 130)
+        }
+        return errored(stderr, "\(primary)", requestFailureExitCode(primary))
     }
 }
 
@@ -473,10 +478,8 @@ private func errored(_ stderr: FileHandle, _ message: String, _ code: Int32) -> 
     return RunResult(exitCode: code)
 }
 
-/// Second footer line, only when the early read ran, so the timing footer stays
-/// what `docs/COMMUNITY_BENCHMARKS.md` tells reporters to quote. Per decode
-/// forward: routed experts that had to come from storage, how many of those an
-/// early read had already loaded, and the share of early reads that were used.
+/// Prefetch counters stay separate from the timing footer parsed by benchmark
+/// tools. Counts are per decode forward; precision is the share of reads used.
 func earlyExpertReadFooter(_ stats: EarlyExpertReadStats) -> String {
     func perForward(_ total: UInt64) -> String {
         guard stats.forwards > 0 else { return "n/a" }
@@ -487,4 +490,13 @@ func earlyExpertReadFooter(_ stats: EarlyExpertReadStats) -> String {
         + " loaded-early/tok=\(perForward(stats.used))"
         + " reads/tok=\(perForward(stats.reads))"
         + " precision=\(precision)]\n"
+}
+
+func requestFailureExitCode(_ error: any Error) -> Int32 {
+    let primary = requestPrimaryError(error)
+    if primary is CancellationError { return 130 }
+    if primary is ArgsError { return 2 }
+    if primary is VisionImageError { return 3 }
+    if primary is VisionPackError { return 4 }
+    return 1
 }

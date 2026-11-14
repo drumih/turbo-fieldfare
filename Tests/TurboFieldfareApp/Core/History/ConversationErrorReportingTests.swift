@@ -55,7 +55,7 @@ import TurboFieldfare
         try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
             .write(to: receiptURL)
         try installVisionCompanion(forTextModel: directory)
-        let model = AppModel(modelDirectory: directory, client: client,
+        let model = AppModel(modelDirectory: directory, appDataDirectory: directory.deletingLastPathComponent(), client: client,
                              attachmentStore: attachments,
                              settingsPersistenceEnabled: true)
         model.modelPathText = directory.path

@@ -352,7 +352,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     /// Reads the plan's misses except `skippingMisses`, whose bytes arrive by
     /// another route (an adopted staged read). `beforeAdmitting` runs after
     /// this plan's reads and before any miss is marked resident; it must not
-    /// return until the skipped misses' bytes are in place.
+    /// return until the skipped misses' bytes are in place. It also runs when
+    /// a foreground read fails, so no adopted writer can outlive recovery.
     public func executeExpertCachePlan(_ plan: ExpertCachePlan,
                                        skippingMisses: Set<Int>,
                                        beforeAdmitting: () throws -> Void) throws
@@ -378,8 +379,16 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                 errorLock.unlock()
             }
         }
-        if let firstError { throw firstError }
-        try beforeAdmitting()
+        let admission: Result<Void, any Error>
+        do { try beforeAdmitting(); admission = .success(()) }
+        catch { admission = .failure(error) }
+        if let firstError {
+            if case .failure(let drain) = admission {
+                throw RequestCompletionFailure(primary: firstError, drain: drain)
+            }
+            throw firstError
+        }
+        try admission.get()
 
         cacheLock.lock()
         for index in plan.misses {

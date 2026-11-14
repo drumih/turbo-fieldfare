@@ -10,15 +10,21 @@ struct ModelInstallView: View {
         ScrollView {
             VStack(spacing: 22) {
                 identity
-                storageCard
-                progressArea
+                ModelLocationView(model: model)
                 actions
+                VStack(alignment: .leading, spacing: 8) {
+                    ModelLocationNotices(model: model, showsVolumeWarning: false)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                progressArea
+                storageCard
             }
             .frame(maxWidth: 560)
             .padding(.horizontal, 28)
             .padding(.vertical, 48)
             .frame(maxWidth: .infinity)
         }
+        .defaultScrollAnchor(.top, for: .sizeChanges)
         .confirmationDialog(
             "Discard the saved model download?",
             isPresented: $showingDiscardConfirmation,
@@ -54,7 +60,7 @@ struct ModelInstallView: View {
             if let requirement = model.installRequirement {
                 StorageRow(label: "Space required",
                            value: MetricFormat.storage(requirement.requiredBytes))
-                StorageRow(label: "Available on this Mac",
+                StorageRow(label: "Available on selected volume",
                            value: MetricFormat.storage(requirement.availableBytes))
                 capacityStatus(requirement)
             } else if case .failed(let message) = model.installReadiness {
@@ -72,12 +78,22 @@ struct ModelInstallView: View {
                     Spacer()
                 }
             }
-            Text(model.modelPathText)
-                .font(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Button("Check Again", action: model.recheckModelAtCurrentLocation)
+                    .buttonStyle(.borderless)
+                    .disabled(model.isInstallingModel)
+                    .accessibilityIdentifier(.installCheckAgain)
+                Spacer()
+                if model.hasPartialModelDownload && !model.isInstallingModel {
+                    Button("Discard Download", role: .destructive) {
+                        showingDiscardConfirmation = true
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!model.canDiscardModelDownload)
+                    .accessibilityIdentifier(.installDiscard)
+                }
+            }
+            .controlSize(.small)
         }
         .padding(18)
         .background {
@@ -166,32 +182,27 @@ struct ModelInstallView: View {
                     .disabled(!model.canCancelInstall)
                     .accessibilityIdentifier(.installCancel)
             } else {
-                if model.hasPartialModelDownload {
-                    Button("Discard Download", role: .destructive) {
-                        showingDiscardConfirmation = true
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(!model.canDiscardModelDownload)
-                    .accessibilityIdentifier(.installDiscard)
-                }
-
-                Button("Check Again", action: model.recheckModelAtCurrentLocation)
-                .buttonStyle(.bordered)
-                .disabled(model.isInstallingModel)
-                .accessibilityIdentifier(.installCheckAgain)
-
-                Button(model.hasPartialModelDownload ? "Resume" : "Download",
+                Button(model.hasPartialModelDownload ? "Resume Download" : "Download Model",
                        action: model.installModel)
                     .buttonStyle(.borderedProminent)
                     .disabled(!model.canInstallModel)
                     .accessibilityIdentifier(.installDownload)
             }
+            Button("Use Existing Model…") {
+                ModelLocationPanels.choose(model: model, intent: .existing)
+            }
+            .buttonStyle(.bordered)
+            .tint(.primary)
+            .disabled(!model.canChangeModelLocation)
+            .accessibilityIdentifier(.modelUseExisting)
         }
         .controlSize(.large)
     }
 
     private var readinessLabel: String {
         switch model.installReadiness {
+        case .installed:
+            return "Installed"
         case .checking:
             return "Checking available space"
         case .failed(let message):

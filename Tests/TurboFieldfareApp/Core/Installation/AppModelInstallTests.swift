@@ -58,6 +58,7 @@ import TurboFieldfareRepackCore
     let client = FakeInferenceClient(eventDelay: .milliseconds(1))
     let model = AppModel(
       modelDirectory: missing,
+      appDataDirectory: missing.deletingLastPathComponent(),
       client: client,
       installer: MockModelInstallerClient(events: [.installed(installed)]),
       settingsPersistenceEnabled: true)

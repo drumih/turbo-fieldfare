@@ -7,6 +7,22 @@ import TurboFieldfare
 /// before any network or Metal work, idle cancel is a no-op, and a bad
 /// request fails the stream with a typed error.
 @Suite struct RealInferenceClientStateTests {
+    @Test func wrappedRestoreErrorsKeepClassificationAndFailureContext() {
+        let drain = AppInferenceError.unknown("delayed writer failed")
+        let cancelled = RequestCompletionFailure(primary: CancellationError(), drain: drain)
+        #expect(RealInferenceSession.classifiedRestoreError(cancelled) is CancellationError)
+        let replay = RequestCompletionFailure(
+            primary: MultimodalConversationError.invalidReplayImage(reason: "missing replay"), drain: drain)
+        let mapped = RealInferenceSession.classifiedRestoreError(replay)
+        guard let appError = mapped as? AppInferenceError,
+              case .conversationRestoreFailed(let reason) = appError else {
+            Issue.record("wrapped replay failure lost its typed classification")
+            return
+        }
+        #expect(reason.contains("missing replay"))
+        #expect(reason.contains("delayed writer failed"))
+    }
+
     /// A replay image's range is bounded by the record before it is built.
     ///
     /// Both figures arrive over the socket in the service, and a sign check

@@ -181,20 +181,25 @@ public enum Posix {
     public static func atomicWrite(_ data: Data,
                                    to path: String,
                                    durableIn directory: String,
+                                   uniqueTemporary: Bool = false,
                                    afterRename: (() throws -> Void)? = nil) throws {
-        let temporary = path + ".tmp"
-        switch try entryKind(temporary) {
-        case .absent:
-            break
-        case .regular:
-            if unlink(temporary) != 0 {
-                throw RepackError.fileOpenFailed(path: temporary, errno: errno)
+        // Installers own their staging paths under a lock; independent writers
+        // need separate staging files and must never clean up another writer's.
+        let temporary = path + (uniqueTemporary ? ".\(UUID().uuidString).tmp" : ".tmp")
+        if !uniqueTemporary {
+            switch try entryKind(temporary) {
+            case .absent:
+                break
+            case .regular:
+                if unlink(temporary) != 0 {
+                    throw RepackError.fileOpenFailed(path: temporary, errno: errno)
+                }
+                try fsyncDirectory(directory)
+            default:
+                throw RepackError.installPathUnsafe(
+                    path: temporary,
+                    detail: "atomic-write temporary has the wrong type")
             }
-            try fsyncDirectory(directory)
-        default:
-            throw RepackError.installPathUnsafe(
-                path: temporary,
-                detail: "atomic-write temporary has the wrong type")
         }
         let fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         if fd < 0 { throw RepackError.fileOpenFailed(path: temporary, errno: errno) }

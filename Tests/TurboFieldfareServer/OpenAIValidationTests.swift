@@ -5,6 +5,16 @@ import Testing
 
 @Suite("OpenAI request validation")
 struct OpenAIValidationTests {
+    @Test func openCodeShapedLeadingGuidanceRendersAfterValidation() async throws {
+        let json = #"{"model":"m","stream":true,"messages":[{"role":"system","content":"You are a coding assistant."},{"role":"system","content":"Keep replies short."},{"role":"user","content":"Hi"}]}"#
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(json.utf8))
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m")
+        let tokenizer = try await GFTokenizer.load()
+        let rendered = try tokenizer.applyChatTemplate(validated.messages)
+        #expect(rendered.hasPrefix("<bos><|turn>system\nYou are a coding assistant.<turn|>\n<|turn>system\nKeep replies short.<turn|>\n"))
+        #expect(tokenizer.encode(rendered, addBOS: false).filter { $0 == tokenizer.endOfTurnID }.count == 3)
+    }
+
     @Test func capturedOpenCodeInitialRequestValidates() throws {
         let request = try fixture("opencode-1.15.11-initial.json")
         let validated = try OpenAIRequestValidator.validate(
@@ -912,6 +922,13 @@ struct StreamingStopMatcherTests {
 
 @Suite("Server arguments")
 struct ServerArgumentTests {
+    @Test(arguments: [RuntimeEarlyExpertRead.off, .router])
+    func explicitPrefetchReachesRuntime(_ mode: RuntimeEarlyExpertRead) throws {
+        let args = try ServerArguments.parse([
+            "--model", "model.gturbo", "--early-expert-read", mode.rawValue,
+        ])
+        #expect(try args.resolvedRuntimeConfiguration().earlyExpertRead == mode)
+    }
 
     @Test(arguments: [24, 32])
     func cacheGrowthRejects128KOnEightGBUnlessExplicitlyOverridden(slots: Int) throws {
@@ -938,7 +955,8 @@ struct ServerArgumentTests {
         #expect(arguments.prefillPolicy == .chunked)
         #expect(arguments.prefillChunkTokens == 128)
         #expect(arguments.rdadvisePolicy == .off)
-        #expect(arguments.earlyExpertRead == .router)
+        #expect(arguments.earlyExpertRead == .off)
+        #expect(ServerArguments.usage.contains("off or router (default off)"))
     }
 
     /// The server rejected `--prefill-chunk-tokens auto` while the CLI accepted

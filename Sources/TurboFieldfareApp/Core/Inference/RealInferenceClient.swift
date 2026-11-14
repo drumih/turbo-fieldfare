@@ -346,19 +346,34 @@ actor RealInferenceSession {
                 prefillConfig: prefillConfig,
                 checkCancellation: { try Task.checkCancellation() },
                 onProgress: onProgress)
-        } catch let error as MultimodalConversationError {
+        } catch {
+            let primary = requestPrimaryError(error)
+            if error is RequestCompletionFailure {
+                FileHandle.standardError.write(Data("[restore cleanup: \(error)]\n".utf8))
+            }
             // A refused restore leaves the KV empty and this session usable, so
             // the conversation is dropped rather than kept as an inert one the
             // next turn would resume onto.
-            self.conversation = nil
-            runner?.reset()
-            conversationTokens.withLock { $0 = 0 }
-            throw AppInferenceError.conversationRestoreFailed("\(error)")
+            if primary is MultimodalConversationError {
+                self.conversation = nil
+                runner?.reset()
+                conversationTokens.withLock { $0 = 0 }
+            }
+            throw Self.classifiedRestoreError(error)
         }
         publishTowerBytes()
         let count = await conversation.kvTokenCount
         conversationTokens.withLock { $0 = count }
         return count
+    }
+
+    nonisolated static func classifiedRestoreError(_ error: any Error) -> any Error {
+        let primary = requestPrimaryError(error)
+        if primary is CancellationError { return CancellationError() }
+        if primary is MultimodalConversationError {
+            return AppInferenceError.conversationRestoreFailed("\(error)")
+        }
+        return error
     }
 
     private func conversationForRestore(
@@ -855,38 +870,44 @@ actor RealInferenceSession {
                                               prefill: prefillDiagnostics)
             continuation.yield(.finished(diagnostics))
             continuation.finish()
-        } catch is CancellationError {
-            let diagnostics = makeDiagnostics(request: request,
-                                              memorySampler: memorySampler,
-                                              progress: progress,
-                                              stopReason: .cancelled,
-                                              prefillSeconds: progress.elapsedPrefillSeconds,
-                                              decodeSeconds: progress.elapsedDecodeSeconds,
-                                              generated: progress.generated,
-                                              prefill: PrefillExecutionDiagnostics(
-                                                config: prefillConfig,
-                                                executedMode: prefillConfig.mode == .chunked
-                                                    ? PrefillExecutedMode.chunked : .off,
-                                                kvStorageMode: .fp16))
-            continuation.yield(.cancelled(diagnostics))
-            continuation.finish(throwing: AppInferenceError.cancelled)
-        } catch let prefillError as PrefillError {
-            let diagnostics = Self.prefillFailureDiagnostics(config: prefillConfig,
-                                                             kvStorageMode: .fp16,
-                                                             reason: prefillError.description)
-            failGeneration(.unknown(prefillError.description),
-                           request: request,
-                           memorySampler: memorySampler,
-                           progress: progress,
-                           continuation: continuation,
-                           prefill: diagnostics,
-                           forcePartialDiagnostics: true)
-        } catch let appError as AppInferenceError {
-            failGeneration(appError, request: request, memorySampler: memorySampler,
-                           progress: progress, continuation: continuation)
         } catch {
-            failGeneration(.unknown("\(error)"), request: request, memorySampler: memorySampler,
-                           progress: progress, continuation: continuation)
+            let primary = requestPrimaryError(error)
+            if error is RequestCompletionFailure {
+                FileHandle.standardError.write(Data("[request cleanup: \(error)]\n".utf8))
+            }
+            if primary is CancellationError {
+                let diagnostics = makeDiagnostics(request: request,
+                                                  memorySampler: memorySampler,
+                                                  progress: progress,
+                                                  stopReason: .cancelled,
+                                                  prefillSeconds: progress.elapsedPrefillSeconds,
+                                                  decodeSeconds: progress.elapsedDecodeSeconds,
+                                                  generated: progress.generated,
+                                                  prefill: PrefillExecutionDiagnostics(
+                                                    config: prefillConfig,
+                                                    executedMode: prefillConfig.mode == .chunked
+                                                        ? PrefillExecutedMode.chunked : .off,
+                                                    kvStorageMode: .fp16))
+                continuation.yield(.cancelled(diagnostics))
+                continuation.finish(throwing: AppInferenceError.cancelled)
+            } else if let prefillError = primary as? PrefillError {
+                let diagnostics = Self.prefillFailureDiagnostics(config: prefillConfig,
+                                                                 kvStorageMode: .fp16,
+                                                                 reason: prefillError.description)
+                failGeneration(.unknown(prefillError.description),
+                               request: request,
+                               memorySampler: memorySampler,
+                               progress: progress,
+                               continuation: continuation,
+                               prefill: diagnostics,
+                               forcePartialDiagnostics: true)
+            } else if let appError = primary as? AppInferenceError {
+                failGeneration(appError, request: request, memorySampler: memorySampler,
+                               progress: progress, continuation: continuation)
+            } else {
+                failGeneration(.unknown("\(error)"), request: request, memorySampler: memorySampler,
+                               progress: progress, continuation: continuation)
+            }
         }
     }
 

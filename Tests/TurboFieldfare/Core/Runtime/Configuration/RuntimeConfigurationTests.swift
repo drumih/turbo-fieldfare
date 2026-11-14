@@ -13,7 +13,9 @@ import Testing
         #expect(runtime.prefillChunkTokens == 128)
         #expect(runtime.prefillAttentionPath == .fullTensorOps2DPreferred)
         #expect(runtime.headPath == .fusedRows)
-        #expect(runtime.earlyExpertRead == .router)
+        #expect(runtime.earlyExpertRead == .off)
+        #expect(RuntimeConfiguration().earlyExpertRead == .off)
+        #expect(RuntimeConfiguration(earlyExpertRead: .router).earlyExpertRead == .router)
     }
 
     @Test func retainedControlsReachTypedRuntime() {

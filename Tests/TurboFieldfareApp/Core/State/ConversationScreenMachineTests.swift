@@ -12,6 +12,48 @@ import TurboFieldfare
 /// and a new screen case or a new event fails to compile until every cell it
 /// creates is written down.
 @Suite struct ConversationScreenMachineTests {
+    @MainActor
+    @Test(arguments: [false, true])
+    func loadingSavedChatNeverShowsNewChatScreen(emptyDocument: Bool) {
+        let model = AppModel(client: FakeInferenceClient())
+        model.setShowPromptExamples(true)
+        #expect(!model.hasOutputTranscript)
+        #expect(model.shouldShowPromptExamples)
+
+        _ = model.machine.apply(Self.clicked(Self.row))
+        // A pending disk read used to show the startup screen and examples.
+        #expect(model.screen.document == nil)
+        #expect(model.hasOutputTranscript)
+        #expect(!model.shouldShowPromptExamples)
+        #expect(!model.showsLiveTurn)
+
+        let document = emptyDocument ? ConversationDocument.load(
+            ConversationOpenResult(meta: Self.stored.meta, records: [],
+                                   isReadOnly: false, droppedTornFinalLine: false),
+            directory: URL(fileURLWithPath: "/tmp/unused-chat-fixture")) : Self.stored
+        _ = model.machine.apply(.documentLoaded(
+            id: Self.row, renderID: Self.renderB, document: document, state: .continuable))
+        #expect(model.hasOutputTranscript == !emptyDocument)
+
+        _ = model.machine.apply(Self.clicked(Self.other))
+        #expect(model.hasOutputTranscript)
+        #expect(!model.shouldShowPromptExamples)
+        // A stale read cannot bring the previous chat or its empty state back.
+        _ = model.machine.apply(.documentLoaded(
+            id: Self.row, renderID: Self.renderB, document: document, state: .continuable))
+        #expect(model.screen.conversationID == Self.other)
+        #expect(model.hasOutputTranscript)
+
+        _ = model.machine.apply(.documentFailed(
+            id: Self.other, renderID: Self.renderB, Self.unreadableError))
+        #expect(model.screen.shape == .unreadable)
+        #expect(!model.hasOutputTranscript)
+
+        _ = model.machine.apply(.newChat)
+        #expect(!model.hasOutputTranscript)
+        #expect(model.shouldShowPromptExamples)
+    }
+
     @Test(arguments: [false, true])
     func adversarialOldReadCannotReplaceReopenedSameChat(failure: Bool) {
         var machine = ConversationScreenMachine()

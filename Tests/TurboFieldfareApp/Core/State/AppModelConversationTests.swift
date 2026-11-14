@@ -159,7 +159,7 @@ import Testing
         #expect(model.conversation.committedTurns == 2)
         let before = model.conversation.epoch
 
-        model.setModelURL(FileManager.default.temporaryDirectory
+        await model.setModelURL(FileManager.default.temporaryDirectory
             .appendingPathComponent("another-model", isDirectory: true))
 
         #expect(model.conversation.committedTurns == 0)
