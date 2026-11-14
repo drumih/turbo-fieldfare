@@ -84,7 +84,9 @@ top-level or `@main` entry in `Command/`; `plugins/dsh-tinytitan/` is the DeepSe
 Harness bundle (route writer + quiet compaction). `examples/embedded/` is the
 consumer package that proves another package can depend on this one, built by
 `tools/embedded-dependency-check.sh`. `docs/repository-layout.md` has
-the conventions, `tests/` mirrors `sources/` path for path and never loads a model,
+the conventions, `tests/` mirrors `sources/` path for path for the runtime and
+library targets — the thin executables, the format reader and the C kernels are
+covered through the suites of the targets they serve — and never loads a model,
 **user documentation lives in the
 [GitHub Wiki](https://github.com/Pummelchen/TinyTitan/wiki) and engineering
 documentation in this repository's `docs/`** — plans, measurements, design notes
