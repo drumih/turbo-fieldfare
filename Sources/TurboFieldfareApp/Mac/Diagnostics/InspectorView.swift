@@ -395,7 +395,7 @@ struct InspectorView: View {
                 .toggleStyle(.switch)
                 .accessibilityIdentifier(.inspectorExpertPrefetch)
                 .help("Read predicted experts ahead during generation. Reload the model to apply changes.")
-            Text("Prefetch can help or slow generation. Reload the model to apply changes.")
+            Text("Expert prefetch can speed up generation on devices with less RAM, but may slow it down on devices with more RAM.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             LabeledContent("RDADVISE") {
