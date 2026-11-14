@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fixed-size recurrent state for gated-DeltaNet linear-attention layers
 /// (`LayerKind.linear`). Unlike KV rows, this state does not grow with

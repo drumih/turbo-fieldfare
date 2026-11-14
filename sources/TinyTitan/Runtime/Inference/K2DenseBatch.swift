@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One dense K2 layer over a prefill chunk.
 ///

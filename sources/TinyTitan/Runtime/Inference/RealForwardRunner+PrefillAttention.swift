@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Chunked-prefill attention encoding, split out of `RealForwardRunner+Prefill.swift`.
 ///

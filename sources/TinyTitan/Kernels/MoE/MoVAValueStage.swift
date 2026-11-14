@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// K2-Horizon's MoVA value stage: a bf16 value router selects 4 of 64 experts,
 /// each expert projects `hidden -> kvHeads * headDim` from 4-bit resident

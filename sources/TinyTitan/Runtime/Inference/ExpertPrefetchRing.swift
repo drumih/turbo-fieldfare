@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// A fixed raw-byte staging ring for v4.3 predictive routed-expert reads.
 ///

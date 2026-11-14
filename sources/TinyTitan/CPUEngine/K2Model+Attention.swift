@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanKernelsC
+import TinyTitanCore
 
 /// The two attention variants of K2-Horizon.
 ///

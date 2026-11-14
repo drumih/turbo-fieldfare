@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// K2-Horizon's sparse expert block: bf16 router, sigmoid selection, then the
 /// selected SwiGLU experts and the always-on shared expert.

@@ -2,6 +2,7 @@ import Foundation
 import TinyTitanFormat
 import Metal
 import Synchronization
+import TinyTitanCore
 
 // Speculative expert reads: the ring, and the compressed arm that decodes into
 // its destinations.

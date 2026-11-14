@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import Testing
 import TinyTitanFormat
+import TinyTitanCore
 @testable import TinyTitan
 @testable import TinyTitanRepackCore
 

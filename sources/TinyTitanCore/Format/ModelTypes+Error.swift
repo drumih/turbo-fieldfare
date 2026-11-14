@@ -25,7 +25,7 @@ package enum ModelError: Error, CustomStringConvertible, Equatable {
     case indexCorrupt(detail: String)
     /// A metadata document is larger than the bound its reader states, so it was
     /// refused **before** its bytes were allocated. The wording is the one
-    /// `ModelCatalog` and `ANEPrefillAttention` already use for the same refusal.
+    /// the catalog and ANE prefill paths already use for the same refusal.
     case metadataOverBound(document: String, bytes: Int, cap: UInt64)
     case posixFailed(call: String, errno: Int32)
     case trustedReceiptInvalid(detail: String)

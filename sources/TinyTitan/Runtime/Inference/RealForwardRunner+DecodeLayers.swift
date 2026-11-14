@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The per-layer decode loop of `produceToken`. Split out of
 // RealForwardRunner+Decode.swift (2026-09-28) under the 500-line-per-file rule as

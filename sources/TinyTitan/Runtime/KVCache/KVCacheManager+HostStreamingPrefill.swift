@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The write half of host-KV streaming: staging a prefill chunk, remapping its
 // selection through the window, committing rows to the arena, and snapshot

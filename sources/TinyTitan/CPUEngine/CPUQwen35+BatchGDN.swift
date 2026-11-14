@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanKernelsC
+import TinyTitanCore
 
 /// Batched gated-DeltaNet layers.
 ///

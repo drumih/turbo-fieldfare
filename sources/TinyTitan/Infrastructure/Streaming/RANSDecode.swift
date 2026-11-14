@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import Synchronization
 import TinyTitanFormat
+import TinyTitanCore
 
 // GPU decode of a rANS expert layer.
 //

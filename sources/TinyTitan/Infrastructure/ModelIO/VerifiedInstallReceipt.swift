@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 public enum ModelIntegrityPolicy: Sendable, Equatable {
     case fullSha256

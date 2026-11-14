@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// A K2 decode step over a dense-only model: embedding, the layer stack, then
 /// the final norm and untied head.

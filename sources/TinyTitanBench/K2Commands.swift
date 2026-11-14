@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import Tokenizers
+import TinyTitanCore
 
 /// `TinyTitanBench k2 <snapshot> "<prompt>" [n]`: the K2-Horizon CPU model,
 /// tokenizer and timings in one command.

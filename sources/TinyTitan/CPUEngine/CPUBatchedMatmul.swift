@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanKernelsC
+import TinyTitanCore
 
 /// A quantized matrix multiplied against many token rows at once.
 ///

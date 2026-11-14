@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 // Resident tensor accessors: the family schema and every named tensor the
 // kernels read, plus the bf16 promotion helper they share.

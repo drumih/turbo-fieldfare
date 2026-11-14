@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fixed, model-wide staging buffers for the event-driven Metal I/O path.
 ///

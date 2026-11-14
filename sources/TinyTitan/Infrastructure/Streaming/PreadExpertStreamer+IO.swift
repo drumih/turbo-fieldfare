@@ -3,6 +3,7 @@ import Foundation
 import Synchronization
 import TinyTitanFormat
 import Metal
+import TinyTitanCore
 
 // The Metal, bounded and cached read paths.
 //

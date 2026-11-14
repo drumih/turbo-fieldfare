@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 struct PrefillChunkScratchLayout: Sendable, Equatable {
     let chunkTokens: Int

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Per-runner fused-decode state: the cached pair scratch, the launch counter
 /// and the test override. A class so one stored property on the runner can

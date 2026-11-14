@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The width-2 MTP verify: the pair schedule and the argmax that packages its
 // result.

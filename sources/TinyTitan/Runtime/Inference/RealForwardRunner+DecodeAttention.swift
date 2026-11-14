@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Decode-time attention encoding, split out of `RealForwardRunner+Decode.swift`.
 ///

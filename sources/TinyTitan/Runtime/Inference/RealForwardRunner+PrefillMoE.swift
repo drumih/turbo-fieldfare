@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Prefill routed MoE: the router readback, expert streaming, tiled
 /// phase-1/phase-2 and the residual tail, plus the dense family's FFN.

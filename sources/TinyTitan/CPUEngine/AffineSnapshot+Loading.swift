@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // Loading a snapshot: the two readers that turn a directory into an
 // `AffineSnapshot` -- a plain affine safetensors snapshot, which the converter

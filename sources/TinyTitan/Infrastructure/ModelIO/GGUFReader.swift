@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TinyTitanCore
 
 /// Failure modes of the GGUF reader.
 ///

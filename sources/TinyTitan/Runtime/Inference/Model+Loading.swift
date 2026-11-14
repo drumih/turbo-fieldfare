@@ -11,6 +11,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 extension Model {
 

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One bounded MTLIO queue shared by all lazy per-layer readers in a model.
 /// Keeping a queue per layer lets prompt ingestion create 40 queues and exhaust

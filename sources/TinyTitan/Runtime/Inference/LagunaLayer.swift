@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One Laguna-S-2.1 layer on a decode step.
 ///

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Which attention variant a layer runs. Qwen 3.6 interleaves 30
 /// gated-DeltaNet linear-attention layers with 10 full-attention layers;

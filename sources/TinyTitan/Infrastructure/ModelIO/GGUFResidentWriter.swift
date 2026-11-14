@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 package enum GGUFResidentWidth: Sendable, Equatable {
     case affine4

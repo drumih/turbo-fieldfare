@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dependency for one storage batch. Value zero is never issued, and a
 /// value is never reused for the lifetime of the coordinator.

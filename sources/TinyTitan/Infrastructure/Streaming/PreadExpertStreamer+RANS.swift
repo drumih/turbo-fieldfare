@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import Synchronization
 import TinyTitanFormat
+import TinyTitanCore
 
 // The rANS decode path: read a wave's payload runs, then run the kernel into
 // the slots, phase 0 before the publish and phase 1 behind the GPU's phase 1.

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The indirection a windowed attention call reads.
 ///

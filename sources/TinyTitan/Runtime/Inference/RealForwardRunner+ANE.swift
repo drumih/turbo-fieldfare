@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The ANE prefill bridge (Track A): stages the normed chunk out, predicts, and rebinds the command buffer so the rest of the layer proceeds exactly as on the GPU path.
 ///

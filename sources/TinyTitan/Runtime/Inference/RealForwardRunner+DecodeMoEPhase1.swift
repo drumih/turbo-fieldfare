@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Decode-time routed MoE phase-1 encodes: the full and subset phase-1
 /// dispatches and the early miss fixup that commits phase 1 over the miss

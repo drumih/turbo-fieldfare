@@ -3,6 +3,7 @@ import Foundation
 import TinyTitanFormat
 import Metal
 import Synchronization
+import TinyTitanCore
 
 /// SSD-backed routed-expert streamer with a fixed per-layer slot cache.
 /// unchecked-invariant: the expert cache bookkeeping is guarded by `cacheLock`,

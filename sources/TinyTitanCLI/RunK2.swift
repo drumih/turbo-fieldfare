@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// The CLI's K2-Horizon path.
 ///

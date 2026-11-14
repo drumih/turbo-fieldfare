@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Single-token decode: the token entry points and the layer loop.
 ///

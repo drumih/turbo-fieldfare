@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // The ANE prefill sidecar's on-disk contract: where its directory lives for a
 // configured chunk width, what its `ane_prefill.json` records, and the bounded

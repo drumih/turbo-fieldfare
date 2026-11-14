@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // QSA sparse attention: the indexer weights, the selection, the decode and
 // prefill encoders, and the snapshot dumps.

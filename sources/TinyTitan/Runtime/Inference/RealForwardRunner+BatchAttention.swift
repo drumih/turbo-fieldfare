@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 extension RealForwardRunner {
     /// Two activation rows through one projection into `[row0 m][row1 m]`.

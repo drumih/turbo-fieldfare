@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 // Lazy routed-expert and per-layer streamer management: opening a layer's
 // backend, pinning the cache, and the counters the runner reads.

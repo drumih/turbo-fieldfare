@@ -115,6 +115,7 @@ let package = Package(
         // GF* coupling is split (tracker row TT-073 records the finding).
         .target(
             name: "TinyTitanCore",
+            dependencies: ["TinyTitanFormat"],
             path: "sources/TinyTitanCore",
             swiftSettings: tinytitanLanguageStandard
         ),

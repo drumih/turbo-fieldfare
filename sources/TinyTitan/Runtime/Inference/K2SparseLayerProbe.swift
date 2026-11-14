@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One K2-Horizon sparse layer on a decode step: grouped norm, q/k and the
 /// separate gate, MoVA value attention over a plain K/V cache, then the bf16

@@ -6,10 +6,16 @@ import TinyTitanFormat
 /// region — it INCLUDES the 24-byte header itself, the entry table, the
 /// string table, and the writer's 16 KB page padding. The resident tensor
 /// region starts at file byte `indexSize`.
-struct ResidentIndexHeader: Sendable, Equatable {
-    let indexSize: UInt64
-    let residentSize: UInt64
-    let entryCount: UInt64
+package struct ResidentIndexHeader: Sendable, Equatable {
+    package let indexSize: UInt64
+    package let residentSize: UInt64
+    package let entryCount: UInt64
+
+    package init(indexSize: UInt64, residentSize: UInt64, entryCount: UInt64) {
+        self.indexSize = indexSize
+        self.residentSize = residentSize
+        self.entryCount = entryCount
+    }
 }
 
 public struct ResidentIndexEntry: Sendable, Equatable {
@@ -24,6 +30,22 @@ public struct ResidentIndexEntry: Sendable, Equatable {
     public let biasOffset: UInt64
     public let biasSize: UInt64
 
+    public init(
+        name: String, dtype: UInt8, fileOffset: UInt64, sizeBytes: UInt64,
+        shape: (UInt32, UInt32, UInt32, UInt32), scaleOffset: UInt64,
+        scaleSize: UInt64, biasOffset: UInt64, biasSize: UInt64
+    ) {
+        self.name = name
+        self.dtype = dtype
+        self.fileOffset = fileOffset
+        self.sizeBytes = sizeBytes
+        self.shape = shape
+        self.scaleOffset = scaleOffset
+        self.scaleSize = scaleSize
+        self.biasOffset = biasOffset
+        self.biasSize = biasSize
+    }
+
     public static func == (a: ResidentIndexEntry, b: ResidentIndexEntry) -> Bool {
         a.name == b.name && a.dtype == b.dtype
             && a.fileOffset == b.fileOffset && a.sizeBytes == b.sizeBytes
@@ -35,18 +57,23 @@ public struct ResidentIndexEntry: Sendable, Equatable {
 }
 
 /// Parsed resident index: header + name-keyed entries.
-struct ResidentIndex: Sendable {
-    let header: ResidentIndexHeader
-    let entries: [String: ResidentIndexEntry]
+package struct ResidentIndex: Sendable {
+    package let header: ResidentIndexHeader
+    package let entries: [String: ResidentIndexEntry]
+
+    package init(header: ResidentIndexHeader, entries: [String: ResidentIndexEntry]) {
+        self.header = header
+        self.entries = entries
+    }
 }
 
-enum ResidentIndexReader {
-    static let defaultMaxBytes = SSDAIFormatV1.residentIndexMaxBytes
+package enum ResidentIndexReader {
+    package static let defaultMaxBytes = SSDAIFormatV1.residentIndexMaxBytes
 
     /// `pread` the header + index region out of `model_weights.bin`. The
     /// tensor data region (starting at byte `header.indexSize`) is **not**
     /// read here — that's the resident-buffer materialization job.
-    static func load(
+    package static func load(
         fileURL: URL,
         maxBytes: UInt64 = defaultMaxBytes
     ) throws -> ResidentIndex {

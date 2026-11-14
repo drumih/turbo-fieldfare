@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import Tokenizers
+import TinyTitanCore
 
 @testable import TinyTitan
 

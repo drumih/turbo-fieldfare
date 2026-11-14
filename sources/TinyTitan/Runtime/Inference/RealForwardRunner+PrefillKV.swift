@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Prefill KV writes: the contiguous and strided cache copies and the
 /// quantized staging path.

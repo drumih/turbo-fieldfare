@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TinyTitanCore
 
 /// Read one metadata document from a directory the engine was handed, with the
 /// allocation capped **before** it happens.

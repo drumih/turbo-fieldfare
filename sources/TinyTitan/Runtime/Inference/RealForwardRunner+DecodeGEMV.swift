@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Decode-time activation of the quantized GEMV kernels: the role-to-width
 /// dispatcher, the primary and head variants, the kernel-split rotation, and

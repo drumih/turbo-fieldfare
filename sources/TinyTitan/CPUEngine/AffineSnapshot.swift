@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The side-engine's view of a snapshot written by `tools/prepare_qwen35.py`.
 ///

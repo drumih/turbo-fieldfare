@@ -12,6 +12,7 @@ import Darwin
 import Foundation
 import Metal
 import Synchronization
+import TinyTitanCore
 
 public struct ExpertIOAdviceResult: Sendable, Equatable {
     public let requested: Int

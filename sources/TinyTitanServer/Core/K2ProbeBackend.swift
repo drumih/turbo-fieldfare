@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// Serving K2-Horizon from the GPU probe, through the same HTTP surface as the
 /// other families.

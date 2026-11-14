@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Opt-in wide verify for `runRawCompletion` (docs/plan-wide-verify.md,
 /// task 11): drafts copied from the prompt and the output so far are verified

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Decode-time routed-MoE finalisation: the pending-command hand-off, the slot
 // publication and the shared-expert commit.

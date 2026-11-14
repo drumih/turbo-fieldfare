@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The W-row verify pass for sampled decoding (docs/plan-wide-verify.md,
 /// task 10): the same pass as `verifyGreedyRows`, but each row's full FP16

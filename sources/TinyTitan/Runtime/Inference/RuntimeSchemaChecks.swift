@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 // The schema checks `validateRuntimeSchema` runs, bound to the index and quant
 // slots they read.

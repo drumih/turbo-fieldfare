@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 public struct ModelLoadStats: Sendable {
     public var manifestSha256Nanos: UInt64

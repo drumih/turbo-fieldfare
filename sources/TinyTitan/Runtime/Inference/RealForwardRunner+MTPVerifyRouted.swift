@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The routed-MoE stage of the width-2 MTP verify pass.
 //

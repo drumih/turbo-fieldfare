@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The W-row verify head and the multi-row pipeline prewarm
 /// (docs/plan-wide-verify.md, task 7).

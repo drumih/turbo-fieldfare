@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // Reading tensors out of a snapshot: the shard lookup and the `floats` /
 // `has` / `matrix` accessors.

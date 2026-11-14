@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Phase two of RealForwardRunner's initializer: the scratch buffers and the
 // resident scale tables. Moved verbatim out of the class body (2026-09-28) under the

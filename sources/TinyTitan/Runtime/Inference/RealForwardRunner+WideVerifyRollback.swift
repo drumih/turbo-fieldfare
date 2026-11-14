@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Wide verify: rollback after a partly accepted draft
 // (docs/plan-wide-verify.md, task 9).

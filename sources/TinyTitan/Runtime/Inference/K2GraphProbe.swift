@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// A K2 decode step over a mixed model: embedding, the dense and sparse layers
 /// in order, then the final norm and head.

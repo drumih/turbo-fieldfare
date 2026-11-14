@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 struct SubTensorEntry: Sendable, Equatable {
     let offset: UInt64  // relative to the expert blob's start

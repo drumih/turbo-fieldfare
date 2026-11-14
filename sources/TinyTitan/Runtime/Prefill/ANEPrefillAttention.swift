@@ -1,6 +1,7 @@
 import CoreML
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Switch for the ANE prefill attention path (Track A).
 ///

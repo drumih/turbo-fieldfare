@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Per-batch scratch for the fused decode path (T4).
 ///

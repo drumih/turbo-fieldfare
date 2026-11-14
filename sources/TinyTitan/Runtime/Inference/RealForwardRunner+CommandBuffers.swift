@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Command-buffer completion plumbing: the wait helper, the routed command whose
 // completion is deferred to the next layer, and the diagnostic completion clock.

@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 extension Model {
     static func ransLayoutAndPhases(

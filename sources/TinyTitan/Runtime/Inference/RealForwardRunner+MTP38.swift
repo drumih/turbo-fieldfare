@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The Qwen3.8-Flash-Next draft head's fusion step.
 ///

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// MTP: the speculative checkpoint, the width-2 verify (pair schedule), and the one-layer draft adapter.
 ///

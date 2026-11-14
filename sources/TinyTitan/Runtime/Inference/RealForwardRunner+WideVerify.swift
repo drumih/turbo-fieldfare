@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// What a W-row verify pass produced: each row's greedy prediction and where
 /// the time went.

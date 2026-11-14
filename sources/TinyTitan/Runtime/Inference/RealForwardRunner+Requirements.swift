@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Checked accessors for the optional kernels and buffers a decode or prefill
 // path needs. Split out of RealForwardRunner.swift (2026-09-28) under the

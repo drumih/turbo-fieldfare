@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One K2-Horizon dense layer on a decode step: grouped norm, GQA with the
 /// separate softplus gate, RoPE, then the SwiGLU MLP and both residuals.

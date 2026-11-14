@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Laguna-S-2.1's resident schema and its executable-geometry bounds.
 ///

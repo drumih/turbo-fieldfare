@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The cold tier's expansion step: 2-bit packed weights to 4-bit packed.
 ///

@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Qwen3.5's dense models (2B, 4B and 9B) on the CPU, one token at a time.
 ///

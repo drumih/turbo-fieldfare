@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Synchronization
 import Metal
+import TinyTitanCore
 
 // Planning an expert cache plan and executing its IO.
 //

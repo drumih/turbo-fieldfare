@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// K2-Horizon on the CPU.
 ///

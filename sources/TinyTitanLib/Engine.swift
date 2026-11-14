@@ -18,6 +18,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// One loaded install and the device it runs on.
 ///

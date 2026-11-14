@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The routed-expert half of one sparse layer's chunk pass.
 ///

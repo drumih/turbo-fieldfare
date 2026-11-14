@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Split-out pieces of the gated full-attention decode path: the pre-attention
 /// projection/norm/RoPE block and the host-KV gather both branches share.

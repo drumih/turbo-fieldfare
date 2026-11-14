@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Prefill of one chunk, layer by layer: the chunk orchestrator and the
 /// per-layer pass it dispatches.

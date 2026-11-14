@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Allocation, worst-case sizing and the K/V accessors the attention encoders
 // and the runner use. Split out of `KVCacheManager.swift` (2026-10-21) under

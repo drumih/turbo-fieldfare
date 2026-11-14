@@ -10,6 +10,7 @@
 // loader's wording verbatim, because inventing a digest-shaped value for a
 // failure the loader describes in words would be a worse lie than prose.
 import Foundation
+import TinyTitanCore
 
 public enum TinyTitanError: Error, Sendable {
     /// The directory does not exist.

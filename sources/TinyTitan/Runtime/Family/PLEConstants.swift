@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The hash constants that accompany Qwen3.8-Flash-Next's n-gram table.
 ///

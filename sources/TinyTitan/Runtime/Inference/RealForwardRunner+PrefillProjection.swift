@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Prefill projections and head: the per-layer tensor views, the affine GEMV
 /// wrapper, and the final norm + lm_head.

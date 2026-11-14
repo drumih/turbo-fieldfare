@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// `mmap`'d view of `model_weights.bin`'s tensor data region, wrapped in
 /// one shared `MTLBuffer`. All resident `TensorView`s alias byte offsets

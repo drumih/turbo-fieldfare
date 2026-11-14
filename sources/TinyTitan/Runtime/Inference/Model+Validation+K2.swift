@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 // K2-Horizon's resident-tensor schema.
 //

@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 public enum ManifestReader {
     /// Weight widths this build accepts. 6-bit was withdrawn: non-power-of-two

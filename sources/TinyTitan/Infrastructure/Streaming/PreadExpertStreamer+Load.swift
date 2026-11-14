@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import TinyTitanFormat
 import Metal
+import TinyTitanCore
 
 /// One phase's read ranges, wrapped so it can cross to the reader's queue.
 /// unchecked-invariant: the pointers are the scratch buffers the caller keeps

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The multi-row form of decode's projection dispatch, for the wide verify's
 /// decode-order pass (docs/plan-wide-verify.md, task 7).

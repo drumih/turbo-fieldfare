@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Synchronization
 import Metal
+import TinyTitanCore
 
 // Residency publication, statistics, eviction and prefetch.
 //

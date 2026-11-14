@@ -1,6 +1,7 @@
 import Accelerate
 import Foundation
 import TinyTitanKernelsC
+import TinyTitanCore
 
 /// The scalar arithmetic between the GEMVs.
 ///
