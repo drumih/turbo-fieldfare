@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// T34: the fused width-2 loop must match the per-row decode step for the same
 /// tokens, positions and slots, and the parity must come from the fused path

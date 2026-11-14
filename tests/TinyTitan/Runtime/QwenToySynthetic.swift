@@ -4,6 +4,7 @@ import TinyTitanFormat
 
 @testable import TinyTitan
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// Synthetic Qwen 3.6 toy fixture: a tiny runnable `.ssdai/` directory with
 /// the qwen36 tensor-name contract (linear_attn.* on mask-2 layers,

@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct DequantIQ2STests {
     private static func blocks(count: Int, seed: UInt64) -> [UInt8] {

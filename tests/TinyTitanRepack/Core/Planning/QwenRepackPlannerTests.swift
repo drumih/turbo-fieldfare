@@ -3,6 +3,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 @Suite
 struct QwenRepackPlannerTests {

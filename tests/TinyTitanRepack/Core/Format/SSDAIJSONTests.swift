@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// The `manifest.json` writer's two contract rules: which architectures carry
 /// the extension-geometry block, and what happens when two `quant` keys want

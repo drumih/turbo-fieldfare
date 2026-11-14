@@ -3,6 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// T22: the interior boundaries are located on the rendered ids, not on a
 /// re-render of truncated messages. The ChatML template renders the last

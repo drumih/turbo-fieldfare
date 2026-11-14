@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Acceptance tests for the host-KV tier: a contiguous cache and a streamed
 /// cache with a VRAM window must agree, the window must be the Metal cost, and

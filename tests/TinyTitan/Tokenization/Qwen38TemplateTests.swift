@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Reasoning-effort rendering against the pinned upstream Qwen3.8-Flash-Next
 /// `chat_template.jinja` (fetched 2026-08-27), paired with the synthetic

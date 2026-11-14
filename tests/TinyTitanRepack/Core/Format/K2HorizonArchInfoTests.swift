@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// `ArchInfo` parsing for `model_type: k2_horizon`, checked against the pinned
 /// checkpoint's config values (IFM/K2-Horizon-MoVA-36B-A4B at e9ce7176).

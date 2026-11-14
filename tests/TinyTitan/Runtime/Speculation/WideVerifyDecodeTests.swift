@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Wide verify in the real decode loop (task 11) on the qwen toy runner: the
 /// same prompt generated with wide verify off and on must emit the same

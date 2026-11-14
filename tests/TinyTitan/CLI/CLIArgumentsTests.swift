@@ -2,6 +2,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanCLICore
+import TinyTitanCore
 
 @Suite struct CLIArgumentsTests {
     @Test func defaultsUseProductionGenerationValues() throws {

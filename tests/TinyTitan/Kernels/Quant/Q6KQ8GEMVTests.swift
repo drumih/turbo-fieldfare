@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Q6_K and Q8_0 fused GEMV on the real shared-expert matrices.
 @Suite struct Q6KQ8GEMVTests {

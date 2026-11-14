@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 import TinyTitanValidationSupport
+import TinyTitanCore
 
 /// Validates `DequantInt4GemvRef.apply` against a scalar reference that
 /// dequantizes inline (per-element nibble unpack + scalar accumulate).

@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Every fused decode kernel reads packed affine weights. A promoted (bf16)
 /// tensor inside a slot that still says 4 bits must never reach one: the 35B

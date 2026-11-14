@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// A bf16-rest install (Qwen3.8 BF16Rest's shape: routed experts affine, every
 /// dense matrix -- embedding and lm_head included -- at the checkpoint's bf16)

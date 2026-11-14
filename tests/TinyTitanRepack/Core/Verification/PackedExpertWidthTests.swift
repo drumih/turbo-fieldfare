@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import TinyTitanFormat
+import TinyTitanCore
 
 @testable import TinyTitanRepackCore
 
@@ -492,8 +493,9 @@ import TinyTitanFormat
     }
 
     /// A manifest entry, for the fields `validatePackedExpertLayout` reads.
-    private func fileEntry(bytes: UInt64 = 0) -> ManifestFileEntry {
-        ManifestFileEntry(size: bytes, sha256: String(repeating: "0", count: 64))
+    private func fileEntry(bytes: UInt64 = 0) -> TinyTitanRepackCore.ManifestFileEntry {
+        TinyTitanRepackCore.ManifestFileEntry(
+            size: bytes, sha256: String(repeating: "0", count: 64))
     }
 
     private func writeLayout(_ object: [String: Any], atRoot root: String) throws {

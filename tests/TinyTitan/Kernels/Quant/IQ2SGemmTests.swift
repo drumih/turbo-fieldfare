@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The batched IQ2_S GEMM: a prompt (several tokens) times one weight row per
 /// threadgroup. Checked element for element against the CPU decoder and dots,

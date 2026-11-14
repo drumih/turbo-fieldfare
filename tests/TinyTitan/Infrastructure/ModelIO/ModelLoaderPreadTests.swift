@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// `Model.load(streamingMode:)` integration for the bounded pread cache.
 @Suite struct ModelLoaderPreadTests {

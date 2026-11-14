@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Resolving a model's architecture: the family's preset, or the manifest's own
 /// declaration when the family has no preset.

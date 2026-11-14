@@ -5,6 +5,7 @@ import TinyTitan
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 /// The batched-serving headroom rule: a worst-case per-slot size computed from
 /// the architecture, and a width clamped so the slots fit beside the wired

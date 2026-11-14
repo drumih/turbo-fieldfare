@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Weight-read bandwidth of every non-expert GEMV of one GDN and one
 /// full-attention layer plus the output head, each timed alone on the decoder's

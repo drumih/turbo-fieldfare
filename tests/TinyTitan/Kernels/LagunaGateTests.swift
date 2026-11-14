@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Laguna applies one plain softplus gate per head, broadcast across that
 /// head's dimensions, before o_proj. K2's kernel is a different function

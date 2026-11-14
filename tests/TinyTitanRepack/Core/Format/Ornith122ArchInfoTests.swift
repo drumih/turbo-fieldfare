@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// `ArchInfo` parsing for Ornith-1.5-122B (`model_type: qwen3_5_moe` at hidden
 /// 3072 / 48 layers). The 3072/48 contract is checked field by field, and a

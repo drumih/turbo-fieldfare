@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The as-is decoder against llama.cpp on the same GGUF (model-gated).
 ///

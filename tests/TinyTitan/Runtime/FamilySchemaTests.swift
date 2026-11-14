@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The family tensor schemas are the single source of on-disk names; these
 /// pins keep a schema edit from silently un-mapping an installed `.ssdai`.

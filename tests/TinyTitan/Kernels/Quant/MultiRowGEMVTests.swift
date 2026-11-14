@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The multi-row GEMV must equal the decode kernel run once per row, byte for
 /// byte: the wide verify's rows are compared against scalar decode with no

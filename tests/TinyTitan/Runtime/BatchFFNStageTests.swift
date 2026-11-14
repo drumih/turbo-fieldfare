@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// T34's per-row FFN pieces: the shared expert and the router must produce a
 /// row's numbers from a slice of a batch buffer, so the fused decode loop can

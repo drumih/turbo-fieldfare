@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct GGUFConversionPlannerTests {
     private static var realModelPath: String? {

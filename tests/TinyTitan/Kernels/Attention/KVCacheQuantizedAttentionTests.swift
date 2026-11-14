@@ -3,6 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct KVCacheQuantizedAttentionTests {
     @Test(arguments: [KVCachePrecision.int8, .int4])

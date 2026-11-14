@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 extension RemotePayloadCopyTests {
     @Test func remotePayloadCopyCompletes() async throws {

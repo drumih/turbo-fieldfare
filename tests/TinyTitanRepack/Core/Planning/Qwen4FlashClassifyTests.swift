@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// Classification over the pinned 3.8 tensor list, run through the 4.0 family.
 ///

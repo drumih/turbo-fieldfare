@@ -3,6 +3,7 @@ import Testing
 import TinyTitanKernelsC
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The batched prefill's new arithmetic, checked without a model file.
 ///

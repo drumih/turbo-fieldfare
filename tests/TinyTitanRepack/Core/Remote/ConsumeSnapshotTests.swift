@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// `--consume-snapshot`: a source shard is deleted only after the last
 /// coalesced copy that reads it has committed, never before, and a shard no

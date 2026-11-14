@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// AUD2-036: the PLE prefill gather's destination is sized by the runner's own
 /// `prefillChunkTokens`, but `PrefillRuntimeConfig.production(chunkTokens:)`

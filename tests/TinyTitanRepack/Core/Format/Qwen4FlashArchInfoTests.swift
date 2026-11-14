@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// `ArchInfo` parsing for the Qwen 4.0 Flash family (`qwen4-omni-120b-think`).
 ///

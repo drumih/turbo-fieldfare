@@ -3,6 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The GEMM is only useful at the real projections' shapes: 2,560 and 4,096
 /// columns (20 and 32 register iterations at 8-bit) and 4,096 rows. The toy

@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct LMHeadChainInt4Tests {
     private static let rmsEps: Float = 1e-6

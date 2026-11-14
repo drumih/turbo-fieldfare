@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The Qwen 4.0 Flash tensor namespace, checked against the pinned 3.8 tensor
 /// list.

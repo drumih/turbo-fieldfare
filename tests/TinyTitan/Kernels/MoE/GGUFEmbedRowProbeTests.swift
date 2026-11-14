@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The CPU Q6_K decoder against llama.cpp, on the real embedding table
 /// (model-gated).

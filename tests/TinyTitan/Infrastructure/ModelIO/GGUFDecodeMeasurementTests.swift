@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Measures how fast the host decoder reads the two expert formats, in the
 /// shape the engine would call it: one whole expert slice per call.

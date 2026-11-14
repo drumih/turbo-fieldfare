@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 @Suite struct DiskSpaceCheckerTests {
     @Test func assessmentDoesNotCreateMissingTargetAndUsesExistingAncestor() throws {

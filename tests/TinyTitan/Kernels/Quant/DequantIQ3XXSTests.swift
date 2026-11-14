@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// IQ3_XXS on the GPU against the CPU decoder, then a rate on a real expert
 /// matrix (640 x 2560 = 1,638,400 values in 6,400 blocks of 98 bytes).

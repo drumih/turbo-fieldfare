@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct PrefillFinalRowHeadTests {
     private static func packedAffine(bits: Int, rows: Int, columns: Int) -> [UInt8] {

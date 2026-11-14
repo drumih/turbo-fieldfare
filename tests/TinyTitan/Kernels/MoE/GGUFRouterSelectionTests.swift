@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The F32 router: the selection rule on explicit logits, and the GEMV that
 /// produces them without rounding the F32 weights or the logits.

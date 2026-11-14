@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 private func randomBlocks(
     count: Int, blockBytes: Int, key: String, seed: UInt64

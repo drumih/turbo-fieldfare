@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// A Metal device on this host, or `nil` on a headless runner. Suite-level gate
 /// rather than an in-body early return: a `return` makes a test that ran nothing

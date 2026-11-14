@@ -5,6 +5,7 @@ import TinyTitanLib
 @testable import TinyTitanCLICore
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct CalibrationCommandTests {
     @Test func parsesDraftArguments() throws {

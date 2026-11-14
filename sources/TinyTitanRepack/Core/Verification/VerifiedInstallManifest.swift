@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 // The verifier's local manifest mirror: only the fields this tool needs,
 // decoded without the format layer's structural validation.

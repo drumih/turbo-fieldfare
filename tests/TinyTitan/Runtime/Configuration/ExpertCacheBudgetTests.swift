@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The slot default is derived from a RAM budget and the model's own expert
 /// stride, so one rule serves every quantisation.

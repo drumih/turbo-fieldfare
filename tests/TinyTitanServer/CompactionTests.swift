@@ -13,6 +13,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 // A summariser stub: it records every request it is handed, answers with a
 // scripted note, and reports scripted token counts so the over-budget path can

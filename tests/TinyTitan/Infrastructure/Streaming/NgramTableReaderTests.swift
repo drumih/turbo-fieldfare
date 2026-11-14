@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Row gather over the n-gram table, against a synthetic file whose contents
 /// encode their own row index so a misaddressed read is detectable rather than

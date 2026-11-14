@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The Laguna preset and its surface rules: the geometry a manifest is checked
 /// against, the sampling defaults from `generation_config.json`, and the

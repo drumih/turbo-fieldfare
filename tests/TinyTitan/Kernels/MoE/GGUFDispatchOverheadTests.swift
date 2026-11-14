@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Where a token's host time goes: one command buffer carrying many dispatches
 /// against many buffers carrying one each. Same kernels, same buffers.

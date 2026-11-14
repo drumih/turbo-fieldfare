@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The fused decode projections against their multi-row form: GDN's
 /// qkv/z/a/b input projection (`gdn_in_proj_gemv_simd`) and full attention's

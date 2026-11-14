@@ -5,6 +5,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 private func send(
     _ port: Int, _ method: String, _ path: String, json: String? = nil,

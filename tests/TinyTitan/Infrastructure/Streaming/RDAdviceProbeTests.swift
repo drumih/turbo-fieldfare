@@ -2,6 +2,7 @@ import Darwin
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct RDAdviceProbeTests {
     @Test func clipsByteCountToRadvisoryIntLimit() {

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite("Tokenizer load coordinator")
 struct TokenizerLoadCoordinatorTests {

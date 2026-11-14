@@ -11,13 +11,13 @@ import TinyTitanFormat
 // (`ManifestReader.decode`) stays behind in the other file.
 
 extension ManifestFileEntry {
-    init(wire: SSDAIManifestFileV1) {
+    package init(wire: SSDAIManifestFileV1) {
         self.init(size: wire.size, sha256: wire.sha256)
     }
 }
 
 extension ManifestArch {
-    init(wire: SSDAIManifestArchV1) {
+    package init(wire: SSDAIManifestArchV1) {
         self.init(
             hiddenSize: wire.hiddenSize,
             ffnIntermediate: wire.ffnIntermediate,
@@ -82,7 +82,7 @@ extension ManifestArch {
 }
 
 extension ManifestQuantSlot {
-    init(wire: SSDAIManifestQuantSlotV1) {
+    package init(wire: SSDAIManifestQuantSlotV1) {
         self.init(
             weightBits: wire.weightBits, scheme: wire.scheme,
             scaleType: wire.scaleType, biasType: wire.biasType,
@@ -91,7 +91,7 @@ extension ManifestQuantSlot {
 }
 
 extension ManifestQuant {
-    init(wire: SSDAIManifestQuantV1) {
+    package init(wire: SSDAIManifestQuantV1) {
         self.init(
             embedding: ManifestQuantSlot(wire: wire.embedding),
             attention: ManifestQuantSlot(wire: wire.attention),
@@ -102,7 +102,7 @@ extension ManifestQuant {
 }
 
 extension Manifest {
-    init(wire: SSDAIManifestV1) {
+    package init(wire: SSDAIManifestV1) {
         self.init(
             magic: wire.magic,
             versionMajor: wire.versionMajor,

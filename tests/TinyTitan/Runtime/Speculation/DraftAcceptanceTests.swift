@@ -2,6 +2,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct DraftAcceptanceTests {
     /// A stand-in target: the token after a context is a fixed hash of it, and

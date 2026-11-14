@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// T25/T26: the page-cache decision is a pure function of physical memory,
 /// install size and one explicit override. A 24 GB host keeps the bounded

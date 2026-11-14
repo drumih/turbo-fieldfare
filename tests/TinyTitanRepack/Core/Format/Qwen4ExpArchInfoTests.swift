@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// `ArchInfo` parsing for `model_type: qwen4_exp`, checked against the real
 /// pinned checkpoint's config values (RockTalk/Qwen3.8-Flash-Next-MLX-4bit at

@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// End-to-end: write a synthetic .ssdai blob containing one "expert" worth of
 /// affine-quantized weights (packed nibbles + BF16 scales + BF16 biases), open

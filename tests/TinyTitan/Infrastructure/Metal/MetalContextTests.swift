@@ -2,6 +2,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The context is where a caller's device becomes the engine's device.
 ///

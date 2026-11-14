@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// K2's sparse expert block on synthetic weights: bf16 router, sigmoid top-k
 /// selection with a ranking-only bias, the selected SwiGLU experts and the

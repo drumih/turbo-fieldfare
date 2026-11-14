@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The PLE block's kernels, against CPU references derived from the reference
 /// implementation (`mlx_qwen4exp/ple.py`).

@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The per-expert fetch path: real byte ranges read into Metal buffers, the
 /// right block type per matrix, an LRU that evicts, and a fused GEMV on the

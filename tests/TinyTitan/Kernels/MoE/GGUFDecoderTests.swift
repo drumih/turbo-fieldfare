@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The whole as-is forward pass on the real checkpoint: embedding, 48 layers
 /// (GDN or full attention, hyper-connections, routed plus shared MoE, PLE) and

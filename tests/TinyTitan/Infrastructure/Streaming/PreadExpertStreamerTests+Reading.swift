@@ -4,6 +4,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 extension PreadExpertStreamerTests {
     /// A stride that cannot be represented as an `Int` used to trap in the slot

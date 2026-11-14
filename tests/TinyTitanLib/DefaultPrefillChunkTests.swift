@@ -4,6 +4,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// The prefill chunk a family gets when neither the caller nor the model's
 /// profile row names one.

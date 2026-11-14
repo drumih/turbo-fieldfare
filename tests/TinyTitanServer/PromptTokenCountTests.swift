@@ -4,6 +4,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 /// `POST /v1/messages/count_tokens` promises "the same encoding generation uses,
 /// minus the generation", and it was not: it encoded `request.messages` and

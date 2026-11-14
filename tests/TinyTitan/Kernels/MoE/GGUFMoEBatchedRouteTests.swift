@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The batched routed-MoE route (one dispatch per projection for all selected
 /// experts) against the one-expert-at-a-time route it replaces, on real GGUF

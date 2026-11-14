@@ -4,6 +4,7 @@ import TinyTitan
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 @Suite struct ResponsesAPIMapperTests {
     private func decode(_ json: String) throws -> ResponsesAPIRequest {

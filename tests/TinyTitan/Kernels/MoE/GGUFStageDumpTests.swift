@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The opt-in parity capture: off unless asked for, one position or all, and
 /// files a comparison script reads with no header (float32 little-endian).

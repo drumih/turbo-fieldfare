@@ -3,6 +3,7 @@ import Testing
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 /// The stored-response store behind `previous_response_id`, `GET` and `DELETE`.
 /// It is bounded and in memory, and the doc comment states the eviction rule:

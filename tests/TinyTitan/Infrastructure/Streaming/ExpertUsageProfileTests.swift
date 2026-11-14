@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 // The persisted routing profile: format round trip, dimension checks, and the
 // decay/cap rule the streamer's LFU score is seeded with.

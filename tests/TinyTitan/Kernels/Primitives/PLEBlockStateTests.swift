@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// `PLEBlock`'s host-side state: the scratch geometry the load path sizes from
 /// the architecture, and the convolution window's reset and rewind.

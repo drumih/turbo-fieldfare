@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct PrefillRuntimeConfigTests {
     @Test(arguments: [32, 64, 128, 256, 512, 1_024, 2_048, 4_096])

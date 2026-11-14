@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Validates the gated-DeltaNet kernels against a straight-line CPU reference
 /// implementing the mlx-vlm gated_delta math: causal depthwise conv + SiLU,

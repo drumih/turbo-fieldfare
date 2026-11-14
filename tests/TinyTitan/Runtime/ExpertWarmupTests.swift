@@ -4,6 +4,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// The startup expert warm-up on the toy MoE install (4 layers, 8 experts,
 /// top-8) with a synthetic `expert-profile.bin`: the hottest experts land in

@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// One layer's whole MoE on the real checkpoint: router -> top-10 -> routed
 /// experts -> shared expert, against a CPU reference.

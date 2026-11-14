@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The PLE stage on the real checkpoint: the rows the hash selects are gathered
 /// bit-exactly, and the block injects a finite, non-zero term into the streams.

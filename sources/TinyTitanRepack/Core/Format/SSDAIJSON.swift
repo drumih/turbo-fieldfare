@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 /// JSON encoders for `manifest.json` and `packed_experts/layout.json`. The
 /// files are small (kilobytes), so we use Foundation's `JSONSerialization`

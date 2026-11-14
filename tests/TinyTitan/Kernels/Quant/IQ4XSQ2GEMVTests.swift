@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct IQ4XSQ2GEMVTests {
     private static var realModelPath: String? {

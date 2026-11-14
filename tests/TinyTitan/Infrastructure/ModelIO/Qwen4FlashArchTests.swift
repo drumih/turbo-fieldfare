@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Pins the Qwen 4.0 Flash runtime preset.
 ///

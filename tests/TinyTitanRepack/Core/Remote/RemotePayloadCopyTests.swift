@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
     nonisolated(unsafe) static var files: [String: Data] = [:]

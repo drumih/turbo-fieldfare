@@ -9,6 +9,7 @@ import Testing
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 /// A whole catalog shares one resident slot, so the `prompt_cache` a load
 /// reports has to come from the backend that just loaded. Naming the server's

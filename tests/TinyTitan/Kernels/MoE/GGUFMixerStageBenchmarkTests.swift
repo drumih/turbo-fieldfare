@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// GPU time of each non-expert stage of one decode layer, on the decoder's own
 /// resident weights: where the attention side's milliseconds go. Opt-in

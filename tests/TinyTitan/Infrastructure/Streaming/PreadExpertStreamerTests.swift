@@ -4,6 +4,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 // Unit tests for the synchronous `pread` backend: round-trip correctness,
 // exact file-byte reads, the short-read failure path,

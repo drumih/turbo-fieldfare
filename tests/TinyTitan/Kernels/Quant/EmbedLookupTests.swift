@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Validates the 4-bit embedding lookup kernel against the CPU reference.
 @Suite struct EmbedLookupTests {

@@ -3,6 +3,7 @@ import Testing
 import TinyTitanFormat
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// The writer that makes a compressed install out of a raw one.
 ///

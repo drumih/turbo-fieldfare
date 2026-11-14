@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The expert GEMV on real GGUF weights: correctness against a CPU
 /// decode-then-dot, then the per-matrix time that sets the decode ceiling.

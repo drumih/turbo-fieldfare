@@ -3,6 +3,7 @@ import Testing
 import TinyTitanFormat
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// The resident index stores each tensor name's length in a `UInt16`, and the
 /// name comes from the source manifest. That makes an over-long name input

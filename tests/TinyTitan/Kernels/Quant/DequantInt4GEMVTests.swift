@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Compares the Metal `dequant_int4_gemv` kernel against `DequantInt4GemvRef`,
 /// which bulk-dequantizes each row to FP32 and dots with `vDSP_dotpr`. The

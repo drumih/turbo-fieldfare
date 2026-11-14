@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Compares the Metal `attention` kernel against `AttentionRef`, which
 /// materializes the full attention matrix per Q head via `vDSP_dotpr` and

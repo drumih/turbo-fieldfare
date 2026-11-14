@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The bf16 GEMV kernels against a CPU reference, and against each other.
 ///

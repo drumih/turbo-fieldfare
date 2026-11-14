@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 extension RemotePayloadCopyTests {
     @Test func discardRemovesOnlyOwnedResumeFiles() throws {

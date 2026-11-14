@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Every projection shape the model's non-MoE stages start from, run through
 /// the arena's bf16 views with the engine's BF16GEMV: the GDN qkv/gate/alpha/

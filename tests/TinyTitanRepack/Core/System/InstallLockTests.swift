@@ -4,6 +4,7 @@ import Synchronization
 import Testing
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 @Suite struct InstallLockTests {
     @Test func twoContendersForCanonicalTargetCannotBothAcquire() throws {

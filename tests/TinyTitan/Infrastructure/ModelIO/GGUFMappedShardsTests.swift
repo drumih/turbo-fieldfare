@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Weights read straight out of the mapped shards: a fused GEMV over a mapped
 /// Q6_K tensor must agree with the CPU, and nothing is copied to make it so.

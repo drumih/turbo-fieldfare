@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The routed-MoE stage on real GGUF weights: two experts of layer 0 through
 /// fused GEMVs, SiLU and weighted accumulation, against a CPU reference built

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The generation loop the CLI's GGUF-as-is branch runs: sidecar tokenizer,
 /// token-at-a-time prefill, then greedy decode with the argmax fed back. This

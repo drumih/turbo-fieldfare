@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// One routed expert's whole FFN on the GPU: gate and up from IQ2_S blocks,
 /// SiLU(gate)·up, then down from IQ4_NL blocks. Checked against a CPU

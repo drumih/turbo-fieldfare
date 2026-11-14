@@ -3,6 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// The one integrity decision the facade exposes.
 ///

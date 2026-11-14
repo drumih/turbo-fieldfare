@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The GDN geometry must come from the file, and the runtime preset is wrong
 /// for this checkpoint - both facts are pinned here.

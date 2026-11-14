@@ -3,6 +3,7 @@ import Testing
 import TinyTitanFormat
 
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 /// The rANS layer writer and its sidecar.
 ///

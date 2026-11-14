@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct ConcisePromptTests {
     /// The shipped prompt is the only prompt, and it is not the unshipped one.

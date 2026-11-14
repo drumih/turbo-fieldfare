@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The model's input and output path on real Q6_K tensors: the embedding gather
 /// and the head GEMV.

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 public struct VerifyInstallOptions: Sendable {
     public let inputSSDAI: String

@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// Tests `GDNStateManager`'s per-slot layout. The delta-rule state and conv
 /// tail are fixed-size per sequence, so batching multiplies them by `slots` and

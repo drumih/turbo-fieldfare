@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// A repack is a byte copy, so a dense `.ssdai` install must be *exactly* the
 /// snapshot it came from. This is the gate that says so.

@@ -3,6 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// `CPUExpertFFN` reads packed expert bytes and computes the FFN in one pass.
 /// These drive it and the independent reference (`MoeRef`/`DequantInt4GemvRef`,

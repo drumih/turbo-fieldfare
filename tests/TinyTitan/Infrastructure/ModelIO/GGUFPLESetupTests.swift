@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The PLE constants come from the checkpoint, and every row the hash produces
 /// must land inside the table's per-head range.

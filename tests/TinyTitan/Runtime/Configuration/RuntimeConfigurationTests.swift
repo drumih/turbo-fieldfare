@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct RuntimeConfigurationTests {
     @Test func publicContextChoicesReachQwenMaximum() {

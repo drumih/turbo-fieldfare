@@ -1,5 +1,6 @@
 import Metal
 import Testing
+import TinyTitanCore
 
 @testable import TinyTitan
 

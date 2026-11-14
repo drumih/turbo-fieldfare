@@ -5,6 +5,7 @@ import TinyTitan
 @testable import TinyTitanMemory
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 /// Consolidation is where the authority comes from, so the flag has to
 /// survive the extraction's own output shapes.

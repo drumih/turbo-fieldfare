@@ -1,6 +1,7 @@
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The dense-exactness window for Qwen Sparse Attention. This boundary decides
 /// whether dense attention is correct or is silently attending to a subset of

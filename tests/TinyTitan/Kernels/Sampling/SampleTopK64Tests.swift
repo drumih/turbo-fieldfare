@@ -2,6 +2,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct SampleTopK64Tests {
     @Test func generationConfigUsesCanonicalSamplingDefaults() throws {

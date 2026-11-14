@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The GGUF hyper-connection against the engine's own implementation on the
 /// same inputs: the only difference is that ours reads the up/down projections

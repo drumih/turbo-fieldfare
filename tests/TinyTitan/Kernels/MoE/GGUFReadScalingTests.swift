@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// How expert-read throughput scales with concurrency: three reads at a time
 /// (today) against all thirty of a layer's matrices at once.

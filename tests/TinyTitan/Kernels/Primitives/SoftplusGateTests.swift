@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// K2-Horizon's attention output gate is `softplus(x; beta = ln 2)`, not the
 /// sigmoid the Qwen families use. The two curves are both smooth, positive and

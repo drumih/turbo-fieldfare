@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// A full-attention layer's decode step over two positions, against a CPU
 /// reference that walks the same pipeline: q split, q/k norms, partial NeoX

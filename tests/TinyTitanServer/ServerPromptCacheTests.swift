@@ -4,6 +4,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanCore
 
 @Suite("Server prompt cache")
 struct ServerPromptCacheTests {

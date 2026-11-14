@@ -2,6 +2,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct GPUExpertResidencyTests {
     private struct Classification {

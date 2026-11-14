@@ -3,6 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// K1: the system-end checkpoint is content-addressed by the rendered system
 /// prefix and the runtime domain, validated before a restore, and accounted

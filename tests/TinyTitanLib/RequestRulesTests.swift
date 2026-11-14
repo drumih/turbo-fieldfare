@@ -3,6 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
+import TinyTitanCore
 
 /// Which request limits apply to whom.
 ///

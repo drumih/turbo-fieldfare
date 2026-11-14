@@ -3,6 +3,7 @@ import Testing
 
 @testable import TinyTitan
 import TinyTitanFormat
+import TinyTitanCore
 
 /// Writes one layer of routed experts as a `.ssdai` blob and reads it back the
 /// way the runtime does: through `PackedExpertsLayoutReader`, then by offset

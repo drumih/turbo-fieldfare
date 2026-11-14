@@ -57,7 +57,7 @@ public struct ManifestArch: Decodable, Equatable, Sendable {
     public let quantGroupSize: Int?
     // The layer conventions, carried by every manifest this repacker writes and
     // optional for the same reason as the block above. The architecture presets
-    // state them per family; a family without a preset (the dense Qwen 3.5
+    // state them per family; a family without a preset (the dense 3.5-lineage
     // models) must read them here rather than assume them, because picking the
     // wrong one produces confident nonsense instead of an error -- a wrong
     // attention output gate or RoPE convention is not a shape mismatch.
@@ -99,6 +99,16 @@ public struct ManifestQuantSlot: Decodable, Equatable, Sendable {
     public let scaleType: String
     public let biasType: String
     public let groupSize: Int
+
+    package init(
+        weightBits: Int, scheme: String, scaleType: String, biasType: String, groupSize: Int
+    ) {
+        self.weightBits = weightBits
+        self.scheme = scheme
+        self.scaleType = scaleType
+        self.biasType = biasType
+        self.groupSize = groupSize
+    }
 }
 
 public struct ManifestQuant: Decodable, Equatable, Sendable {
@@ -108,11 +118,22 @@ public struct ManifestQuant: Decodable, Equatable, Sendable {
     public let sharedExpert: ManifestQuantSlot
     public let routedExpert: ManifestQuantSlot
 
+    package init(
+        embedding: ManifestQuantSlot, attention: ManifestQuantSlot, router: ManifestQuantSlot,
+        sharedExpert: ManifestQuantSlot, routedExpert: ManifestQuantSlot
+    ) {
+        self.embedding = embedding
+        self.attention = attention
+        self.router = router
+        self.sharedExpert = sharedExpert
+        self.routedExpert = routedExpert
+    }
+
     /// The slot a tensor is actually stored in.
     ///
     /// The five slots above are the build's *defaults*; a tensor whose width
     /// differs from every slot's carries a per-tensor override instead, keyed
-    /// by tensor stem (the name without `.weight`). A dense Qwen 3.5 install is
+    /// by tensor stem (the name without `.weight`). A dense 3.5-lineage install is
     /// exactly that case: its `mlp.*` projections are 4-bit and its
     /// full-attention `k_proj`/`v_proj` 8-bit, while the `sharedExpert` and
     /// `attention` slots say 8 and 4. Reading the slot where the override
@@ -185,12 +206,4 @@ public struct Manifest: Decodable, Equatable, Sendable {
     public let expertsPerLayer: Int
     public let numLayers: Int
     public let expertStride: UInt64
-}
-
-public struct ManifestIdentity: Equatable, Sendable {
-    public let modelID: String
-    public let family: ModelFamily
-    /// Routed-expert width, which is what "a 4-bit model" names: the experts
-    /// are almost all of the payload.
-    public let weightBits: Int
 }

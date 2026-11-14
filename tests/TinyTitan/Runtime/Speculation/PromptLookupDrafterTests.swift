@@ -2,6 +2,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 @Suite struct PromptLookupDrafterTests {
     /// The definition the replay tool uses, restated naively: the most recent

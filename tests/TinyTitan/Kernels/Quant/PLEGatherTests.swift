@@ -4,6 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
+import TinyTitanCore
 
 /// The PLE gather over real IQ4_NL rows: correctness against the CPU decoder,
 /// then the rows/s rate. The table is 28.8 GB and is never materialised here -

@@ -5,6 +5,7 @@ import TinyTitanFormat
 
 @testable import TinyTitan
 @testable import TinyTitanRepackCore
+import TinyTitanCore
 
 // The whole compressed path on a toy install: convert a real raw install with
 // the repacker's writer, load it with the runtime's loader, and compare every

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 import TinyTitanValidationSupport
+import TinyTitanCore
 
 @Suite struct DequantInt8GEMVReferenceTests {
     private static func scalarRef(

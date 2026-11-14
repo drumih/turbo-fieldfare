@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 // The packed-expert half of `--verify-install`.
 //
