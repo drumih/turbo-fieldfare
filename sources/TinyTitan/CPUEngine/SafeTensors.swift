@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// A safetensors file, memory-mapped.
 ///

@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Synchronization
 import TinyTitan
+import TinyTitanCore
 
 /// Persistent + in-memory backing for published prompt-cache entries.
 ///

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// Content-addressed store for interior checkpoints.
 ///

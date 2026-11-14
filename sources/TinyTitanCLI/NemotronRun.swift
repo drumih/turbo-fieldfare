@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// The CLI's Nemotron 3.5 Bolt path.
 ///

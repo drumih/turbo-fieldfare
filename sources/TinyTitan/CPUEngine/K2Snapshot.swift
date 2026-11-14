@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The K2-Horizon snapshot: `config.json`, a quantized safetensors shard set,
 /// and the accessors the CPU model reads.

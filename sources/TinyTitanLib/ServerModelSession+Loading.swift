@@ -8,6 +8,7 @@ import CryptoKit
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 extension ServerModelSession {
     /// Interior checkpoints are on by default; the A/B benchmark can turn

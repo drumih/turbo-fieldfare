@@ -12,6 +12,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 extension TinyTitanBench {
     /// What the CPU side-engine can actually read, and at how many threads.

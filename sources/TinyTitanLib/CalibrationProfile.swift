@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// A measured tuning profile for one (machine, model, context) triple.
 ///

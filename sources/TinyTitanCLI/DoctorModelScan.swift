@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// Reads a `models/` tree without loading a model or touching its weights.
 ///

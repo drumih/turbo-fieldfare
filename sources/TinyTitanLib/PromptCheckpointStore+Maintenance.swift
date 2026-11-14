@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 extension PromptCheckpointStore {
     private static let stagingPrefix = ".tmp-"

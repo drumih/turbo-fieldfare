@@ -1,5 +1,6 @@
 import Foundation
 import Tokenizers
+import TinyTitanCore
 
 /// The checkpoint's own tokenizer, loaded without TinyTitan's ChatML/K2
 /// dialect resolver.

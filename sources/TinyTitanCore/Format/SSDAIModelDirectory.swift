@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import TinyTitanFormat
-import TinyTitanCore
 
 package final class SSDAIModelDirectory {
     package let rootURL: URL

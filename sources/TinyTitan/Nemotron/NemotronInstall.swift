@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// One tensor in a Nemotron install's resident payload.
 public struct NemotronTensorRef: Sendable {
