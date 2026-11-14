@@ -168,6 +168,92 @@ import TurboFieldfareValidationSupport
                 "TensorOps 2D rel=\(rel) maxAbs=\(maxAbs) keys=\(visibleKeys)")
     }
 
+    /// Sliding-window TensorOps at production head shapes: windows that clip
+    /// inside a 64-key tile, chunks that do not fill the four-query group, and
+    /// a bidirectional image block.
+    @Test(arguments: [
+        (start: 0, chunk: 1, window: 1_024),
+        (start: 0, chunk: 37, window: 1_024),
+        (start: 63, chunk: 66, window: 5),
+        (start: 100, chunk: 29, window: 70),
+        (start: 1_000, chunk: 33, window: 1_024),
+        (start: 1_100, chunk: 5, window: 1_024),
+    ])
+    func slidingWindowTensorOpsMatchesReference(_ shape: (start: Int, chunk: Int, window: Int)) throws {
+        let context = try MetalContext()
+        guard try PrefillAttention(context: context).slidingWindowTensorOpsAvailable else { return }
+        let fixture = Self.makeFixture(start: shape.start,
+                                       chunk: shape.chunk,
+                                       window: shape.window,
+                                       seed: 0xA910 + UInt64(shape.start * 7 + shape.chunk),
+                                       headDim: 256,
+                                       qHeads: 16,
+                                       kvHeads: 8)
+        let candidate = try Self.runKernel(fixture, path: .fullTensorOps2DPreferred)
+        let repeated = try Self.runKernel(fixture, path: .fullTensorOps2DPreferred)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(candidate == repeated, "SWA TensorOps is not byte-stable at \(shape)")
+        #expect(maxAbs <= 2e-2, "SWA TensorOps maxAbs=\(maxAbs) rel=\(rel) \(shape)")
+        #expect(rel <= 2e-2, "SWA TensorOps rel=\(rel) maxAbs=\(maxAbs) \(shape)")
+    }
+
+    /// A ring whose capacity is not a multiple of the 64-key tile, so key tiles
+    /// have to stop at the physical wrap.
+    @Test func slidingWindowTensorOpsHandlesRingWrap() throws {
+        let context = try MetalContext()
+        guard try PrefillAttention(context: context).slidingWindowTensorOpsAvailable else { return }
+        let fixture = Self.makeFixture(start: 150,
+                                       chunk: 37,
+                                       window: 90,
+                                       seed: 0xA950,
+                                       headDim: 256,
+                                       qHeads: 16,
+                                       kvHeads: 8)
+        let ringCapacity = 130
+        var kRing = [Float](repeating: 0, count: ringCapacity * fixture.kvStride)
+        var vRing = [Float](repeating: 0, count: ringCapacity * fixture.kvStride)
+        for position in 0..<fixture.kvValid {
+            let destination = (position % ringCapacity) * fixture.kvStride
+            let source = position * fixture.kvStride
+            kRing.replaceSubrange(destination..<(destination + fixture.kvStride),
+                                  with: fixture.k[source..<(source + fixture.kvStride)])
+            vRing.replaceSubrange(destination..<(destination + fixture.kvStride),
+                                  with: fixture.v[source..<(source + fixture.kvStride)])
+        }
+        var ringFixture = fixture
+        ringFixture.k = kRing
+        ringFixture.v = vRing
+        let candidate = try Self.runKernel(ringFixture,
+                                           kvRingCapacity: UInt32(ringCapacity),
+                                           path: .fullTensorOps2DPreferred)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(maxAbs <= 2e-2, "SWA TensorOps ring maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "SWA TensorOps ring rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
+    @Test func slidingWindowTensorOpsKeepsTheBidirectionalBlock() throws {
+        let context = try MetalContext()
+        guard try PrefillAttention(context: context).slidingWindowTensorOpsAvailable else { return }
+        var fixture = Self.makeFixture(start: 40,
+                                       chunk: 30,
+                                       window: 1_024,
+                                       seed: 0xA960,
+                                       headDim: 256,
+                                       qHeads: 16,
+                                       kvHeads: 8)
+        fixture.bidirectionalBlock = 45..<62
+        let candidate = try Self.runKernel(fixture, path: .fullTensorOps2DPreferred)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(maxAbs <= 2e-2, "SWA TensorOps bidirectional maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "SWA TensorOps bidirectional rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
     @Test func preferredTensorOpsPathUsesSafeHardwareFallback() throws {
         let context = try MetalContext()
         let fixture = Self.makeFixture(start: 128,

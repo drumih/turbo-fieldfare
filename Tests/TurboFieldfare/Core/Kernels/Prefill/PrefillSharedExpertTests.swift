@@ -244,6 +244,90 @@ import TurboFieldfareValidationSupport
         assertPaddingUnchanged(got)
     }
 
+    /// Above the batching threshold the block runs three INT8 matrix
+    /// multiplies instead of one GEMV chain per token. Rounding differs (gate
+    /// and up are stored as FP16 before the activation), so this compares
+    /// within tolerance; 70 rows leave a partial 64-row tile.
+    @Test(arguments: [4, 8])
+    func batchedSharedExpertMatchesRepeatedScalarRows(weightBits: Int) throws {
+        let batchRows = 70
+        let batchD = 128
+        let batchF = 192
+        var rng = SeedTree(0xC0FFEF).key("prefill-shared-expert-batched-\(weightBits)")
+        let ctx = try MetalContext()
+        let scalar = try SharedExpertRuntime(context: ctx, weightBits: weightBits)
+        let prefill = try PrefillSharedExpert(context: ctx, weightBits: weightBits)
+        guard prefill.batchedPathAvailable else { return }
+
+        let x = (0..<(batchRows * batchD)).map { _ in Float16(rng.uniform(-0.35, 0.35)) }
+        let makeWeights = weightBits == 4 ? Self.makeInt4Weights : Self.makeWeights
+        let gate = makeWeights(batchF, batchD, &rng)
+        let up = makeWeights(batchF, batchD, &rng)
+        let down = makeWeights(batchD, batchF, &rng)
+        guard let xBuf = Fp16Buffer.make(ctx.device, halves: x),
+              let yRef = Fp16Buffer.make(ctx.device, count: batchRows * batchD),
+              let yGot = Fp16Buffer.make(ctx.device, count: batchRows * batchD),
+              let scratchGate = Fp16Buffer.make(ctx.device, count: batchF),
+              let scratchUp = Fp16Buffer.make(ctx.device, count: batchF),
+              let scratchAct = Fp16Buffer.make(ctx.device, count: batchF) else {
+            Issue.record("buffer allocation failed")
+            return
+        }
+        let gateProj = Self.makeProjection(ctx: ctx, packed: gate, rows: batchF, cols: batchD)
+        let upProj = Self.makeProjection(ctx: ctx, packed: up, rows: batchF, cols: batchD)
+        let downProj = Self.makeProjection(ctx: ctx, packed: down, rows: batchD, cols: batchF)
+
+        let halfBytes = MemoryLayout<Float16>.stride
+        let refCB = ctx.queue.makeCommandBuffer()!
+        for row in 0..<batchRows {
+            try scalar.encode(commandBuffer: refCB,
+                              x: xBuf, xOffset: row * batchD * halfBytes,
+                              gate: gateProj, up: upProj, down: downProj,
+                              y: yRef, yOffset: row * batchD * halfBytes,
+                              scratchGate: scratchGate, scratchUp: scratchUp,
+                              scratchAct: scratchAct)
+        }
+        refCB.commit()
+        refCB.waitUntilCompleted()
+        #expect(refCB.error == nil)
+
+        let gotCB = ctx.queue.makeCommandBuffer()!
+        try prefill.encodeBlock(commandBuffer: gotCB,
+                                x: xBuf, y: yGot,
+                                gate: gateProj, up: upProj, down: downProj,
+                                scratchGate: scratchGate, scratchUp: scratchUp, scratchAct: scratchAct,
+                                queryCount: batchRows, d: batchD, intermediate: batchF,
+                                xStrideElements: batchD, yStrideElements: batchD)
+        gotCB.commit()
+        gotCB.waitUntilCompleted()
+        #expect(gotCB.error == nil)
+
+        let reference = Fp16Buffer.read(yRef, count: batchRows * batchD)
+        let candidate = Fp16Buffer.read(yGot, count: batchRows * batchD)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(maxAbs <= 2e-2, "batched shared expert maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "batched shared expert rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
+    private static func makeInt4Weights(rows: Int,
+                                        cols: Int,
+                                        rng: inout SplitMix64)
+        -> (packed: [UInt8], scales: [UInt16], biases: [UInt16])
+    {
+        let groupsPerRow = cols / Quantization.groupSize
+        var packed: [UInt8] = []
+        var scales: [UInt16] = []
+        var biases: [UInt16] = []
+        for _ in 0..<rows {
+            let q = Quantization.quantizeInt4Affine((0..<cols).map { _ in rng.uniform(-0.4, 0.4) })
+            packed += q.packed
+            scales += q.scales.prefix(groupsPerRow)
+            biases += q.biases.prefix(groupsPerRow)
+        }
+        return (packed, scales, biases)
+    }
+
     private static func makeInputBlock(rng: inout SplitMix64) -> [Float16] {
         var block = Array(repeating: sentinel, count: rows * xStride)
         for row in 0..<rows {
