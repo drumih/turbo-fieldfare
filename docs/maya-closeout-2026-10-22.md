@@ -2,7 +2,7 @@
 
 Status: closed on this host after T1-T34 were each implemented, measured,
 rejected with evidence, or recorded as blocked by a resource this checkout does
-not have. The live ledger is `docs/maya-task-status.md`; this page is the
+not have. The closed-out status record is `docs/maya-task-status.md`; this page is the
 scorecard and the verification footer.
 
 ## Environment

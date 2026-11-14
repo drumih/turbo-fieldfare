@@ -1,8 +1,11 @@
-# Maya work: task status
+# Maya work: task status (closed out)
 
-Source plan: `docs/maya-remaining-work-2026-10-21.md`. This file is the live
-status ledger; a task is done only when its acceptance test and benchmark
-evidence exist.
+Source plan: `docs/maya-remaining-work-2026-10-21.md`. Project Maya is closed
+on this host — see `docs/maya-closeout-2026-10-22.md`; this file is the
+closed-out status record, not a tracker. Open work lives only in the wiki
+[Project Tracker](https://github.com/Pummelchen/TinyTitan/wiki/Project-Tracker)
+(the resource-blocked remainder is TT-071 there); a task was done here only
+when its acceptance test and benchmark evidence existed.
 
 | Task | Status | Evidence |
 | --- | --- | --- |
