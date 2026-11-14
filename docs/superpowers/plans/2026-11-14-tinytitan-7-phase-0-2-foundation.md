@@ -18,7 +18,7 @@ Run the tasks strictly in this order; the Depends column is a hard gate — a ta
 | --- | --- | --- | --- | --- |
 | 1 | Freeze 6.x, write the registry inventory | — | `registry/registry.json` + inventory test | §Task 1 |
 | 2 | Extract `TinyTitanCore` (pure code motion) | 1 | generic-only core target, suites unchanged | §Task 2 |
-| 3 | `core-purity` + `variant-isolation` gates | 2 | two new fail-closed lint checks, AGENTS.md count updated | §Task 3 |
+| 3 | `core-purity` + `variant-isolation` gates | 2 | the `core-purity` and `variant-isolation` lint modes added, AGENTS.md count updated | §Task 3 |
 | 4 | `EngineVariant` contracts in Core | 2 | VariantID/Quant/Profiles/Recipe/Qualification types + tests | §Task 4 |
 | 5 | Variant target scaffold (`Qwen35Dense2B4Bit`) | 1, 3, 4 | compiling, gated, non-serving variant + registry wiring | §Task 5 |
 | 6 | `tinytitan catalog --check` | 1, 5 | registry ↔ target ↔ qualification gate | §Task 6 |
@@ -238,7 +238,7 @@ knowledge stays in the runtime targets. TinyTitanFormat stays separate."
 **Depends on:** Task 2. **Tracker row:** TT-074.
 
 **Files:**
-- Modify: `tools/lint.sh` (two new checks), `AGENTS.md` (count sentence "eighteen checks" → twenty, constraint C11), `docs/repository-layout.md` (describe the two checks)
+- Modify: `tools/lint.sh` (add the `core-purity` and `variant-isolation` modes), `AGENTS.md` (count sentence "eighteen checks" → twenty, constraint C11), `docs/repository-layout.md` (describe both modes)
 - Test: `benchmark/test_lint_core_purity.py`, `benchmark/test_lint_variant_isolation.py`
 
 **Interfaces:**
