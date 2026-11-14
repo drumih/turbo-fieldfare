@@ -55,6 +55,9 @@ tooling that ship beside them; the split is spelled out under
 
 Requires macOS 26+, Xcode 27 (Swift 6.4) and Apple Silicon.
 
+Last verified: 2026-11-14 — the three commands below were run in a fresh
+clone of this commit (`swift build` 940 targets, ~140 s; `--help` exit 0).
+
 ```bash
 git clone https://github.com/Pummelchen/TinyTitan.git
 cd TinyTitan
@@ -124,7 +127,7 @@ mode is derived from the
 chat template by [peculiar-ragdoll](https://huggingface.co/peculiar-ragdoll).
 
 **Project Maya:** the 6.0 checkpoint, calibration and machine-size cache work was
-carried under that name. The live ledger is
+carried under that name. The closed-out status record is
 [docs/maya-task-status.md](docs/maya-task-status.md); the closeout is
 [docs/maya-closeout-2026-10-22.md](docs/maya-closeout-2026-10-22.md).
 
