@@ -94,42 +94,7 @@ public enum ManifestReader {
         directoryURL: URL,
         maxBytes: UInt64 = defaultMaxBytes
     ) throws -> Manifest {
-        let directory = try SSDAIModelDirectory(rootURL: directoryURL)
-        let data: Data
-        do {
-            data = try directory.readMetadata("manifest.json", maxBytes: maxBytes)
-        } catch ModelError.missingFile {
-            throw ModelError.partialInstall(path: directoryURL.path)
-        }
-        let manifest: Manifest
-        do {
-            let wire = try SSDAIManifestCodec.decodeUnchecked(data)
-            guard SSDAIFormatV1.isSupportedMagic(wire.magic) else {
-                throw ModelError.notASSDAIDirectory
-            }
-            guard wire.versionMajor == SSDAIFormatV1.versionMajor,
-                wire.versionMinor >= 0
-            else {
-                throw ModelError.unsupportedVersion(
-                    major: wire.versionMajor,
-                    minor: wire.versionMinor)
-            }
-            for key in wire.flags.keys where !SSDAIFormatV1.knownFlags.contains(key) {
-                throw ModelError.unknownFlag(name: key)
-            }
-            if wire.expertStride % SSDAIFormatV1.alignmentBytes != 0 {
-                throw ModelError.expertStrideNotPageAligned(
-                    stride: wire.expertStride,
-                    pageSize: Int(SSDAIFormatV1.alignmentBytes))
-            }
-            try SSDAIManifestCodec.validate(wire)
-            manifest = Manifest(wire: wire)
-        } catch let error as ModelError {
-            throw error
-        } catch {
-            throw ModelError.indexCorrupt(detail: "manifest.json: \(error)")
-        }
-        return manifest
+        try SSDAIManifestReader.read(directoryURL: directoryURL, maxBytes: maxBytes)
     }
 
     /// Extract the architecture dimensions from the manifest without full
