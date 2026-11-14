@@ -277,6 +277,12 @@ let package = Package(
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
+            name: "TinyTitanCoreTests",
+            dependencies: ["TinyTitanCore"],
+            path: "tests/TinyTitanCore",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
             name: "TinyTitanMemoryTests",
             dependencies: ["TinyTitanMemory", "ContinuityCore"],
             path: "tests/TinyTitanMemory",
