@@ -74,6 +74,17 @@ directory is the name of the target:
 - **`TinyTitanFormat`, `TinyTitanMemory`, `ContinuityCore`** — the `.ssdai` format
   types, the memory layer, and the session/continuity engine. Each is a
   standalone library with its own README where its contract needs prose.
+- **`TinyTitanCore`** — the generic library the 7.0 engine variants share
+  (`docs/plan-tinytitan-7-engine.md`): bounded reads, the JSON value type, UTF-8
+  text helpers, concurrency, hardware capabilities and process memory. It carries
+  **no model knowledge** — the `core-purity` gate (`tools/lint.sh core-purity`)
+  refuses a model name or a `ModelFamily`/`ModelProfile`/`ModelCatalog` reference
+  in it. The tokenizer cluster and the Metal context stay in `TinyTitan` until
+  their internal `GF*` coupling is split (tracker row TT-073). Variant targets
+  will live under `sources/Engines/<Variant>/` and import only this library and
+  the system frameworks — the `variant-isolation` gate
+  (`tools/lint.sh variant-isolation`) refuses a cross-variant or runtime import.
+  Both gates fail closed on an empty scan.
 - **`TinyTitanBench`, `TinyTitanValidation`, `TinyTitanKernelsC`** — the benchmark
   harness, the validation/reference target, and the C kernels.
 

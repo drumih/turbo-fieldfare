@@ -238,7 +238,7 @@ knowledge stays in the runtime targets. TinyTitanFormat stays separate."
 **Depends on:** Task 2. **Tracker row:** TT-074.
 
 **Files:**
-- Modify: `tools/lint.sh` (add the `core-purity` and `variant-isolation` modes), `AGENTS.md` (count sentence "eighteen checks" → twenty, constraint C11), `docs/repository-layout.md` (describe both modes)
+- Modify: `tools/lint.sh` (add the `core-purity` and `variant-isolation` modes), `AGENTS.md` (its gate-count sentence raised to the new total, constraint C11), `docs/repository-layout.md` (describe both modes)
 - Test: `benchmark/test_lint_core_purity.py`, `benchmark/test_lint_variant_isolation.py`
 
 **Interfaces:**
@@ -269,7 +269,7 @@ Case-insensitive; the exemption comment is `lint:allow-core-name <reason>` above
 
 - [ ] **3.4 Register the modes and update the count**
 
-Add both modes to `tools/lint.sh`'s usage header and `all` chain, then update AGENTS.md's count sentence ("eighteen checks CI enforces beyond the compiler" → "twenty") in the same commit — the `docs` gate fails otherwise. Run the docs gate to prove it.
+Add both modes to `tools/lint.sh`'s usage header and `all` chain, then raise AGENTS.md's gate-count sentence to the new total in the same commit — the `docs` gate fails otherwise. Run the docs gate to prove it.
 
 - [ ] **3.5 Run the tests to verify they pass, then the full gate**
 

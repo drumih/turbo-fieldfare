@@ -28,6 +28,8 @@
 #   javascript          eslint + prettier --check over the plugin packages, pinned
 #   python              ruff check + ruff format --check under pyproject.toml,
 #                       with the pinned ruff version
+#   core-purity         TinyTitanCore carries no model knowledge (7.0 spec §1.3)
+#   variant-isolation   a variant target imports only the generic library (7.0 spec §3)
 #
 # Opting out of force-cast: put `lint:allow-force <reason>` in a comment on
 # the line immediately above. The reason is mandatory and is what a reviewer
@@ -1630,6 +1632,88 @@ check_library_facade() {
   fi
 }
 
+
+# --- 7.0 isolation gates ------------------------------------------------------
+# The 7.0 design contract (docs/plan-tinytitan-7-engine.md) makes isolation the
+# product: the generic core carries no model knowledge (§1.3), and a variant
+# target imports only the generic library (§3). Both gates fail closed — an
+# empty scan is a failure, never a pass (the AUD-271 family rule).
+
+check_core_purity() {
+  echo "== core-purity: TinyTitanCore carries no model knowledge =="
+  local dir="$ROOT/sources/TinyTitanCore"
+  local scanned
+  scanned=$(find "$dir" -name '*.swift' -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$scanned" -eq 0 ]; then
+    echo "  FAIL: no Swift files under sources/TinyTitanCore; the scan read nothing"
+    status=1
+    return
+  fi
+  local hits found=0
+  hits=$(grep -rnEi 'qwen36|qwen38|qwen35|qwen4flash|ornith|agentworld|katcoder|laguna|nemotron|k2horizon|deepseek|ModelFamily|ModelProfile|ModelCatalog' "$dir" --include='*.swift' 2>/dev/null)
+  local hit file rest line above
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    file="${hit%%:*}"; rest="${hit#*:}"; line="${rest%%:*}"
+    above=$(sed -n "$((line-1))p" "$file")
+    case "$above" in *"lint:allow-core-name "*) continue ;; esac
+    echo "  FAIL: $hit"
+    found=$((found+1))
+  done <<< "$hits"
+  if [ "$found" -gt 0 ]; then
+    echo "        TinyTitanCore is generic-only (spec §1.3); move the model knowledge into the variant or the runtime."
+    status=1
+    return
+  fi
+  echo "  ok ($scanned files scanned, no model knowledge)"
+}
+
+check_variant_isolation() {
+  echo "== variant-isolation: a variant imports only the generic library =="
+  local dir="$ROOT/sources/Engines"
+  if [ ! -d "$dir" ]; then
+    # No variant targets exist yet (pre-7.0): there is nothing to isolate, and
+    # saying so is not a silent pass. The fail-closed case is a directory that
+    # exists but holds no Swift — a scan that should have read files and read none.
+    echo "  ok (no variant targets yet; nothing to isolate)"
+    return
+  fi
+  local scanned
+  scanned=$(find "$dir" -name '*.swift' -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$scanned" -eq 0 ]; then
+    echo "  FAIL: sources/Engines exists but holds no Swift files; the scan read nothing"
+    status=1
+    return
+  fi
+  local found=0 f variant imports bad
+  while IFS= read -r f; do
+    variant=$(basename "$(dirname "$f")")
+    imports=$(grep -E '^import ' "$f" | sed 's/^import //;s/ .*//')
+    local imp
+    while IFS= read -r imp; do
+      [ -z "$imp" ] && continue
+      bad=0
+      case "$imp" in
+        TinyTitanCore|TinyTitanFormat|Metal|MetalKit|Foundation|Accelerate|Compression|SystemPackage|Darwin|Synchronization|IOKit|TinyTitanKernelsC) ;;
+        TinyTitan|TinyTitanLib|TinyTitanServerCore|TinyTitanRepackCore|TinyTitanCLICore) bad=1 ;;
+        *)
+          # Another variant target: a sibling directory under sources/Engines.
+          if [ -d "$dir/$imp" ] && [ "$imp" != "$variant" ]; then bad=1; fi
+          ;;
+      esac
+      if [ "$bad" -eq 1 ]; then
+        echo "  FAIL: $f imports $imp (a variant may import only the generic library, spec §3)"
+        found=$((found+1))
+      fi
+    done <<< "$imports"
+  done < <(find "$dir" -name '*.swift' -type f | sort)
+  if [ "$found" -gt 0 ]; then
+    status=1
+    return
+  fi
+  echo "  ok ($scanned files scanned, no cross-variant or runtime import)"
+}
+
 # --- documented facts --------------------------------------------------------
 # A fact the repository can compute and a document restates is a defect waiting
 # for the next commit that changes the computation. Measured 2026-10-06: the gate
@@ -1668,7 +1752,7 @@ check_docs() {
 # exact name in `AGENTS.md`, exited 2 — which is what `tools/lint.sh docs` now
 # refuses. Every spelling must appear in the unknown-check message below.
 case "$want" in
-  all)         check_force_cast; check_unbounded_metadata_read; check_func_length; check_file_length; check_unchecked_sendable; check_converter_expert_order; check_arch_path; check_library_stdout; check_silent_test_skip; check_test_hollow; check_library_facade; check_docs; check_shell_portability; check_shellcheck; check_swiftlint; check_swift_format; check_javascript; check_python ;;
+  all)         check_force_cast; check_unbounded_metadata_read; check_func_length; check_file_length; check_unchecked_sendable; check_converter_expert_order; check_arch_path; check_library_stdout; check_silent_test_skip; check_test_hollow; check_library_facade; check_docs; check_shell_portability; check_shellcheck; check_swiftlint; check_swift_format; check_javascript; check_python; check_core_purity; check_variant_isolation ;;
   force-cast)  check_force_cast ;;
   unbounded-read) check_unbounded_metadata_read ;;
   func-length) check_func_length ;;
@@ -1693,7 +1777,9 @@ case "$want" in
   javascript)  check_javascript ;;
   js)          check_javascript ;;
   python)      check_python ;;
-  *) echo "unknown check: $want (all|force-cast|unbounded-read|func-length|file-length|sendable|unchecked-sendable|converter|arch-path|stdout-clean|test-skip|silent-test-skip|test-hollow|library-facade|docs|shell|shell-portability|shellcheck|shell-lint|swiftlint|swift-format|format|javascript|js|python)" >&2; exit 2 ;;
+  core-purity) check_core_purity ;;
+  variant-isolation) check_variant_isolation ;;
+  *) echo "unknown check: $want (all|force-cast|unbounded-read|func-length|file-length|sendable|unchecked-sendable|converter|arch-path|stdout-clean|test-skip|silent-test-skip|test-hollow|library-facade|docs|shell|shell-portability|shellcheck|shell-lint|swiftlint|swift-format|format|javascript|js|python|core-purity|variant-isolation)" >&2; exit 2 ;;
 esac
 
 exit $status

@@ -21,7 +21,7 @@ swift test --no-parallel
 ```
 
 CI runs the same three, so a green run here is a green run there. `tools/lint.sh`
-enforces eighteen checks the compiler cannot — project-specific probes and the
+enforces twenty checks the compiler cannot — project-specific probes and the
 pinned third-party linters (shellcheck, swiftlint, swift-format, the plugin
 packages' eslint + prettier, and ruff). That number is not free to rot:
 `tools/lint.sh docs` compares every documented count, gate name and tag citation

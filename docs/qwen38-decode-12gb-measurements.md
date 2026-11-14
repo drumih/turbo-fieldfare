@@ -935,8 +935,8 @@ accounting before it is believed.
   which asserted the launcher's pin as a property of the benchmark protocol. That
   test was the wrong side, because the pin was the defect: it now asserts the
   launcher's command carries no tier, and the constant is gone.- **Suites and gates** — `swift test --no-parallel` after the last source edit:
-  7 bundles, 1765 tests, exit 0. `tools/lint.sh` full battery: exit 0 over all
-  18 gates. `swift build -c release`: exit 0, `lipo -archs` reports `arm64`
+  7 bundles, 1765 tests, exit 0. `tools/lint.sh` full battery: all
+  18 gates ok (exit 0). `swift build -c release`: exit 0, `lipo -archs` reports `arm64`
   alone. Python: `test_launcher_ram` plus `test_tinytitan_profile` — 35 tests,
   OK — and ruff clean at the pin.
 - **On the real machine, configuration identity** — a no-flag server launch on
@@ -8264,7 +8264,7 @@ keep-warm mirrored, output hashed.
 5. **Gates run on this exact tree**: `tools/lint.sh format` (ok, 618 Swift files),
    `swiftlint` (0.65.1, `--strict` clean), `sendable`, `force-cast`, `func-length`,
    `file-length` (largest 499), `unbounded-read`, `arch-path`, `stdout-clean`,
-   `docs` (87 documents against 18 gates, 222 ledger commit references resolved)
+   `docs` (ok, 87 documents against 18 gates, 222 ledger commit references resolved)
    and CI's `Check Markdown links` step run verbatim from `.github/workflows/ci.yml`
    (220 local links, 0 broken, exit 0). `swift build -c release` clean. The
    `sendable` gate **failed on the first run** and was right: the

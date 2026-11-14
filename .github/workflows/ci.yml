@@ -357,7 +357,8 @@ jobs:
         # refused everything could not pass as the fix.
         run: |
           cd benchmark
-          python3 -m unittest test_lint_gate_scan_guard
+          python3 -m unittest test_lint_gate_scan_guard test_lint_core_purity \
+            test_lint_variant_isolation
       - name: Memory-matrix exit gates
         # `benchmark/memval_matrix.sh` is a day of twelve `memval_run.sh` arms and
         # its verdict is the exit code an operator or a script reads afterwards.

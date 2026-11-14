@@ -255,8 +255,8 @@ for it only when the small model *is* the subject — its own limits, its own
 behaviour — and say in the report that it was deliberate. This does not change the
 golden-baseline targets below, which are what they are.
 
-`tools/lint.sh` runs the eighteen checks CI enforces beyond the compiler — the
-first thirteen are project-specific probes, the last five are pinned third-party
+`tools/lint.sh` runs the twenty checks CI enforces beyond the compiler — the
+first fifteen are project-specific probes, the last five are pinned third-party
 linters:
 
 - `force-cast` — no `as!` / `try!` under `sources/` without a
@@ -338,6 +338,14 @@ linters:
   `${a[@]+"${a[@]}"}` (likewise `[*]`), which means the same thing for a
   non-empty array on both shells — every script here does, and the gate fails on
   a bare one.
+- `core-purity` — `sources/TinyTitanCore/` carries no model knowledge: no model
+  name, no `ModelFamily`/`ModelProfile`/`ModelCatalog` reference (7.0 spec §1.3).
+  The exemption is `lint:allow-core-name <reason>` on the line above; there are
+  none. An empty scan is a failure, not a pass.
+- `variant-isolation` — a target under `sources/Engines/` imports only the
+  generic library (`TinyTitanCore`, `TinyTitanFormat`, Foundation/Metal and the
+  system frameworks) — never another variant, never a runtime target (7.0 spec
+  §3). An empty scan is a failure, not a pass.
 - `shellcheck` (pinned 0.11.0), `swiftlint` (pinned 0.65.1, `--strict`),
   `swift-format` (the committed `.swift-format`), `javascript` (each plugin
   package's own eslint + prettier) and `python` (pinned ruff, plus a parse at the
@@ -346,7 +354,8 @@ linters:
 
 `tools/lint.sh <mode>` runs a single check (`force-cast`, `unbounded-read`,
 `func-length`, `sendable`, `converter`, `arch-path`, `stdout-clean`, `test-skip`,
-`shell`, `shellcheck`, `swiftlint`, `swift-format`, `javascript`, `python`;
+`shell`, `shellcheck`, `swiftlint`, `swift-format`, `javascript`, `python`,
+`core-purity`, `variant-isolation`;
 `format` and `js` are aliases).
 
 In a fresh checkout the `javascript` check needs the plugin package's
