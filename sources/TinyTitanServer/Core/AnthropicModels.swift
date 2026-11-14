@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 // MARK: - Error envelope
 

@@ -6,6 +6,7 @@
 // engine type appears in a signature. The wrapper in `Session` maps to and
 // from `OpenAIChatRequest`/`ServerInferenceEvent` internally.
 import TinyTitan
+import TinyTitanCore
 
 /// One turn of a conversation, in the shape the chat template expects.
 public struct ChatMessage: Sendable, Equatable {

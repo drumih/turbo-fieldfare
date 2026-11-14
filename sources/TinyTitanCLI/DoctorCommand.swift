@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 package struct DoctorOptions: Equatable, Sendable {
     package var modelsDirectory: String = "models"

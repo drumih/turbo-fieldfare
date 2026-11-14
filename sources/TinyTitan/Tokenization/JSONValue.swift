@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 public indirect enum JSONValue: Codable, Equatable, Sendable {
     case object([String: JSONValue])

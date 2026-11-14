@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import CoreML
+import TinyTitanCore
 
 // The ANE prefill sidecar's model lifecycle and per-layer masks: residency,
 // compilation, loading, release, and the causal/selection masks the graph reads.

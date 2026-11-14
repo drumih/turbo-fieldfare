@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Phase one of RealForwardRunner's initializer: configuration, kernels and the
 // optional subsystems. Moved verbatim out of the class body (2026-09-28) under the

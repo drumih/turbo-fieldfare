@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The `TINYTITAN_TENSOROPS` switch: whether the Apple10 tensor-ops prefill
 /// pipeline may be built.

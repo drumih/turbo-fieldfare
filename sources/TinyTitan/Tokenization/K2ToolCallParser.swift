@@ -16,28 +16,28 @@ import Foundation
 /// It is separate from `QwenToolCallParser`: the markers and the body grammar
 /// are the checkpoint's, not ChatML's, and accepting one dialect's text as the
 /// other would silently produce a call with no arguments.
-struct K2ToolCallParser {
-    enum Format: String, Sendable, CaseIterable {
+package struct K2ToolCallParser {
+    package enum Format: String, Sendable, CaseIterable {
         case json
         case xml
         case xmlTyped = "xml_typed"
     }
 
-    static let maximumBytes = 256 * 1024
-    static let callsOpen = "<ifm|tool_calls>"
-    static let callsClose = "</ifm|tool_calls>"
-    static let callOpen = "<ifm|tool_call>"
-    static let callClose = "</ifm|tool_call>"
-    static let keyOpen = "<ifm|arg_key>"
-    static let keyClose = "</ifm|arg_key>"
-    static let typeOpen = "<ifm|arg_type>"
-    static let typeClose = "</ifm|arg_type>"
-    static let valueOpen = "<ifm|arg_value>"
-    static let valueClose = "</ifm|arg_value>"
+    package static let maximumBytes = 256 * 1024
+    package static let callsOpen = "<ifm|tool_calls>"
+    package static let callsClose = "</ifm|tool_calls>"
+    package static let callOpen = "<ifm|tool_call>"
+    package static let callClose = "</ifm|tool_call>"
+    package static let keyOpen = "<ifm|arg_key>"
+    package static let keyClose = "</ifm|arg_key>"
+    package static let typeOpen = "<ifm|arg_type>"
+    package static let typeClose = "</ifm|arg_type>"
+    package static let valueOpen = "<ifm|arg_value>"
+    package static let valueClose = "</ifm|arg_value>"
 
     /// Parse a complete block. `makeID` runs once per call so a caller can
     /// keep the ids deterministic in tests and unique in a stream.
-    static func parse(
+    package static func parse(
         _ text: String,
         allowedTools: Set<String>,
         format: Format,

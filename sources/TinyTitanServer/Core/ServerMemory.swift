@@ -2,6 +2,7 @@ import Foundation
 import TinyTitan
 import TinyTitanLib
 import TinyTitanMemory
+import TinyTitanCore
 
 /// Bridges the memory subsystem to the server's own types.
 ///

@@ -7,6 +7,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 extension ServerModelSession {
     /// Take a slot for one generation. Actor-isolated, so the free list and the

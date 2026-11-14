@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 public enum StructuredAssistantEvent: Equatable, Sendable {
     case content(String)

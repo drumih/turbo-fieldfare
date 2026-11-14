@@ -5,6 +5,7 @@ import NIOEmbedded
 import NIOHTTP1
 import Synchronization
 import Testing
+import TinyTitanCore
 
 @testable import TinyTitan
 @testable import TinyTitanLib

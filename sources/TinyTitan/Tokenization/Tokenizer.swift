@@ -1,5 +1,6 @@
 import Foundation
 import Tokenizers
+import TinyTitanCore
 
 /// The control-token dialect a tokenizer speaks.
 public enum TokenizerDialect: String, Sendable, Equatable {

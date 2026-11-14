@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 extension DoctorReport {
     /// Assemble a report from injected facts. This is the whole of `doctor`'s

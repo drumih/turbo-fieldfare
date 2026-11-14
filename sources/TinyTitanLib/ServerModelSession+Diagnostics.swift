@@ -7,6 +7,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 extension ServerModelSession {
     /// Publish this turn's KV range to the prompt cache, and persist a snapshot

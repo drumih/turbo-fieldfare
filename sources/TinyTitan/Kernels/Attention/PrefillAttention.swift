@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 struct PrefillAttentionParams: Sendable, Equatable {
     var startPosition: UInt32

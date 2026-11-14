@@ -1,5 +1,6 @@
 import Foundation
 import Tokenizers
+import TinyTitanCore
 
 // Tokenizer introspection helpers: the Jinja context, the resolved-special-token
 // type, the streaming-decoder check and the special-token resolution.

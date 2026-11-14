@@ -1,6 +1,7 @@
 import ContinuityCore
 import Foundation
 import Testing
+import TinyTitanCore
 
 @testable import TinyTitanMemory
 

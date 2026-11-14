@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TinyTitanCore
 
 /// The two host probes `doctor` needs beyond `HardwareCapabilities`: free space
 /// where the model store lives, and other TinyTitan model processes.

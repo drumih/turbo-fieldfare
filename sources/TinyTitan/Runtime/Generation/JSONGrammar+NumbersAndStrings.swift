@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // The number and string arms of the JSON grammar state machine: number
 // continuation, key and string reading, escapes and unicode escapes.

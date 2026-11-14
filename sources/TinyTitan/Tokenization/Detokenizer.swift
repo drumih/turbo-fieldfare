@@ -1,5 +1,6 @@
 import Foundation
 import Tokenizers
+import TinyTitanCore
 
 enum GFDetokenizerError: Error, Equatable, CustomStringConvertible {
     case invalidTokenID(Int32)

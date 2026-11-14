@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// The report `tinytitan doctor` renders, as one value so the human and JSON
 /// surfaces cannot disagree.

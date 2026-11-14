@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Streaming callbacks from `runRawCompletion`. `.prefill` reports monotonic
 /// producer-defined prompt progress; scalar replay reports per token, while a

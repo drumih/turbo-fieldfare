@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 enum MPPPrefillInt4QMMError: Error, CustomStringConvertible {
     case pipelineUnavailable(reason: String)

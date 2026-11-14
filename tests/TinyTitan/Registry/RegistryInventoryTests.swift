@@ -18,7 +18,9 @@ struct RegistryInventoryTests {
         // walk up to the package root (the directory containing Package.swift).
         var dir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         for _ in 0...6 {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
+            if FileManager.default.fileExists(
+                atPath: dir.appendingPathComponent("Package.swift").path)
+            {
                 return dir.appendingPathComponent(relative)
             }
             dir.deleteLastPathComponent()
@@ -28,7 +30,7 @@ struct RegistryInventoryTests {
 
     private static func loadRegistry() throws -> [String: Any] {
         let data = try Data(contentsOf: registryURL())
-        return try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
     @Test func registryParsesAndCoversTheShippedPairs() throws {
@@ -45,14 +47,17 @@ struct RegistryInventoryTests {
             for variant in variants {
                 #expect(variant["id"] != nil)
                 #expect(variant["bits"] != nil)
-                #expect(variant["engine"] as? String == "cpu" || variant["engine"] as? String == "gpu")
+                #expect(
+                    variant["engine"] as? String == "cpu" || variant["engine"] as? String == "gpu")
                 #expect(variant["shipped"] as? Bool == false)
                 // JSONSerialization surfaces JSON null as NSNull, so "unset"
                 // is either an absent key or NSNull.
                 let target = variant["target"]
                 #expect(target == nil || target is NSNull || target is String)
                 let qualification = variant["qualification"]
-                #expect(qualification == nil || qualification is NSNull || qualification is [String: Any])
+                #expect(
+                    qualification == nil || qualification is NSNull
+                        || qualification is [String: Any])
             }
         }
     }
@@ -81,7 +86,8 @@ struct RegistryInventoryTests {
         // two must agree. Count the `key|Name|bits|GB|note` rows and compare
         // against the registry's variant count, accounting for the bf16dense
         // row the registry models as a variant of ornith-1.5-35b.
-        let script = try String(contentsOf: URL(fileURLWithPath: "tools/tinytitan_models.sh"), encoding: .utf8)
+        let script = try String(
+            contentsOf: URL(fileURLWithPath: "tools/tinytitan_models.sh"), encoding: .utf8)
         let tableStart = try #require(script.range(of: "TINYTITAN_MODEL_CHOICES=("))
         // The array closes with a line that is exactly ")"; row text itself
         // contains parentheses, so a character-level first ")" would stop

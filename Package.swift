@@ -108,9 +108,20 @@ let package = Package(
                 .linkedFramework("Accelerate")
             ]
         ),
+        // The generic library the 7.0 variants share: bounded reads, concurrency,
+        // hardware and the tool-call parsers. Model knowledge stays out —
+        // docs/plan-tinytitan-7-engine.md §1.3 — and the core-purity gate enforces
+        // it. The tokenizer cluster stays in `TinyTitan` until its internal
+        // GF* coupling is split (tracker row TT-073 records the finding).
+        .target(
+            name: "TinyTitanCore",
+            path: "sources/TinyTitanCore",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "TinyTitan",
             dependencies: [
+                "TinyTitanCore",
                 "TinyTitanFormat",
                 "TinyTitanKernelsC",
                 .product(name: "Tokenizers", package: "swift-transformers"),
@@ -128,7 +139,7 @@ let package = Package(
         // drift from what the server actually needs.
         .target(
             name: "TinyTitanLib",
-            dependencies: ["TinyTitan", "TinyTitanFormat"],
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanFormat"],
             path: "sources/TinyTitanLib",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -149,7 +160,7 @@ let package = Package(
             // The CLI is a front end of the library (phase A2 of
             // `docs/plan-embedded-library.md`), so it depends on the facade it
             // drives. `TinyTitan` stays for the few value types `Args` parses.
-            dependencies: ["TinyTitan", "TinyTitanLib"],
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib"],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
             swiftSettings: tinytitanLanguageStandard
@@ -204,6 +215,7 @@ let package = Package(
         .target(
             name: "TinyTitanServerCore",
             dependencies: [
+                "TinyTitanCore",
                 "TinyTitanLib",
                 "TinyTitan",
                 "TinyTitanMemory",
@@ -222,7 +234,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanBench",
-            dependencies: ["TinyTitan", "TinyTitanLib"],
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib"],
             path: "sources/TinyTitanBench",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -235,6 +247,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
+                "TinyTitanCore",
                 "TinyTitan", "TinyTitanFormat", "TinyTitanValidationSupport",
                 "TinyTitanRepackCore", "TinyTitanCLICore", "TinyTitanLib",
             ],
@@ -272,6 +285,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanServerTests",
             dependencies: [
+                "TinyTitanCore",
                 "TinyTitanServerCore",
                 "TinyTitanLib",
                 "TinyTitanMemory",
@@ -291,7 +305,9 @@ let package = Package(
         // target is where the facade's own guarantees live.
         .testTarget(
             name: "TinyTitanLibTests",
-            dependencies: ["TinyTitanLib", "TinyTitan"],
+            dependencies: [
+                "TinyTitanCore", "TinyTitanLib", "TinyTitan",
+            ],
             path: "tests/TinyTitanLib",
             swiftSettings: tinytitanLanguageStandard
         ),

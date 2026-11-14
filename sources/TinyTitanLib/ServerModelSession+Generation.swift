@@ -7,6 +7,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 extension ServerModelSession {
     /// lint:allow-long the request orchestrator: prompt preparation, cache

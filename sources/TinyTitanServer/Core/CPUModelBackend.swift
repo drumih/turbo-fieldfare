@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// Serving a small model from the CPU, through the same HTTP surface as the
 /// big ones.

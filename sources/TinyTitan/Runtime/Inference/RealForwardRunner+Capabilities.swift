@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 extension RealForwardRunner {
     /// The capability-injecting form (K0). `package` keeps the seam off the

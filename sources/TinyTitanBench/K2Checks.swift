@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import Tokenizers
+import TinyTitanCore
 
 // Install-dependent K2 checks used by the `k2gpu` command: the tokenizer's
 // multi-turn and tool rendering, the structured decoder on real tokenizer

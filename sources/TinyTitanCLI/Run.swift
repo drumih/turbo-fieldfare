@@ -10,6 +10,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 private struct MessageJSON: Decodable {
     let role: String

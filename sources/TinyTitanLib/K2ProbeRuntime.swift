@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// The K2-Horizon probe as a reusable generation engine.
 ///

@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 package struct OpenAIChatRequest: Codable, Equatable, Sendable {
     package let model: String

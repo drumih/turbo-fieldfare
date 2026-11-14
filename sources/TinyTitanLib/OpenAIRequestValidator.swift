@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 import TinyTitan
 
 /// Which request limits apply.

@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The JSON Schema keywords this server compiles into a grammar.
 ///

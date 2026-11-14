@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 // The Anthropic Messages request mapping onto the chat request.
 //

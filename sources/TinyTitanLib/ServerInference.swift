@@ -7,6 +7,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// A model the server was asked to load but this build cannot run.
 enum ServerInferenceError: Error, CustomStringConvertible {

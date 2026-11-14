@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 // Structured-output failure reporting, split out of `ServerInference.swift`.
 //

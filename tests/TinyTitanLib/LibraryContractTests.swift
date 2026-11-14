@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 import TinyTitanLib
+import TinyTitanCore
 
 /// The concurrency and lifetime contract of §5 of
 /// `docs/plan-embedded-library.md`, exercised against a real install.

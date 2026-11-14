@@ -2,6 +2,7 @@ import Foundation
 import TinyTitan
 import TinyTitanLib
 import TinyTitanMemory
+import TinyTitanCore
 
 /// Adds persistent memory to any inference backend.
 ///

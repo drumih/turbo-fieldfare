@@ -7,6 +7,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// Per-generation decode state that `runRawCompletion`'s progress closure
 /// mutates. Boxed so the closure captures a reference the compiler can send

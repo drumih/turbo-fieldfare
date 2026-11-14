@@ -12,6 +12,7 @@ import NIOPosix
 import Synchronization
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 extension ServerHTTPHandler {
     // MARK: Anthropic Messages API

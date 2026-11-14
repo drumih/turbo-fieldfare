@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The raw-completion loop's helpers: the MTP-backed streaming pass and the
 // single sampling step, both called by `runRawCompletion`.

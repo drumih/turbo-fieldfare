@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import TinyTitanLib
+import TinyTitanCore
 
 @testable import TinyTitanCLICore
 @testable import TinyTitan

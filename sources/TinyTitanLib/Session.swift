@@ -16,6 +16,7 @@
 //     `TinyTitanError` has no case for a malformed request.
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 public actor Session {
     private let system: String?

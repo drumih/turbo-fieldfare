@@ -8,6 +8,7 @@ import CryptoKit
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 public actor ServerCoordinator {
 
