@@ -674,12 +674,13 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             rdadviseFailures: value.rdadviseFailures)
     }
 
-    private static func decodeRuntimeOptions(_ options: AppRuntimeOptions)
+    static func decodeRuntimeOptions(_ options: AppRuntimeOptions)
         -> DecodeRuntimeOptions {
         DecodeRuntimeOptions(
             expertCacheSlots: options.expertCacheSlots,
             expertCachePolicy: options.expertCachePolicy.rawValue,
             prefillEnabled: options.prefillEnabled,
+            expertPrefetchEnabled: options.expertPrefetchEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: options.rdadvisePolicy.rawValue,
             modelVerification: options.modelVerification.rawValue,

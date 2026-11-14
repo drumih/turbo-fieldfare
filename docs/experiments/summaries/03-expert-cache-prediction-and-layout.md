@@ -5,9 +5,9 @@
 [Optimization journey](../../OPTIMIZATION_JOURNEY.md) |
 [Next: RDADVISE](04-rdadvise.md)
 
-The production runtime keeps 16 expert slots per layer and uses LFU
-replacement. More memory improves hit rate, but trace-trained allocation,
-prediction, and disk-layout policies failed representative holdouts. The
+The runtime keeps 16 expert slots per layer and uses LFU replacement. More
+memory improves hit rate, but earlier trace-trained allocation, copied-route
+prediction, Markov prediction, and disk-layout policies failed their gates. The
 [resource split](../../SYSTEM_DESIGN.md#resource-split) explains the slot
 capacity and memory cost.
 
@@ -15,7 +15,8 @@ capacity and memory cost.
 | --- | --- |
 | Uniform 16-slot LFU | Production |
 | 24/32 slots | Conditional +memory experiments |
-| Predictor, Markov, read sorting, and single-trace layout | Rejected |
+| Copied-route predictor, Markov, read sorting, and single-trace layout | Rejected |
+| Next-layer router prefetch with a separate stage | Opt-in, default off; measured results in [CACHE-10](#cache-10) |
 | Fresh preallocated expert artifact | Unexecuted hypothesis |
 
 ## Cache policy and capacity
@@ -156,6 +157,18 @@ capacity and memory cost.
 - **Lesson:**
   A plausible filesystem mechanism is neither a win nor a rejection until the
   artifact is built and measured.
+
+<a id="cache-10"></a>
+### CACHE-10: Next-layer router prefetch with a separate stage
+
+- **Hypothesis:** L+1's router, evaluated on L's router input, can predict
+  a useful expert read before L+1's native route is ready.
+- **Variants:** Same-build off/router; 16 cache slots and one separate stage.
+- **Evidence:** Two full-answer pairs per case favored router on the tested
+  8 GB M2 and off on the 24 GB M5 Pro. See the
+  [results and limitations](../../BENCHMARKS.md#speculative-expert-prefetch).
+- **Disposition:** Retained opt-in, off by default in 0.10.0.
+- **Lesson:** Prediction gains depend on workload and host.
 
 [Previous: Decode, MoE, INT4, and router](02-decode-moe-int4-and-router.md) |
 [Experiment inventory](../EXPERIMENT_INVENTORY.md) |

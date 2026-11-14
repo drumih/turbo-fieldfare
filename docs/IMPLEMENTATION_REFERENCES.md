@@ -63,6 +63,9 @@ included for broader design context rather than a line-level claim.
 
 ## Out-of-core inference
 
+- Maxim Voronin's [PR #187](https://github.com/drumih/turbo-fieldfare/pull/187)
+  introduced next-layer router prediction and separately staged expert reads
+  ([implementation](https://github.com/drumih/turbo-fieldfare/commit/b3e82c32)).
 - [`danveloper/flash-moe`](https://github.com/danveloper/flash-moe),
   [`Anemll/flash-moe`](https://github.com/Anemll/flash-moe), and
   [SwiftLM](https://github.com/SharpAI/SwiftLM) informed Apple-Silicon

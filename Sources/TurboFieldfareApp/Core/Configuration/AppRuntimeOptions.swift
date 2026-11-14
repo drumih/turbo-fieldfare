@@ -56,6 +56,7 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var expertCacheSlots: Int
     public var expertCachePolicy: AppExpertCachePolicy
     public var prefillEnabled: Bool
+    public var expertPrefetchEnabled: Bool
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
@@ -64,6 +65,7 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: AppExpertCachePolicy = .lfu,
                 prefillEnabled: Bool = true,
+                expertPrefetchEnabled: Bool = false,
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: AppRDAdvicePolicy = .off,
                 modelVerification: AppModelVerification = .fullSha256,
@@ -71,6 +73,7 @@ public struct AppRuntimeOptions: Equatable, Sendable {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
+        self.expertPrefetchEnabled = expertPrefetchEnabled
         self.prefillChunkTokens = prefillChunkTokens
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
@@ -104,7 +107,8 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var resultSummary: String {
         let prefill = prefillEnabled ? "prefill \(prefillChunkTokens)" : "prefill off"
         let verification = modelVerification == .fullSha256 ? "full SHA-256" : "trusted receipt"
-        return "Cache \(expertCacheSlots) \(expertCachePolicy.label), \(prefill), FP16 KV, RDADVISE \(rdadvisePolicy.label.lowercased()), \(verification)"
+        let prefetch = expertPrefetchEnabled ? "expert prefetch on" : "expert prefetch off"
+        return "Cache \(expertCacheSlots) \(expertCachePolicy.label), \(prefill), \(prefetch), FP16 KV, RDADVISE \(rdadvisePolicy.label.lowercased()), \(verification)"
     }
 
     public static func slotsLabel(for slots: Int) -> String {
@@ -125,7 +129,8 @@ public struct AppRuntimeOptions: Equatable, Sendable {
             rdadvisePolicy: rdadvisePolicy.runtimeValue,
             prefillEnabled: prefillEnabled,
             prefillChunkTokens: prefillChunkTokens,
-            forceLogitsHead: forceLogitsHead)
+            forceLogitsHead: forceLogitsHead,
+            earlyExpertRead: expertPrefetchEnabled ? .router : .off)
     }
 }
 
@@ -134,6 +139,7 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
     public var maxContextTokens: Int
     public var expertCacheSlots: Int
     public var expertCachePolicy: AppExpertCachePolicy
+    public var expertPrefetchEnabled: Bool
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
     public var visionResidencyPolicy: VisionResidencyPolicy
@@ -147,6 +153,7 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
         self.maxContextTokens = maxContextTokens
         self.expertCacheSlots = options.expertCacheSlots
         self.expertCachePolicy = options.expertCachePolicy
+        self.expertPrefetchEnabled = options.expertPrefetchEnabled
         self.rdadvisePolicy = options.rdadvisePolicy
         self.modelVerification = options.modelVerification
         self.visionResidencyPolicy = options.visionResidencyPolicy
@@ -166,6 +173,7 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
             expertCacheSlots: expertCacheSlots,
             expertCachePolicy: expertCachePolicy,
             prefillEnabled: prefillEnabled,
+            expertPrefetchEnabled: expertPrefetchEnabled,
             prefillChunkTokens: prefillChunkTokens,
             rdadvisePolicy: rdadvisePolicy,
             modelVerification: modelVerification,

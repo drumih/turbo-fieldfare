@@ -48,16 +48,16 @@ resident set size; and **NLL** is negative log-likelihood. See
 | --- | --- | ---: |
 | Model installation and expert I/O | [Remote repack, `pread`, hints, compression, and speculative I/O](summaries/01-model-install-and-expert-io.md) | 10 |
 | Decode MoE, INT4, and router | [Persistent MoE, vectorization, router, and rejected geometries](summaries/02-decode-moe-int4-and-router.md) | 18 |
-| Expert cache and layout | [Replacement policy, capacity, prediction, and disk layout](summaries/03-expert-cache-prediction-and-layout.md) | 9 |
+| Expert cache and layout | [Replacement policy, capacity, prediction, and disk layout](summaries/03-expert-cache-prediction-and-layout.md) | 10 |
 | RDADVISE | [The complete short-win to long-context-rejection arc](summaries/04-rdadvise.md) | 7 |
 | Attention and KV cache | [Split attention, MLX geometry, K4/V4, and FP16 ring](summaries/05-attention-and-kv-cache.md) | 15 |
 | Prefill | [Chunking, MPP, routed MoE, overlap, attention, and allocation experiments](summaries/06-prefill.md) | 17 |
 | Fusions and orchestration | [Targeted fusions, head variants, queues, and synchronization](summaries/07-fusions-head-and-orchestration.md) | 15 |
 | Sampling and output | [Gumbel sampling, tokenizer caching, and detokenization](summaries/08-sampling-tokenization-and-output.md) | 4 |
 | Validation methodology | [False rejections, holdouts, thermal state, and benchmark artifacts](summaries/09-validation-and-measurement-lessons.md) | 9 |
-| **Total** | | **103** |
+| **Total** | | **105** |
 
-## All 103 experiments
+## All 105 experiments
 
 ### Model installation and expert I/O
 
@@ -110,6 +110,7 @@ resident set size; and **NLL** is negative log-likelihood. See
 | [CACHE-07](summaries/03-expert-cache-prediction-and-layout.md#cache-07) — Offset read order | First win failed to repeat. | Rejected. |
 | [CACHE-08](summaries/03-expert-cache-prediction-and-layout.md#cache-08) — Packed layout | Natural text +3.61%; near-4K decode -16.1% and prefill worse. | Rejected. |
 | [CACHE-09](summaries/03-expert-cache-prediction-and-layout.md#cache-09) — APFS preallocation | Fragmentation observed; candidate not built. | Unexecuted hypothesis. |
+| [CACHE-10](summaries/03-expert-cache-prediction-and-layout.md#cache-10) — Next-layer router prefetch | Paired tests improved decode on the tested M2 and slowed it on the tested M5 Pro. | Retained opt-in; off by default in 0.10.0. |
 
 ### RDADVISE
 

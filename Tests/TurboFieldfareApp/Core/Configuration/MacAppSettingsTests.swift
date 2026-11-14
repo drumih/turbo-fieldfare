@@ -3,6 +3,34 @@ import Testing
 @testable import TurboFieldfareAppCore
 
 @Suite struct MacAppSettingsTests {
+    // Explicit preferences from earlier builds must survive the new default.
+    @MainActor
+    @Test(arguments: [false, true])
+    func expertPrefetchExplicitSettingSurvivesRelaunch(_ enabled: Bool) throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = AppDataLocation.settingsURL(in: root)
+        try MacAppSettingsFileStore.save(.init(expertPrefetchEnabled: enabled), at: file)
+        let model = AppModel(appDataDirectory: root,
+                             environment: ["TURBO_FIELDFARE_APP_DATA_PATH": root.path],
+                             client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(model.runtimeOptions.expertPrefetchEnabled == enabled)
+        #expect(try MacAppSettingsFileStore.load(at: file)?.expertPrefetchEnabled == enabled)
+    }
+
+    @Test(arguments: ["null", "1", "\"true\"", "{}", "[]"])
+    func invalidExpertPrefetchIsRejected(_ value: String) throws {
+        let encoded = try JSONEncoder().encode(MacAppSettings())
+        var object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["expertPrefetchEnabled"] = try JSONSerialization.jsonObject(
+            with: Data(value.utf8), options: .fragmentsAllowed)
+        let data = try JSONSerialization.data(withJSONObject: object)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(MacAppSettings.self, from: data)
+        }
+    }
+
     @Test func settingsFileLivesBesideModelDirectory() {
         let model = URL(fileURLWithPath: "/tmp/TurboFieldfare/gemma4.gturbo",
                         isDirectory: true)
@@ -19,6 +47,7 @@ import Testing
         let fileURL = MacAppSettingsFileStore.fileURL(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
         #expect(FileManager.default.fileExists(atPath: fileURL.path))
         let decoded = try JSONDecoder().decode(
             MacAppSettings.self,
@@ -36,6 +65,7 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
         #expect(try Data(contentsOf: fileURL) == Data("not json".utf8))
     }
 
@@ -50,6 +80,7 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
     }
 
     @Test func legacySettingsDefaultToReturnWithoutLosingValues() throws {
@@ -77,6 +108,7 @@ import Testing
         #expect(!settings.topPEnabled)
         #expect(settings.topP == 0.8)
         #expect(!settings.prefillEnabled)
+        #expect(!settings.expertPrefetchEnabled)
         #expect(settings.newlineShortcut == .return)
         #expect(settings.showPromptExamples)
         #expect(settings.visionResidencyPolicy == .onDemand)
@@ -369,6 +401,7 @@ import Testing
         let settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
 
         #expect(settings == MacAppSettings())
+        #expect(!settings.expertPrefetchEnabled)
     }
 
     @MainActor
@@ -443,6 +476,36 @@ import Testing
         let saved = MacAppSettingsFileStore.loadOrCreate(
             forModelDirectory: modelDirectory)
         #expect(saved.newlineShortcut == .shiftReturn)
+    }
+
+    @MainActor
+    @Test func expertPrefetchPersistsAcrossModelSelectionsAndRelaunch() async throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = root.appendingPathComponent("app-data", isDirectory: true)
+        let file = AppDataLocation.settingsURL(in: data)
+        let environment = ["TURBO_FIELDFARE_APP_DATA_PATH": data.path]
+        try MacAppSettingsFileStore.save(.init(expertPrefetchEnabled: false), at: file)
+        let model = AppModel(appDataDirectory: data, environment: environment,
+                             client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(!model.runtimeOptions.expertPrefetchEnabled)
+        for name in ["prefetch-first", "prefetch-second"] {
+            let parent = root.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+            await model.selectModelLocation(parent, intent: .download)
+            #expect(model.modelPathText == parent.appendingPathComponent("gemma4.gturbo").path)
+            #expect(!model.runtimeOptions.expertPrefetchEnabled)
+        }
+        model.setExpertPrefetchEnabled(true)
+        #expect(try MacAppSettingsFileStore.load(at: file)?.expertPrefetchEnabled == true)
+        model.setExpertPrefetchEnabled(false)
+        let persisted = try MacAppSettingsFileStore.load(at: file)
+        let saved = try #require(persisted)
+        #expect(!saved.expertPrefetchEnabled)
+        #expect(try JSONDecoder().decode(MacAppSettings.self, from: JSONEncoder().encode(saved)) == saved)
+        let relaunched = AppModel(appDataDirectory: data, environment: environment,
+                                  client: MockLifecycleInferenceClient(), settingsPersistenceEnabled: true)
+        #expect(!relaunched.runtimeOptions.expertPrefetchEnabled)
     }
 
     @MainActor

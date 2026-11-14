@@ -4,6 +4,37 @@ import Testing
 
 @Suite struct AppModelLoadStateTests {
     @MainActor
+    @Test func expertPrefetchChangeRequiresReloadAndRequestsKeepLoadedChoice() throws {
+        let directory = try makeCompleteModelInstall("expert-prefetch-reload")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = AppModel(modelDirectory: directory, client: MockLifecycleInferenceClient())
+        model.promptText = "go"
+        model.setExpertPrefetchEnabled(true)
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+        #expect(model.runtimeOptions.expertPrefetchEnabled)
+        #expect(!model.hasStaleLoadedRuntime)
+        model.setExpertPrefetchEnabled(false)
+        #expect(model.hasStaleLoadedRuntime)
+        #expect(model.canReloadModel)
+        #expect(!model.canRun)
+        #expect(try model.makeRequest().runtimeOptions.expertPrefetchEnabled)
+        model.setExpertPrefetchEnabled(true)
+        #expect(!model.hasStaleLoadedRuntime)
+        #expect(!model.canReloadModel)
+        #expect(model.canRun)
+
+        model.setExpertPrefetchEnabled(false)
+        model.applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0))
+        #expect(!model.hasStaleLoadedRuntime)
+        #expect(try !model.makeRequest().runtimeOptions.expertPrefetchEnabled)
+        model.setExpertPrefetchEnabled(true)
+        #expect(model.hasStaleLoadedRuntime)
+        #expect(try !model.makeRequest().runtimeOptions.expertPrefetchEnabled)
+        model.setExpertPrefetchEnabled(false)
+        #expect(!model.hasStaleLoadedRuntime)
+    }
+
+    @MainActor
     @Test func runRequiresReadyState() {
         let model = AppModel()
         model.promptText = "go"

@@ -13,9 +13,59 @@ Decode rate excludes model installation, model loading, and prompt prefill.
 
 | Host and runtime | Decode rate | Reported memory |
 | --- | ---: | ---: |
-| 8 GB M2, TurboFieldfare | 5.10-6.30 tok/s | ~1.9-2.1 GB footprint |
-| 24 GB M5 Pro, TurboFieldfare | 31-35 tok/s | ~2.1 GB footprint |
-| 24 GB M5 Pro, mlx-lm | 76.33-82.07 tok/s | 8.3-9.8 GB RSS; 14.7-15.3 GB GPU allocation |
+| 8 GB M2 MacBook Air, TurboFieldfare, prefetch on | 5.5–6.8 tok/s | 2,078–2,092 MiB footprint |
+| 24 GB M5 Pro, TurboFieldfare, prefetch off | 35.3–39.2 tok/s | 2,163–2,168 MiB footprint |
+| 24 GB M5 Pro, [mlx-lm](#same-host-mlx-comparison) | 76.3–82.1 tok/s | 8.3–9.8 GB RSS; 14.7–15.3 GB GPU allocation |
+
+Prefetch defaults off. TurboFieldfare uses the full-generation workloads below;
+MLX uses the separate [comparison workloads](#same-host-mlx-comparison).
+
+## Full-generation measurements
+
+Measured on 2026-11-13 using the [community prompts](COMMUNITY_BENCHMARKS.md).
+M2 has one measured run per case after warmup. M5 shows both off-mode runs
+from the paired comparison, in run order.
+
+| Host / case | Prefetch | Prompt / generated tokens | Decode tok/s |
+| --- | --- | ---: | ---: |
+| M2 / short | On | 61 / 527 | 6.8 |
+| M2 / medium | On | 430 / 665 | 6.2 |
+| M2 / long | On | 3,015 / 597 | 5.5 |
+| M5 Pro / short | Off | 61 / 497 | 39.1 / 39.2 |
+| M5 Pro / medium | Off | 430 / 721 | 37.5 / 37.4 |
+| M5 Pro / long | Off | 3,015 / 610 | 35.4 / 35.3 |
+
+All ended at `endOfTurn`; outputs matched within each case. Different output
+lengths across hosts prevent a controlled cross-host ratio.
+
+<details>
+<summary>Measurement settings and source revisions</summary>
+
+16 LFU slots, 128-token chunked prefill, RDADVISE off, context 4096, max-new
+1024, temperature 0.2, Top-K 64, Top-P 0.95; short/medium/long seeds
+20260721/20260722/20260723. Enabled prefetch uses one stage. No profiling.
+M2: macOS 26.5.2, Swift 6.3.3, revision `d85c1ee2`.
+M5 Pro: macOS 27.0, Swift 6.4.2, revision `18b68ce`.
+These measurements predate 0.10.0. Peak footprint comes from `/usr/bin/time -l`;
+all listed runs recorded zero host swapout delta. Cache state, clocks and
+background work were not controlled.
+
+</details>
+
+## Speculative expert prefetch
+
+Same-binary off/router comparisons used two measured pairs per workload:
+
+| Host | Short explanation | Medium review | Long synthesis |
+| --- | ---: | ---: | ---: |
+| M2 MacBook Air, 8 GB (2026-11-12) | +12.6–14.3% | +11.2–12.7% | +12.3–13.1% |
+| M5 Pro, 24 GB (2026-11-13) | −4.1% to −3.4% | −5.1% to −4.4% | −12.5% to −9.9% |
+
+Positive means faster decode with prefetch. Output bytes, counts and stop
+reasons matched within each case. The M2 pairs predate its enabled-only rows
+above. Results apply to these hosts and workloads; use the
+[comparison protocol](COMMUNITY_BENCHMARKS.md#optional-speculative-prefetch-comparison)
+to test another system.
 
 ## M2 measured decode
 
@@ -99,9 +149,9 @@ a normal end of turn, so a repetition loop cannot become a published speed
 result. The public CLI's timing footer reports decode-only throughput without a
 separate research harness.
 
-Community runs generate their own output, while the reference table uses fixed
-non-repeating continuations for token-for-token stability. Compare community
-submissions only when their prompt and generated token counts match.
+The full-generation and community runs generate their own output. Only the
+July M5 table uses fixed continuations. Matching prompt and generated token
+counts are necessary, but not sufficient, for a controlled comparison.
 
 A current checkout may not reproduce a historical number after the runtime,
 compiler, or operating system changes. Report the commit and all three rows

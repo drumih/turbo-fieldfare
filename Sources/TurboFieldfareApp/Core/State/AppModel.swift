@@ -291,6 +291,7 @@ public final class AppModel {
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: settings.expertCacheSlots,
             prefillEnabled: settings.prefillEnabled,
+            expertPrefetchEnabled: settings.expertPrefetchEnabled,
             rdadvisePolicy: settings.rdadvisePolicy,
             visionResidencyPolicy: .onDemand)
         let admitted = Self.admittedContext(settings.contextTokens,
@@ -1068,6 +1069,12 @@ public final class AppModel {
             setMaxContextTokens(admitted.tokens)
             contextClampNotice = admitted.notice
         }
+        persistSettings()
+    }
+
+    public func setExpertPrefetchEnabled(_ enabled: Bool) {
+        guard runtimeOptions.expertPrefetchEnabled != enabled else { return }
+        runtimeOptions.expertPrefetchEnabled = enabled
         persistSettings()
     }
 
@@ -2216,6 +2223,7 @@ public final class AppModel {
             topPEnabled: topPEnabled,
             topP: topP,
             prefillEnabled: runtimeOptions.prefillEnabled,
+            expertPrefetchEnabled: runtimeOptions.expertPrefetchEnabled,
             newlineShortcut: newlineShortcut,
             showPromptExamples: showPromptExamples,
             textSize: textSize,

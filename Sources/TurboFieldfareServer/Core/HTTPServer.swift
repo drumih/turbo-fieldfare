@@ -606,9 +606,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   phase: String,
                                   stream: Bool,
                                   started: ContinuousClock.Instant) {
+        let primary = requestPrimaryError(error)
         let envelope: OpenAIErrorEnvelope
         let status: HTTPResponseStatus
-        if let requestError = error as? ServerRequestError {
+        if let requestError = primary as? ServerRequestError {
             status = requestError.httpStatus
             envelope = requestError.envelope
         } else {
@@ -618,7 +619,11 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 code: "internal_error",
                 type: "server_error")
         }
-        if error is CancellationError {
+        if primary is CancellationError {
+            if error is RequestCompletionFailure {
+                // Cancellation classification must not erase cleanup failure.
+                ServerLog.failed(id: id, phase: phase, status: status.code, error: error)
+            }
             // Not a failure, and not silence either: without a terminal line the
             // request's last record stayed `generating` forever, so a reader could
             // not tell running from abandoned from crashed.

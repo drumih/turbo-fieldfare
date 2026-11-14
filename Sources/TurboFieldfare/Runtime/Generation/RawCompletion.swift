@@ -72,6 +72,30 @@ func runRawPrefill(
     scratch: RawCompletionScratch,
     onProgress: (RawDecodeProgress) -> Void
 ) async throws -> RawPrefillOutcome {
+    try await withFinishedInferenceRequest(producer: producer) {
+        // Standalone restore may follow a direct decode caller. Finish before
+        // reset or any chunked-prefill expert-slot reuse, and again on exit.
+        try (producer as? any RequestFinishingProducer)?.finishRequest()
+        return try await runRawPrefillBody(
+            producer: producer, promptIds: promptIds, multimodalInput: multimodalInput,
+            prefillConfig: requestedPrefillConfig, start: start, outputMode: outputMode,
+            seedUse: seedUse, historyReserve: historyReserve, scratch: scratch,
+            onProgress: onProgress)
+    }
+}
+
+private func runRawPrefillBody(
+    producer: any LogitProducer,
+    promptIds: [Int32],
+    multimodalInput: MultimodalPrefillInput?,
+    prefillConfig requestedPrefillConfig: PrefillRuntimeConfig,
+    start: RawCompletionStart,
+    outputMode: PrefillOutputMode,
+    seedUse: RawPrefillSeedUse,
+    historyReserve: Int,
+    scratch: RawCompletionScratch,
+    onProgress: (RawDecodeProgress) -> Void
+) async throws -> RawPrefillOutcome {
     let cachedPromptTokens = try start.cachedPromptTokens(
         promptCount: promptIds.count, producer: producer)
     let computedPrefillTokens = promptIds.count - cachedPromptTokens
@@ -281,6 +305,26 @@ public func runRawCompletion(producer: any LogitProducer,
                              start: RawCompletionStart = .reset,
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
+    try await withFinishedInferenceRequest(producer: producer) {
+        try await runRawCompletionBody(
+            producer: producer, tokenizer: tokenizer, promptIds: promptIds,
+            multimodalInput: multimodalInput, config: config, context: context,
+            scratch: scratch, prefillConfig: prefillConfig, start: start,
+            shouldStop: shouldStop, onProgress: onProgress)
+    }
+}
+
+private func runRawCompletionBody(producer: any LogitProducer,
+                                  tokenizer: GFTokenizer,
+                                  promptIds: [Int32],
+                                  multimodalInput: MultimodalPrefillInput?,
+                                  config: GenerationConfig,
+                                  context: MetalContext,
+                                  scratch: RawCompletionScratch,
+                                  prefillConfig: PrefillRuntimeConfig,
+                                  start: RawCompletionStart,
+                                  shouldStop: () -> Bool,
+                                  onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
     guard !promptIds.isEmpty else {
         throw GeneratorError.emptyPrompt
@@ -308,7 +352,12 @@ public func runRawCompletion(producer: any LogitProducer,
                                              maxContext: context.maxContext)
     }
 
-    let prefill = try await runRawPrefill(
+    // A direct caller may have left speculative work pending. Fence before
+    // the prefill body resets KV, even when the prior caller bypassed this loop.
+    try (producer as? any RequestFinishingProducer)?.finishRequest()
+    // The enclosing request owns the final drain; successful intermediate
+    // prefill must not introduce a second completion boundary.
+    let prefill = try await runRawPrefillBody(
         producer: producer,
         promptIds: promptIds,
         multimodalInput: multimodalInput,

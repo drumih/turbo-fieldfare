@@ -63,8 +63,11 @@ defaults. See [Runtime controls](RUNTIME_CONTROLS.md) for what each one does.
 ```
 
 Without these flags the server runs the production defaults: 16 expert-cache
-slots, LFU eviction, chunked prefill on with 128-token chunks, and read advice
-off. `--prefill-chunk-tokens auto` runs at the cap,
+slots, LFU eviction, chunked prefill on with 128-token chunks, and prefetch and
+read advice off. `--early-expert-read router` opts in at server startup; it is
+not a Chat Completions request field.
+
+`--prefill-chunk-tokens auto` runs at the cap,
 256, on the server: a per-request size is the smallest allowed size covering the
 span being prefilled, so the cap prefills every prompt in exactly those spans,
 and it costs about 32.5 MB of prefill scratch against about 16.4 MB at the 128

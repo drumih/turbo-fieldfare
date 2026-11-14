@@ -16,7 +16,7 @@ import TurboFieldfare
         let runtime = try options.resolvedRuntimeConfiguration(forceLogitsHead: false)
         #expect(runtime == .production)
         #expect(options.resultSummary ==
-            "Cache 16 LFU, prefill 128, FP16 KV, RDADVISE off, full SHA-256")
+            "Cache 16 LFU, prefill 128, expert prefetch off, FP16 KV, RDADVISE off, full SHA-256")
     }
 
     @Test func everyPublicChoiceMapsToRuntime() throws {
@@ -76,6 +76,7 @@ import TurboFieldfare
         value.expertCacheSlots = 24; variants.append(value)
         value = base; value.expertCachePolicy = .lru; variants.append(value)
         value = base; value.rdadvisePolicy = .bounded; variants.append(value)
+        value = base; value.expertPrefetchEnabled.toggle(); variants.append(value)
         value = base; value.modelVerification = .trustedInstall; variants.append(value)
 
         for variant in variants {
@@ -101,6 +102,22 @@ import TurboFieldfare
             maxContextTokens: 4096,
             options: value) == baseline)
     }
+    @Test func expertPrefetchResolvesExistingModeAndLoadedOptions() throws {
+        let on = AppRuntimeOptions(expertPrefetchEnabled: true)
+        #expect(!AppRuntimeOptions().expertPrefetchEnabled)
+        let off = AppRuntimeOptions(expertPrefetchEnabled: false)
+        #expect(on.expertPrefetchEnabled)
+        #expect(on != off)
+        #expect(try on.resolvedRuntimeConfiguration(forceLogitsHead: false).earlyExpertRead == .router)
+        #expect(try off.resolvedRuntimeConfiguration(forceLogitsHead: true).earlyExpertRead == .off)
+        let key = AppLoadedRuntimeKey(modelDirectory: URL(fileURLWithPath: "/tmp/m.gturbo"),
+                                      maxContextTokens: 4096, options: off)
+        let reconstructed = key.options(prefillEnabled: true, prefillChunkTokens: 64)
+        #expect(!reconstructed.expertPrefetchEnabled)
+        #expect(reconstructed.prefillEnabled)
+        #expect(reconstructed.prefillChunkTokens == 64)
+    }
+
     /// Refused at selection, not inside the first prefill chunk - which is
     /// after the model load and, on an image turn, after every attachment has
     /// already been encoded on the GPU.

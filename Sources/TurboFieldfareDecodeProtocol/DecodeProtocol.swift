@@ -4,6 +4,7 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public var expertCacheSlots: Int
     public var expertCachePolicy: String
     public var prefillEnabled: Bool
+    public var expertPrefetchEnabled: Bool
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: String
     public var modelVerification: String
@@ -12,6 +13,7 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: String = "lfu",
                 prefillEnabled: Bool = true,
+                expertPrefetchEnabled: Bool = false,
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: String = "off",
                 modelVerification: String = "full-sha256",
@@ -19,10 +21,29 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
+        self.expertPrefetchEnabled = expertPrefetchEnabled
         self.prefillChunkTokens = prefillChunkTokens
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
         self.visionResidencyPolicy = visionResidencyPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case expertCacheSlots, expertCachePolicy, prefillEnabled, expertPrefetchEnabled
+        case prefillChunkTokens, rdadvisePolicy, modelVerification, visionResidencyPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        expertCacheSlots = try container.decode(Int.self, forKey: .expertCacheSlots)
+        expertCachePolicy = try container.decode(String.self, forKey: .expertCachePolicy)
+        prefillEnabled = try container.decode(Bool.self, forKey: .prefillEnabled)
+        expertPrefetchEnabled = container.contains(.expertPrefetchEnabled)
+            ? try container.decode(Bool.self, forKey: .expertPrefetchEnabled) : false
+        prefillChunkTokens = try container.decode(Int.self, forKey: .prefillChunkTokens)
+        rdadvisePolicy = try container.decode(String.self, forKey: .rdadvisePolicy)
+        modelVerification = try container.decode(String.self, forKey: .modelVerification)
+        visionResidencyPolicy = try container.decodeIfPresent(String.self, forKey: .visionResidencyPolicy)
     }
 }
 
