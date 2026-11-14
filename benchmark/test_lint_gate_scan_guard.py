@@ -37,8 +37,8 @@ branch, `swiftlint` exits on "No lintable files found", `javascript` counts the
 packages it checked, and `docs` cannot open a `docs-facts.py` that is not there.
 Fail-closed is not the same as counted, and only the seven above are pinned here.
 
-So "the gates are green" -- the evidence every close in `docs/audit-ledger.json`
-cites -- says nothing about code the harness never opened. The trigger is not
+So "the gates are green" -- the evidence every close in the 2026 pre-production
+audit cited -- says nothing about code the harness never opened. The trigger is not
 hypothetical: this checkout was renamed once and `AGENTS.md` records that receipts
 and `.build` broke, func-length's own comment records the pass-on-nothing that
 already happened here, and a wrapper that copies `tools/` somewhere else moves `ROOT`
