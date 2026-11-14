@@ -129,7 +129,7 @@ let package = Package(
         ),
         .target(
             name: "Qwen35Dense4B4Bit",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC"],
             path: "sources/Engines/Qwen35Dense4B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
