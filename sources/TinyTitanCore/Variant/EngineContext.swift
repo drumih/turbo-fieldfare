@@ -36,9 +36,14 @@ public struct LoadedModelHandle: Sendable {
     }
 
     public let tensors: [String: Tensor]
+    /// The install directory the model was loaded from. A variant that reads
+    /// its weights lazily from disk (the dense CPU engine) loads its snapshot
+    /// from here; a fully-resident handle may leave it nil.
+    public let directoryURL: URL?
 
-    public init(tensors: [String: Tensor]) {
+    public init(tensors: [String: Tensor], directoryURL: URL? = nil) {
         self.tensors = tensors
+        self.directoryURL = directoryURL
     }
 }
 

@@ -280,6 +280,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
+                "Qwen35Dense4B4Bit",
                 "TinyTitanCore",
                 "TinyTitan", "TinyTitanFormat", "TinyTitanValidationSupport",
                 "TinyTitanRepackCore", "TinyTitanCLICore", "TinyTitanLib",
