@@ -519,6 +519,8 @@ public actor ServerModelSession: ServerInferenceBackend {
     private let promptCacheMode: ServerPromptCacheMode
     private let promptCacheDomain: ServerPromptCacheDomain
     private var promptCache = ServerPromptCache()
+    private let promptCheckpointEnabled: Bool
+    private var promptCheckpoint: ServerPromptCheckpoint?
     public nonisolated let visionCapability: String
     private let visionRuntime: VisionRuntime?
     private let visionResidencyPolicy: VisionResidencyPolicy
@@ -553,6 +555,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                             visionPackURL: URL? = nil,
                             visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
                             promptCacheMode: ServerPromptCacheMode = .singlePrefix,
+                            promptCheckpointEnabled: Bool = false,
                             runtimeConfiguration: RuntimeConfiguration) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
@@ -641,6 +644,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                                   maxContext: maxContext,
                                   promptCacheMode: promptCacheMode,
                                   promptCacheDomain: promptCacheDomain,
+                                  promptCheckpointEnabled: promptCheckpointEnabled,
                                   visionRuntime: visionRuntime,
                                   visionCapability: visionCapability,
                                   visionResidencyPolicy: visionResidencyPolicy)
@@ -671,6 +675,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                  maxContext: Int,
                  promptCacheMode: ServerPromptCacheMode,
                  promptCacheDomain: ServerPromptCacheDomain,
+                 promptCheckpointEnabled: Bool,
                  visionRuntime: VisionRuntime?,
                  visionCapability: String,
                  visionResidencyPolicy: VisionResidencyPolicy) {
@@ -683,6 +688,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         self.maxContext = maxContext
         self.promptCacheMode = promptCacheMode
         self.promptCacheDomain = promptCacheDomain
+        self.promptCheckpointEnabled = promptCheckpointEnabled
         self.visionRuntime = visionRuntime
         self.visionResidencyPolicy = visionResidencyPolicy
         self.visionCapability = visionCapability
@@ -927,6 +933,7 @@ public actor ServerModelSession: ServerInferenceBackend {
         let effectivePromptIDs: [Int32]
         let completionStart: RawCompletionStart
         var multimodalInput: MultimodalPrefillInput?
+        var checkpointPrefill = (tokens: 0, seconds: 0.0)
         switch cacheMatch {
         case .hit(let effective, let cached):
             effectivePromptIDs = effective
@@ -965,12 +972,21 @@ public actor ServerModelSession: ServerInferenceBackend {
             if let renderedTextIDs {
                 effectivePromptIDs = renderedTextIDs
                 multimodalInput = nil
+                completionStarted = true
+                if promptCheckpointEnabled,
+                   let resumed = try await resumeFromPromptCheckpoint(
+                    request: request, promptIDs: renderedTextIDs) {
+                    completionStart = .resume(cachedPromptTokens: resumed.cachedTokens)
+                    checkpointPrefill = (resumed.prefilledTokens, resumed.prefillSeconds)
+                } else {
+                    completionStart = .reset
+                }
             } else {
                 let rendered = try await renderMultimodal(request)
                 effectivePromptIDs = rendered.effectiveTokenIDs
                 multimodalInput = rendered
+                completionStart = .reset
             }
-            completionStart = .reset
         }
         // What the template renders versus what actually prefills: on a text
         // cache hit the two genuinely differ, and that difference is the point
@@ -1129,9 +1145,55 @@ public actor ServerModelSession: ServerInferenceBackend {
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
                                totalTokens: result.prefillTokens + result.newTokens,
-                               cachedTokens: result.cachedPromptTokens),
-            prefillSeconds: result.prefillSeconds,
+                               cachedTokens: result.cachedPromptTokens - checkpointPrefill.tokens),
+            prefillSeconds: result.prefillSeconds + checkpointPrefill.seconds,
             decodeSeconds: result.decodeSeconds)
+    }
+
+    /// Leaves the KV holding the leading system turn of `promptIDs`, either by
+    /// restoring the checkpoint or by prefilling that turn and keeping a new
+    /// one. Nil when neither applies and the request should prefill from zero.
+    private func resumeFromPromptCheckpoint(
+        request: ValidatedChatRequest,
+        promptIDs: [Int32]
+    ) async throws -> (cachedTokens: Int, prefilledTokens: Int, prefillSeconds: Double)? {
+        if let checkpoint = promptCheckpoint,
+           promptIDs.count > checkpoint.tokenIDs.count,
+           promptIDs.starts(with: checkpoint.tokenIDs) {
+            try runner.restoreKVPrefix(checkpoint.snapshot)
+            ServerLog.promptCheckpointRestored(tokens: checkpoint.tokenIDs.count)
+            return (checkpoint.tokenIDs.count, 0, 0)
+        }
+        let systemTurn = request.messages.prefix { $0.role == .system || $0.role == .developer }
+        guard !systemTurn.isEmpty, systemTurn.count < request.messages.count,
+              let systemTurnIDs = try? renderSystemTurn(Array(systemTurn), tools: request.tools,
+                                                        toolTemplate: usesToolTemplate(request)) else {
+            return nil
+        }
+        let boundary = ServerPromptCheckpoint.boundary(systemTurnIDs: systemTurnIDs, promptIDs: promptIDs)
+        guard boundary >= ServerPromptCheckpoint.minimumTokens, boundary < promptIDs.count else {
+            return nil
+        }
+        let prefix = Array(promptIDs.prefix(boundary))
+        // Released before the new snapshot is taken so two never coexist.
+        promptCheckpoint = nil
+        let seconds = try await runRawPromptPrefill(producer: runner,
+                                                    promptIds: prefix,
+                                                    prefillConfig: prefillConfig,
+                                                    scratch: scratch)
+        let snapshot = try runner.snapshotKVPrefix()
+        promptCheckpoint = ServerPromptCheckpoint(tokenIDs: prefix, snapshot: snapshot)
+        ServerLog.promptCheckpointStored(tokens: boundary, bytes: snapshot.byteCount, seconds: seconds)
+        return (boundary, boundary, seconds)
+    }
+
+    private func renderSystemTurn(_ messages: [GFTokenizer.Message],
+                                  tools: [GFTokenizer.FunctionDefinition],
+                                  toolTemplate: Bool) throws -> [Int32] {
+        if toolTemplate {
+            return try tokenizer.encodeToolChat(messages: messages, tools: tools)
+        }
+        return tokenizer.encode(try tokenizer.applyChatTemplate(messages), addBOS: false)
     }
 
     private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {
