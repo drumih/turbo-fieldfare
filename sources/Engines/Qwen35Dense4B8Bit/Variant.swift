@@ -1,12 +1,16 @@
-// Provenance: scaffold created 2026-11-14 against docs/plan-tinytitan-7-engine.md §3
-// (7.0 dense family). Statics grounded in tools/prepare_qwen35.py SIZES (hidden
-// 2560, 32 layers, tied output) and the dense family sampling row. The CPU+GPU
-// graph is ported in the dense-port task; until then this target refuses to serve.
+// Provenance: 7.0 dense variant (plan task 5/7). The CPU forward is copied from
+// sources/TinyTitan/CPUEngine; the model-specific reasoning/sampling subsystem
+// is copied with it (a variant owns its model knowledge, spec §1.2). The loader
+// reads through the Core SSDAIManifestReader. Statics grounded in
+// tools/prepare_qwen35.py SIZES (hidden 2560, 32 layers).
 import Foundation
 import TinyTitanCore
 
-/// The Qwen 3.5 4B model at 8-bit, as a 7.0 engine variant (CPU + GPU paths).
-public struct Qwen35Dense4B8BitVariant: EngineVariant {
+/// The Qwen 3.5 4B at 8-bit, as a 7.0 engine variant serving the dense CPU path.
+/// unchecked-invariant: the CPUQwen35 instance and its last-logits buffer are
+/// confined to a single generation session and accessed serially by that
+/// session's prefill/decode loop; no two sessions share one variant instance.
+public final class Qwen35Dense4B8BitVariant: EngineVariant, @unchecked Sendable {
     public static let id: VariantID = {
         do { return try VariantID("qwen35-4b-8bit") } catch {
             fatalError("invalid variant id literal: \(error)")
@@ -38,15 +42,37 @@ public struct Qwen35Dense4B8BitVariant: EngineVariant {
         variantID: id, renames: [:], keepBF16Stems: [],
         headBits: nil, embeddingBits: nil)
 
+    private let engine: CPUQwen35
+    private var lastLogits: [Float] = []
+
     public init(context: EngineContext, model: LoadedModelHandle) throws {
-        throw VariantError.notPorted(Self.id.raw)
+        guard let directory = model.directoryURL else {
+            throw VariantError.notPorted(Self.id.raw)
+        }
+        let snapshot = try AffineSnapshot(ssdai: directory)
+        engine = try CPUQwen35(snapshot: snapshot)
     }
+
     public func prefill(_ tokens: [Int], state: inout SessionState) throws {
-        throw VariantError.notPorted(Self.id.raw)
+        lastLogits = try engine.prefill(tokens: tokens)
+        state.position = tokens.count
+        state.tokens = tokens
     }
+
     public func decode(_ state: inout SessionState) throws -> Int {
-        throw VariantError.notPorted(Self.id.raw)
+        guard !lastLogits.isEmpty else {
+            throw VariantError.notPorted(Self.id.raw)
+        }
+        var best = 0
+        for index in lastLogits.indices where lastLogits[index] > lastLogits[best] {
+            best = index
+        }
+        lastLogits = try engine.step(token: best)
+        state.position += 1
+        state.tokens.append(best)
+        return best
     }
+
     public static func qualify() throws -> Qualification {
         throw VariantError.notPorted(id.raw)
     }

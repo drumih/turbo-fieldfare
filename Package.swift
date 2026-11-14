@@ -135,19 +135,19 @@ let package = Package(
         ),
         .target(
             name: "Qwen35Dense4B8Bit",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC"],
             path: "sources/Engines/Qwen35Dense4B8Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
         .target(
             name: "Qwen35Dense9B4Bit",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC"],
             path: "sources/Engines/Qwen35Dense9B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
         .target(
             name: "Qwen35Dense9B8Bit",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC"],
             path: "sources/Engines/Qwen35Dense9B8Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -280,7 +280,8 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
-                "Qwen35Dense4B4Bit",
+                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
+                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
                 "TinyTitanCore",
                 "TinyTitan", "TinyTitanFormat", "TinyTitanValidationSupport",
                 "TinyTitanRepackCore", "TinyTitanCLICore", "TinyTitanLib",
