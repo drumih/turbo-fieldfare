@@ -44,7 +44,7 @@
       "variants": [
         {
           "id": "qwen35-4b-4bit",
-          "target": null,
+          "target": "Qwen35Dense4B4Bit",
           "bits": 4,
           "engine": "cpu",
           "shipped": false,
@@ -54,7 +54,7 @@
         },
         {
           "id": "qwen35-4b-8bit",
-          "target": null,
+          "target": "Qwen35Dense4B8Bit",
           "bits": 8,
           "engine": "cpu",
           "shipped": false,
@@ -75,7 +75,7 @@
       "variants": [
         {
           "id": "qwen35-9b-4bit",
-          "target": null,
+          "target": "Qwen35Dense9B4Bit",
           "bits": 4,
           "engine": "cpu",
           "shipped": false,
@@ -85,7 +85,7 @@
         },
         {
           "id": "qwen35-9b-8bit",
-          "target": null,
+          "target": "Qwen35Dense9B8Bit",
           "bits": 8,
           "engine": "cpu",
           "shipped": false,
