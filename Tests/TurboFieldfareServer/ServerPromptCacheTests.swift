@@ -15,6 +15,19 @@ struct ServerPromptCacheTests {
         fp16RingEnabled: true,
         templateSHA256: "template")
 
+    /// A miss rewinds to the longest shared token prefix, keeps at least one
+    /// prompt token to prefill, and refuses short or unreachable prefixes.
+    @Test func kvLineageRewindsToTheSharedPrefix() {
+        let shared = (0..<300).map(Int32.init)
+        let lineage = ServerKVLineage(tokenIDs: shared + [900, 901, 902])
+        #expect(lineage.rewindTarget(promptIDs: shared + [500, 501], canRewind: { _ in true }) == 300)
+        // The whole lineage matching still leaves the last prompt token to prefill.
+        #expect(lineage.rewindTarget(promptIDs: shared, canRewind: { _ in true }) == 299)
+        #expect(lineage.rewindTarget(promptIDs: shared + [500], canRewind: { $0 >= 302 }) == nil)
+        let short = ServerKVLineage(tokenIDs: Array(shared.prefix(200)) + [7])
+        #expect(short.rewindTarget(promptIDs: shared, canRewind: { _ in true }) == nil)
+    }
+
     @Test(arguments: ServerPromptCachePublishRejection.allCases)
     func publicationExplainsRejectionAndInvalidatesPreviousEntry(_ reason: ServerPromptCachePublishRejection) {
         let initial = request(messages: [.init(role: .user, content: "secret-prompt-sentinel")])
