@@ -1,0 +1,297 @@
+{
+  "version": 1,
+  "note": "The one inventory of shipped (model, quantization) pairs, derived 2026-11-14 from tools/tinytitan_models.sh, tools/install_models.sh, sources/TinyTitan/Runtime/Configuration/ModelProfile.swift, sources/TinyTitan/Infrastructure/ModelIO/ModelFamily.swift and benchmark/golden. Reconciliation findings are recorded in the wiki tracker row TT-072. `target`, `shipped`, `installedSizeBytes` and `qualification` fill in as the 7.0 migration (docs/superpowers/plans/2026-11-14-tinytitan-7-phase-0-2-foundation.md) lands variants.",
+  "models": [
+    {
+      "modelID": "qwen35-2b",
+      "displayName": "Qwen 3.5 2B",
+      "family": "qwen35_dense",
+      "source": {
+        "repo": "Qwen/Qwen3.5-2B",
+        "sha": "15852e8c16360a2fea060d615a32b45270f8a8fc"
+      },
+      "variants": [
+        {
+          "id": "qwen35-2b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 2470440960,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-2b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 2363888640,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "qwen35-4b",
+      "displayName": "Qwen 3.5 4B",
+      "family": "qwen35_dense",
+      "source": {
+        "repo": "Qwen/Qwen3.5-4B",
+        "sha": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
+      },
+      "variants": [
+        {
+          "id": "qwen35-4b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 3973342208,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-4b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 5691643904,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "qwen35-9b",
+      "displayName": "Qwen 3.5 9B",
+      "family": "qwen35_dense",
+      "source": {
+        "repo": "Qwen/Qwen3.5-9B",
+        "sha": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+      },
+      "variants": [
+        {
+          "id": "qwen35-9b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 8053063680,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-9b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 11811160064,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "qwen36-35b",
+      "displayName": "Qwen 3.6 35B-A3B",
+      "family": "qwen36",
+      "source": {
+        "repo": "Qwen/Qwen3.6-35B-A3B",
+        "sha": "995ad96eacd98c81ed38be0c5b274b04031597b0"
+      },
+      "variants": [
+        {
+          "id": "qwen36-35b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 20954280960,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen36-35b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 40583766016,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "ornith-1.5-35b",
+      "displayName": "Ornith 1.5 35B-A3B",
+      "family": "qwen36",
+      "source": {
+        "repo": "ornith-ai/Ornith-1.5-35B-A3B",
+        "sha": "10fbf86fed7ecee4a061f8b499a618f46001cac1"
+      },
+      "variants": [
+        {
+          "id": "ornith-1.5-35b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 20954280960,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "ornith-1.5-35b-bf16dense-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 23613919232,
+          "sourceSizeBytes": null,
+          "qualification": null,
+          "recipeNote": "attention, GDN and the shared expert stay at the checkpoint's bf16; routed experts 4-bit"
+        },
+        {
+          "id": "ornith-1.5-35b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 39636844800,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "qwen-agentworld-35b",
+      "displayName": "Qwen-AgentWorld 35B-A3B",
+      "family": "qwen36",
+      "source": {
+        "repo": "Qwen/Qwen-AgentWorld-35B-A3B",
+        "sha": "60d2b0434a53d2e62a7c00a489586815d94ebffb"
+      },
+      "variants": [
+        {
+          "id": "qwen-agentworld-35b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 21474836480,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen-agentworld-35b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 44023414784,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "kat-coder-v2.5-35b",
+      "displayName": "KAT-Coder-V2.5-Dev 35B-A3B",
+      "family": "qwen36",
+      "source": {
+        "repo": "Kwaipilot/KAT-Coder-V2.5-Dev",
+        "sha": "7be56fe773e72b6f5ca93c1ae45d828ddb893922"
+      },
+      "variants": [
+        {
+          "id": "kat-coder-v2.5-35b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 21474836480,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "kat-coder-v2.5-35b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 40802189312,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "qwen3.8-flash-next-125b",
+      "displayName": "Qwen3.8-Flash-Next 125B-A6B",
+      "family": "qwen38flash",
+      "source": {
+        "repo": "Qwen/Qwen3.8-Flash-Next",
+        "sha": "not-pinned-in-converter"
+      },
+      "variants": [
+        {
+          "id": "qwen3.8-flash-next-125b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 175046168576,
+          "sourceSizeBytes": null,
+          "qualification": null,
+          "recipeNote": "the 4/8/16 hybrid: routed experts 4-bit, every resident tensor 8-bit, the n-gram table fp16"
+        },
+        {
+          "id": "qwen3.8-flash-next-125b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 236223201280,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    },
+    {
+      "modelID": "ornith-1.5-122b",
+      "displayName": "Ornith 1.5 122B",
+      "family": "qwen36",
+      "source": {
+        "repo": "ornith-ai/Ornith-1.5-122B",
+        "sha": "7681ef608624e7532d8164128bcffdbdbaf1b1af"
+      },
+      "variants": [
+        {
+          "id": "ornith-1.5-122b-4bit",
+          "target": null,
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 70866960384,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "ornith-1.5-122b-8bit",
+          "target": null,
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 132122204672,
+          "sourceSizeBytes": null,
+          "qualification": null
+        }
+      ]
+    }
+  ]
+}
