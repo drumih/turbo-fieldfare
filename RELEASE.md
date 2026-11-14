@@ -213,7 +213,7 @@ other destructive remote action.
 
 # Part 2 — This repository
 
-## TinyTitan — Swift, semantic version, 30 release tags
+## TinyTitan — Swift, semantic version, 43 release tags
 
 *The reference implementation of this standard.* Runbook:
 `docs/release-process.md`. Mechanism: `tools/release.sh`.
@@ -223,9 +223,9 @@ other destructive remote action.
 This repository is a GitHub **fork** of `drumih/turbo-fieldfare`, and it is
 **deliberately left as a fork** — do not detach it from the fork network. Leaving
 is permanent, and the standalone repository would not retain its wiki, issues, pull
-requests, stars, watchers or child forks; the wiki alone holds 17 pages across 342
-commits, alongside 30 semantic-version tags (`v2` through `v5.13`; `git tag | grep
--cE '^v[0-9]+\.[0-9]+'`).
+requests, stars, watchers or child forks; the wiki alone holds 16 content pages
+across 455 commits, alongside 43 semantic-version tags (`v2.0` through `v6.3`;
+`git tag | grep -cE '^v[0-9]+\.[0-9]+'`).
 
 The fork relationship is inert. Nothing here is upstreamed: **no pull requests,
 cherry-picks or patches go to the parent**, and every change stays inside this
@@ -248,14 +248,13 @@ repository.
   tools archive is the one artifact with no binary in it, being `git archive` of
   the tag, and gets no arch check.
 - **Gates** `tools/lint.sh` — every check in its `all` chain, and the
-  authoritative list of those checks is the script's own usage header. This line
-  used to keep a second copy with a count ("fifteen checks as of 2026-10-07");
-  `library-facade` made that count stale the day it landed, which is the defect
-  AUD-160 records, so the copy is gone rather than renumbered. Five gates are
-  this audit's additions — `unbounded-read`, `test-skip`, `file-length`,
-  `test-hollow`, `library-facade`. `AGENTS.md` still enumerates the set with a
-  count of its own and is the maintainer's file, so correcting it is an owner
-  action, not an edit made from here. —
+  authoritative list of those checks is the script's own usage header — keep a
+  second copy with a count and it goes stale the day a gate lands (the defect
+  AUD-160 records; the copy here is gone rather than renumbered). Five gates are
+  the 2026 audit's additions — `unbounded-read`, `test-skip`, `file-length`,
+  `test-hollow`, `library-facade`. `AGENTS.md` enumerates the set with the
+  current count and the `docs` gate keeps that enumeration honest against the
+  script. —
   `swift test --no-parallel`;
   **every installed model with
   a golden target**, through `tools/golden-baseline.sh --check`; then a clean
