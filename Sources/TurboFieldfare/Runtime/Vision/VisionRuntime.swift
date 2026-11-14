@@ -240,7 +240,7 @@ public final class VisionRuntime {
     }
 
     public static func isSupported(on device: MTLDevice) -> Bool {
-        device.supportsFamily(.apple8)
+        device.supportsFamily(.apple7)
     }
 
     public static var isSupportedOnDefaultDevice: Bool {
