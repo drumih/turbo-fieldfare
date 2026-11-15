@@ -416,9 +416,12 @@ done
 # executables the runtime cannot load its kernels. Fail closed rather than
 # shipping an archive that dies on the first model load. Test bundles are
 # excluded: they hold fixtures the tests read, and 5.5's archive carried the six
-# that the executables of the day needed.
-[ -d "$BIN/TinyTitan_TinyTitan.bundle" ] \
-  || die "no TinyTitan_TinyTitan.bundle in $BIN: the Metal shader library would not ship"
+# that the executables of the day needed. The shaders live in the target that
+# carries the Metal context — TinyTitanCore since the 7.0 extraction — so the
+# bundle is TinyTitan_TinyTitanCore.bundle; assert it carries shader sources, not
+# merely that a directory exists.
+[ -n "$(find "$BIN/TinyTitan_TinyTitanCore.bundle" -name '*.metal' -print -quit 2>/dev/null)" ] \
+  || die "no TinyTitan_TinyTitanCore.bundle with Metal shader sources in $BIN: the Metal shader library would not ship"
 find "$BIN" -maxdepth 1 -name '*.bundle' ! -name '*Tests.bundle' -exec cp -R {} "$STAGE/" \;
 # LICENSE and NOTICE are what Apache-2.0 requires to travel with a binary
 # distribution; THIRD_PARTY_NOTICES.md carries the upstream attributions.
@@ -458,8 +461,8 @@ step "package"
 # Assert on the *archive*, not the staging directory: a bundle that failed to
 # stage is invisible until someone runs the binary somewhere else, which is how
 # 5.6's first upload shipped without the Metal shader library.
-tar tzf "$ARCHIVE" | grep -q '^[^/]*/TinyTitan_TinyTitan\.bundle/' \
-  || die "the archive carries no TinyTitan_TinyTitan.bundle: the runtime could not load its kernels"
+tar tzf "$ARCHIVE" | grep -q '^[^/]*/TinyTitan_TinyTitanCore\.bundle/' \
+  || die "the archive carries no TinyTitan_TinyTitanCore.bundle: the runtime could not load its kernels"
 # Every product the build produced, by name, in the archive. The stage loop above
 # proves each one was executable *before* the copy, and `set -e` is off here, so a
 # `cp` that fails partway -- out of disk is the realistic one -- would otherwise
@@ -497,7 +500,7 @@ LIB_ARCHIVE="$STAGE_ROOT/tinytitan-lib-$VERSION-macos-arm64.tar.gz"
 # Assert on the *archive*, not the staging directory: a dylib that failed to
 # stage is invisible until somebody links against the download.
 for member in libTinyTitanLib.a libTinyTitanLib.dylib TinyTitanLib.swiftmodule/ \
-  TinyTitanKernelsC.modulemap TinyTitan_TinyTitan.bundle/Contents/Resources/Metal/ \
+  TinyTitanKernelsC.modulemap TinyTitan_TinyTitanCore.bundle/Contents/Resources/Metal/ \
   demo/main.swift demo/build-dynamic.sh; do
   tar tzf "$LIB_ARCHIVE" | grep -q "$member" \
     || die "the library archive carries no $member"

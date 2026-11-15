@@ -143,9 +143,11 @@ done
 [[ "$FOUND_BUNDLE" == 1 ]] || die "no resource bundle in $BIN: the Metal kernels would not ship"
 # The bundle carries the shader *sources*. `MetalContext` compiles them with
 # `device.makeLibrary(source:)` at load time — there is no `.metallib` step to
-# check for, so the assertion is that the sources travelled, not a binary.
-[[ -n "$(find "$OUT/TinyTitan_TinyTitan.bundle" -name '*.metal' -print -quit)" ]] \
-  || die "the staged TinyTitan_TinyTitan.bundle carries no Metal shader sources"
+# check for, so the assertion is that the sources travelled, not a binary. The
+# sources live in whichever target carries the Metal context (TinyTitanCore since
+# the 7.0 extraction), so check the staged non-test bundles by content, not name.
+[[ -n "$(find "$OUT"/*.bundle -name '*.metal' -print -quit 2>/dev/null)" ]] \
+  || die "the staged resource bundle carries no Metal shader sources"
 
 # 5. Licensing travels with any binary distribution (Apache-2.0).
 cp "$ROOT/LICENSE" "$ROOT/NOTICE" "$ROOT/THIRD_PARTY_NOTICES.md" "$OUT/"
@@ -199,7 +201,8 @@ Contents
   demo/                      two terminal apps built from one source — one
                              linked against the static archive, one against the
                              dylib — with the scripts that build them
-  TinyTitan_TinyTitan.bundle the Metal shader sources, compiled when the library
+  TinyTitan_TinyTitanCore.bundle
+                             the Metal shader sources, compiled when the library
                              loads; the bundle must sit next to the executable
                              that uses the library
   LICENSE, NOTICE, THIRD_PARTY_NOTICES.md
@@ -214,7 +217,7 @@ once (it writes swiftc-flags.txt with the paths of *this* directory), then:
               -Xlinker -rpath -Xlinker "\$PWD" -o mytool
 
 Both lines were run against this archive before it was published. Run the result
-from a directory that holds TinyTitan_TinyTitan.bundle (and the two dependency
+from a directory that holds TinyTitan_TinyTitanCore.bundle (and the two dependency
 bundles), or copy them beside the executable: the runtime finds its shaders
 through Bundle.module, which resolves next to the binary.
 
