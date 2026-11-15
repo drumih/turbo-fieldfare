@@ -11,3 +11,7 @@ sources/TinyTitanServer/Core/AnthropicMapper.swift:chatRequest: AUD-024: the AUD
 sources/TinyTitanServer/Core/HTTPServerHandler+Anthropic.swift:handleMessages: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanServer/Core/HTTPServerHandler+Responses.swift:handleResponses: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
 sources/TinyTitanServer/Core/HTTPServerHandler+Routes.swift:route: AUD-024: the AUD-004 formatter sweep expanded this body past 120 lines; no logic was added
+sources/Engines/Ornith35B4Bit/Kernels/Attention/Attention.swift:encodeSplit: AUD-024 copy: verbatim copy of the audited runtime engine function into the Ornith variant (7.0 duplication, spec §1.2); no logic added
+sources/Engines/Ornith35B4Bit/Runtime/Generation/RawCompletionHelpers.swift:runStreamingMTPCompletion: AUD-024 copy: verbatim copy of the audited runtime engine function into the Ornith variant (7.0 duplication, spec §1.2); no logic added
+sources/Engines/Ornith35B4Bit/Runtime/Inference/Model+SchemaValidation.swift:validateLayerTensors: AUD-024 copy: verbatim copy of the audited runtime engine function into the Ornith variant (7.0 duplication, spec §1.2); no logic added
+sources/Engines/Ornith35B4Bit/Runtime/Inference/RealForwardRunner+PrefillProjection.swift:encodeAffineProjection: AUD-024 copy: verbatim copy of the audited runtime engine function into the Ornith variant (7.0 duplication, spec §1.2); no logic added

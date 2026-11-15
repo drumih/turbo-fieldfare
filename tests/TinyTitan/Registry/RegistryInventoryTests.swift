@@ -49,11 +49,17 @@ struct RegistryInventoryTests {
                 #expect(variant["bits"] != nil)
                 #expect(
                     variant["engine"] as? String == "cpu" || variant["engine"] as? String == "gpu")
-                #expect(variant["shipped"] as? Bool == false)
+                let shipped = variant["shipped"] as? Bool ?? false
                 // JSONSerialization surfaces JSON null as NSNull, so "unset"
                 // is either an absent key or NSNull.
                 let target = variant["target"]
                 #expect(target == nil || target is NSNull || target is String)
+                if shipped {
+                    // A shipped variant must name a real target and carry a
+                    // qualification record (catalog --check enforces the same).
+                    #expect(target is String)
+                    #expect(variant["qualification"] is [String: Any])
+                }
                 let qualification = variant["qualification"]
                 #expect(
                     qualification == nil || qualification is NSNull

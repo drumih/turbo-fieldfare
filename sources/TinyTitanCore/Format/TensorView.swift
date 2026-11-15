@@ -1,6 +1,10 @@
 import Foundation
 import Metal
 
+/// unchecked-invariant: every stored property is `let`; the view is an
+/// immutable window (offset/length/shape) over an MTLBuffer whose bytes are
+/// read-only for the view's lifetime. @unchecked only because MTLBuffer is a
+/// reference type; the value itself carries no mutable state.
 public struct TensorView: @unchecked Sendable {
     public let buffer: MTLBuffer
     public let offset: UInt64
