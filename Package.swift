@@ -331,6 +331,12 @@ let package = Package(
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
+            name: "Ornith35B4BitTests",
+            dependencies: ["Ornith35B4Bit", "TinyTitan", "TinyTitanCore"],
+            path: "tests/Engines/Ornith35B4Bit",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
             name: "TinyTitanMemoryTests",
             dependencies: ["TinyTitanMemory", "ContinuityCore"],
             path: "tests/TinyTitanMemory",
