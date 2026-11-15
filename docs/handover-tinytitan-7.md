@@ -214,6 +214,12 @@ PASS** (169 `public`, all on the baseline). Three concerns, handled as follows:
   `qualificationDecodesRegistryRecordWithNullUnmeasuredFields` to
   `VariantContractsTests`, decoding the registry shape and asserting the nulls.
   Verified: `VariantContractsTests` 14/14 green (the new decode test included).
+  Sibling audit (read-only): no sibling defect — `Qualification` is the only
+  `Codable` type in `Core/Variant/` (the rest are plain `Sendable` structs,
+  never decoded); `CatalogCommand` parses the registry with raw
+  `JSONSerialization` and never decodes `Qualification`, so the bug was latent
+  for a future Codable consumer; no production decode site exists and the
+  install manifest carries no nulls.
 - **FOLLOW-UP — core-purity gate scope.** The gate scans `*.swift` identifiers
   only; model names survive in Core *comments* (`Format/ArchConfig.swift`,
   `Format/ModelTypes+Configs.swift`) and in `.metal` sources, and the regex
