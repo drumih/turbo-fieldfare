@@ -36,13 +36,16 @@ The GPU runtime lift into Core requires `ArchConfig` to be model-free, so
 `ArchConfig.family` was changed from `ModelFamily` to a raw `String` (the
 runtime resolves it via a `modelFamily` computed property;
 `ModelFamily`/the presets stay in the runtime). The source tree builds green
-in release. **The test target does not compile yet**: ~29 sites across five
+in release and the test conversions are DONE: the full serial suite passes
+(2,371 tests across all eight targets; one transient TinyTitanServerTests
+runner crash re-ran green). The conversions touched ~29 sites across five
 test files (`ANEPrefillAttentionTests`, `RoleUniformityTests`,
 `ReasoningControlTests`, `LagunaSurfaceTests`, `LagunaToySynthetic` — see
 `git show HEAD` and `swift build --build-tests`) pass `family:` as a
 `ModelFamily` member where `ArchConfig.family` is now a String, or compare
 `config.family == .member`.
 
+**VERIFIED 2026-11-15: full serial suite green.**
 **Trap learned the hard way: a scripted/regex fix does NOT converge.** Each
 conversion shifts type inference and creates new sites (error counts
 oscillated 23 → 83 → 10 → 29 across attempts), and `.family` exists on
