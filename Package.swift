@@ -153,6 +153,15 @@ let package = Package(
             swiftSettings: tinytitanLanguageStandard
         ),
         .target(
+            name: "Ornith35B4Bit",
+            dependencies: [
+                "TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC",
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            path: "sources/Engines/Ornith35B4Bit",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .target(
             name: "TinyTitan",
             dependencies: [
                 "TinyTitanCore",
