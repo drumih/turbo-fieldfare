@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitanFormat
+import TinyTitanCore
 
 package enum GGUFManifestError: Error, Equatable, CustomStringConvertible {
     case missingMetadata(String)

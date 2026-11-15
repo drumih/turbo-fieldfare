@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// CPU reference for the gated-DeltaNet kernels.
 ///

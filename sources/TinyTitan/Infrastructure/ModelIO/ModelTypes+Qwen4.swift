@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Qwen 4.0 Flash (`qwen4-omni-120b-think`) runtime presets.
 ///

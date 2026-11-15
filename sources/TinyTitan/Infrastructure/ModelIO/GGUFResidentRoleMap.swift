@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 package enum GGUFResidentRoleError: Error, Equatable, CustomStringConvertible {
     case unknownTensor(String)

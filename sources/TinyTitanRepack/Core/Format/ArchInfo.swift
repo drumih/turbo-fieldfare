@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Model family discriminator, mirrored into `manifest.json -> arch.family`.
 /// Raw values match the runtime's `ModelFamily`.

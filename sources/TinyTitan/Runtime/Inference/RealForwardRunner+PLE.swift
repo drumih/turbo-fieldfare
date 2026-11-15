@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The PLE n-gram block: gathering rows, rewinding accepted speculations and
 // the decode/prefill encoders.

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// How a family moves data between the residual stream and a sublayer.
 ///

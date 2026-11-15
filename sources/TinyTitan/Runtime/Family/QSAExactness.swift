@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// When dense attention is bit-exact for Qwen Sparse Attention.
 ///

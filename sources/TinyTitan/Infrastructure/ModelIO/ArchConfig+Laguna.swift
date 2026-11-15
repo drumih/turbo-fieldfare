@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// The parts of Laguna-S-2.1 that are not expressible in the cross-family
 /// `ArchConfig` fields: the per-layer head counts, the QK norms, the per-head
