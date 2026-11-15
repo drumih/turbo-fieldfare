@@ -112,3 +112,83 @@ local import. Fixed; the Ornith install completes and verifies.
   may be downloaded without it.
 - Lint invocations need `PATH=".build/shims:$PATH"` (pinned ruff; recreated
   after any `swift package clean`).
+
+## 7.0 release verification (2026-11-15)
+
+Verified at commit `c3e65db9` on `main`, Apple M3 MacBook Pro 24 GB,
+macOS 27.2.1, Swift 6.4.2 (Xcode 27 toolchain). No model was run in this
+session (no benchmark, golden or server); the ruff shim was recreated
+(`.build/shims/ruff` → pipx ruff 0.16.7) before lint.
+
+**Result: NOT all green.** Release build and `catalog --check` pass; the
+serial suite has one deterministic failure and lint fails 2 of 20 checks.
+All three defects pre-exist on `main` and sit in files this verification
+session does not own (tests/registry/sources) — they are recorded here for
+the owner to fix before the release can go out.
+
+### Serial suite — `swift test --no-parallel` (exit 1)
+
+2,372 tests across nine targets; 2,371 passed, 1 failed:
+
+| Target | Tests | Suites | Result |
+| --- | --- | --- | --- |
+| TinyTitanTests | 1307 | 271 | **FAILED (1 issue)** |
+| TinyTitanServerTests | 434 | 49 | passed |
+| TinyTitanRepackTests | 196 | 31 | passed |
+| TinyTitanMemoryTests | 189 | 23 | passed |
+| TinyTitanLibTests | 129 | 17 | passed |
+| TinyTitanCoreTests | 15 | 2 | passed |
+| Qwen35Dense2B4BitTests | 3 | 1 | passed |
+| Ornith35B4BitTests | 1 | 1 | passed |
+| ContinuityCoreTests | 98 | 10 | passed |
+
+The failure is **not** a transient runner crash:
+`RegistryInventoryTests.registryParsesAndCoversTheShippedPairs`
+(`tests/TinyTitan/Registry/RegistryInventoryTests.swift:52`) asserts
+`variant["shipped"] as? Bool == false` for **every** registry variant.
+Commit `87d1dad5` (Ornith qualification) set `ornith-1.5-35b-4bit` to
+`shipped: true` without updating this invariant; the test last changed in
+`63297e4e`/`1944cacd`, before qualification. Re-ran
+`swift test --no-parallel --filter RegistryInventoryTests`: same failure,
+exit 1 — deterministic. Fix belongs to the test/registry owner: the
+assertion must accept the shipped Ornith pair (e.g. pin the shipped set
+explicitly) rather than demanding `false` everywhere.
+
+### Lint — `PATH=".build/shims:$PATH" tools/lint.sh` (exit 1, 18/20 ok)
+
+ok: force-cast, unbounded-read, file-length, converter, arch-path,
+stdout-clean, silent-test-skip, test-hollow, library-facade, docs,
+shell-portability, shellcheck (0.11.0), swiftlint (0.65.1 --strict),
+swift-format, javascript (eslint 10.11.0 / prettier 3.9.9), python
+(ruff 0.16.7), core-purity, variant-isolation.
+
+FAIL:
+- **func-length** — 4 new functions over 120 lines, all in the Ornith
+  variant: `sources/Engines/Ornith35B4Bit/Kernels/Attention/Attention.swift:encodeSplit`,
+  `Runtime/Generation/RawCompletionHelpers.swift:runStreamingMTPCompletion`,
+  `Runtime/Inference/Model+SchemaValidation.swift:validateLayerTensors`,
+  `Runtime/Inference/RealForwardRunner+PrefillProjection.swift:encodeAffineProjection`.
+  Shorten/split them or add audited rows to `tools/func-length-baseline.txt`.
+- **unchecked-sendable** — `sources/TinyTitanCore/Format/TensorView.swift:TensorView`
+  has an `@unchecked Sendable` without an `unchecked-invariant:` note.
+
+### Build and catalog
+
+- `swift build -c release` — exit 0, Build complete! (344.97 sec).
+- `swift run -c release TinyTitanCLI catalog --check` — exit 0,
+  "catalog: ok (registry ↔ target ↔ qualification consistent)".
+
+### Ornith 1.5 35B 4-bit qualification (registry, read-only)
+
+`ornith-1.5-35b-4bit`: `shipped: true`, target `Ornith35B4Bit`, gpu engine;
+qualification dated 2026-11-15 on Apple M3 MacBook Pro 24 GB: golden
+SHA256 `363ba710eef09deaeb3d2fe6c060b88b658bb392d767da0b4021ed6fc01500a7`,
+decode **11.55 tok/s**. Golden `ornith-4` passed at qualification time
+(commit `87d1dad5`); it was **not re-run** in this session (no model runs).
+
+### Publish status
+
+Publish remains **pending CI green** (the CI watcher tags/publishes; nothing
+was tagged or published here). Expect CI to reproduce the three failures
+above on `c3e65db9` — the stale `shipped` assertion and the two lint gates
+must be fixed on `main` before the 7.0 release can pass `tools/ci-green.sh`.
