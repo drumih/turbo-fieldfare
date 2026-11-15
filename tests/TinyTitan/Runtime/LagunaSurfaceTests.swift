@@ -52,11 +52,11 @@ struct LagunaSurfaceTests {
 
     @Test func reasoningIsABooleanThinkingSwitch() throws {
         guard
-            case .binaryThinking = ModelFamily.perLayerHeadGeometry.reasoningControl
+            case .binaryThinking = ModelFamily.laguna.reasoningControl
         else {
             Issue.record("Laguna should use the template's boolean enable_thinking")
             return
         }
-        #expect(ModelFamily.perLayerHeadGeometry.supportsThinkingOff)
+        #expect(ModelFamily.laguna.supportsThinkingOff)
     }
 }

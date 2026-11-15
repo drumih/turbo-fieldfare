@@ -32,10 +32,10 @@ import TinyTitanCore
         // would make the two installs indistinguishable to the log and to a
         // later re-tune of either.
         let dense = ModelProfile.resolve(
-            modelID: "ornith-1.5-35b-a3b-bf16dense", family: "qwen36", weightBits: 4,
+            modelID: "ornith-1.5-35b-a3b-bf16dense", family: .qwen36, weightBits: 4,
             environment: [:])
         let plain = ModelProfile.resolve(
-            modelID: "ornith-1.5-35b-a3b", family: "qwen36", weightBits: 4, environment: [:])
+            modelID: "ornith-1.5-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
         #expect(dense.isTabled)
         #expect(dense.key != plain.key)
         #expect(dense.expertCacheBudgetBytes == plain.expertCacheBudgetBytes)
@@ -50,16 +50,16 @@ import TinyTitanCore
     @Test func modelsSharingAFamilyResolveIndependently() {
         // Same family, different keys: editing one row cannot move the other.
         let a = ModelProfile.resolve(
-            modelID: "qwen-agentworld", family: "qwen36", weightBits: 4, environment: [:])
+            modelID: "qwen-agentworld", family: .qwen36, weightBits: 4, environment: [:])
         let q = ModelProfile.resolve(
-            modelID: "qwen3.6-35b-a3b", family: "qwen36", weightBits: 4, environment: [:])
+            modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
         #expect(a.key != q.key)
         #expect(ModelProfile.table[a.key] != nil && ModelProfile.table[q.key] != nil)
     }
 
     @Test func tabledValuesMatchWhatWasMeasured() {
         let q38 = ModelProfile.resolve(
-            modelID: "qwen3.8-flash-next", family: "qwen38flash", weightBits: 4, environment: [:])
+            modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4, environment: [:])
         #expect(q38.expertCacheBudgetBytes == 12 << 30)
         // Depth 1 since 2026-09-21: the ring was re-measured and wins at both
         // prompt lengths now (7-token +15.7%, ~500-token +14.6%), which
@@ -71,7 +71,7 @@ import TinyTitanCore
         // prompts and the generated text stayed byte-identical.
         #expect(q38.prefillChunkTokens == 2_048)
         let q38b = ModelProfile.resolve(
-            modelID: "qwen3.8-flash-next", family: "qwen38flash", weightBits: 8, environment: [:])
+            modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 8, environment: [:])
         #expect(q38b.expertCacheBudgetBytes == Int(9.5 * Double(1 << 30)))
         // Inferred from the 4-bit A/B (see the 8-bit row comment), not measured.
         #expect(q38b.prefetchDepth == 1)
@@ -81,11 +81,11 @@ import TinyTitanCore
         #expect(q38.sampling.temperature == 1.0 && q38.sampling.topP == 0.95)
         #expect(!q38.hcFused && !q38.qsaGPUSelect)
         let q36 = ModelProfile.resolve(
-            modelID: "qwen3.6-35b-a3b", family: "qwen36", weightBits: 8, environment: [:])
+            modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 8, environment: [:])
         #expect(q36.expertCacheBudgetBytes == 12 << 30)
         #expect(q36.keepExpertCacheWired)
         let q36four = ModelProfile.resolve(
-            modelID: "qwen3.6-35b-a3b", family: "qwen36", weightBits: 4, environment: [:])
+            modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: [:])
         #expect(q36four.expertCacheBudgetBytes == 10 << 30)
         #expect(q36.prefetchDepth == 1)
         #expect(q36.prefillChunkTokens == 4_096)
@@ -127,7 +127,7 @@ import TinyTitanCore
         // measurements; what is pinned is that the family defaults are the 4.0
         // ones (12 GiB / depth 1 / the thinking row), not the 35B house values.
         let p = ModelProfile.resolve(
-            modelID: "qwen4-omni-120b-think", family: "qwen4flash",
+            modelID: "qwen4-omni-120b-think", family: .qwen4flash,
             weightBits: 4, environment: [:])
         #expect(!p.isTabled)
         #expect(p.expertCacheBudgetBytes == 12 << 30)
@@ -135,7 +135,7 @@ import TinyTitanCore
         #expect(p.sampling == GenerationDefaults.qwen4Thinking)
 
         let draft = ModelProfile.resolve(
-            modelID: "qwen4-omni-120b-think-mtp", family: "qwen4flash_mtp",
+            modelID: "qwen4-omni-120b-think-mtp", family: .qwen4flashMTP,
             weightBits: 4, environment: [:])
         #expect(!draft.isTabled)
         #expect(draft.expertCacheBudgetBytes == 12 << 30)
@@ -143,10 +143,10 @@ import TinyTitanCore
 
     @Test func unknownModelFallsBackToItsFamily() {
         let p = ModelProfile.resolve(
-            modelID: "qwen3.6-35b-a3b-mtp-4bit", family: "qwen36_mtp", weightBits: 4, environment: [:]
+            modelID: "qwen3.6-35b-a3b-mtp-4bit", family: .qwen36MTP, weightBits: 4, environment: [:]
         )
         #expect(!p.isTabled)
-        let f = RuntimeConfiguration.decodeTuning(family: "qwen36_mtp", weightBits: 4)
+        let f = RuntimeConfiguration.decodeTuning(family: .qwen36MTP, weightBits: 4)
         #expect(p.expertCacheBudgetBytes == f.expertCacheBudgetBytes)
         #expect(p.prefetchDepth == f.prefetchDepth)
         #expect(p.prefillChunkTokens == nil)
@@ -160,12 +160,12 @@ import TinyTitanCore
             "TINYTITAN_QSA_GPU_SELECT": "verify",
         ]
         let p = ModelProfile.resolve(
-            modelID: "qwen3.6-35b-a3b", family: "qwen36", weightBits: 4, environment: env)
+            modelID: "qwen3.6-35b-a3b", family: .qwen36, weightBits: 4, environment: env)
         #expect(!p.routerTopKSimd)
         #expect(p.hcFused)
         #expect(p.qsaGPUSelect)
         let off = ModelProfile.resolve(
-            modelID: "qwen3.8-flash-next", family: "qwen38flash", weightBits: 4,
+            modelID: "qwen3.8-flash-next", family: .qwen38flash, weightBits: 4,
             environment: ["TINYTITAN_PREDICTIVE_PREFETCH": "0"])
         #expect(off.prefetchDepth == 0)
     }
@@ -175,18 +175,18 @@ import TinyTitanCore
         // wash on decode (-0.37%) and the row's own value is the decision, so
         // every streaming row keeps its cache wired and a dense row does not.
         let streaming = ModelProfile.resolve(
-            modelID: "qwen3.8-flash-next", family: "qwen38flash",
+            modelID: "qwen3.8-flash-next", family: .qwen38flash,
             weightBits: 4, environment: [:])
         #expect(streaming.keepExpertCacheWired, "the row wires it")
         let dense = ModelProfile.resolve(
-            modelID: "qwen3.5-4b", family: "qwen3_5_dense",
+            modelID: "qwen3.5-4b", family: .qwen35Dense,
             weightBits: 4, environment: [:])
         #expect(!dense.keepExpertCacheWired, "a dense install has no routed-expert cache")
     }
 
     @Test func summaryNamesTheKeyAndEveryKnob() {
         let p = ModelProfile.resolve(
-            modelID: "qwen-agentworld", family: "qwen36", weightBits: 8, environment: [:])
+            modelID: "qwen-agentworld", family: .qwen36, weightBits: 8, environment: [:])
         for needle in [
             "model=qwen-agentworld", "bits=8", "tabled", "budget=", "prefetch=1",
             "chunk=4096", "topk_simd=true", "hc_fused=false", "keep_wired=true",

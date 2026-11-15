@@ -25,7 +25,7 @@ import TinyTitanCore
                 "\(layer).self_attn.q_proj": 8,
                 "\(layer).self_attn.o_proj": 8,
             ],
-            family: "qwen36", attentionBits: 4)
+            family: .qwen36, attentionBits: 4)
     }
 
     @Test func aRoleThatDisagreesWithItselfIsRefused() {
@@ -35,7 +35,7 @@ import TinyTitanCore
                     "\(layer).self_attn.k_proj": 8,
                     "\(layer).self_attn.v_proj": 4,
                 ],
-                family: "qwen36", attentionBits: 4)
+                family: .qwen36, attentionBits: 4)
         }
     }
 
@@ -44,7 +44,7 @@ import TinyTitanCore
             // 8 against a 4-bit slot is a width the kernel cannot read.
             try Model.validateRoleUniformity(
                 overrides: ["\(layer).linear_attn.in_proj_a": 8],
-                family: "qwen36", attentionBits: 4)
+                family: .qwen36, attentionBits: 4)
             Issue.record("an override the kernel cannot read must be refused")
         } catch let error as ModelError {
             // The message has to say what it is: the size mismatch this used to
@@ -67,7 +67,7 @@ import TinyTitanCore
                 "\(layer).linear_attn.in_proj_a": 4,
                 "\(layer).linear_attn.in_proj_b": 4,
             ],
-            family: "qwen38flash", attentionBits: 4)
+            family: .qwen38flash, attentionBits: 4)
     }
 
     @Test func anOverrideThatDiffersFromTheSlotIsRefused() {
@@ -76,12 +76,12 @@ import TinyTitanCore
         #expect(throws: ModelError.self) {
             try Model.validateRoleUniformity(
                 overrides: ["\(layer).linear_attn.in_proj_a": 4],
-                family: "qwen38flash", attentionBits: 8)
+                family: .qwen38flash, attentionBits: 8)
         }
         #expect(throws: ModelError.self) {
             try Model.validateRoleUniformity(
                 overrides: ["\(layer).linear_attn.in_proj_b": 8],
-                family: "qwen38flash", attentionBits: 4)
+                family: .qwen38flash, attentionBits: 4)
         }
     }
 
@@ -89,12 +89,12 @@ import TinyTitanCore
         // 16 is the promoted width the kernel can read for this pair.
         try Model.validateRoleUniformity(
             overrides: ["\(layer).linear_attn.in_proj_b": 16],
-            family: "qwen36", attentionBits: 4)
+            family: .qwen36, attentionBits: 4)
     }
 
     @Test func anEmptyOverrideMapIsFine() throws {
         try Model.validateRoleUniformity(
-            overrides: [:], family: "qwen36",
+            overrides: [:], family: .qwen36,
             attentionBits: 4)
     }
 
@@ -112,7 +112,7 @@ import TinyTitanCore
                 "\(layer).self_attn.indexer.index_q_proj": 8,
                 "\(layer).self_attn.indexer.index_k_proj": 8,
             ],
-            family: "qwen38flash", attentionBits: 4)
+            family: .qwen38flash, attentionBits: 4)
     }
 
     @Test func aHyperGateThatDiffersBetweenSublayersIsRefused() {
@@ -122,7 +122,7 @@ import TinyTitanCore
                     "\(layer).attn_hyper_connection.block_inject_weight": 8,
                     "\(layer).mlp_hyper_connection.block_inject_weight": 4,
                 ],
-                family: "qwen38flash", attentionBits: 4)
+                family: .qwen38flash, attentionBits: 4)
         }
     }
 
@@ -133,7 +133,7 @@ import TinyTitanCore
                     "\(layer).self_attn.indexer.index_q_proj": 8,
                     "\(layer).self_attn.indexer.index_k_proj": 4,
                 ],
-                family: "qwen38flash", attentionBits: 4)
+                family: .qwen38flash, attentionBits: 4)
         }
     }
 }

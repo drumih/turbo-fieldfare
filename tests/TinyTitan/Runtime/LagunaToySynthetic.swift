@@ -346,7 +346,7 @@ enum LagunaToySynthetic {
             "attentionKEqV": toy.attentionKEqV,
             "hiddenActivation": toy.hiddenActivation,
             "fullAttentionLayerMask": toy.fullAttentionLayerMask.map { Int($0) },
-            "family": toy.family.rawValue,
+            "family": toy.family,
             "attnOutputGate": toy.attnOutputGate,
             "attentionScale": toy.attentionScale,
             "embeddingScaledBySqrtHidden": toy.embeddingScaledBySqrtHidden,

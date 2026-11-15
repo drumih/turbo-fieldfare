@@ -82,7 +82,7 @@ import TinyTitanCore
     @Test func measurementReportKeepsOnlyMeasuredWinners() async throws {
         let target = CalibrationProfile.Target(
             modelID: "ornith", family: "qwen36", weightBits: 4,
-                    contextTokens: 8192)
+            contextTokens: 8192)
         let report = try await CalibrationCommand.measurementReport(
             target: target, repeats: 2
         ) { arm in

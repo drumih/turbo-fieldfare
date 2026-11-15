@@ -36,7 +36,7 @@ struct ReasoningControlTests {
         for effort in ModelReasoningEffort.allCases {
             #expect(
                 throws: ModelReasoningControlError.effortUnsupported(
-                    family: "qwen36", effort: effort)
+                    family: .qwen36, effort: effort)
             ) {
                 try ModelFamily.qwen36.validateReasoning(
                     thinkingMode: .on, effort: effort)
@@ -109,14 +109,14 @@ struct ReasoningControlTests {
     func effortSetsAreNotInterchangeable() {
         #expect(
             throws: ModelReasoningControlError.effortUnsupported(
-                family: "qwen38flash", effort: .high)
+                family: .qwen38flash, effort: .high)
         ) {
             try ModelFamily.qwen38flash.validateReasoning(
                 thinkingMode: .on, effort: .high)
         }
         #expect(
             throws: ModelReasoningControlError.effortUnsupported(
-                family: "k2_horizon", effort: .xhigh)
+                family: .k2Horizon, effort: .xhigh)
         ) {
             try ModelFamily.k2Horizon.validateReasoning(
                 thinkingMode: .on, effort: .xhigh)
@@ -129,7 +129,7 @@ struct ReasoningControlTests {
         }
         // K2 has no thinking-off prompt at all, even without an effort.
         #expect(
-            throws: ModelReasoningControlError.thinkingRequired(family: "k2_horizon")
+            throws: ModelReasoningControlError.thinkingRequired(family: .k2Horizon)
         ) {
             try ModelFamily.k2Horizon.validateReasoning(
                 thinkingMode: .off, effort: nil)
