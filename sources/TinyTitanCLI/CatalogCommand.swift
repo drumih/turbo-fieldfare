@@ -170,11 +170,14 @@ package enum CatalogCommand {
         process.standardError = Pipe()
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return []
         }
+        // Drain the pipe before reaping: `swift package describe` emits more
+        // than the 64 KB pipe buffer, so waiting for exit first deadlocks the
+        // child blocked in write while we block in waitUntilExit.
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let targets = json["targets"] as? [[String: Any]]
         else { return [] }
