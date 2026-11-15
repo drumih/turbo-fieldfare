@@ -223,21 +223,21 @@ import TinyTitanCore
         // of the token for a speculative read to pay.
         #expect(
             RuntimeConfiguration.decodeTuning(
-                family: .qwen36, weightBits: 8
+                family: "qwen36", weightBits: 8
             ).prefetchDepth == 1)
         #expect(
             RuntimeConfiguration.decodeTuning(
-                family: .qwen36MTP, weightBits: 8
+                family: "qwen36_mtp", weightBits: 8
             ).prefetchDepth == 1)
         // At 4-bit the same family spends ~7 ms of a ~44 ms token on expert
         // I/O; prefetch measured -3.9% (Ornith) and -4.2% (Qwen 3.6).
         #expect(
             RuntimeConfiguration.decodeTuning(
-                family: .qwen36, weightBits: 4
+                family: "qwen36", weightBits: 4
             ).prefetchDepth == 0)
         #expect(
             RuntimeConfiguration.decodeTuning(
-                family: .qwen36MTP, weightBits: 4
+                family: "qwen36_mtp", weightBits: 4
             ).prefetchDepth == 0)
     }
 
@@ -245,7 +245,7 @@ import TinyTitanCore
         for bits in [4, 8] {
             #expect(
                 RuntimeConfiguration.decodeTuning(
-                    family: .qwen36, weightBits: bits
+                    family: "qwen36", weightBits: bits
                 ).expertCacheBudgetBytes
                     == RuntimeConfiguration.defaultExpertCacheBudgetBytes)
         }

@@ -65,7 +65,7 @@ import TinyTitanCore
 
     @Test func draftCarriesTheTargetGeometryButNoNgramBlock() {
         let draft = ArchConfig.qwen4FlashMTP
-        #expect(draft.family == .qwen4flashMTP)
+        #expect(draft.modelFamily == .qwen4flashMTP)
         #expect(draft.numLayers == 1)
         #expect(draft.fullAttentionLayerMask == [1])
         #expect(!draft.ple.enabled)
