@@ -55,10 +55,11 @@ for this one pair. `OrnithParityTests` drives the variant and the original
 6.x runtime engine on the same install and asserts identical greedy
 tokens: passed (24 tokens, commit `bc112a90`). The install is about
 19.5 GiB (20,954,280,960 bytes per the registry); it streams routed experts
-from SSD, so the 35B MoE runs on a 24 GB Mac. Server-side decode measured
-about **7.66 tok/s on a 24 GB M3** during the 7.0 variant work — a
-measurement on that host, not a re-certified benchmark table (see below).
-The install path is the usual one (`docs/adding-a-model.md`); the repacker
+from SSD, so the 35B MoE runs on a 24 GB Mac. The qualification benchmark
+(`cache_on_mtp_off_4bit`, 12 prompts, **12/12 answers verified**) measured
+**11.55 tok/s** average decode (12.57 tok/s warm) on a 24 GB M3 — the figure
+recorded in the registry qualification; an earlier server-side measurement
+during the variant work was ~7.66 tok/s. The install path is the usual one (`docs/adding-a-model.md`); the repacker
 bug that wrote the family enum instead of its `rawValue` into
 `manifest.json` was fixed on the way (`17529070`), and the Ornith install
 completes and verifies with `--verify-install`.
@@ -79,11 +80,15 @@ completes and verifies with `--verify-install`.
 
 ### Performance
 
-No benchmark table was re-run for this cut. The ~7.66 tok/s Ornith decode
-figure above is the server-side measurement taken on the 24 GB M3 during
-the 7.0 variant work; the wiki Benchmarks page's older rows stand labelled
-by their engine. The parity claim is token identity (`OrnithParityTests`,
-`DenseParityTests`), not a speed claim.
+The Ornith 4-bit variant was qualified with the production benchmark
+(`benchmark/benchmark-results/bench-cache_on_mtp_off_4bit-20261115T185402`):
+**11.55 tok/s** average decode, 12.57 tok/s warm, **12/12 answers verified**,
+and the prompt-reuse continuation probe verified (96 of 122 turn-2 prompt
+tokens served from cache). This is the figure in the registry qualification
+record, measured on a 24 GB M3. The wiki Benchmarks page's older rows stand
+labelled by their engine; no full multi-model table was re-run for this cut.
+The parity claim is token identity (`OrnithParityTests`, `DenseParityTests`),
+not a speed claim.
 
 ### Checks not run
 

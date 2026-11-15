@@ -197,3 +197,33 @@ baseline count is corrected to 17. Re-verified: **full serial suite green
 exit 0. The annotated tag **v7.0** is created and pushed on `b3a16747`.
 Publish remains **pending CI green** on the tag commit (`tools/ci-green.sh`),
 then `tools/release.sh v7.0` (dry run) and `--publish`.
+
+### Final 7.0 audit — independent code review (2026-11-15)
+
+A read-only reviewer audited the 7.0 changes against the spec gates. Verdicts:
+**variant-isolation PASS** (all 368 files; Ornith35B4Bit imports only
+Core/Format/KernelsC/Tokenizers + system frameworks; the four func-length
+baseline copies are byte-identical to the runtime originals), **library-facade
+PASS** (169 `public`, all on the baseline). Three concerns, handled as follows:
+
+- **FIXED — `Qualification` nullability.** `TinyTitanCore/Variant/Qualification.swift`
+  required non-optional `prefillTokS`/`ttftS`/`memoryCeilingBytes`, but the
+  shipped registry record stores them `null` (unmeasured fields stay null by
+  design). Any `Codable` decode of the record would throw. Made the three
+  fields optional (`Double?`/`Int?`, init defaults `nil`) and added
+  `qualificationDecodesRegistryRecordWithNullUnmeasuredFields` to
+  `VariantContractsTests`, decoding the registry shape and asserting the nulls.
+  Verified: `VariantContractsTests` 14/14 green (the new decode test included).
+- **FOLLOW-UP — core-purity gate scope.** The gate scans `*.swift` identifiers
+  only; model names survive in Core *comments* (`Format/ArchConfig.swift`,
+  `Format/ModelTypes+Configs.swift`) and in `.metal` sources, and the regex
+  misses dotted/hyphenated spellings (`Qwen3.6`, `K2-Horizon`). Gate is green as
+  written; strengthening its scope is future work, not a 7.0 blocker.
+- **FOLLOW-UP — variant serial-use invariant.** `Ornith35B4Bit` is documented
+  serial-use; the `Bridge` semaphore ordering is correct, but concurrent
+  `generate`+`decode` would race and `runSync` blocks on a semaphore. This is
+  the inherited 6.x engine design (parity-verified, driven serially by the
+  session); actor isolation is future work. Also noted: `CatalogCommand`
+  returns `[]` on a `swift package describe` failure (fail-open findings) and
+  its orphan check is CWD-relative; `decode` is one-ahead vs `generate`. All
+  inherited semantics, parity-verified — recorded for the phase-4 cleanup.

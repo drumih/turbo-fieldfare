@@ -146,4 +146,22 @@ struct VariantContractsTests {
             renames: [:], keepBF16Stems: [], headBits: nil, embeddingBits: nil)
         #expect(recipe.variantID.bits == 4)
     }
+
+    @Test func qualificationDecodesRegistryRecordWithNullUnmeasuredFields() throws {
+        // The shipped registry record leaves unmeasured fields null; the type
+        // must decode that shape rather than throw on a missing non-optional.
+        let json = """
+            {"goldenSHA256":"\(String(repeating: "b", count: 64))",
+             "decodeTokS":11.55,"prefillTokS":null,"ttftS":null,
+             "memoryCeilingBytes":null,"terminalBench":null,
+             "hardware":"Apple M3 MacBook Pro 24 GB","date":"2026-11-15"}
+            """
+        let q = try JSONDecoder().decode(Qualification.self, from: Data(json.utf8))
+        #expect(q.decodeTokS == 11.55)
+        #expect(q.prefillTokS == nil)
+        #expect(q.ttftS == nil)
+        #expect(q.memoryCeilingBytes == nil)
+        #expect(q.terminalBench == nil)
+        #expect(q.hardware == "Apple M3 MacBook Pro 24 GB")
+    }
 }

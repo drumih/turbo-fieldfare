@@ -8,16 +8,17 @@ public struct Qualification: Codable, Sendable, Equatable {
     /// SHA-256 of the greedy golden output over the fixed prompt set.
     public let goldenSHA256: String
     public let decodeTokS: Double
-    public let prefillTokS: Double
-    public let ttftS: Double
-    public let memoryCeilingBytes: Int
+    // Unmeasured fields stay null in the registry until a benchmark fills them.
+    public let prefillTokS: Double?
+    public let ttftS: Double?
+    public let memoryCeilingBytes: Int?
     public let terminalBench: TerminalBench?
     public let hardware: String
     public let date: String
 
     public init(
-        goldenSHA256: String, decodeTokS: Double, prefillTokS: Double, ttftS: Double,
-        memoryCeilingBytes: Int, terminalBench: TerminalBench?,
+        goldenSHA256: String, decodeTokS: Double, prefillTokS: Double? = nil, ttftS: Double? = nil,
+        memoryCeilingBytes: Int? = nil, terminalBench: TerminalBench? = nil,
         hardware: String, date: String
     ) {
         self.goldenSHA256 = goldenSHA256
