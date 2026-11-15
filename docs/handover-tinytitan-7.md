@@ -186,10 +186,14 @@ SHA256 `363ba710eef09deaeb3d2fe6c060b88b658bb392d767da0b4021ed6fc01500a7`,
 decode **11.55 tok/s**. Golden `ornith-4` passed at qualification time
 (commit `87d1dad5`); it was **not re-run** in this session (no model runs).
 
-### Publish status
+### Publish status (updated 2026-11-15, commit b3a16747)
 
-Publish remains **pending CI green** (the CI watcher tags/publishes; nothing
-was tagged or published here). Expect CI to reproduce the three failures
-above on `c3e65db9` — the stale `shipped` assertion and the `func-length` /
-`unchecked-sendable` failures must be fixed on `main` before the 7.0 release
-can pass `tools/ci-green.sh`.
+The three failures above are **fixed** on `main` (`b3a16747`): the registry
+test now asserts a shipped variant carries a target + qualification; the four
+copied >120-line engine functions are baselined as verbatim AUD-024 copies;
+`TensorView` in Core carries its `unchecked-invariant` note; CONTRIBUTING's
+baseline count is corrected to 17. Re-verified: **full serial suite green
+(2,372 tests, 9 targets)** and **all 20 lint gates green**; `catalog --check`
+exit 0. The annotated tag **v7.0** is created and pushed on `b3a16747`.
+Publish remains **pending CI green** on the tag commit (`tools/ci-green.sh`),
+then `tools/release.sh v7.0` (dry run) and `--publish`.
