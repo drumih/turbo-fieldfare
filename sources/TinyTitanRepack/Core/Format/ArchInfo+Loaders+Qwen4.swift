@@ -222,7 +222,7 @@ extension ArchInfo {
             throw RepackError.configJsonInvalid(
                 path: configPath,
                 detail: "a draft head is not defined for family "
-                    + "\(base.family.rawValue)")
+                    + "\(base.family)")
         }
     }
 }

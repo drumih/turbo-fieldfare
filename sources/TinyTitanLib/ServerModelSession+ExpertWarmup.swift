@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 // The session's side of the startup expert warm-up (`Model+ExpertWarmup`).
 //

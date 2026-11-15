@@ -191,15 +191,15 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
         self.tokenizer = tokenizer
         self.tokenizerFolder = tokenizerFolder
         self.loadedReasoning = loadedReasoning
-        self.modelFamily = model.config.family
+        self.modelFamily = model.config.modelFamily
         self.profileSampling =
             ModelProfile.resolve(
-                modelID: model.modelID, family: model.config.family,
+                modelID: model.modelID, family: model.config.modelFamily,
                 weightBits: model.routedExpertWeightBits
             ).sampling
         self.defaultModelID = ServerModelIdentity.apiModelID(
             manifestModelID: model.modelID,
-            family: model.config.family,
+            family: model.config.modelFamily,
             weightBits: model.routedExpertWeightBits)
         self.runner = runner
         self.batchedProducer =

@@ -414,7 +414,7 @@ public struct Model {
     /// tensor. The returned model retains the target's Metal buffers and uses
     /// its actual 4/6/8-bit head kernels.
     public func sharingTargetWeights(from target: Model) throws -> Model {
-        let pairing = (config.family, target.config.family)
+        let pairing = (config.modelFamily, target.config.modelFamily)
         let familiesMatch =
             pairing == (.qwen36MTP, .qwen36)
             || pairing == (.qwen38flashMTP, .qwen38flash)

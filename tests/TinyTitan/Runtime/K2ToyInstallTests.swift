@@ -14,7 +14,7 @@ struct K2ToyInstallTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let config = try ArchConfig.resolved(
             forFamily: .k2Horizon, directoryURL: directory)
-        #expect(config.family == .k2Horizon)
+        #expect(config.modelFamily == .k2Horizon)
         #expect(config.numLayers == 3)
         #expect(config.denseLayerIndices == [0, 1, 2])
         #expect(config.normGroups == 2)
@@ -24,7 +24,7 @@ struct K2ToyInstallTests {
         let model = try Model.load(
             directoryURL: directory, device: ctx.device, expecting: config,
             integrityPolicy: .fullSha256)
-        #expect(model.config.family == .k2Horizon)
+        #expect(model.config.modelFamily == .k2Horizon)
         #expect(try model.embedding().shape.0 == UInt32(config.vocabSize))
         #expect(try model.qProj(layer: 0).shape.1 == UInt32(config.hiddenSize))
         #expect(try model.inputNorm(layer: 2).shape.0 == UInt32(config.hiddenSize))

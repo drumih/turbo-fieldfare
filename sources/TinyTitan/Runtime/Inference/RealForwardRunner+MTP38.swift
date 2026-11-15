@@ -32,7 +32,7 @@ extension RealForwardRunner {
         startPosition: Int,
         predictNext: Bool
     ) async throws -> Int32? {
-        switch cfg.family {
+        switch cfg.modelFamily {
         case .qwen38flashMTP, .qwen4flashMTP:
             return try await advanceMTP38(
                 tokens: tokens,
@@ -59,7 +59,7 @@ extension RealForwardRunner {
         startPosition: Int,
         predictNext: Bool
     ) async throws -> Int32? {
-        guard cfg.family == .qwen38flashMTP || cfg.family == .qwen4flashMTP else {
+        guard cfg.modelFamily == .qwen38flashMTP || cfg.modelFamily == .qwen4flashMTP else {
             throw StreamingMTPError.sidecarMustBeQwen36MTP
         }
         guard !tokens.isEmpty, tokens.count <= Self.mtpChunkCapacity else {

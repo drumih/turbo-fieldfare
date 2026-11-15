@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// The headroom rule for batched serving.
 ///

@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // Laguna-S-2.1's ArchInfo loader, split out of ArchInfo+Loaders.swift under
 // the 500-line-per-file rule.

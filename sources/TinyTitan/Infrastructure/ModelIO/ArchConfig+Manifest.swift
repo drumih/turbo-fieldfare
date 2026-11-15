@@ -188,7 +188,7 @@ extension ArchConfig {
             attentionKEqV: arch.attentionKEqV,
             fullAttentionLayerMask: arch.fullAttentionLayerMask.map { UInt8($0) },
             hiddenActivation: arch.hiddenActivation,
-            family: family,
+            family: family.rawValue,
             attnOutputGate: try required(arch.attnOutputGate, "attnOutputGate"),
             attentionScale: try required(arch.attentionScale, "attentionScale"),
             embeddingScaledBySqrtHidden: try required(

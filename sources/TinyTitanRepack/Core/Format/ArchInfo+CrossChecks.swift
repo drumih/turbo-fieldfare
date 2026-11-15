@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // Cross-checks between a config and the family it claims to be.
 //

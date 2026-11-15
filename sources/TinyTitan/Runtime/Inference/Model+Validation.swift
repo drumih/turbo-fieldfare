@@ -147,8 +147,8 @@ extension Model {
         // the MoE kernels' serving tile, both of which the probe handles and
         // the serving runner refuses by name, so it is validated on its own
         // terms first.
-        if config.family == .laguna {
-            try Self.validateExecutableLagunaGeometry(config)
+        if config.modelFamily == .laguna {
+            try Self.validateExecutablePerLayerHeadGeometry(config)
             let checks = RuntimeSchemaChecks(residentIndex: residentIndex, quant: quant)
             try Self.validateLagunaSchema(
                 checks: checks, layout: layout, config: config,
@@ -159,7 +159,7 @@ extension Model {
 
         let checks = RuntimeSchemaChecks(residentIndex: residentIndex, quant: quant)
 
-        switch config.family {
+        switch config.modelFamily {
         case .k2Horizon:
             // The install validates like any other; what does not exist is the
             // GPU graph. `Model.load` may return the handle -- reading its
@@ -230,7 +230,7 @@ extension Model {
         // family collapses its streams through a mixer whose norm spans the
         // full residual.
         try checks.requireBF16(
-            TensorSchema.schema(for: config.family).finalNorm,
+            TensorSchema.schema(for: config.modelFamily).finalNorm,
             count: config.hyperConnections.enabled
                 ? config.hiddenSize * config.hyperConnections.count
                 : config.hiddenSize)
@@ -404,7 +404,7 @@ extension Model {
             config: config, quant: quant,
             overrides: overrides)
         try validateRoleUniformity(
-            overrides: overrides, family: config.family,
+            overrides: overrides, family: config.modelFamily,
             attentionBits: quant.attention.weightBits)
         try validateLayerTensors(
             checks: checks, config: config, quant: quant,

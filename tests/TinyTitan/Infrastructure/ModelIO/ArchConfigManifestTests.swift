@@ -92,7 +92,7 @@ struct ArchConfigManifestTests {
         for family in presetFamilies {
             let preset = try #require(ArchConfig.knownArchitectures[family])
             let got = try ArchConfig.resolved(forFamily: family, directoryURL: missing)
-            #expect(got.family == family)
+            #expect(got.modelFamily == family)
             #expect(got.numLayers == preset.numLayers)
             #expect(got.hiddenSize == preset.hiddenSize)
             #expect(got.ple.ngramSize == preset.ple.ngramSize)
@@ -116,7 +116,7 @@ struct ArchConfigManifestTests {
         ])
         let config = try ArchConfig.from(
             manifest: Self.decode(arch), family: .qwen4flash)
-        #expect(config.family == .qwen4flash)
+        #expect(config.modelFamily == .qwen4flash)
         #expect(config.linearAttention.outputGate == .sigmoid)
         #expect(config.hyperConnections.count == 2)
         #expect(config.hyperConnections.lowRank == 8)
@@ -153,7 +153,7 @@ struct ArchConfigManifestTests {
         #expect(config.intermediateSize == 128)  // ffnIntermediate, not moe
         #expect(config.moeIntermediateSize == 128)
         #expect(config.numLayers == 4)
-        #expect(config.family == .qwen35Dense)
+        #expect(config.modelFamily == .qwen35Dense)
         // The mask crosses the wire as Int and is carried as UInt8.
         #expect(config.fullAttentionLayerMask == [2, 1, 2, 1])
         #expect(config.attnOutputGate == true)
@@ -237,7 +237,7 @@ struct ArchConfigManifestTests {
         #expect(config.attnOutputGate == true)
         #expect(config.ropeNeoxSubdim == true)
         #expect(config.linearAttention.keyHeadDim == 16)
-        #expect(config.family == .qwen35Dense)
+        #expect(config.modelFamily == .qwen35Dense)
     }
 
     /// `qwen36` used to be exactly one geometry (the 35B-A3B). Ornith-1.5-122B

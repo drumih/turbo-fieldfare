@@ -46,8 +46,8 @@ extension RealForwardRunner {
     /// copying payload bytes; the next draft pass overwrites the stale row.
     func rewindMTP(to position: Int) throws {
         guard
-            cfg.family == .qwen36MTP || cfg.family == .qwen38flashMTP
-                || cfg.family == .qwen4flashMTP,
+            cfg.modelFamily == .qwen36MTP || cfg.modelFamily == .qwen38flashMTP
+                || cfg.modelFamily == .qwen4flashMTP,
             let kv
         else {
             throw InferenceStateSnapshotError.invalidLayout
@@ -69,7 +69,7 @@ extension RealForwardRunner {
         startPosition: Int,
         predictNext: Bool
     ) async throws -> Int32? {
-        guard cfg.family == .qwen36MTP else {
+        guard cfg.modelFamily == .qwen36MTP else {
             throw StreamingMTPError.sidecarMustBeQwen36MTP
         }
         guard !tokens.isEmpty, tokens.count <= Self.mtpChunkCapacity else {
@@ -209,14 +209,16 @@ extension RealForwardRunner {
         onProgress: (Int) -> Void
     ) async throws -> MTPPrefillResult {
         defer { resetExpertUseCountsAfterPrefill() }
-        guard cfg.family == .qwen36 || cfg.family == .qwen38flash || cfg.family == .qwen4flash
+        guard
+            cfg.modelFamily == .qwen36 || cfg.modelFamily == .qwen38flash
+                || cfg.modelFamily == .qwen4flash
         else {
             throw StreamingMTPError.targetMustBeQwen36
         }
         guard
-            mtp.cfg.family == .qwen36MTP
-                || mtp.cfg.family == .qwen38flashMTP
-                || mtp.cfg.family == .qwen4flashMTP
+            mtp.cfg.modelFamily == .qwen36MTP
+                || mtp.cfg.modelFamily == .qwen38flashMTP
+                || mtp.cfg.modelFamily == .qwen4flashMTP
         else {
             throw StreamingMTPError.sidecarMustBeQwen36MTP
         }

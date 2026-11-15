@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Segment-length, payload-append and restore for inference-state snapshots.
 //

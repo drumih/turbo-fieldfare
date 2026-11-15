@@ -53,7 +53,7 @@ extension RealForwardRunner {
         guard fusedDecodeState.override ?? Self.fusedDecodeOptIn else { return false }
         guard rows.count == 2 || rows.count == 4, slots >= rows.count
         else { return false }
-        guard cfg.family == .qwen36 else { return false }
+        guard cfg.modelFamily == .qwen36 else { return false }
         guard cfg.ple.layerIndices.isEmpty else { return false }
         guard !cfg.hyperConnections.enabled else { return false }
         guard qsaIndexer == nil else { return false }

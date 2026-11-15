@@ -159,7 +159,7 @@ public enum ManifestReader {
         }
         try validateArch(m.arch, minor: m.versionMinor, expected: expected)
         if let quant = m.quant {
-            try validateQuant(quant, family: expected.family)
+            try validateQuant(quant, family: expected.modelFamily)
         } else if expected.numLayers == ArchConfig.qwen36_35B_A3B.numLayers,
             expected.hiddenSize == ArchConfig.qwen36_35B_A3B.hiddenSize
         {
@@ -374,7 +374,7 @@ public enum ManifestReader {
         _ a: ManifestArch,
         expected e: ArchConfig
     ) throws {
-        guard e.family == .k2Horizon else { return }
+        guard e.modelFamily == .k2Horizon else { return }
         func check<T: Equatable & CustomStringConvertible>(
             _ field: String, _ actual: T?, _ expected: T
         ) throws {

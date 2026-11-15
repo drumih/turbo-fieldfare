@@ -10,8 +10,8 @@ import TinyTitanCore
 /// from the hidden size instead of a compile-time tile). The serving runner is
 /// refused separately, so bypassing that gate cannot reach a Qwen-shaped graph.
 extension Model {
-    static func validateExecutableLagunaGeometry(_ config: ArchConfig) throws {
-        guard config.laguna.enabled else {
+    static func validateExecutablePerLayerHeadGeometry(_ config: ArchConfig) throws {
+        guard config.perLayerHeadGeometry.enabled else {
             throw ModelError.unsupportedArchitecture(
                 detail: "Laguna family without its per-layer head geometry")
         }
@@ -25,15 +25,16 @@ extension Model {
                 detail: "head dimension \(config.fullHeadDim) exceeds the "
                     + "\(Attention.maxHeadDim)-element attention tile")
         }
-        let most = config.laguna.headsPerLayer.max() ?? 0
+        let most = config.perLayerHeadGeometry.headsPerLayer.max() ?? 0
         guard most <= Attention.maxQHeads else {
             throw ModelError.unsupportedArchitecture(
                 detail: "\(most) query heads exceeds the \(Attention.maxQHeads)-head "
                     + "split-KV scratch")
         }
-        guard config.laguna.headsPerLayer.count == config.numLayers else {
+        guard config.perLayerHeadGeometry.headsPerLayer.count == config.numLayers else {
             throw ModelError.unsupportedArchitecture(
-                detail: "Laguna declares \(config.laguna.headsPerLayer.count) per-layer "
+                detail:
+                    "Laguna declares \(config.perLayerHeadGeometry.headsPerLayer.count) per-layer "
                     + "head counts for \(config.numLayers) layers")
         }
         guard config.slidingWindow > 0,
@@ -42,7 +43,7 @@ extension Model {
             throw ModelError.unsupportedArchitecture(
                 detail: "Laguna needs a positive sliding window and a 0/1 layer mask")
         }
-        for (layer, heads) in config.laguna.headsPerLayer.enumerated() {
+        for (layer, heads) in config.perLayerHeadGeometry.headsPerLayer.enumerated() {
             guard heads > 0, heads % config.numKVHeads == 0 else {
                 throw ModelError.unsupportedArchitecture(
                     detail: "layer \(layer) has \(heads) query heads against "
@@ -77,7 +78,7 @@ extension Model {
 
         let dense = Set(config.denseLayerIndices)
         for layer in 0..<config.numLayers {
-            let heads = config.laguna.headsPerLayer[layer]
+            let heads = config.perLayerHeadGeometry.headsPerLayer[layer]
             let queryDim = heads * headDim
             try checks.requireBF16(LagunaTensors.inputNorm(layer), count: hidden)
             try checks.requireBF16(LagunaTensors.postAttnNorm(layer), count: hidden)

@@ -127,7 +127,7 @@ import TinyTitanCore
         // measurements; what is pinned is that the family defaults are the 4.0
         // ones (12 GiB / depth 1 / the thinking row), not the 35B house values.
         let p = ModelProfile.resolve(
-            modelID: "qwen4-omni-120b-think", family: .qwen4flash,
+            modelID: "qwen4-omni-120b-think", family: "qwen4flash",
             weightBits: 4, environment: [:])
         #expect(!p.isTabled)
         #expect(p.expertCacheBudgetBytes == 12 << 30)
@@ -135,7 +135,7 @@ import TinyTitanCore
         #expect(p.sampling == GenerationDefaults.qwen4Thinking)
 
         let draft = ModelProfile.resolve(
-            modelID: "qwen4-omni-120b-think-mtp", family: .qwen4flashMTP,
+            modelID: "qwen4-omni-120b-think-mtp", family: "qwen4flash_mtp",
             weightBits: 4, environment: [:])
         #expect(!draft.isTabled)
         #expect(draft.expertCacheBudgetBytes == 12 << 30)
@@ -175,11 +175,11 @@ import TinyTitanCore
         // wash on decode (-0.37%) and the row's own value is the decision, so
         // every streaming row keeps its cache wired and a dense row does not.
         let streaming = ModelProfile.resolve(
-            modelID: "qwen3.8-flash-next", family: .qwen38flash,
+            modelID: "qwen3.8-flash-next", family: "qwen38flash",
             weightBits: 4, environment: [:])
         #expect(streaming.keepExpertCacheWired, "the row wires it")
         let dense = ModelProfile.resolve(
-            modelID: "qwen3.5-4b", family: .qwen35Dense,
+            modelID: "qwen3.5-4b", family: "qwen3_5_dense",
             weightBits: 4, environment: [:])
         #expect(!dense.keepExpertCacheWired, "a dense install has no routed-expert cache")
     }

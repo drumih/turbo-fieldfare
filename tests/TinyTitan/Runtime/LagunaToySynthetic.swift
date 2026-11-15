@@ -9,7 +9,7 @@ import TinyTitanCore
 /// A tiny, runnable Laguna-S-2.1 install: layer 0 dense, layer 1 sparse with
 /// four routed experts at top-2, the checkpoint's tensor spelling, and the
 /// toy geometry. It is the smallest install that exercises
-/// `LagunaGeometry`, the resident schema, the manifest/layout readers, the
+/// `PerLayerHeadGeometry`, the resident schema, the manifest/layout readers, the
 /// loader's mapping path and the probe graph without a checkpoint.
 enum LagunaToySynthetic {
     static let toy = ArchConfig(
@@ -22,14 +22,14 @@ enum LagunaToySynthetic {
         numExperts: 4, topKExperts: 2,
         tieWordEmbeddings: false, attentionKEqV: false,
         fullAttentionLayerMask: [1, 0], hiddenActivation: "silu",
-        family: .laguna, attnOutputGate: true,
+        family: "laguna", attnOutputGate: true,
         attentionScale: 1.0 / Double(32).squareRoot(),
         embeddingScaledBySqrtHidden: false, routerScaled: false,
         ffnSandwichNorms: false, sharedExpertGated: false,
         ropeNeoxSubdim: true, routerNormTopK: true, quantGroupSize: 64,
         normGroups: 1, attentionGate: .softplus, routerHasBias: true,
         routerScaling: 2.5, denseLayerIndices: [0],
-        laguna: LagunaGeometry(
+        perLayerHeadGeometry: PerLayerHeadGeometry(
             headsPerLayer: [2, 4], qkNorm: true, gatePerHead: true,
             swaPartialRotaryFactor: 1.0, yarnFactor: 128,
             yarnOriginalMax: 8192, yarnBetaFast: 32, yarnBetaSlow: 1,
@@ -77,7 +77,7 @@ enum LagunaToySynthetic {
         ]
         let kvDim = toy.numFullKVHeads * toy.fullHeadDim
         for layer in 0..<toy.numLayers {
-            let heads = toy.laguna.headsPerLayer[layer]
+            let heads = toy.perLayerHeadGeometry.headsPerLayer[layer]
             let queryDim = heads * toy.fullHeadDim
             specs.append(bf16(LagunaTensors.inputNorm(layer), count: d))
             specs.append(bf16(LagunaTensors.postAttnNorm(layer), count: d))

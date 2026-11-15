@@ -138,7 +138,7 @@ struct K2ManifestTests {
         let dir = try Self.write(Self.manifest())
         defer { try? FileManager.default.removeItem(at: dir) }
         let config = try ArchConfig.resolved(forFamily: .k2Horizon, directoryURL: dir)
-        #expect(config.family == .k2Horizon)
+        #expect(config.modelFamily == .k2Horizon)
         #expect(config.normGroups == 2)
         #expect(config.attentionGate == .softplus)
         #expect(config.routerHasBias)

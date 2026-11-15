@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Decode-order routing for the wide-verify pass (docs/plan-wide-verify.md,
 /// task 3).

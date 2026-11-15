@@ -18,7 +18,7 @@ extension Model {
     // family with different naming supplies a schema file; these accessors
     // never change.
 
-    var schema: TensorSchema { TensorSchema.schema(for: config.family) }
+    var schema: TensorSchema { TensorSchema.schema(for: config.modelFamily) }
 
     /// The family's Flash-only tensor namespace.
     ///
@@ -27,7 +27,7 @@ extension Model {
     /// lineage has them. Reading the set from the family keeps the accessors
     /// single-bodied while the two contracts stay separate.
     var flashTensors: any FlashTensorSet.Type {
-        switch config.family {
+        switch config.modelFamily {
         case .qwen4flash, .qwen4flashMTP:
             return Qwen4FlashTensors.self
         default:

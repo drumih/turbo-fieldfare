@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 package enum GGUFModelSourceError: Error, Equatable, CustomStringConvertible {
     case missingPLE

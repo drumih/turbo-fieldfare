@@ -9,7 +9,7 @@ import TinyTitanCore
 @Suite struct Qwen38FlashArchTests {
     @Test func geometryMatchesTheVerifiedCheckpointConfig() {
         let arch = ArchConfig.qwen38FlashNext
-        #expect(arch.family == .qwen38flash)
+        #expect(arch.modelFamily == .qwen38flash)
         #expect(arch.numLayers == 48)
         #expect(arch.hiddenSize == 2560)
         #expect(arch.vocabSize == 248_320)

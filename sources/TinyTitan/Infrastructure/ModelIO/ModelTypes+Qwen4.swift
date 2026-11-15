@@ -39,7 +39,7 @@ extension ArchConfig {
         attentionKEqV: false,
         fullAttentionLayerMask: Self.qwen4LayerMask(),
         hiddenActivation: "silu",
-        family: .qwen4flash,
+        family: "qwen4flash",
         attnOutputGate: true,
         attentionScale: 0.0625,  // 256^-0.5
         embeddingScaledBySqrtHidden: false,
@@ -93,7 +93,7 @@ extension ArchConfig {
         attentionKEqV: false,
         fullAttentionLayerMask: [1],
         hiddenActivation: "silu",
-        family: .qwen4flashMTP,
+        family: "qwen4flash_mtp",
         attnOutputGate: true,
         attentionScale: 0.0625,
         embeddingScaledBySqrtHidden: false,

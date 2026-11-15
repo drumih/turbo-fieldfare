@@ -18,8 +18,8 @@ struct LagunaToyInstallTests {
         let model = try Model.load(
             directoryURL: directory, device: ctx.device, expecting: toy,
             streamingMode: .pread(slotCount: 4), integrityPolicy: .fullSha256)
-        #expect(model.config.family == .laguna)
-        #expect(model.config.laguna.headsPerLayer == [2, 4])
+        #expect(model.config.modelFamily == .laguna)
+        #expect(model.config.perLayerHeadGeometry.headsPerLayer == [2, 4])
         #expect(try model.embedding().shape.0 == UInt32(toy.vocabSize))
         // The per-layer head counts, not a single scalar: 2 then 4.
         #expect(try model.qProj(layer: 0).shape.0 == UInt32(2 * toy.fullHeadDim))

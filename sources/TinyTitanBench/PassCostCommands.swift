@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 enum PassCostError: Error, CustomStringConvertible {
     case usage

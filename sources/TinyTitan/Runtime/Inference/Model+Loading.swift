@@ -219,7 +219,7 @@ extension Model {
         // their source checkpoints); promote those once here.
         let promotedBF16 = try Model.buildBF16ReadableViews(
             device: device,
-            schema: TensorSchema.schema(for: expecting.family),
+            schema: TensorSchema.schema(for: expecting.modelFamily),
             config: expecting,
             residentIndex: residentIndex,
             residentBuffer: residentBuffer.buffer)

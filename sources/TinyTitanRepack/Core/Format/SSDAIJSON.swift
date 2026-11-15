@@ -101,7 +101,7 @@ enum SSDAIJSON {
             "fullAttentionLayerMask": arch.fullAttentionLayerMask.map { Int($0) },
         ]
         // Family extension fields. Always written for the Qwen families.
-        archDict["family"] = arch.family.rawValue
+        archDict["family"] = arch.family
         archDict["attnOutputGate"] = arch.attnOutputGate
         archDict["attentionScale"] = arch.attentionScale
         archDict["embeddingScaledBySqrtHidden"] = arch.embeddingScaledBySqrtHidden

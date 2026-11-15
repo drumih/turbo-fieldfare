@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 package struct GGUFResidentTensorPlan: Sendable, Equatable {
     package let name: String

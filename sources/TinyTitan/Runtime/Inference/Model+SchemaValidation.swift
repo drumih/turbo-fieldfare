@@ -137,7 +137,7 @@ extension Model {
         // Names resolve through the family's schema; only shapes are spelled
         // here. A family whose per-sublayer norm is the hyper-connection's
         // spans the whole residual rather than one stream.
-        let schema = TensorSchema.schema(for: config.family)
+        let schema = TensorSchema.schema(for: config.modelFamily)
         // A dense model has no router and no shared expert: its `mlp.*` FFN is
         // what the schema's shared-expert roles name, and the routed half of
         // the layer does not exist.

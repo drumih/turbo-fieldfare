@@ -236,11 +236,11 @@ extension ServerModelSession {
                 ?? loadRuntime.rdadvisePolicy,
             prefillChunkTokens: requestedPrefillChunkTokens
                 ?? ModelProfile.resolve(
-                    modelID: model.modelID, family: model.config.family,
+                    modelID: model.modelID, family: model.config.modelFamily,
                     weightBits: model.routedExpertWeightBits
                 ).prefillChunkTokens
                 ?? defaultPrefillChunkTokens(
-                    family: model.config.family,
+                    family: model.config.modelFamily,
                     fallback: loadRuntime.prefillChunkTokens),
             prefillAttentionPath: loadRuntime.prefillAttentionPath,
             forceLogitsHead: forceLogitsHead,

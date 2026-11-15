@@ -26,7 +26,7 @@ extension RealForwardRunner {
         // kernels would read K2's gate projection as a packed q/gate. Refusing
         // before any scratch is sized keeps that from happening, and the
         // message names the path that does work.
-        guard cfg.family != .k2Horizon else {
+        guard cfg.modelFamily != .k2Horizon else {
             throw ModelError.unsupportedArchitecture(
                 detail: "K2-Horizon does not run on this runner: the server's "
                     + "probe backend serves it, and `TinyTitanBench k2gpu "
@@ -35,7 +35,7 @@ extension RealForwardRunner {
         }
         // Laguna is the same shape of exception: its decode probe exists, the
         // serving graph does not.
-        guard cfg.family != .laguna else {
+        guard cfg.modelFamily != .laguna else {
             throw ModelError.unsupportedArchitecture(
                 detail: "Laguna-S-2.1 does not run on this runner: "
                     + "`TinyTitanBench lagunagpu <install> \"<prompt>\"` runs "
@@ -75,7 +75,7 @@ extension RealForwardRunner {
         // TINYTITAN_PREDICTIVE_PREFETCH still wins either way, so a probe can turn
         // it on where it ships off and off where it ships on.
         let profile = ModelProfile.resolve(
-            modelID: model.modelID, family: cfg.family,
+            modelID: model.modelID, family: cfg.modelFamily,
             weightBits: model.routedExpertWeightBits)
         bp.profile = profile
         bp.decodeExpertExecution = runtimeConfiguration.decodeExpertExecution
@@ -172,7 +172,7 @@ extension RealForwardRunner {
                     hiddenSize: model.config.hiddenSize,
                     kvDim: model.config.numFullKVHeads * model.config.fullHeadDim,
                     weightsSha256: model.weightsDigestFromManifest,
-                    family: model.config.family,
+                    family: model.config.modelFamily,
                     fullAttentionLayerMask: model.config.fullAttentionLayerMask,
                     sparseIndexer: model.config.sparseIndexer,
                     configChunkTokens: runtimeConfiguration.prefillChunkTokens)
@@ -381,7 +381,7 @@ extension RealForwardRunner {
             : nil
         if cfg.ple.enabled {
             let constants = try PLEConstants.load(
-                directoryURL: model.directoryURL, family: cfg.family)
+                directoryURL: model.directoryURL, family: cfg.modelFamily)
             // Before anything derives buffer sizes or row addressing from the
             // sidecar. Its values are geometry, and `PLEBlock`'s embedding
             // buffer is sized from `cfg.ple.embedDim` while the gather width
@@ -408,7 +408,7 @@ extension RealForwardRunner {
             bp.ngramTable = try NgramTableReader(
                 path: model.directoryURL.appendingPathComponent(
                     constants.tableFile
-                        ?? (cfg.family == .qwen4flash || cfg.family == .qwen4flashMTP
+                        ?? (cfg.modelFamily == .qwen4flash || cfg.modelFamily == .qwen4flashMTP
                             ? Qwen4FlashTensors.ngramTableFile
                             : Qwen38FlashTensors.ngramTableFile)
                 ).path,

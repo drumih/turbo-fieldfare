@@ -13,7 +13,7 @@ import TinyTitanCore
 @Suite struct Qwen4FlashArchTests {
     @Test func geometryMatchesTheStartingContract() {
         let arch = ArchConfig.qwen4Flash
-        #expect(arch.family == .qwen4flash)
+        #expect(arch.modelFamily == .qwen4flash)
         #expect(arch.numLayers == 48)
         #expect(arch.hiddenSize == 2560)
         #expect(arch.vocabSize == 248_320)

@@ -206,7 +206,7 @@ import TinyTitanCore
 
     @Test func qwen38FlashGetsTheWiderCacheAndPrefetch() {
         let tuning = RuntimeConfiguration.decodeTuning(
-            family: .qwen38flash,
+            family: "qwen38flash",
             weightBits: 4)
         #expect(tuning.expertCacheBudgetBytes == 12 << 30)
         #expect(tuning.prefetchDepth == 1)

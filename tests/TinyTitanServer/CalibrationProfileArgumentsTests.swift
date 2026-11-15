@@ -128,7 +128,7 @@ import TinyTitanCore
             machine: machine,
             target: .init(
                 modelID: "ornith", family: "qwen36", weightBits: 4,
-                contextTokens: 8192),
+                    contextTokens: 8192),
             measured: true, measuredAt: "2026-10-22T00:00:00Z",
             source: "calibrate/1")
         let url = FileManager.default.temporaryDirectory
@@ -157,7 +157,7 @@ import TinyTitanCore
             machine: otherOS,
             target: .init(
                 modelID: "ornith", family: "qwen36", weightBits: 4,
-                contextTokens: 8192),
+                    contextTokens: 8192),
             measured: true, measuredAt: "2026-10-22T00:00:00Z",
             source: "calibrate/1")
         let osURL = FileManager.default.temporaryDirectory

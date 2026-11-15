@@ -34,7 +34,7 @@ struct K2RoutedLayoutTests {
             numExperts: 2, topKExperts: 1,
             tieWordEmbeddings: false, attentionKEqV: false,
             fullAttentionLayerMask: [1, 1, 1, 1], hiddenActivation: "silu",
-            family: .k2Horizon, attnOutputGate: true, attentionScale: 0.25,
+            family: "k2_horizon", attnOutputGate: true, attentionScale: 0.25,
             embeddingScaledBySqrtHidden: false, routerScaled: false,
             ffnSandwichNorms: false, sharedExpertGated: true,
             ropeNeoxSubdim: true, routerNormTopK: true,

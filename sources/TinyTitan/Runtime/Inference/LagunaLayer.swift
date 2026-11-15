@@ -9,7 +9,7 @@ import TinyTitanCore
 /// has the same attention *shape family* but not the same width: the 12 global
 /// layers run 48 query heads, the 36 sliding-window layers 72, both against 8
 /// KV heads of width 128. The per-layer count comes from
-/// `config.laguna.headsPerLayer`, never from `config.numHeads`.
+/// `config.perLayerHeadGeometry.headsPerLayer`, never from `config.numHeads`.
 ///
 /// The K/V cache is a plain FP16 buffer for one sequence (the probe-sized form
 /// of the serving graph), and the routed experts are fetched between command
@@ -61,14 +61,14 @@ final class LagunaLayer {
         maxSequence: Int
     ) throws {
         let config = model.config
-        guard config.laguna.headsPerLayer.indices.contains(layer) else {
+        guard config.perLayerHeadGeometry.headsPerLayer.indices.contains(layer) else {
             throw ModelError.internalInconsistency(
                 detail: "Laguna layer \(layer) has no declared head count")
         }
         self.model = model
         self.config = config
         self.layer = layer
-        self.heads = config.laguna.headsPerLayer[layer]
+        self.heads = config.perLayerHeadGeometry.headsPerLayer[layer]
         self.queryDim = heads * config.fullHeadDim
         self.kvDim = config.numFullKVHeads * config.fullHeadDim
         self.isSliding = config.fullAttentionLayerMask[layer] == 0
@@ -77,7 +77,7 @@ final class LagunaLayer {
         if isSliding {
             self.rope = try RoPE(context: context)
             self.rotaryDim = UInt32(
-                (Double(config.fullHeadDim) * config.laguna.swaPartialRotaryFactor)
+                (Double(config.fullHeadDim) * config.perLayerHeadGeometry.swaPartialRotaryFactor)
                     .rounded())
         } else {
             let yarn = YaRNRoPEParameters(
@@ -85,9 +85,9 @@ final class LagunaLayer {
                 partialRotaryFactor: config.partialRotaryFactor,
                 theta: config.fullRopeTheta,
                 targetContextTokens: 1_048_576,
-                originalContextTokens: config.laguna.yarnOriginalMax,
-                betaFast: config.laguna.yarnBetaFast,
-                betaSlow: config.laguna.yarnBetaSlow)
+                originalContextTokens: config.perLayerHeadGeometry.yarnOriginalMax,
+                betaFast: config.perLayerHeadGeometry.yarnBetaFast,
+                betaSlow: config.perLayerHeadGeometry.yarnBetaSlow)
             self.rope = try RoPE(context: context, yarn: yarn)
             self.rotaryDim = UInt32(
                 (Double(config.fullHeadDim) * config.partialRotaryFactor).rounded())
@@ -245,7 +245,7 @@ final class LagunaLayer {
             commandBuffer, try model.lagunaAttentionGate(layer: layer),
             x: normed, y: gate, rows: heads, columns: d)
 
-        if config.laguna.qkNorm {
+        if config.perLayerHeadGeometry.qkNorm {
             let qNorm = try model.qNorm(layer: layer)
             let kNorm = try model.kNorm(layer: layer)
             try rms.encodeBF16WPerHead(
@@ -295,7 +295,7 @@ final class LagunaLayer {
                 seqLen: UInt32(position + 1),
                 scale: Float(config.attentionScale))
         }
-        if config.laguna.gatePerHead {
+        if config.perLayerHeadGeometry.gatePerHead {
             try elementwise.encodeSoftplusGatePerHeadMul(
                 commandBuffer: commandBuffer, out: attn, gate: gate,
                 count: queryDim, headDim: config.fullHeadDim)

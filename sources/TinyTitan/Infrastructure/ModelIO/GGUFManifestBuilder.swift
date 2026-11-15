@@ -98,7 +98,7 @@ package enum GGUFManifestBuilder {
             attentionKEqV: preset.attentionKEqV,
             hiddenActivation: preset.hiddenActivation,
             fullAttentionLayerMask: preset.fullAttentionLayerMask.map(Int.init),
-            family: preset.family.rawValue,
+            family: preset.family,
             hcCount: preset.hyperConnections.enabled ? preset.hyperConnections.count : nil,
             hcLowRank: preset.hyperConnections.enabled ? preset.hyperConnections.lowRank : nil,
             indexerNumHeads: preset.sparseIndexer.enabled ? preset.sparseIndexer.numHeads : nil,

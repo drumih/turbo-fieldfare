@@ -63,7 +63,7 @@ import TinyTitanCore
 
     @Test func architectureIsOneLayerAndBounded() {
         let arch = ArchConfig.qwen36MTP
-        #expect(arch.family == .qwen36MTP)
+        #expect(arch.modelFamily == .qwen36MTP)
         #expect(arch.numLayers == 1)
         #expect(arch.fullAttentionLayerMask == [1])
         #expect(arch.slidingWindow == 65_536)
@@ -115,8 +115,8 @@ import TinyTitanCore
             device: ctx.device,
             expecting: .qwenToyMTP())
 
-        #expect(target.config.family == .qwen36)
-        #expect(sidecar.config.family == .qwen36MTP)
+        #expect(target.config.modelFamily == .qwen36)
+        #expect(sidecar.config.modelFamily == .qwen36MTP)
         // MTP adapter tensors resolve against the sidecar's resident index.
         _ = try sidecar.mtpProjection()
         _ = try sidecar.mtpEmbeddingNorm()

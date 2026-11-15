@@ -683,7 +683,7 @@ extension ArchConfig {
             attentionKEqV: false,
             fullAttentionLayerMask: [2, 1, 2, 1],
             hiddenActivation: "silu",
-            family: .qwen36,
+            family: "qwen36",
             attnOutputGate: true,
             attentionScale: 0.125,  // 32^-0.5
             embeddingScaledBySqrtHidden: false,

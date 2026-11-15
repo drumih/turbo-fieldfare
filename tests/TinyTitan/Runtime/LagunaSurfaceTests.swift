@@ -11,7 +11,7 @@ import TinyTitanCore
 struct LagunaSurfaceTests {
     @Test func presetStatesTheCheckpointGeometry() {
         let config = ArchConfig.lagunaS21
-        #expect(config.family == .laguna)
+        #expect(config.modelFamily == .laguna)
         #expect(config.hiddenSize == 3_072)
         #expect(config.numLayers == 48)
         #expect(config.numExperts == 256)
@@ -22,12 +22,12 @@ struct LagunaSurfaceTests {
         #expect(config.routerScaling == 2.5)
         #expect(config.attentionGate == .softplus)
         #expect(config.sharedExpertGated == false)
-        #expect(config.laguna.enabled)
-        #expect(config.laguna.qkNorm)
-        #expect(config.laguna.gatePerHead)
-        #expect(config.laguna.headsPerLayer.count == 48)
-        #expect(config.laguna.headsPerLayer[0] == 48)
-        #expect(config.laguna.headsPerLayer[1] == 72)
+        #expect(config.perLayerHeadGeometry.enabled)
+        #expect(config.perLayerHeadGeometry.qkNorm)
+        #expect(config.perLayerHeadGeometry.gatePerHead)
+        #expect(config.perLayerHeadGeometry.headsPerLayer.count == 48)
+        #expect(config.perLayerHeadGeometry.headsPerLayer[0] == 48)
+        #expect(config.perLayerHeadGeometry.headsPerLayer[1] == 72)
         #expect(config.fullAttentionLayerMask.filter { $0 == 1 }.count == 12)
     }
 
@@ -52,11 +52,11 @@ struct LagunaSurfaceTests {
 
     @Test func reasoningIsABooleanThinkingSwitch() throws {
         guard
-            case .binaryThinking = ModelFamily.laguna.reasoningControl
+            case .binaryThinking = ModelFamily.perLayerHeadGeometry.reasoningControl
         else {
             Issue.record("Laguna should use the template's boolean enable_thinking")
             return
         }
-        #expect(ModelFamily.laguna.supportsThinkingOff)
+        #expect(ModelFamily.perLayerHeadGeometry.supportsThinkingOff)
     }
 }

@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// `TinyTitanBench verifyprobe <install> [width=8] [dumpDir] [promptFile]`: the
 /// wide-verify identity bisect (docs/plan-wide-verify.md, task 3).

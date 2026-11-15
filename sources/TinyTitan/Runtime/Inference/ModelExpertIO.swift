@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 public struct RoutedExpertFetchPlan: Sendable {
     public let layer: Int

@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 extension RealForwardRunner {
     struct LayerSharedExpertProjections {

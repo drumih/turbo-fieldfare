@@ -61,7 +61,7 @@ private func sparseANE(
     let ane = try ANEPrefillAttention(
         modelDirectory: dir, device: context.device,
         hiddenSize: 16, kvDim: 4, weightsSha256: nil,
-        family: .qwen38flash,
+        family: "qwen38flash",
         fullAttentionLayerMask: fullMask(
             layers: layers,
             count: 8),
@@ -169,7 +169,7 @@ private func makeSelection(
                 device: ctx.device,
                 hiddenSize: 2048, kvDim: 512,
                 weightsSha256: nil,
-                family: .qwen36,
+                family: "qwen36",
                 fullAttentionLayerMask: fullMask(layers: [3]),
                 sparseIndexer: .none,
                 configChunkTokens: 4096)
@@ -231,7 +231,7 @@ private func makeSelection(
             modelDirectory: dir, device: ctx.device,
             hiddenSize: 2048, kvDim: 512,
             weightsSha256: String(repeating: "A", count: 64),
-            family: .qwen36,
+            family: "qwen36",
             fullAttentionLayerMask: fullMask(layers: [3]),
             sparseIndexer: .none,
             configChunkTokens: 4096)
@@ -240,7 +240,7 @@ private func makeSelection(
                 modelDirectory: dir, device: ctx.device,
                 hiddenSize: 2048, kvDim: 512,
                 weightsSha256: String(repeating: "b", count: 64),
-                family: .qwen36,
+                family: "qwen36",
                 fullAttentionLayerMask: fullMask(layers: [3]),
                 sparseIndexer: .none,
                 configChunkTokens: 4096)
@@ -273,7 +273,7 @@ private func makeSelection(
                 modelDirectory: dir, device: ctx.device,
                 hiddenSize: 2048, kvDim: 512,
                 weightsSha256: nil,
-                family: .qwen36,
+                family: "qwen36",
                 fullAttentionLayerMask: fullMask(layers: [3, 7]),
                 sparseIndexer: .none,
                 configChunkTokens: 4096)
@@ -339,7 +339,7 @@ private func makeSelection(
             try ANEPrefillAttention(
                 modelDirectory: dir, device: ctx.device,
                 hiddenSize: 2048, kvDim: 512, weightsSha256: nil,
-                family: .qwen38flash, fullAttentionLayerMask: fullMask(layers: [3]),
+                family: "qwen38flash", fullAttentionLayerMask: fullMask(layers: [3]),
                 sparseIndexer: indexer, configChunkTokens: 4096)
         }
         #expect(QSAExactness(indexer).maximumExactVisibleKeys == 2_051)
@@ -362,7 +362,7 @@ private func makeSelection(
         let denseANE = try ANEPrefillAttention(
             modelDirectory: dir, device: ctx.device,
             hiddenSize: 2048, kvDim: 512, weightsSha256: nil,
-            family: .qwen38flash, fullAttentionLayerMask: fullMask(layers: [3]),
+            family: "qwen38flash", fullAttentionLayerMask: fullMask(layers: [3]),
             sparseIndexer: .none, configChunkTokens: 4096)
         #expect(!denseANE.requiresSelection)
     }
@@ -483,7 +483,7 @@ private func makeSelection(
             device: ctx.device,
             hiddenSize: 2048, kvDim: 512,
             weightsSha256: nil,
-            family: .qwen36,
+            family: "qwen36",
             fullAttentionLayerMask: fullMask(layers: [3, 7]),
             sparseIndexer: .none,
             configChunkTokens: 4096)
@@ -555,7 +555,7 @@ private func makeSelection(
                 modelDirectory: dir, device: ctx.device,
                 hiddenSize: 2048, kvDim: 512,
                 weightsSha256: nil,
-                family: .qwen36,
+                family: "qwen36",
                 fullAttentionLayerMask: fullMask(layers: [3]),
                 sparseIndexer: .none,
                 configChunkTokens: 4096)
@@ -643,7 +643,7 @@ private func makeSelection(
             _ = try ANEPrefillAttention(
                 modelDirectory: dir, device: ctx.device,
                 hiddenSize: 2048, kvDim: 512, weightsSha256: nil,
-                family: .qwen36, fullAttentionLayerMask: fullMask(layers: [3]),
+                family: "qwen36", fullAttentionLayerMask: fullMask(layers: [3]),
                 sparseIndexer: .none, configChunkTokens: 4096)
             Issue.record("a 1,024-token sidecar loaded under a 4,096 chunk")
         } catch {
@@ -674,7 +674,7 @@ private func makeSelection(
             device: ctx.device,
             hiddenSize: 16, kvDim: 4,
             weightsSha256: nil,
-            family: .qwen36,
+            family: "qwen36",
             fullAttentionLayerMask: fullMask(layers: [3], count: 8),
             sparseIndexer: .none,
             configChunkTokens: 8)
