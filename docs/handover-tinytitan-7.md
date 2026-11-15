@@ -190,5 +190,6 @@ decode **11.55 tok/s**. Golden `ornith-4` passed at qualification time
 
 Publish remains **pending CI green** (the CI watcher tags/publishes; nothing
 was tagged or published here). Expect CI to reproduce the three failures
-above on `c3e65db9` — the stale `shipped` assertion and the two lint gates
-must be fixed on `main` before the 7.0 release can pass `tools/ci-green.sh`.
+above on `c3e65db9` — the stale `shipped` assertion and the `func-length` /
+`unchecked-sendable` failures must be fixed on `main` before the 7.0 release
+can pass `tools/ci-green.sh`.
