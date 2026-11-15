@@ -68,18 +68,38 @@ models/qwen3.8-flash-next_125B_A6B_8Bit --consume-snapshot
 `--verify-install` and a smoke generation. Disk-tight: ~11 GB margin, so do
 not raise `--fetch-workers` above 1 while the install is being written.
 
+## Scope decision (owner, 2026-11-15): 7.0 ships ONE variant
+
+**Ornith 1.5 35B-A3B 4-bit** (`ornith-1.5-35b-a3b-4bit`, the qwen36-family
+MoE on the GPU engine with SSD expert streaming). The dense 4B/9B variant
+ports stay in the tree as code for future releases; the Qwen3.8 8/8/16
+conversion was stopped mid-run (staging discarded, the converter resumes
+from finished output shards if the 8-bit install is wanted later). The
+generic Core foundation (manifest layer, MetalContext, geometry configs)
+serves every future variant.
+
 ## Remaining work after the WIP lands green
 
-1. Dense **GPU** path for the variants (they serve CPU only today).
-2. **Qwen3.8 GPU port** — `RealForwardRunner` is ~11K lines over 45 files,
-   built on `Model`, `MetalContext`, the kernel objects and expert streaming.
-   With `MetalContext`, the geometry configs and the manifest layer already
-   in Core, the remaining lift is `Model`, the kernel objects, and the
-   runner itself — a major refactor, not a copy.
-3. Qualification records per variant (golden + benchmark), registry
-   `shipped` flags, `catalog --check` green.
-4. Version bump to 7.0, release notes, tag, dry run, publish per
+1. **Ornith 1.5 35B 4-bit variant** — the install is verified on disk
+   (`models/ornith-1.5_35B_A3B_4Bit`, 47 files, receipt written 2026-11-15;
+   it required fixing a repacker bug — see below). Port the qwen36-family
+   GPU engine into an `Ornith35B4Bit` variant: the manifest layer,
+   `MetalContext` and the geometry configs are already in Core; the
+   remaining lift is `Model`, the kernel objects, expert streaming and the
+   runner — a major refactor, not a copy. Parity gate: golden baseline
+   `ornith-4` exists in `benchmark/golden/`.
+2. Qualification record for the variant (golden + benchmark), registry
+   `shipped` flag, `catalog --check` green.
+3. Version bump to 7.0, release notes, tag, dry run, publish per
    `docs/release-process.md`.
+
+## Repacker bug fixed here (17529070)
+
+A conversion-site regex stripped `.rawValue` from
+`archDict["family"]` in `SSDAIJSON.swift`, putting the `RepackModelFamily`
+enum into the JSON dict — NSJSONSerialization crashed
+("Invalid type in JSON write (__SwiftValue)") at the finalize stage of every
+local import. Fixed; the Ornith install completes and verifies.
 
 ## Machines and state
 
