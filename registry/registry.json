@@ -137,13 +137,22 @@
       "variants": [
         {
           "id": "ornith-1.5-35b-4bit",
-          "target": null,
+          "target": "Ornith35B4Bit",
           "bits": 4,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 20954280960,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "363ba710eef09deaeb3d2fe6c060b88b658bb392d767da0b4021ed6fc01500a7",
+            "decodeTokS": 11.55,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-15"
+          }
         },
         {
           "id": "ornith-1.5-35b-bf16dense-4bit",
