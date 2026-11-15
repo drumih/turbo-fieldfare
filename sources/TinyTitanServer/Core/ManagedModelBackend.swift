@@ -216,7 +216,7 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
         if let metalContext {
             context = metalContext
         } else {
-            context = try MetalContext()
+            context = try MetalContext.runtimeDefault()
             metalContext = context
         }
 

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 public struct PrefillStreamedTileBinding: Sendable, Equatable {
     public let expertIDs: [Int]

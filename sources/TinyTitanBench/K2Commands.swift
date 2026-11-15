@@ -150,7 +150,7 @@ extension TinyTitanBench {
     ) async throws {
         let config = try ArchConfig.resolved(
             forFamily: .k2Horizon, directoryURL: install)
-        let context = try MetalContext()
+        let context = try MetalContext.runtimeDefault()
         // Expert-cache slots per layer. Eight covers exactly one top-8 set, so
         // a changing selection misses; the measured default trades RAM for
         // hits (4-bit experts are 3.3 MB, 8-bit 6.6 MB per layer-slot).

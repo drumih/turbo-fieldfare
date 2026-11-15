@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// A Laguna-S-2.1 decode step: embedding, all 48 layers in order, then the
 /// final norm and the untied head.

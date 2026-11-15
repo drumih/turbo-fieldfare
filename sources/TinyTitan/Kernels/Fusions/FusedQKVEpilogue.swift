@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Single-kernel Q/K/V epilogue.
 ///

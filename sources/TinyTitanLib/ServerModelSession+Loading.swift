@@ -110,9 +110,9 @@ extension ServerModelSession {
         if let reusingContext {
             context = reusingContext
         } else if let device {
-            context = try MetalContext(device: device)
+            context = try MetalContext.runtimeDefault(device: device)
         } else {
-            context = try MetalContext()
+            context = try MetalContext.runtimeDefault()
         }
         let loadRuntime = try RuntimeConfiguration(
             forceLogitsHead: true,

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Gated-DeltaNet linear attention kernels (Qwen 3.6 layers with layer-mask
 /// value 2). Wraps the `gdn.metal` module: causal depthwise conv + SiLU,

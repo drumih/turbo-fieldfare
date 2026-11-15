@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// What the HTTP layer needs to validate a request for one model before that
 /// model is resident: the omitted-sampling defaults, the max_tokens bound and
@@ -161,7 +162,7 @@ private actor SharedMetalContext {
 
     func context() throws -> MetalContext {
         if let built { return built }
-        let context = try MetalContext()
+        let context = try MetalContext.runtimeDefault()
         built = context
         return context
     }

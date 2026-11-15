@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// Final BF16 RMSNorm, INT4 affine lm-head projection, and greedy argmax.
 /// The hot path writes one token ID without materializing vocab-sized logits.

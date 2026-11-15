@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// What a bf16-rest install needs beyond the per-projection dtype dispatch:
 /// the embedding and the vocabulary head kept at the checkpoint's bf16.

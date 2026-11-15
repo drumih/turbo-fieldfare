@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class FusedQKVGEMV {
     private struct Shape: Hashable {

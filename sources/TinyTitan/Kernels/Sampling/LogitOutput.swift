@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Swift wrapper for `logit_softcap_softmax`.
 ///

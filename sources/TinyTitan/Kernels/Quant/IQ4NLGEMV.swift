@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused IQ4_NL dequantise-and-GEMV: the down projection and every expert path
 /// that stores IQ4_NL, read in place.

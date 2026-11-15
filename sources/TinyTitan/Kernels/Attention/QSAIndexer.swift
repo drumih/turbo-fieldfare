@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Qwen Sparse Attention's block indexer.
 ///

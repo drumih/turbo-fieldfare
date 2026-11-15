@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Embedding lookup from a table kept at the checkpoint's own bf16.
 ///

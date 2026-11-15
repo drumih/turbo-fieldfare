@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Small elementwise kernels used by the Qwen 3.6 layer graph: the
 /// full-attention output gate, the shared-expert scalar gate, and the plain

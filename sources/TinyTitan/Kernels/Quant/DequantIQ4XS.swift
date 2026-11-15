@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of IQ4_XS blocks (256 values, 136 bytes) to bf16: layer
 /// 47's gate/up experts. The nibble table is `kvalues_iq4nl`, shared with the

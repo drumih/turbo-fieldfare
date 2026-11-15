@@ -11,6 +11,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 extension TinyTitanBench {
     /// The vocabulary head GEMV at the 35B family's shape (248,320 x 2048),

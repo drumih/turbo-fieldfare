@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// MLX-affine INT4 matrix-vector multiplication.
 /// Eight SIMD groups process eight output rows per threadgroup.

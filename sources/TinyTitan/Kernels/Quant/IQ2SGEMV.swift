@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused IQ2_S dequantise-and-GEMV: reads the gate/up expert matrices in their
 /// GGUF block form and writes half results, so the as-is path never materialises

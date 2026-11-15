@@ -64,7 +64,7 @@ enum NemotronRun {
             throw NemotronRunError(description: "the prompt tokenized to nothing")
         }
         let limit = min(args.maxNew, args.maxContext)
-        let context = try MetalContext()
+        let context = try MetalContext.runtimeDefault()
         let model = try NemotronMetalGraph(
             install: install, context: context, maxSequence: ids.count + limit + 8)
 

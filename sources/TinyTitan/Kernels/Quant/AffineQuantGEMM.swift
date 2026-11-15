@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Affine-quantized weights against a chunk of tokens, for prefill.
 ///

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Accepts or rejects a W-row verify pass's drafts under any sampling
 /// configuration, emitting exactly what scalar decode would have emitted

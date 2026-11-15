@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import Synchronization
+import TinyTitanCore
 
 /// An opt-in second command queue that issues one micro-dispatch on a fixed
 /// period for the duration of a generation.

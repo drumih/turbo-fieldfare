@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The as-is shared expert for one layer: gate and up in their block format
 /// (Q6_K or Q8_0), SiLU(gate)·up, down at Q8_0, and the whole output scaled by

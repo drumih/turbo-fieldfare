@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// Affine per-group quantization used by the K/V cache. Each token row is
 /// independently quantized in groups of 64 values so appends never rewrite

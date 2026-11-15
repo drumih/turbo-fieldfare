@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// How the as-is decoder sizes what it holds: the expert cache from the RAM
 /// budget, the read-ahead depth, and the opt-in routing log. Split from

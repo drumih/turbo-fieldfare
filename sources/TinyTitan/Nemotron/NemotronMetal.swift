@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitanKernelsC
+import TinyTitanCore
 
 /// Metal matvecs for the Nemotron graph.
 ///

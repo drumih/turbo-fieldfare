@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 extension NemotronMetal {
     /// The engine's entry point: the shared `MetalContext` has already compiled

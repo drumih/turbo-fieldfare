@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// Kernel micro-benchmarks. Two families:
 ///
@@ -35,7 +36,7 @@ struct TinyTitanBench {
         // touch the GPU, whose bandwidth is the thing being competed for.
         if try runCPUCommand(kernelName, iterations: iterations) { return }
 
-        let context = try MetalContext()
+        let context = try MetalContext.runtimeDefault()
         let device = context.device
         print("device: \(device.name)")
 

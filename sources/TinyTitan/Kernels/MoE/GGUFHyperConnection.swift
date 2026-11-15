@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The gated residual, with its two projections read from the mapped blocks.
 ///

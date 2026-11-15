@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One entry point for the as-is expert math: the caller says which GGUF block
 /// type a matrix is in, and the matching fused decode-and-dot kernel runs.

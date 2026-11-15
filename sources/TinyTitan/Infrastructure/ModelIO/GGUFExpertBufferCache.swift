@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// unchecked-invariant: the buffer is written once at fetch and then only read
 /// by GPU commands; no mutating access escapes after `load` returns.

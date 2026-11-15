@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Prefill-only wrapper over the int8 shared expert.
 ///

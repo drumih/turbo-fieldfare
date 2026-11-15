@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One full-attention layer's decode step from the arena: the packed
 /// `[query ; gate]` q projection split per head, weighted per-head q/k norms,

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused GEMV for the two layer-exception expert formats: IQ4_XS (layer 47's
 /// gate/up) and Q2_0 (layers 8/10/13 down).

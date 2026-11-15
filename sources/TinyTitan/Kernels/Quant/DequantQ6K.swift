@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of Q6_K blocks (256 values, 210 bytes) to bf16: the
 /// embedding, the output head and the attention projections.

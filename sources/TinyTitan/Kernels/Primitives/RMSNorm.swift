@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Swift wrapper for the RMSNorm kernel family.
 ///

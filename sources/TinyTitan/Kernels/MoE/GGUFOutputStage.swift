@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The model's tail: collapse the 4-stream residual with the output
 /// hyper-connection (read only - there is no block after it), then project the

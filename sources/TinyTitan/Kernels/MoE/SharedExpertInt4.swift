@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 public enum SharedExpertError: Error, CustomStringConvertible {
     case unsupportedWeightBits(Int)

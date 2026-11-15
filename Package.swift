@@ -117,6 +117,7 @@ let package = Package(
             name: "TinyTitanCore",
             dependencies: ["TinyTitanFormat"],
             path: "sources/TinyTitanCore",
+            resources: [.copy("Metal")],
             swiftSettings: tinytitanLanguageStandard
         ),
         // The first 7.0 engine variant (plan task 5). A variant target imports
@@ -160,9 +161,6 @@ let package = Package(
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "sources/TinyTitan",
-            resources: [
-                .copy("Metal")
-            ],
             swiftSettings: tinytitanLanguageStandard
         ),
         // The supported facade an embedder links: the generation orchestrator,
@@ -178,7 +176,7 @@ let package = Package(
         ),
         .target(
             name: "TinyTitanRepackCore",
-            dependencies: ["TinyTitanFormat"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat"],
             path: "sources/TinyTitanRepack/Core",
             swiftSettings: tinytitanLanguageStandard
         ),

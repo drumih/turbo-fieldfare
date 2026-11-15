@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Per-projection 8-bit affine weights for the shared (dense) MLP.
 ///

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 @frozen
 public struct MoEExpertOffsets {

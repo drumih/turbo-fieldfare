@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of IQ3_XXS blocks to bf16.
 ///

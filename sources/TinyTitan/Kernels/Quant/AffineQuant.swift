@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// K27: shared two-row GEMV encode used by the MTP adapter in both
 /// `AffineQuantGEMV` and `DequantInt4GEMV` (previously copy-pasted). The

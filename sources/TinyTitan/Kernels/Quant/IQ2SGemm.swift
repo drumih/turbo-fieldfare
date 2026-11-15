@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Batched IQ2_S GEMM: `Y[t][m] = sum_k A[t][k] * W[m][k]` with the weight in
 /// IQ2_S blocks. Rows are 256-element block aligned, which is every IQ2_S

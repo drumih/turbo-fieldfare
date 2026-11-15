@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of IQ2_S blocks to bf16: the gate/up expert format on
 /// most layers. Block is 82 bytes; the 1,024-entry grid is ggml's and is

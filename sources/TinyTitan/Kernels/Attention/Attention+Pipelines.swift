@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The attention kernel pipelines: the simd partial builder, the specialized
 // cache lookup and the partial/combine builders.

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Chunked prefill: the public entry points, the chunk loop that drives them,
 /// and the scratch/validation setup they need.

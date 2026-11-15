@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 package enum GGUFANEPrefillError: Error, Equatable, CustomStringConvertible {
     case notFullAttention(Int)

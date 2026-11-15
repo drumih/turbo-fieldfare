@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class PrefillMoE {
     private let reducePSO: MTLComputePipelineState

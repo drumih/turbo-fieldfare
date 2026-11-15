@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The Nemotron graph with the hidden state, Mamba state and KV cache resident
 /// on the GPU.

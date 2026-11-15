@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// Decode's single-row GEMVs for up to nine activation rows, with each weight
 /// row read once (`multirow_gemv.metal`).

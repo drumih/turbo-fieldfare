@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of Q8_0 blocks (32 values, 34 bytes) to bf16: the shared
 /// experts and small projections.

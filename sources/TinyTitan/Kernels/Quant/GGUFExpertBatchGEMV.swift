@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One dispatch for the same projection of several routed experts.
 ///

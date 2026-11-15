@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class PrefillEmbedLookupInt4 {
     private let pso: MTLComputePipelineState

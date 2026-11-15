@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 struct AttentionSplitGeometry: Sendable, Equatable {
     let effectiveLength: Int

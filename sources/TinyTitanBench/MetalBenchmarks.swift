@@ -10,6 +10,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// A Metal object the harness needs but could not create. The benchmark
 /// harnesses used to force-unwrap these, so a machine under memory pressure

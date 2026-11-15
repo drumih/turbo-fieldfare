@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The staging object for RealForwardRunner's two-phase initializer. Every field
 // is optional (a double optional where the property itself is optional) so the

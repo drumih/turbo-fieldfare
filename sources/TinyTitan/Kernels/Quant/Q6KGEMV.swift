@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused Q6_K dequantise-and-GEMV: the shared gate/up projections on the layers
 /// that store them at Q6_K.

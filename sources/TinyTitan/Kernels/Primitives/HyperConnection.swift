@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Qwen3.8-Flash-Next's Gated Residual ("hyper-connections").
 ///

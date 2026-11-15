@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// 4-bit affine embedding lookup with fused output scale.
 ///

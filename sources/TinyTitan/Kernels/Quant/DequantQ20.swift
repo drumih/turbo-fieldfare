@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// GPU dequantisation of Q2_0 blocks (64 values, 18 bytes) to bf16: the down
 /// experts of layers 8, 10 and 13.

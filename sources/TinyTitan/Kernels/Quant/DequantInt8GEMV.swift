@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Swift wrapper for `dequant_int8_gemv_simd`.
 ///

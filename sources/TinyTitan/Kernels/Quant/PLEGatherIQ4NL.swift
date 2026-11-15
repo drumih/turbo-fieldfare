@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Gathers arbitrary rows of the PLE table, which stays in its GGUF IQ4_NL
 /// blocks, and decodes them to bf16.

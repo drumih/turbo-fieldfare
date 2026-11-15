@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Why a wide-verify rollback window refused an operation. Every case is a
 /// caller error that would otherwise leave the GDN state, the KV cursor or the

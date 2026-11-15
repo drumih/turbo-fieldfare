@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The per-layer n-gram injection, driven from the checkpoint: the 16 rows this
 /// token's n-grams hash to are gathered from the IQ4_NL table and decoded on the

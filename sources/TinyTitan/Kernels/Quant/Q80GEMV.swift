@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused Q8_0 dequantise-and-GEMV: shared-expert down projections and the
 /// Q8_0 half of the shared gate/up.

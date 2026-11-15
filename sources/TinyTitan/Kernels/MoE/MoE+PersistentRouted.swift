@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The persistent routed-expert encode path: the U16 load stages, the phase-2
 // reduce, and the argument-buffer helpers they share.

@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitan
+import TinyTitanCore
 
 /// `TinyTitanBench nemotron <install> "<prompt>" [n]`: the Nemotron 3.5 Bolt
 /// text graph, its tokenizer and timings in one command.
@@ -85,7 +86,7 @@ extension TinyTitanBench {
         let model: NemotronModel?
         let graphModel: NemotronMetalGraph?
         if graph || gpu {
-            let context = try MetalContext()
+            let context = try MetalContext.runtimeDefault()
             print("device: \(context.device.name)\(graph ? " (graph)" : "")")
             if graph {
                 graphModel = try NemotronMetalGraph(
@@ -155,7 +156,7 @@ extension TinyTitanBench {
         let backend: NemotronMatvec?
         var graphModel: NemotronMetalGraph?
         if graph || gpu {
-            let context = try MetalContext()
+            let context = try MetalContext.runtimeDefault()
             if graph {
                 graphModel = try NemotronMetalGraph(
                     install: loaded, context: context, maxSequence: ids.count + 8)

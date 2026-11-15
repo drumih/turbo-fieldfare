@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Metal
+import TinyTitanCore
 
 package enum GGUFMappedShardsError: Error, Equatable, CustomStringConvertible {
     case openFailed(String, Int32)

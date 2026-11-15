@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// One GDN layer's decode step, driven from the arena: the four input
 /// projections, the causal conv with its tail, the per-head qk norm, the delta

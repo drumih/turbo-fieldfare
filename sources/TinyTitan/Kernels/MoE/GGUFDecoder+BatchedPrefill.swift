@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Layer-major prompt prefill: every token of a chunk through layer 0, then
 /// every token through layer 1, and so on.

@@ -80,11 +80,16 @@ public final class MetalContext: @unchecked Sendable {
     /// device, which is the point: a process with more than one GPU, or holding
     /// a device it took from somewhere other than the system default, runs on
     /// the one it named rather than on whichever device happens to be default.
-    public init(device dev: MTLDevice) throws {
+    public init(
+        device dev: MTLDevice, shaderModules: [String]? = nil,
+        shaderSubdirectories: [String: String]? = nil
+    ) throws {
         guard let q = dev.makeCommandQueue() else { throw MetalError.noQueue }
         self.device = dev
         self.queue = q
-        self.library = try Self.compileShaderLibrary(device: dev)
+        self.library = try Self.compileShaderLibrary(
+            device: dev, modules: shaderModules ?? Self.shaderModules,
+            subdirectories: shaderSubdirectories ?? Self.shaderSubdirectories)
     }
 
     deinit {
@@ -95,7 +100,7 @@ public final class MetalContext: @unchecked Sendable {
     }
 
     /// Production shader modules compiled into the shared runtime library.
-    private static let shaderModules: [String] = [
+    public static let shaderModules: [String] = [
         "dequant_int4",
         "dequant_int8",
         "dequant_affine",
@@ -116,11 +121,10 @@ public final class MetalContext: @unchecked Sendable {
         "gguf_moe",
         "gguf_embed",
         "ple_iq",
-        "nemotron",
     ]
 
     /// Bundle locations for runtime shader modules.
-    private static let shaderSubdirectories: [String: String] = [
+    public static let shaderSubdirectories: [String: String] = [
         "attention": "Metal/Attention",
         "qsa": "Metal/Attention",
         "dequant_int4": "Metal/Quant",
@@ -143,20 +147,21 @@ public final class MetalContext: @unchecked Sendable {
         "rope": "Metal/Primitives",
         "tensorops": "Metal/TensorCore",
         "utility": "Metal/Primitives",
-        "nemotron": "Metal/Nemotron",
     ]
 
-    private static func shaderURL(module: String) -> URL? {
-        guard let subdirectory = shaderSubdirectories[module] else { return nil }
+    private static func shaderURL(module: String, subdirectories: [String: String]) -> URL? {
+        guard let subdirectory = subdirectories[module] else { return nil }
         return Bundle.module.url(
             forResource: module, withExtension: "metal",
             subdirectory: subdirectory)
     }
 
-    private static func compileShaderLibrary(device: MTLDevice) throws -> MTLLibrary {
+    private static func compileShaderLibrary(
+        device: MTLDevice, modules: [String], subdirectories: [String: String]
+    ) throws -> MTLLibrary {
         var combined = ""
-        for name in shaderModules {
-            guard let url = shaderURL(module: name) else {
+        for name in modules {
+            guard let url = shaderURL(module: name, subdirectories: subdirectories) else {
                 throw MetalError.missingShaderResource(name)
             }
             // lint:allow-unbounded-read Bundle.module resolves this to a .metal
@@ -176,8 +181,13 @@ public final class MetalContext: @unchecked Sendable {
     }
 
     /// Compile a shader module separately from the shared runtime library.
-    public static func moduleLibrary(device: MTLDevice, module: String) throws -> MTLLibrary {
-        guard let url = shaderURL(module: module) else {
+    public static func moduleLibrary(
+        device: MTLDevice, module: String, subdirectories: [String: String]? = nil
+    ) throws -> MTLLibrary {
+        guard
+            let url = shaderURL(
+                module: module, subdirectories: subdirectories ?? Self.shaderSubdirectories)
+        else {
             throw MetalError.missingShaderResource(module)
         }
         // lint:allow-unbounded-read Same resource as `compileShaderLibrary`: a

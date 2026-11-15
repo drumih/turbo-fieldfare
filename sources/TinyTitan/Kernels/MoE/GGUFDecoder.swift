@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The as-is forward pass: one token through all 48 layers, composed from the
 /// stages that were each verified against a CPU reference on this checkpoint.

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Qwen3.8-Flash-Next's per-layer n-gram embedding block (layer 1, 0-based).
 ///

@@ -78,7 +78,7 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
         guard resolvedSlots > 0 else {
             throw K2BackendError.unsupported("expert cache slots must be positive")
         }
-        let context = try reusingContext ?? MetalContext()
+        let context = try reusingContext ?? MetalContext.runtimeDefault()
         let loaded: Model
         do {
             loaded = try Model.load(

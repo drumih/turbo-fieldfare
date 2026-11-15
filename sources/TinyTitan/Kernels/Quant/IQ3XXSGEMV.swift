@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Fused IQ3_XXS dequantise-and-GEMV: the gate/up matrices of the layers that
 /// use this format, read in place.

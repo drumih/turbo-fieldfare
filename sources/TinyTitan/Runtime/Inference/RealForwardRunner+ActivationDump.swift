@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Writes named activation slices to disk so a run can be compared against a
 /// reference implementation stage by stage.

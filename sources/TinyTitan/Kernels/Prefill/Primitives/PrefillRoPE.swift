@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class PrefillRoPE {
     private let psoDefaultNeox: MTLComputePipelineState

@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TinyTitanFormat
+import TinyTitanCore
 
 package struct GGUFResidentArenaEntry: Sendable, Equatable {
     package let name: String

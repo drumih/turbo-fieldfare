@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// K2-Horizon's router selection: sigmoid scores, a selection bias, top-k
 /// renormalization and the family's scaling factor.

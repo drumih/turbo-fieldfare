@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanCore
 
 /// The CLI's GGUF-as-is path: a directory of `.gguf` shards read in place,
 /// with no conversion, no install and no receipt.
@@ -34,7 +35,7 @@ func runGGUFAsIs(
         guard let device = MTLCreateSystemDefaultDevice() else {
             return errored(stderr, "no Metal device", 1)
         }
-        let metal = try MetalContext(device: device)
+        let metal = try MetalContext.runtimeDefault(device: device)
         let model = try GGUFModelReader.read(modelAt: modelURL)
         let tokenizer = try await ggufTokenizer(
             for: model, modelURL: modelURL, quiet: args.quiet,

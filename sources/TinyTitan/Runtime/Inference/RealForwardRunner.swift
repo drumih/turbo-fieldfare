@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Compatible Qwen3.5-MoE real-forward decode pass, composing the production
 /// kernels against the `.ssdai` model:
@@ -35,14 +36,6 @@ import Metal
 public final class RealForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     ContinuableLogitProducer, @unchecked Sendable
 {
-    struct LayerSharedExpertProjections {
-        let gate: SharedExpertInt8Proj
-        let up: SharedExpertInt8Proj
-        let down: SharedExpertInt8Proj
-        /// Qwen3.5-MoE [1, hidden] scalar gate on the shared expert branch.
-        let scalarGate: TensorView?
-    }
-
     let model: Model
     let ctx: MetalContext
     let kv: KVCacheManager?

@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Target-verified greedy native-MTP session. The target always verifies the draft; a
 /// rejected draft is rolled back to the GPU checkpoint captured immediately

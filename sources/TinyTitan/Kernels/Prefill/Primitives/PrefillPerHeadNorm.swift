@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class PrefillPerHeadNorm {
     private let psoBF16W: MTLComputePipelineState

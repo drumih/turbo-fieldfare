@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import Synchronization
+import TinyTitanCore
 
 /// Turns `GenerationConfig` + a logits buffer into one token id, staying
 /// GPU-resident wherever the kernels allow.

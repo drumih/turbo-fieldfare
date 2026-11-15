@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The as-is router for one layer, in F32 end to end.
 ///

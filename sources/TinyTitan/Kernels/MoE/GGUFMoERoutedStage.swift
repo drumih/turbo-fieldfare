@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// The as-is routed MoE for one layer: for each selected expert, gate and up
 /// through the fused GEMV for their block format, `SiLU(gate)·up`, down through

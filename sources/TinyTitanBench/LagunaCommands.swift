@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import Tokenizers
+import TinyTitanCore
 
 /// `TinyTitanBench lagunagpu <install> "<prompt>" [n]`: the Laguna-S-2.1
 /// install through the probe graph on Metal, greedy.
@@ -38,7 +39,7 @@ extension TinyTitanBench {
     ) async throws {
         let config = try ArchConfig.resolved(
             forFamily: .laguna, directoryURL: install)
-        let context = try MetalContext()
+        let context = try MetalContext.runtimeDefault()
         let model = try Model.load(
             directoryURL: install, device: context.device, expecting: config,
             streamingMode: .pread(slotCount: 16))

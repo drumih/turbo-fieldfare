@@ -27,7 +27,7 @@ func runK2Probe(
         guard let device = MTLCreateSystemDefaultDevice() else {
             return errored(stderr, "no Metal device", 1)
         }
-        let metal = try MetalContext(device: device)
+        let metal = try MetalContext.runtimeDefault(device: device)
         let loaded: Model
         do {
             loaded = try Model.load(

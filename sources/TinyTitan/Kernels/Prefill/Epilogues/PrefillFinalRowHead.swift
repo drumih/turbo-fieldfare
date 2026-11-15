@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 final class PrefillFinalRowHeadInt4 {
     private let rms: RMSNorm

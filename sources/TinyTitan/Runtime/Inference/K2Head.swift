@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// K2-Horizon's input and output ends: the embedding lookup, the grouped final
 /// norm and the untied `lm_head` GEMV.

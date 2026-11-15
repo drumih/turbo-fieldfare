@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The hyper-connection and PLE elementwise passes.
 //

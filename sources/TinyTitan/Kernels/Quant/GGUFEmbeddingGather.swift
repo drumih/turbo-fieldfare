@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Gathers token-embedding rows from the checkpoint's Q6_K table and decodes
 /// them to bf16. The table is 521 MB in blocks and is never materialised.

@@ -1,4 +1,5 @@
 import Metal
+import TinyTitanCore
 
 /// NeoX RoPE variants used by Qwen 3.6 attention.
 final class RoPE {

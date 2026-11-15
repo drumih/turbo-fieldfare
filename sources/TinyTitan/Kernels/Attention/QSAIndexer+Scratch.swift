@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Scratch management for the QSA indexer: the per-layer key buffers and the
 // grow-on-demand scratch the encode paths call.
