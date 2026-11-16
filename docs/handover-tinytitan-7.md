@@ -107,6 +107,34 @@ by the 7.0 **variant** passing its own golden + parity (already true), NOT by th
 server process importing it — those are separate claims and the tracker rows
 TT-082/083/087 should say so until (ii)+(iii) actually land.
 
+## CLOSURE — decided 2026-11-16 (owner): 7.0 closed at the variant bar
+
+The owner chose to **close 7.0 on the variant-qualification bar**, not to attempt
+the server re-host in this effort. Outcome, all recorded + published:
+
+- **Re-verified, not cited stale:** preconditions clean (Swift 6.4.2 / macOS
+  27.2.1 / 204 GB free / 51% mem / no competing model process), and
+  `OrnithParityTests.greedyParityAgainst6x` was **re-run against the real
+  `models/ornith-1.5_35B_A3B_4Bit` install and passed in 82.1 s** — the 7.0
+  variant engine is greedy-byte-identical to 6.x on the real model. (Run it with
+  `TINYTITAN_ORNITH_PARITY_MODEL=models/ornith-1.5_35B_A3B_4Bit swift test
+  --no-parallel --filter Ornith35B4BitTests`; without the env var it self-skips.)
+- **Tracker (wiki, pushed `a8812e6`):** TT-082 → **Done** at the variant bar;
+  TT-087 → **Won't Do** (6.x NOT deleted from main — it still serves every model;
+  preserved on `archive/6.x-final`); **new TT-097** (Open, deferred) carries the
+  server-serves-variant migration + its measured blocker + staged plan. Footer
+  count corrected to 39 rows; the two claims (variant-qualified vs
+  server-serves-variant) are stated apart everywhere so neither is overclaimed.
+- **What a future session owes if it wants the server on 7.0:** TT-097 only.
+  First bounded step is moving the model-free `GenerationDefaults.Sampling`
+  struct into Core (Core = bare constants + `Sampling` + `house`; family rows +
+  `forFamily` stay runtime as a same-named extension of computed `static var`s),
+  then untangle `ValidatedChatRequest`, then re-host the 2,236-line session, then
+  route + model-gate. Do NOT start the re-host unless it can be finished +
+  model-verified; a half-migrated session leaves `main` untested, which the rules
+  forbid. The Core unification phases (a/b/c) + the parallelFor deadlock fix +
+  the dense-trio variants are all landed regardless and stand on their own.
+
 ## What is in progress — the `ArchConfig.family` decoupling (WIP)
 
 The GPU runtime lift into Core requires `ArchConfig` to be model-free, so
