@@ -1,15 +1,5 @@
 import Foundation
-
-public enum StopReason: String, Codable, Sendable, Equatable {
-    case eos
-    case endOfTurn
-    case maxTokens
-    case stopString
-    case toolCalls
-    /// The caller's `shouldStop()` closure returned true (external stop
-    /// signal) before any configured stop string matched.
-    case external
-}
+import TinyTitanCore
 
 public enum GeneratorError: Error, CustomStringConvertible, Equatable {
     case contextOverflow(prompt: Int, maxNew: Int, maxContext: Int)

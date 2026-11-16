@@ -1,6 +1,7 @@
 import Foundation
-import TinyTitanCore
 
+/// A structural JSON value, shared by the tool-call parsers and the 7.0 server
+/// backend contract so a parsed tool argument has one type across the boundary.
 public indirect enum JSONValue: Codable, Equatable, Sendable {
     case object([String: JSONValue])
     case array([JSONValue])

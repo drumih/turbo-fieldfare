@@ -1,31 +1,7 @@
 import Foundation
+import TinyTitanCore
 
-public struct ParsedToolCall: Equatable, Sendable {
-    public let id: String
-    public let name: String
-    public let arguments: JSONValue
-    public let argumentsJSON: String
-
-    public init(
-        id: String,
-        name: String,
-        arguments: JSONValue,
-        argumentsJSON: String
-    ) {
-        self.id = id
-        self.name = name
-        self.arguments = arguments
-        self.argumentsJSON = argumentsJSON
-    }
-}
-
-public enum ToolCallParserError: Error, Equatable {
-    case malformed
-    case unknownTool(String)
-    case oversized
-}
-
-/// Parses the Qwen ChatML tool-call body — the text BETWEEN the `<tool_call>`
+/// Parses the Qwen ChatML tool-call body — the text BETWEEN the `<tool_call>`<tool_call>`
 /// and `</tool_call>` special tokens:
 ///
 ///     \n<function=NAME>\n
