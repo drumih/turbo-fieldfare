@@ -233,3 +233,59 @@ PASS** (169 `public`, all on the baseline). Three concerns, handled as follows:
   returns `[]` on a `swift package describe` failure (fail-open findings) and
   its orphan check is CWD-relative; `decode` is one-ahead vs `generate`. All
   inherited semantics, parity-verified — recorded for the phase-4 cleanup.
+
+## 2026-11-16 — one-model scope reset; prefill deadlock fixed; dense 2B/4B added
+
+Owner reset the 7.0 completion scope: **7.0 ships Ornith 1.5 35B-A3B 4-bit (GPU)
+plus dense Qwen 3.5 2B/4B 4-bit (CPU); all other models are deferred to user
+request; once these work perfectly on the variant engine, retire 6.x and 7.0 is
+complete.** Tracker: TT-082 (wire variant as server engine), TT-087 (retire 6.x),
+TT-095/TT-096 (this session's fixes).
+
+Done and pushed this session:
+- **TT-095 — full-chunk prefill deadlock** (`61f92ba1`). A ≥4096-token MoE
+  prefill chunk hung at 0% CPU mid-layer (OpenCode agent turn). Root cause
+  (isolated by forcing serial I/O, which completed): `executeCachedPreads` ran
+  `DispatchQueue.concurrentPerform` *on the expert-I/O scheduler's 4 fixed worker
+  threads*; concurrentPerform counts the caller as a worker and blocks it,
+  starving the GCD pool under concurrent fetches. Fix: generic dispatch-group
+  `parallelFor` in `TinyTitanCore/Concurrency/ParallelFor.swift`, used at the 6
+  scheduler-context sites (executeCachedPreads/decodeBlocks/readRanges) in the
+  runtime AND the Ornith variant. RANSDecode (layer-open) / NgramTableReader
+  (main path) are not on the worker pool — left. Verified: ParallelForTests 3/3,
+  5,818-token prompt completes, golden ornith-4 byte-identical, 20 gates green.
+- **TT-096 — dense 2B/4B 4-bit** (`77638454`). Ported Qwen35Dense2B4Bit CPU
+  forward (copied the config-driven CPUEngine from 4B; 2B statics). Both installed
+  via `tools/install_models.sh qwen35-2b`/`qwen35-4b` (installer proven: streams,
+  converts, hashes, writes receipt, refuses snapshot mixing). dense2B4BitParity
+  and dense4B4BitParity passed vs the 6.x CPU engine.
+
+### The remaining migration (TT-082 → TT-087), scoped
+
+The variants own the full engine (runRawCompletion/tokenizer/sampler/decoder are
+byte-identical copies of 6.x) and are parity-verified, but the SERVER still
+generates through 6.x via TinyTitanLib `ServerModelSession`. **Key finding: the
+server-adapter layer is ~10,377 lines of TinyTitanLib, nearly all `import
+TinyTitan`; `ServerCompletion` cascades into OpenAIUsage / ParsedToolCall /
+StopReason / WatchdogSet, so the backend contract is deeply 6.x-coupled.** The
+variant duplicates every engine type nominally, so the adapter cannot drive the
+variant's `runRawCompletion` without being re-typed.
+
+Staged plan (each gated on the previous; NO destructive deletion before stage 3):
+1. Move the generic backend contract (ServerInferenceBackend / ServerInferenceEvent
+   / ServerCompletion + AssistantOutput / watchdogs / prompt-cache, and the cascade
+   data types) into shared TinyTitanCore, decoupled from 6.x. `defaultPrefillChunkTokens`
+   stays in Lib (it switches on ModelFamily).
+2. Build a variant-typed server session over the variant engine (a spec-sanctioned
+   copy of ServerModelSession re-typed for the variant; ModelProfile.resolve →
+   variant statics, ModelFamily → variant family).
+3. Server selects the variant for Ornith + dense; prove golden byte-parity +
+   streaming/tools/sampling/prompt-cache/reasoning/stop-sequences/cancellation/
+   262144 context + OpenCode end-to-end agent turn + decode benchmark.
+4. Retire 6.x (TT-087): ModelFamily (62 files), ModelProfile (19), the 8
+   tools/prepare_*.py converters, and the 6.x paths in Lib/CLI/Bench/Server/
+   Validation; adjust installer/launcher/catalog/golden/release scripts to the
+   shipped set. Keep arm64-only/release discipline; catalog --check is the model list.
+
+This is a multi-thousand-line refactor — execute as a focused phase, verifying the
+build + gates at every stage and keeping the tree green between stages.
