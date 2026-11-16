@@ -104,3 +104,35 @@ rather than risked at the tail of this session.
   footer decode (run `20261115T211043`); instrumented 12.69 tok/s (traces +35%).
 - Long-prompt + 128 decode, warm: **≈16.2 tok/s** (chunk-clean run, base arm).
 - Registry qualification record: 11.55 tok/s (earlier, busier host).
+## 6. Occupancy experiment: early attention-CB commit — measured-REJECTED
+
+Hypothesis: commit `attnCB`/`softmaxCB` immediately after `encodeDecodeAttention`
+(before the tail/router encode), so the GPU runs attention while the CPU encodes
+the router (same-queue FIFO preserves order). Implemented in `decodeLayerLoop`
+(`RealForwardRunner+DecodeLayers.swift`), built two binaries (base A, change B),
+paired interleaved A/B (3 rounds, 192-token greedy, parity-checked; shader bundle
+copied beside the test binaries — a copied binary without its bundle dies on
+"unable to find bundle named TinyTitan_TinyTitanCore").
+
+| round | base A | change B | Δ B vs A | parity | machine |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 6.579 | 7.419 | +12.77% | OK | heavy swap load |
+| 2 | 7.018 | 7.351 | +4.74% | OK | load |
+| 3 | 16.620 | 13.884 | **−16.46%** | OK | **freed up (≈clean)** |
+
+Mean +0.35%, median +4.74%, 2/3 positive — but the **representative clean round
+(3) is a regression**: B's `cb1` (8.36 vs 6.67 ms) and `wait` (39.4 vs 33.4 ms)
+are both *higher* when the machine is not swap-thrashed. The early commit only
+helps when the CPU encode is pathologically slow (swap); it hurts normal clean
+operation (likely disrupts command-buffer batching). **REJECTED and reverted** —
+the product runs clean, not swap-thrashed; a load-only "win" is not a win.
+
+Lesson: an occupancy lever must be validated under the *clean* memory
+precondition, not under load — load can invert the verdict (here, +13% under
+swap became −16% clean). Parity held throughout (identical sha), so this was a
+pure scheduling effect, not a correctness issue.
+
+**Net conclusion of the occupancy investigation:** the shipped decode pipeline
+is near-optimal under clean conditions. The I/O knobs, prefill chunk, and the
+early-attention-commit occupancy lever were all measured and rejected. No
+accepted performance change resulted; the engine's defaults stand.
