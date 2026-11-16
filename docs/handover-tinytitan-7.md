@@ -346,6 +346,19 @@ Core instead of re-duplicating them. Then port GPUEngine per variant, wire the e
 into the variant surface + the server backend, and parity-check each against the 6.x GPU
 engine (`TINYTITAN_DENSE_GPU_EQUIV=1` oracle exists per plan-dense-gpu-engine.md).
 
+**Measured entanglement (2026-11-16, attempt reverted to keep the tree green):** a naive
+`git mv` of the grammar subsystem + `SamplerTypes.swift` into Core does NOT compile, because:
+- `JSONTokenTable` references `GFTokenizer`/`GFDetokenizer` (still in 6.x Tokenization) — so
+  the tokenizer (~979 lines, needs Core → Tokenizers dep) must move first or together;
+- `SamplerTypes.swift`'s `GenerationDefaults` switches on `ModelFamily` (model knowledge —
+  core-purity forbids it in Core). `GenerationConfig` (generic struct) and `GenerationDefaults`
+  (family-specific) must be SPLIT: the config struct to Core, the family defaults stay in the
+  runtime/variants;
+- `SamplerTypes.swift` also throws `GeneratorError` (6.x Generation) — move that to Core too.
+Correct sequence: (a) `GeneratorError` + `GFTokenizer`/`GFDetokenizer`/`TokenizerTypes` → Core;
+(b) split `GenerationConfig` (Core) from `GenerationDefaults` (runtime); (c) grammar subsystem
+→ Core; (d) then the dense GPUEngine port. Each step build + parity + gate verified.
+
 The server-level CPU/GPU choice already works today via the 6.x engines (catalog `<id>` GPU
 default + `<id>@cpu`; launcher `--engine cpu|gpu` + interactive menu) — verified on 2B/4B/9B
 both engines. The 7.0 goal is to move that choice into the dedicated variant code paths.
