@@ -136,3 +136,28 @@ pure scheduling effect, not a correctness issue.
 is near-optimal under clean conditions. The I/O knobs, prefill chunk, and the
 early-attention-commit occupancy lever were all measured and rejected. No
 accepted performance change resulted; the engine's defaults stand.
+
+## 7. Readahead at the actual expert stride — measured no change
+
+Ornith's `expertStride` is **1,769,472 bytes (1.69 MiB)** (`manifest.json`).
+A direct-I/O probe at that exact size gives no reliable readahead win: random
+runs were ~7.75–8.93 GiB/s with advice on vs ~7.75–8.36 GiB/s off (one −29%
+outlier; the rest within noise). Larger chunks were not monotonic either
+(64 KiB 7.26, 256 KiB 5.65, 1 MiB 7.27, 8 MiB 4.83 GiB/s). **No change** to
+readahead or expert-read sizing. (`/tmp/ssd_probe.c`.)
+
+## 8. CPU thread-count sweep — no stable winner
+
+The quantized prefill harness was run at 1/2/4/8 threads. Results swung widely
+between rounds; 4 threads was often but not always best, and no count won
+consistently across 2B/4B and 4/8-bit. Keep the current count. A future change
+would need a cleaner, interleaved repeated sweep plus parity before it is
+justified.
+
+## 9. ANE prefill — no sidecar available
+
+The installed `models/ornith-1.5_35B_A3B_4Bit` contains **no `ane_prefill*`
+sidecar**, so there is no valid ANE on/off measurement to take. No ANE change
+or performance claim. If a sidecar is later produced, evaluate a full
+4,096-token chunk on/off (compile cost, TTFT, decode cost, parity) before
+considering it.
