@@ -65,16 +65,38 @@ breakeven ~9.2k generated tokens; not bit-identical, golden pins it off). Only t
 the variant — so no product headroom here without first wiring the server to the
 variant.
 
-## 5. Remaining lever — GPU occupancy (item 5, in progress)
+## 5. Remaining lever — GPU occupancy (item 5, analyzed; deferred as high-risk)
 
 The only measured headroom is the 47.8% GPU occupancy / per-layer CPU barrier.
-Candidate parity-safe scheduling changes (ranked): pre-encode the next layer's
-attention command buffer ahead of the routed-MoE CPU work (requires double-buffered
-router scratch so the pending routed CB is not clobbered); reduce `cb1` CPU encode
-cost; check the fused greedy head branch. High-risk alternatives (indirect command
-buffers / GPU-driven expert dispatch) rebuild the CPU cache-plan authority and are
-deferred. Each candidate is gated by golden `ornith-4` parity + a clean paired
-benchmark.
+Two candidates were analyzed in depth:
+
+- **Pre-resolve per-layer TensorViews** (the `model.inputNorm/postAttnNorm/router`
+  accessors string-format + dictionary-lookup + rebuild a `TensorView` every layer
+  every token, `Model+Accessors.swift:319`). Caching them (precedent:
+  `effectiveScaleBuffers[L]`) is parity-safe but saves only ~0.2–0.6 ms of the
+  ~7–16 ms `cb1` ≈ **~1% decode — marginal, not worth the cross-file change.**
+- **Pre-encode the next layer's attention CB** ahead of the routed-MoE CPU work to
+  fill the inter-layer GPU idle gap. This is the real occupancy lever, but it
+  requires restructuring the 344-line critical `decodeLayerLoop`
+  (`RealForwardRunner+DecodeLayers.swift`) to carry the attention command buffer
+  one iteration ahead, respecting the router-scratch lifecycle (the authoritative
+  `outIndices/outWeights` are drained via the pending-routed-command before the
+  next layer's router overwrites them; probe routers already use separate
+  `prefetchPrediction*` buffers). High complexity, real parity risk, uncertain
+  payoff — **deferred as a funded research direction, not forced.** The loop is
+  already deeply optimized (shared-CB overlap, probe router, prefetch ring, event
+  I/O, deferred routed completion).
+
+High-risk alternatives (indirect command buffers / GPU-driven expert dispatch)
+rebuild the CPU cache-plan authority and are likewise deferred. Each future
+candidate must pass golden `ornith-4` parity + a clean paired benchmark.
+
+**Conclusion of this investigation:** the shipped Ornith 4-bit engine is
+near-optimal on this host. Every parameter knob (I/O submission, page cache,
+readahead advice, prefill chunk) is measured-optimal; the kernels are already
+bf16+simdgroup and bandwidth-bound; I/O is ~100% hidden. A *solid* further gain
+requires the GPU-occupancy restructure above, which is scoped as future work
+rather than risked at the tail of this session.
 
 ## Clean baselines (for the final paired comparison)
 
