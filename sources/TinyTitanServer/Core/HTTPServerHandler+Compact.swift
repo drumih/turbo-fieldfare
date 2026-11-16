@@ -1,3 +1,4 @@
+import TinyTitanCore
 //
 //  HTTPServerHandler+Compact.swift
 //  TinyTitanServer

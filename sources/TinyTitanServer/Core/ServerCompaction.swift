@@ -1,3 +1,4 @@
+import TinyTitanCore
 //
 //  ServerCompaction.swift
 //  TinyTitanServer
