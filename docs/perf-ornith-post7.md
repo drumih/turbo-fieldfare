@@ -174,10 +174,23 @@ and for decode. `DenseVariantBatchedMatmulTests` 4/4 and `CPUBatchedPrefillTests
 ## 11. P2 measured non-adoption: attention-CB coalescing
 
 A candidate reused `attnCB` for softmax/tail, reducing three command buffers to
-one. Policy tests 3/3 and golden `ornith-4` passed, but the paired A/B was too
-swap-confounded to accept: 13.19–13.75 GB swap, 3.5–8.6 tok/s, per-round deltas
-−7.18%, +15.11%, +61.44%, +114.14% (parity OK). **Reverted; no coalescing change
-adopted.** A future retry needs an acceptable-memory, clean paired run.
+one. Policy tests 3/3 and golden `ornith-4` passed (byte-identical). A first
+paired A/B was too swap-confounded to read (13.19–13.75 GB swap, 3.5–8.6 tok/s,
+per-round deltas −7.18%, +15.11%, +61.44%, +114.14%); re-measured 2026-11-16
+under clean conditions (25–26% free with the model resident, swap flat at
+9.34 GB, `io_hidden` ≈ 99.9%), the coalesced arm is consistently slower:
+
+| round | A base | B coalesced | Δ | parity |
+| --- | --- | --- | --- | --- |
+| 1 | 16.669 | 16.476 | −1.16% | identical |
+| 2 | 16.625 | 16.466 | −0.96% | identical |
+| 3 | 16.698 | 16.612 | −0.52% | identical |
+
+Mean −0.88%, median −0.96%, **0/3 rounds positive**; `wait_ms` slightly higher
+under B (29.78 vs 29.29 ms, round 2). **NOT ADOPTED — reverted.** Same
+signature as the early-commit experiment in §6: a load-only win that is a small
+loss clean. The three-buffer split is the measured-optimal shape. Result:
+`.build/p2-coalescing-clean.json`.
 
 ## 12. P1–P5 final verdict
 
@@ -187,7 +200,7 @@ justified it. One item was adopted; four were measured and not adopted.
 | item | hypothesis | verdict | evidence |
 | --- | --- | --- | --- |
 | **P1** batched CPU prefill (dequantize-once + SGEMM, M≥16) | GEMV-per-token wastes repeated weight dequantization at large M | **ADOPTED** `07cecaf1` | microbench M=16 1.7–2.9×, M=64 5.7–6.2×; 4/4 + 5/5 tests green; full-model golden **not checked** (no dense installs) |
-| **P2** attention command-buffer coalescing | fewer CBs → less per-layer CPU barrier | **NOT ADOPTED** | policy 3/3 + golden passed, but A/B swap-confounded (−7%…+114%); reverted |
+| **P2** attention command-buffer coalescing | fewer CBs → less per-layer CPU barrier | **NOT ADOPTED** | policy 3/3 + golden byte-identical; clean re-measure 2026-11-16 mean −0.88%, 0/3 positive (the first attempt's +15…+114% was swap artifact); reverted |
 | **P3** expert-read size / readahead tuning | larger readahead at the 1.69 MiB expert stride | **NO CHANGE** | direct-I/O probe within noise; no monotonic win |
 | **P4** measured CPU thread-count selection | a fixed thread count is suboptimal | **NO CHANGE** | 1/2/4/8 sweep swung between rounds; no stable winner |
 | **P5** ANE prefill sidecar | ANE offloads prefill | **NO CHANGE** | installed model has no `ane_prefill*` sidecar; nothing to measure |
