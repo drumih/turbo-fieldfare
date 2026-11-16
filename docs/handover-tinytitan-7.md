@@ -319,3 +319,33 @@ build + gates at every stage and keeping the tree green between stages.
   installed via the installer and parity-verified vs 6.x (2B4 183.9s, 2B8 57.6s,
   4B4 430.2s, 4B8 164.5s, 9B4 230.2s, 9B8 677.8s). Installer resume-after-kill race in
   `prepare_qwen35.py`'s threaded downloader noted as a follow-up (fresh download avoids it).
+
+### Owner directive 2026-11-16: strict CPU/GPU code separation, dedicated dense paths
+
+The owner requires CPU and GPU paths **strictly code-separated**, and each dense model
+to own **its own dedicated CPU and GPU code paths** — the whole point of 7.0 (no shared
+family switch). Target structure per dense variant:
+
+    sources/Engines/Qwen35Dense<N><Q>Bit/
+        CPUEngine/      # the dense CPU forward (CPUQwen35) — already present, dedicated
+        GPUEngine/      # the dense GPU forward (RealForwardRunner, qwen3_5_dense) — TO ADD
+        Variant.swift   # exposes both, engine selectable (CPU default for dense; @gpu opt-in)
+
+The GPU engine is config-driven (`denseFFN = cfg.numExperts == 0` in
+`RealForwardRunner+DecodeLayers.swift`), so the same runner code serves the dense family;
+the MoE-streaming/QSA/speculation paths are inert for a dense install. The dense GPU port
+is therefore a spec-sanctioned **copy** of the GPU engine (the Ornith variant's
+Kernels/Metal/Runtime/ModelIO/Streaming, ~284 files) into each dense variant's `GPUEngine/`,
+with dense statics — NOT a cross-variant import (variant-isolation forbids that).
+
+**Ordering constraint:** the GPU engine copy includes tokenizer/generation files that are
+being unified into Core (stages 1–3 done: data vocabulary + reasoning types). Complete the
+Core unification of `GenerationConfig`/`GenerationDefaults` (+ the `JSONConstraint` grammar
+cascade) and `GFTokenizer`/`GFDetokenizer` FIRST, so the copied GPUEngine imports those from
+Core instead of re-duplicating them. Then port GPUEngine per variant, wire the engine choice
+into the variant surface + the server backend, and parity-check each against the 6.x GPU
+engine (`TINYTITAN_DENSE_GPU_EQUIV=1` oracle exists per plan-dense-gpu-engine.md).
+
+The server-level CPU/GPU choice already works today via the 6.x engines (catalog `<id>` GPU
+default + `<id>@cpu`; launcher `--engine cpu|gpu` + interactive menu) — verified on 2B/4B/9B
+both engines. The 7.0 goal is to move that choice into the dedicated variant code paths.
