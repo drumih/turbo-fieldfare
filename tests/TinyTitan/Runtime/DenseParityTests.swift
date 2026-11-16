@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import TinyTitanCore
 @testable import Qwen35Dense2B4Bit
+@testable import Qwen35Dense2B8Bit
 @testable import Qwen35Dense4B4Bit
 @testable import Qwen35Dense4B8Bit
 @testable import Qwen35Dense9B4Bit
@@ -54,6 +55,17 @@ struct DenseParityTests {
         try Self.assertParity(
             Qwen35Dense2B4BitVariant.self,
             install: dir.appendingPathComponent("qwen3.5_2B_4Bit"))
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_DENSE_PARITY_DIR"] != nil,
+            "requires dense installs; set TINYTITAN_DENSE_PARITY_DIR"))
+    func dense2B8BitParity() throws {
+        let dir = try #require(Self.modelsDir())
+        try Self.assertParity(
+            Qwen35Dense2B8BitVariant.self,
+            install: dir.appendingPathComponent("qwen3.5_2B_8Bit"))
     }
 
     @Test(
