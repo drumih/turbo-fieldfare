@@ -30,6 +30,50 @@ state a fresh session cannot discover from those quickly.
   `tests/Engines/Qwen35Dense4B4Bit/MatrixTests.swift`.
 - All four dense installs verified on disk under `models/`.
 
+## Measured integration gap (2026-11-16) — what actually blocks "main = 7.0 only"
+
+Re-derived from the tree, not assumed:
+
+- **The production server/library still run entirely on the 6.x `TinyTitan`
+  runtime.** `Package.swift`: `TinyTitanServer → TinyTitanServerCore →
+  { TinyTitanLib, TinyTitan }` and `TinyTitanLib → TinyTitan`. The GPU server
+  session and the dense GPU path both call 6.x `Model.load`/`RealForwardRunner`
+  (e.g. `K2ProbeBackend.swift:84`). **No product target imports any variant.**
+- **`EngineVariant` exists and is clean** (`TinyTitanCore/Variant/EngineContext.swift`:
+  `prefill`/`decode`/`qualify`, `EngineContext`/`LoadedModelHandle`/`SessionState`),
+  and every variant implements it — but **there is no `VariantRegistry` and no
+  consumer**: the spec's "registry resolves a variant id to a concrete factory"
+  is not written yet. `grep EngineVariant sources/` hits only Core + the variants.
+- **Phase (d) "dense GPUEngine port" is NOT a feature port.**
+  `docs/plan-dense-gpu-engine.md` is marked implemented+verified: dense 2B/4B/9B
+  (×4/8) already run on the **GPU** — via the config-driven 6.x `RealForwardRunner`
+  (`numExperts == 0`), gated by `TINYTITAN_DENSE_GPU_EQUIV=1` + both golden
+  baselines. So the remaining work is *retargeting* the server onto variant
+  engines, not building new inference.
+- **Type-conflict note for any future "one variant dir per model with both CPU+GPU
+  in one target" idea:** the dense `CPUEngine` and the GPU engine share 9 top-level
+  type names (`GenerationDefaults`, `Int8AffineGEMV`, `ModelFamily`,
+  `ModelReasoningControl(+Error)`, `Quantization`, `ReasoningLevel(+Error)`,
+  `RequestReasoning`), so strict separation means **separate variant targets**, not
+  co-located directories.
+
+The minimal sequence to reach "server runs 7.0, then retire 6.x" — all serial, all
+model-gated (a real install + `tools/golden-baseline.sh` per step), and none of it
+parallelizable to agents:
+
+1. `VariantRegistry` (id → factory) + `EngineVariant` qualification hook, in Core.
+2. A server-side consumer that drives a variant's `prefill`/`decode` through the
+   streaming session (rule 2: ONE generation path — move the session onto it, do
+   not fork it), selectable per model; keep 6.x for not-yet-ported models.
+3. Wire Ornith first (TT-082): parity + golden on the variant engine (TT-083).
+4. Wire the dense trio (CPU + GPU) the same way.
+5. Only once every served model runs on a variant: drop `TinyTitan` from
+   `TinyTitanLib`/`TinyTitanServerCore`/CLI, retire 6.x off `main` (it stays on
+   `archive/6.x-final`), sync registry/scripts/wiki.
+
+Step 2 is the load-bearing one and the risk: it rewrites the generation path the
+whole product sits on, so it must land behind a real model-run gate or not at all.
+
 ## What is in progress — the `ArchConfig.family` decoupling (WIP)
 
 The GPU runtime lift into Core requires `ArchConfig` to be model-free, so
