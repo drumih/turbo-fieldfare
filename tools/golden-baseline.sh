@@ -8,7 +8,7 @@
 #   tools/golden-baseline.sh --check [...]    # compare against the stored file
 #   tools/golden-baseline.sh --server [...]   # CLI and server must agree
 #
-# Targets: ornith-4, ornith-8, ornith-bf16dense-4, ornith122-4, ornith122-8,
+# Targets: ornith-4, ornith-8, ornith122-4, ornith122-8,
 # qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8,
 # katcoder-4, katcoder-8, k2-4, k2-8, and the dense qwen35-{2b,4b,9b}-{4,8}.
 # The katcoder and qwen35 targets are declared whether
@@ -348,14 +348,6 @@ for t in "${targets[@]+"${targets[@]}"}"; do
   case "$t" in
     4|ornith-4) dir="ornith-1.5_35B_A3B_4Bit"; file="ornith-1.5-35b-a3b-4bit.txt"; q=4 ;;
     8|ornith-8) dir="ornith-1.5_35B_A3B_8Bit"; file="ornith-1.5-35b-a3b-8bit.txt"; q=8 ;;
-    # The bf16-dense / 4-bit-expert build is a different install, not a width:
-    # its attention, GDN and shared-expert weights are the checkpoint's own
-    # bf16, so its output is not expected to match ornith-4. It needs its own
-    # baseline for the same reason the other targets do -- a runtime change
-    # must not move this graph either -- and it is declared here before the
-    # install exists so the first release that ships it cannot skip it.
-    ornith-bf16dense-4) dir="ornith-1.5_35B_A3B-bf16dense_4Bit"
-                        file="ornith-1.5-35b-a3b-bf16dense-4bit.txt"; q=4 ;;
     # Ornith 1.5 122B: the wider member of the same family, so it exercises the
     # same graph at hidden 3072 and 48 layers. Declared before its install is on
     # every machine, like the other targets: inert where the directory is
@@ -384,7 +376,7 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     # K2-Horizon installs, driven by the probe: `TinyTitanBench k2gpu`.
     k2-4) dir="k2-horizon-4bit.ssdai"; file="k2-horizon-4bit.txt"; q=4; kind=k2 ;;
     k2-8) dir="k2-horizon-8bit.ssdai"; file="k2-horizon-8bit.txt"; q=8; kind=k2 ;;
-    *) echo "unknown target: $t (ornith-4, ornith-8, ornith-bf16dense-4, ornith122-4, ornith122-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, k2-4, k2-8)" >&2
+    *) echo "unknown target: $t (ornith-4, ornith-8, ornith122-4, ornith122-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, k2-4, k2-8)" >&2
        status=1; continue ;;
   esac
   model="$ROOT/models/$dir"

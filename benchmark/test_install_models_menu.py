@@ -61,10 +61,11 @@ class InstallMenuAnswerTests(unittest.TestCase):
         self.assertIn("INSTALLED ornith15-8bit", result.stdout + result.stderr)
 
     def test_a_number_installs_that_row(self) -> None:
-        # Row 14 is Qwen 3.5 2B 4-bit in the current catalogue; the bf16-dense
-        # row sits at 3, so this also pins that a row's number moved with its
-        # position rather than being read from a stale list.
-        result = run_menu("14\n")
+        # Row 13 is Qwen 3.5 2B 4-bit in the current catalogue (it was 14 while
+        # the bf16-dense row sat at 3, before that variant was removed), so this
+        # also pins that a row's number moved with its position rather than
+        # being read from a stale list.
+        result = run_menu("13\n")
         self.assertIn("INSTALLED qwen35-2b", result.stdout + result.stderr)
 
     def test_end_of_input_installs_nothing(self) -> None:
@@ -131,7 +132,7 @@ class MenuRowPaddingTests(unittest.TestCase):
 
     def test_a_padded_row_outside_the_list_still_refuses(self) -> None:
         # Forcing the base is not a pass: 20 and 21 are still not rows (the
-        # catalogue has 19), and 0 is still not a row, padded or not.
+        # catalogue has 18), and 0 is still not a row, padded or not.
         for reply in ("00", "020", "021"):
             with self.subTest(reply=reply):
                 got, output = self.installed(reply + "\n")
@@ -192,6 +193,25 @@ class StagingPathTests(unittest.TestCase):
         self.assertNotIn("qwen3.8-flash-next_125B_A6B_4E-8R-16N", self.script)
         self.assertNotIn("qwen38flash-mtp", self.script)
         self.assertNotIn("qwen3.8-flash-next_125B_A6B_MTP_4Bit", self.script)
+
+    def test_the_removed_rows_and_their_branches_are_gone(self) -> None:
+        # ornith15-bf16dense, ornith15-mtp and qwen36-mtp were removed from the
+        # catalogue (2026-11-16). Their rows, dispatch branches and model ids
+        # must not come back; the legacy staging patterns in `clean` are the
+        # only place the removed names may still appear.
+        for fragment in (
+            '"ornith15-bf16dense|',
+            '"ornith15-mtp|',
+            '"qwen36-mtp|',
+            "convert_qwen36_mtp",
+            "prepare_ornith_mtp",
+            "convert_qwen35moe_dense16",
+            "ornith-1.5-35b-a3b-bf16dense",
+            "ornith-1.5-35b-a3b-mtp-4bit",
+            "qwen3.6-35b-a3b-mtp-4bit",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, self.script)
 
     def test_relative_staging_paths_are_not_quoted_in_a_command(self) -> None:
         # Belt and braces for a future edit that reintroduces the old spelling.
@@ -334,13 +354,53 @@ class DiskSpaceAndCleanupTests(unittest.TestCase):
         self.assertFalse(snapshot.exists())
         self.assertIn("staging cleaned", result.stdout + result.stderr)
 
-    def test_draft_head_staging_is_removed_immediately(self) -> None:
-        # Nothing reuses a draft head's source shard, installed or not.
-        self.install("ornith-1.5_35B_A3B_MTP_4Bit")
-        source = self.stage("ornith-mtp-src", 1)
-        result = self.run_tool("ornith15-mtp")
-        self.assertFalse(source.exists())
-        self.assertIn("staging cleaned", result.stdout + result.stderr)
+    def test_clean_reclaims_staging_from_removed_rows(self) -> None:
+        # The MTP draft heads and the bf16-dense variant left the catalogue
+        # (2026-11-16). Staging they left behind has no remaining consumer, so
+        # `clean` must reclaim it rather than report it staged forever.
+        legacy = [
+            self.stage("ornith-mtp-src", 1),
+            self.stage("ornith-mtp-affine", 1),
+            self.stage("qwen36-mtp-affine", 1),
+            self.stage("qwen36-mtp-shards", 1),
+            self.stage("ornith15-bf16dense-affine", 1),
+            self.stage("ornith15-bf16dense-shards", 1),
+        ]
+        result = self.run_tool("clean")
+        output = result.stdout + result.stderr
+        for path in legacy:
+            self.assertFalse(path.exists(), f"legacy staging kept: {path}")
+        self.assertIn("staging cleaned", output)
+        self.assertIn("nothing left staged", output)
+
+    def test_removed_models_are_refused_by_name(self) -> None:
+        # The three removed rows must not install, and the refusal must name
+        # what was asked for rather than fall through to a converter.
+        for name in ("ornith15-bf16dense", "ornith15-mtp", "qwen36-mtp"):
+            with self.subTest(model=name):
+                result = self.run_tool(name)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 2, output)
+                self.assertIn(f"unknown model: {name}", output)
+                self.assertNotIn("FAKE-REPACK", output)
+
+    def test_canonical_launcher_keys_install_the_same_rows(self) -> None:
+        # The installer accepts the launcher's canonical keys and aliases, so
+        # both scripts address one catalogue (tools/tinytitan_models.sh).
+        for alias, row in (
+            ("ornith", "ornith15"),
+            ("ornith-8bit", "ornith15-8bit"),
+            ("qwen38", "qwen38flash"),
+            ("qwen38-8bit", "qwen38flash-8bit"),
+            ("aw", "agentworld"),
+            ("kat-8bit", "katcoder-8bit"),
+        ):
+            with self.subTest(alias=alias):
+                result = self.run_tool(alias, available_gb=9999)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                self.assertIn(f"installing {row}", output)
+                self.assertIn("FAKE-REPACK", output)
 
     def test_clean_keeps_staging_an_uninstalled_width_still_needs(self) -> None:
         self.install(self.ORNITH_4)
@@ -478,85 +538,13 @@ class ConverterPathTests(unittest.TestCase):
         self.assertTrue(path.is_file(), path)
 
 
-class DenseBf16InstallTests(unittest.TestCase):
-    """The bf16-dense row is installed, not merely listed.
-
-    This is the branch that was once pasted into `row_staging_dirs` instead of
-    `install_one`, so the catalogue row, the menu entry and the README all said
-    the build existed while selecting it returned success and installed nothing.
-    The stub repack records its arguments, so the test pins the converter path,
-    the variant's own model id (the catalog id must not collide with the plain
-    4-bit row) and that the per-build staging is dropped afterwards.
-    """
-
-    def test_the_row_repacks_the_dense_snapshot_and_verifies_it(self) -> None:
-        root = pathlib.Path(tempfile.mkdtemp(prefix="tt-dense-install-"))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        for name in ("work", "models", "bin"):
-            (root / name).mkdir()
-        # The resolver only has to answer its `-c` probe; the snapshot exists,
-        # so the converter itself is never called.
-        fake_python = root / "python"
-        fake_python.write_text("#!/bin/sh\nexit 0\n")
-        fake_python.chmod(0o755)
-        calls = root / "calls"
-        repack = root / "bin" / "TinyTitanRepack"
-        repack.write_text(
-            "#!/bin/sh\n"
-            "{ printf 'CALL\\n'; printf '%s\\n' \"$@\"; } >> \"$STUB_LOG\"\n"
-            "while [ $# -gt 0 ]; do\n"
-            '  case "$1" in --output) mkdir -p "$2"; shift 2 ;; *) shift ;; esac\n'
-            "done\n"
-            "exit 0\n"
-        )
-        repack.chmod(0o755)
-        snap = root / "work" / "ornith15-bf16dense-affine"
-        snap.mkdir(parents=True)
-        (snap / "model.safetensors.index.json").write_text("{}")
-        shards = root / "work" / "ornith15-bf16dense-shards"
-        shards.mkdir()
-        (shards / "model-00001-of-00016.safetensors").write_text("partial")
-        env = dict(
-            os.environ,
-            TINYTITAN_WORK_DIR=str(root / "work"),
-            TINYTITAN_MODELS_DIR=str(root / "models"),
-            TINYTITAN_BIN_DIR=str(root / "bin"),
-            TINYTITAN_PYTHON=str(fake_python),
-            TINYTITAN_SKIP_DISK_CHECK="1",
-            STUB_LOG=str(calls),
-        )
-        result = subprocess.run(
-            ["bash", str(SCRIPT), "ornith15-bf16dense"],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
-        output = result.stdout + result.stderr
-        self.assertEqual(result.returncode, 0, output)
-        groups = [
-            group.splitlines() for group in calls.read_text().split("CALL\n") if group.strip()
-        ]
-        self.assertEqual(len(groups), 2, output)
-        install = groups[0]
-        self.assertIn("--input-snapshot", install)
-        self.assertEqual(install[install.index("--input-snapshot") + 1], str(snap))
-        self.assertEqual(
-            install[install.index("--model-id") + 1],
-            "ornith-1.5-35b-a3b-bf16dense",
-            "the variant must not advertise the plain 4-bit row's catalog id",
-        )
-        self.assertEqual(
-            install[install.index("--output") + 1],
-            str(root / "models" / "ornith-1.5_35B_A3B-bf16dense_4Bit"),
-        )
-        self.assertIn("--verify-install", groups[1], output)
-        self.assertFalse(snap.exists(), "the dense snapshot was not cleaned up")
-        self.assertFalse(
-            (root / "work" / "ornith15-bf16dense-shards").exists(),
-            "the shard directory was not cleaned up",
-        )
+# DenseBf16InstallTests lived here and pinned the `convert_qwen35moe_dense16`
+# install path while the bf16-dense variant existed. The row, its menu entry
+# and its dispatch branch were removed (2026-11-16);
+# StagingPathTests.test_the_removed_rows_and_their_branches_are_gone and
+# DiskSpaceAndCleanupTests.test_removed_models_are_refused_by_name pin the
+# removal instead, and test_clean_reclaims_staging_from_removed_rows pins what
+# happens to staging the variant left behind.
 
 
 if __name__ == "__main__":

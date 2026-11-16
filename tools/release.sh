@@ -322,10 +322,6 @@ check_golden() {  # <install dir> <golden target>
 # notes and make the requirement meaningless.
 check_golden ornith-1.5_35B_A3B_8Bit ornith-8
 check_golden ornith-1.5_35B_A3B_4Bit ornith-4
-# The bf16-dense Ornith build: attention, GDN and the shared expert at the
-# checkpoint's bf16 with 4-bit routed experts. A different install from the
-# 4-bit row, so it needs its own stored text rather than inheriting ornith-4's.
-check_golden ornith-1.5_35B_A3B-bf16dense_4Bit ornith-bf16dense-4
 check_golden qwen3.6_35B_A3B_4Bit qwen36-4
 check_golden qwen3.6_35B_A3B_8Bit qwen36-8
 # The 4-bit type carries the 4/8/16 recipe (experts 4-bit, the rest 8-bit)

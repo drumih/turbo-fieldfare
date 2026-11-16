@@ -43,10 +43,12 @@ TINYTITAN_CLIENTS=(
 #   key|label|bits|installed GB|what it is for
 #
 # `key` is an `install_models.sh` target and a `TinyTitanRepack --model` selector.
-# `label` is what the menu prints; it is spelled out here rather than derived,
-# because `tinytitan_resolve_model` takes the base keys (ornith15, qwen38) and
-# not the `-8bit` targets or `qwen38flash`, and a menu that fell back to printing
-# `qwen35-4b-8bit` at a person is not a menu.
+# `label` is what the menu prints, and it must equal the label
+# `tinytitan_resolve_model` gives the same model: the installer menu and the
+# launcher's fallback list are two views of one catalogue, and
+# `test_launcher_install` asserts the labels and the key sets agree. Both
+# scripts accept the launcher's canonical base keys (ornith, qwen38) and these
+# width-suffixed targets through `tinytitan_install_target`.
 #
 # The sizes are **installed** sizes, not downloads: a MoE install is built from a
 # ~70 GB bf16 fetch and the widths share it, so the number a person has to have
@@ -59,7 +61,6 @@ TINYTITAN_CLIENTS=(
 TINYTITAN_MODEL_CHOICES=(
   "ornith15-8bit|Ornith 1.5 35B-A3B|8|36.9|Recommended. Best measured coding and tooling results."
   "ornith15|Ornith 1.5 35B-A3B|4|19.5|The same model at 4-bit: half the disk, faster decode."
-  "ornith15-bf16dense|Ornith 1.5 35B-A3B (bf16 dense)|4|22.0|Attention, GDN and the shared expert at the checkpoint's own bf16 with the routed experts still 4-bit: about 7% slower to decode than the 4-bit row, the same prefill, and no quantization error in the always-on blocks."
   "qwen36-8bit|Qwen 3.6 35B-A3B|8|37.8|The other 35B family, at 8-bit."
   "qwen36|Qwen 3.6 35B-A3B|4|19.5|The other 35B family, at 4-bit."
   "agentworld-8bit|Qwen-AgentWorld 35B-A3B|8|41.0|Tuned for agentic tool use."
@@ -143,13 +144,6 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_FAMILY=qwen36
       TINYTITAN_MODEL_ENGINES=gpu
       TINYTITAN_MODEL_THINKING="off,on" ;;
-    ornith15-bf16dense|ornith1.5-bf16dense)
-      TINYTITAN_MODEL_KEY=ornith15-bf16dense
-      TINYTITAN_MODEL_STEM="ornith-1.5_35B_A3B-bf16dense"
-      TINYTITAN_MODEL_LABEL="Ornith 1.5 35B-A3B (bf16 dense)"
-      TINYTITAN_MODEL_FAMILY=qwen36
-      TINYTITAN_MODEL_ENGINES=gpu
-      TINYTITAN_MODEL_THINKING="off,on" ;;
     ornith122|ornith-1.5-122b|ornith1.5-122b)
       TINYTITAN_MODEL_KEY=ornith122
       TINYTITAN_MODEL_STEM="ornith-1.5_122B"
@@ -178,7 +172,7 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_FAMILY=qwen36
       TINYTITAN_MODEL_ENGINES=gpu
       TINYTITAN_MODEL_THINKING="off,on" ;;
-    qwen38|qwen3.8)
+    qwen38|qwen3.8|qwen38flash)
       TINYTITAN_MODEL_KEY=qwen38
       TINYTITAN_MODEL_STEM="qwen3.8-flash-next_125B_A6B"
       TINYTITAN_MODEL_LABEL="Qwen3.8-Flash-Next 125B-A6B"
@@ -209,7 +203,7 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_ENGINES="gpu,cpu"
       TINYTITAN_MODEL_THINKING="off,on" ;;
     *)
-      echo "unknown AI model: ${1:-} (ornith|ornith15-bf16dense|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b)" >&2
+      echo "unknown AI model: ${1:-} (ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b)" >&2
       return 2 ;;
   esac
 }
@@ -246,12 +240,6 @@ tinytitan_install_key() {
   local key
   case "${1:-}" in
     ornith-1.5_35B_A3B)            key=ornith15 ;;
-    # The mixed build has one width only: the routed experts are the 4-bit
-    # payload and the dense blocks are bf16, so there is no 8-bit sibling to
-    # fetch and the launcher must not ask for one.
-    ornith-1.5_35B_A3B-bf16dense)
-      [[ "${2:-4}" == 8 ]] && return 1
-      key=ornith15-bf16dense ;;
     ornith-1.5_122B)               key=ornith122 ;;
     qwen3.6_35B_A3B)               key=qwen36 ;;
     qwen-agentworld_35B_A3B)       key=agentworld ;;
@@ -264,6 +252,28 @@ tinytitan_install_key() {
   esac
   [[ "${2:-4}" == "8" ]] && key="$key-8bit"
   printf '%s\n' "$key"
+}
+
+# tinytitan_install_target <key> -> the install_models.sh catalogue key for any
+# spelling either script accepts: a catalogue key itself (ornith15-8bit,
+# qwen38flash), a launcher canonical key (ornith, qwen38), or a resolver alias
+# (aw, kat, qwen3.5-4b), each optionally carrying an -8bit width suffix.
+# Derived from the shared resolver and the stem->key map above rather than a
+# second alias table, so the installer and the launcher cannot drift apart:
+# both accept exactly the keys TINYTITAN_ALL_MODELS and TINYTITAN_MODEL_CHOICES
+# describe. Returns 1 for a key neither list carries.
+tinytitan_install_target() {
+  local key="${1:-}" base bits entry
+  for entry in "${TINYTITAN_MODEL_CHOICES[@]+"${TINYTITAN_MODEL_CHOICES[@]}"}"; do
+    [[ "${entry%%|*}" == "$key" ]] && { printf '%s\n' "$key"; return 0; }
+  done
+  bits=4
+  base="$key"
+  case "$key" in
+    *-8bit) base="${key%-8bit}"; bits=8 ;;
+  esac
+  tinytitan_resolve_model "$base" 2>/dev/null || return 1
+  tinytitan_install_key "$TINYTITAN_MODEL_STEM" "$bits"
 }
 
 # tinytitan_install_size_gb <key> -> the installed size the menu prints, or
@@ -295,8 +305,8 @@ tinytitan_install_size_gb() {
 #
 # It reads the built-in list rather than the server's catalog, because the whole
 # point is the models a catalog of installed things cannot report. A name whose
-# width has no catalogue key (an MTP sidecar, which is not a model on its own)
-# is skipped rather than offered as something that cannot be fetched.
+# width has no catalogue key is skipped rather than offered as something that
+# cannot be fetched.
 tinytitan_missing_offers() {
   local models_dir="${1:-}" name stem label engines thinking quant bits key size
   [[ -n "$models_dir" ]] || return 1
@@ -327,7 +337,7 @@ tinytitan_model_port() {
 # Every model this checkout knows about, for help text and for the fallback
 # list when the server cannot report its catalog. One list: the catalog is
 # still the source of what is installed.
-TINYTITAN_ALL_MODELS=(ornith ornith15-bf16dense ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b)
+TINYTITAN_ALL_MODELS=(ornith ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b)
 
 # --- Installed models, from the server's catalog -----------------------
 #

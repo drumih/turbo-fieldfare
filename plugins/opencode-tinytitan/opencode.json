@@ -155,42 +155,6 @@
             }
           }
         },
-        "ornith-1.5-35b-a3b-bf16dense_4-Bit": {
-          "name": "Ornith 1.5 35B-A3B bf16 dense 4-bit",
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": false,
-          "attachment": false,
-          "modalities": {
-            "input": [
-              "text"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "limit": {
-            "context": 262144,
-            "output": 32768
-          },
-          "variants": {
-            "off": {
-              "reasoningEffort": "off"
-            },
-            "on": {
-              "reasoningEffort": "on"
-            },
-            "low": {
-              "disabled": true
-            },
-            "medium": {
-              "disabled": true
-            },
-            "high": {
-              "disabled": true
-            }
-          }
-        },
         "qwen3.6-35b-a3b_8-Bit": {
           "name": "Qwen 3.6 35B-A3B 8-bit",
           "tool_call": true,

@@ -50,12 +50,9 @@ STEM_KEYS = {
 
 # The names the launcher's own `tinytitan_resolve_model` accepts, with the
 # catalogue key each one's 4-bit install uses. A missing model is chosen from
-# these, because `--model qwen38flash` is not a name the launcher knows.
+# these, because they are the canonical keys both scripts share.
 LAUNCHER_NAMES = {
     "ornith": "ornith15",
-    # A one-width model: the bf16-dense build's routed experts are the 4-bit
-    # payload, so there is no 8-bit sibling to fetch.
-    "ornith15-bf16dense": "ornith15-bf16dense",
     "ornith122": "ornith122",
     "qwen36": "qwen36",
     "agentworld": "agentworld",
@@ -65,6 +62,27 @@ LAUNCHER_NAMES = {
     "qwen35-4b": "qwen35-4b",
     "qwen35-9b": "qwen35-9b",
 }
+
+# The canonical key list both scripts derive from, with the display name each
+# model must print everywhere and the installer key its 4-bit row carries.
+# Spelled out as the assertion: the menu (TINYTITAN_MODEL_CHOICES), the
+# launcher's resolver and the installer's CATALOGUE are three views of this
+# one list, and CatalogueSyncTests holds them equal to it.
+CANONICAL = {
+    "ornith": ("Ornith 1.5 35B-A3B", "ornith15"),
+    "ornith122": ("Ornith 1.5 122B", "ornith122"),
+    "qwen36": ("Qwen 3.6 35B-A3B", "qwen36"),
+    "agentworld": ("Qwen-AgentWorld 35B-A3B", "agentworld"),
+    "katcoder": ("KAT-Coder-V2.5-Dev 35B-A3B", "katcoder"),
+    "qwen38": ("Qwen3.8-Flash-Next 125B-A6B", "qwen38flash"),
+    "qwen35-2b": ("Qwen 3.5 2B", "qwen35-2b"),
+    "qwen35-4b": ("Qwen 3.5 4B", "qwen35-4b"),
+    "qwen35-9b": ("Qwen 3.5 9B", "qwen35-9b"),
+}
+
+# Removed from the catalogue 2026-11-16: a quant variant and two draft-head
+# sidecars. Neither script may resolve, offer or install them again.
+REMOVED_KEYS = ("ornith15-bf16dense", "ornith15-mtp", "qwen36-mtp")
 
 
 def catalogue() -> dict[str, str]:
@@ -168,15 +186,15 @@ class InstallKeyTests(unittest.TestCase):
         result = shell_model_function("tinytitan_install_key", "not-a-stem", "4")
         self.assertNotEqual(result.returncode, 0)
 
-    def test_the_bf16_dense_build_has_only_a_4_bit_key(self) -> None:
-        # It is a different model, not a second width: the catalogue carries no
-        # 8-bit row, so the launcher must not offer to fetch one.
-        four = shell_model_function("tinytitan_install_key", "ornith-1.5_35B_A3B-bf16dense", "4")
-        self.assertEqual(four.returncode, 0, four.stderr)
-        self.assertEqual(four.stdout.strip(), "ornith15-bf16dense")
-        self.assertIn(four.stdout.strip(), catalogue())
-        eight = shell_model_function("tinytitan_install_key", "ornith-1.5_35B_A3B-bf16dense", "8")
-        self.assertNotEqual(eight.returncode, 0)
+    def test_the_removed_bf16_dense_stem_has_no_key(self) -> None:
+        # The bf16-dense variant was removed (2026-11-16): neither width may
+        # map to an install key, so the launcher cannot offer to fetch it.
+        for bits in ("4", "8"):
+            with self.subTest(bits=bits):
+                result = shell_model_function(
+                    "tinytitan_install_key", "ornith-1.5_35B_A3B-bf16dense", bits
+                )
+                self.assertNotEqual(result.returncode, 0)
 
     def test_the_install_size_comes_from_the_menu_entry(self) -> None:
         result = subprocess.run(
@@ -265,13 +283,10 @@ class MissingOffersTests(unittest.TestCase):
         self.assertIn("ornith", names)
         self.assertIn("katcoder", names)
         self.assertIn("qwen38", names)
-        # Nine models in two widths, plus the bf16-dense build, which has one
-        # width. The count is asserted so a new row is a deliberate edit here:
-        # a width that cannot be fetched must not appear as a row.
-        self.assertEqual(len(rows), 19, "ten models, one of them 4-bit only")
-        dense = [row for row in rows if row[0] == "ornith15-bf16dense"]
-        self.assertEqual([row[1] for row in dense], ["4"], dense)
-        self.assertEqual([row[2] for row in dense], ["ornith15-bf16dense"], dense)
+        # Nine models in two widths. The count is asserted so a new row is a
+        # deliberate edit here: a width that cannot be fetched must not appear
+        # as a row.
+        self.assertEqual(len(rows), 18, "nine models, two widths each")
         for row in rows:
             self.assertIn(row[1], ("4", "8"))
             self.assertTrue(row[3], f"offer row has no label: {row}")
@@ -306,7 +321,6 @@ class MissingOffersTests(unittest.TestCase):
             root = pathlib.Path(directory)
             for stem in (
                 "ornith-1.5_35B_A3B",
-                "ornith-1.5_35B_A3B-bf16dense",
                 "ornith-1.5_122B",
                 "qwen3.6_35B_A3B",
                 "qwen-agentworld_35B_A3B",
@@ -568,7 +582,7 @@ class MenuRowPaddingTests(unittest.TestCase):
     def test_a_padded_reply_past_the_end_still_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as empty:
             models = pathlib.Path(empty)
-            # The catalogue has 19 rows; 20 and 21 are past its end.
+            # The catalogue has 18 rows; 20 and 21 are past its end.
             for padded in ("020", "021"):
                 with self.subTest(reply=padded):
                     pad = self.pick(padded, models)
@@ -578,44 +592,160 @@ class MenuRowPaddingTests(unittest.TestCase):
                     self.assertEqual(pad.returncode, 2)
 
 
-class OneWidthModelTests(unittest.TestCase):
-    """A model the catalogue ships in one width is not a missing 8-bit fetch.
+class RemovedModelTests(unittest.TestCase):
+    """The removed rows stay removed (2026-11-16).
 
-    The launcher's historical default is 8-bit. The bf16-dense Ornith row has
-    no 8-bit sibling, so asking for it by name must resolve to the width it
-    has, and asking for `--bits 8` must name the absence rather than offering
-    a download that cannot exist.
+    ornith15-bf16dense (a quant variant) and the two MTP draft-head sidecars
+    (ornith15-mtp, qwen36-mtp) left the catalogue. The launcher must refuse
+    them by name, and the shared key resolver must not map them to a fetch.
+    OneWidthModelTests lived here while the bf16-dense build was the one
+    single-width model; every remaining model ships both widths.
     """
 
-    def test_the_bare_model_name_defaults_to_its_only_width(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="one-width-") as empty:
-            run = run_launcher(
-                "--client",
-                "server",
-                "--model",
-                "ornith15-bf16dense",
-                models_dir=pathlib.Path(empty),
-            )
-        combined = run.stdout + run.stderr
-        self.assertEqual(run.returncode, 1, combined)
-        self.assertIn("4-bit is not installed", combined)
-        self.assertIn("tools/install_models.sh ornith15-bf16dense", combined)
+    def test_the_launcher_refuses_the_removed_keys(self) -> None:
+        for key in REMOVED_KEYS:
+            with self.subTest(model=key), tempfile.TemporaryDirectory(prefix="removed-") as empty:
+                run = run_launcher(
+                    "--client", "server", "--model", key, models_dir=pathlib.Path(empty)
+                )
+                combined = run.stdout + run.stderr
+                self.assertEqual(run.returncode, 2, combined)
+                self.assertIn(f"unknown model: {key}", combined)
+                self.assertNotIn("Install it with", combined)
 
-    def test_an_explicit_eight_bit_is_refused_by_name(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="one-width-") as empty:
+    def test_the_shared_resolver_has_no_target_for_them(self) -> None:
+        for key in REMOVED_KEYS:
+            with self.subTest(key=key):
+                result = subprocess.run(
+                    ["bash", "-c", f'source "{MODELS_SH}"; tinytitan_install_target "{key}"'],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=60,
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+
+class InstallerSpellingTests(unittest.TestCase):
+    """The launcher accepts the installer's key spellings, width included.
+
+    Both scripts read one catalogue (tools/tinytitan_models.sh), so a key the
+    installer prints -- ornith15-8bit, qwen38flash -- is a key the launcher
+    takes, and a canonical key with an -8bit suffix names its own width.
+    """
+
+    def test_installer_keys_and_suffixed_canonical_keys_resolve(self) -> None:
+        cases = (
+            ("ornith15-8bit", "ornith15-8bit"),
+            ("ornith15", "ornith15-8bit"),  # bare key takes the historical 8-bit default
+            ("qwen38flash", "qwen38flash-8bit"),
+            ("qwen38flash-8bit", "qwen38flash-8bit"),
+            ("ornith-8bit", "ornith15-8bit"),
+            ("qwen38-8bit", "qwen38flash-8bit"),
+            ("qwen35-4b-8bit", "qwen35-4b-8bit"),
+        )
+        for model, key in cases:
+            with (
+                self.subTest(model=model),
+                tempfile.TemporaryDirectory(prefix="spelling-") as empty,
+            ):
+                run = run_launcher(
+                    "--client", "server", "--model", model, models_dir=pathlib.Path(empty)
+                )
+                combined = run.stdout + run.stderr
+                self.assertEqual(run.returncode, 1, combined)
+                self.assertIn(f"tools/install_models.sh {key}", combined)
+
+    def test_a_suffixed_key_conflicting_with_bits_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="spelling-") as empty:
             run = run_launcher(
                 "--client",
                 "server",
                 "--model",
-                "ornith15-bf16dense",
+                "ornith-8bit",
                 "--bits",
-                "8",
+                "4",
                 models_dir=pathlib.Path(empty),
             )
         combined = run.stdout + run.stderr
         self.assertEqual(run.returncode, 2, combined)
-        self.assertIn("has no 8-bit build", combined)
-        self.assertNotIn("Install it with", combined)
+        self.assertIn("names 8-bit, not 4-bit", combined)
+
+
+def choices() -> dict[str, tuple[str, str]]:
+    """`tinytitan_models.sh`'s TINYTITAN_MODEL_CHOICES as `key -> (label, bits)`."""
+    text = MODELS_SH.read_text()
+    block = re.search(r"^TINYTITAN_MODEL_CHOICES=\((.*?)^\)", text, re.MULTILINE | re.DOTALL)
+    if block is None:
+        raise AssertionError("tinytitan_models.sh no longer declares TINYTITAN_MODEL_CHOICES")
+    rows = {}
+    for line in block.group(1).splitlines():
+        match = re.match(r'\s*"([^|]+)\|([^|]+)\|([48])\|', line)
+        if match:
+            rows[match.group(1)] = (match.group(2), match.group(3))
+    if not rows:
+        raise AssertionError("TINYTITAN_MODEL_CHOICES parsed as empty")
+    return rows
+
+
+def shell_snippet(snippet: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", "-c", f'source "{MODELS_SH}"; {snippet}'],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+
+class CatalogueSyncTests(unittest.TestCase):
+    """One catalogue, three views: menu, resolver, installer.
+
+    The installer menu (TINYTITAN_MODEL_CHOICES), the launcher's resolver and
+    the installer's CATALOGUE must carry the same keys and print the same
+    display names for every model. CANONICAL above is the assertion; these
+    tests hold all three lists to it, so a rename or a one-sided addition
+    fails here rather than in a user's terminal.
+    """
+
+    def test_the_three_lists_carry_exactly_the_same_keys(self) -> None:
+        expected = set()
+        for _label, key in CANONICAL.values():
+            expected.add(key)
+            expected.add(f"{key}-8bit")
+        self.assertEqual(set(choices()), expected, "menu keys drifted from the canonical list")
+        self.assertEqual(
+            set(catalogue()), expected, "installer keys drifted from the canonical list"
+        )
+
+    def test_the_menu_and_the_launcher_print_the_same_names(self) -> None:
+        menu = choices()
+        for name, (label, key) in CANONICAL.items():
+            with self.subTest(model=name):
+                resolved = shell_snippet(
+                    f'tinytitan_resolve_model "{name}" && printf "%s" "$TINYTITAN_MODEL_LABEL"'
+                )
+                self.assertEqual(resolved.returncode, 0, resolved.stderr)
+                self.assertEqual(resolved.stdout, label)
+                for width_key in (key, f"{key}-8bit"):
+                    self.assertEqual(
+                        menu[width_key][0],
+                        label,
+                        f"menu label for {width_key} differs from the launcher's",
+                    )
+
+    def test_install_target_accepts_both_spellings_of_every_model(self) -> None:
+        for name, (_label, key) in CANONICAL.items():
+            for spelling, expected in (
+                (name, key),
+                (f"{name}-8bit", f"{key}-8bit"),
+                (key, key),
+                (f"{key}-8bit", f"{key}-8bit"),
+            ):
+                with self.subTest(spelling=spelling):
+                    result = shell_snippet(f'tinytitan_install_target "{spelling}"')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
 
 
 if __name__ == "__main__":

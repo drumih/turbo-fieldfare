@@ -44,7 +44,7 @@ source "$ROOT/tools/lib/python.sh"
 # disk. A download is refused before it starts if it cannot finish, and staging
 # is removed as soon as it can no longer save work — a converted snapshot exists
 # so the *second* width of a model costs no fetch, so it is kept exactly until
-# that width is installed, and draft-head staging is never reusable at all.
+# that width is installed.
 
 # Free GB on the volume holding <path>, or empty when df cannot say.
 free_gb() {
@@ -80,10 +80,24 @@ require_gb() {
 # The paths under $WORK that this tool owns. Deliberately a narrow pattern rather
 # than "everything in $WORK": a checkout keeps its release build, benchmark
 # results and scratch checkouts there too, and measuring those as "staging" made
-# `clean` claim 12 GB it had nothing to do with.
+# `clean` claim 12 GB it had nothing to do with. `ornith-mtp-src` is legacy
+# staging from a removed draft-head row; it is still counted so `clean` can
+# reclaim it (see legacy_staging_paths).
 staging_paths() {
   local dir
   for dir in "$WORK"/*-affine* "$WORK"/*-shards "$WORK"/ornith-mtp-src; do
+    [[ -e "$dir" ]] && printf '%s\n' "$dir"
+  done
+}
+
+# Staging that only removed catalogue rows ever consumed: the two MTP draft
+# heads and the bf16-dense Ornith variant (removed 2026-11-16). No remaining
+# row can reuse any of it, so `clean` reclaims it unconditionally rather than
+# leaving it staged forever with no row left to retire it.
+legacy_staging_paths() {
+  local dir
+  for dir in "$WORK"/ornith-mtp-src "$WORK"/ornith-mtp-affine "$WORK"/qwen36-mtp-affine \
+             "$WORK"/qwen36-mtp-shards "$WORK"/*-bf16dense-affine "$WORK"/*-bf16dense-shards; do
     [[ -e "$dir" ]] && printf '%s\n' "$dir"
   done
 }
@@ -159,20 +173,12 @@ row_staging_dirs() {
     IFS='|' read -r _n _dir _w source preset _ <<<"$row"
     [[ "$_n" == "$name" ]] || continue
     case "$source" in
-      convert_qwen36_mtp)  printf 'drop:%s\n' "$WORK/qwen36-mtp-affine" ;;
-      prepare_ornith_mtp)  printf 'drop:%s\n' "$WORK/ornith-mtp-affine" "$WORK/ornith-mtp-src" ;;
       convert)             printf 'drop:%s\n' "$WORK/qwen38-affine-${_w}bit"
                            printf 'reuse:%s\n' "$WORK/qwen38-shards" ;;
       # Both MoE widths are quantized into the same pair of snapshots by one
       # run, so every one of these is what the *other* width would consume.
       convert_qwen35moe)   printf 'reuse:%s\n' "$WORK/${preset}-affine-4bit" "$WORK/${preset}-affine-8bit" \
                                               "$WORK/${preset}-affine" "$WORK/${preset}-shards" ;;
-      # The bf16-dense build is a third conversion of the same checkpoint, not
-      # a width of either snapshot above: its dense blocks are copied through
-      # at bf16, so neither `<preset>-affine-*` can stand in for it. Nothing
-      # else can reuse it either, hence `drop` for the snapshot and the shards.
-      convert_qwen35moe_dense16)
-        printf 'drop:%s\n' "$WORK/${preset}-bf16dense-affine" "$WORK/${preset}-bf16dense-shards" ;;
       # A 122B snapshot is 69.5 GB (4-bit) or 129.8 GB (8-bit). Nobody can reuse
       # it -- the sibling width is a separate fetch by design -- so it goes as
       # soon as its own install exists. The shard directory holds only partial
@@ -267,6 +273,20 @@ cmd_clean() {
     IFS='|' read -r name _ <<<"$row"
     cleanup_staging "$name" reap
   done
+  # Staging from removed rows: nothing left in the catalogue can consume it.
+  local legacy freed=0 removed=()
+  while IFS= read -r legacy; do
+    [[ -n "$legacy" && -e "$legacy" ]] || continue
+    local before
+    before="$(du -sk "$legacy" 2>/dev/null | awk 'NR==1 {print $1}')"
+    rm -rf "$legacy"
+    freed=$(( freed + ${before:-0} ))
+    removed+=("${legacy#"$WORK"/}")
+  done < <(legacy_staging_paths)
+  if (( ${#removed[@]} > 0 )); then
+    printf '  staging cleaned (%s freed): %s\n' \
+      "$(human_kb "$freed")" "$(IFS=', '; printf '%s' "${removed[*]+"${removed[*]}"}")"
+  fi
   for dir in "$WORK"/*-shards; do
     [[ -d "$dir" && -z "$(ls -A "$dir" 2>/dev/null)" ]] && rmdir "$dir" 2>/dev/null
   done
@@ -284,20 +304,22 @@ cmd_clean() {
 # name|install directory|width|source[|preset[|both-widths-directory]]
 #
 # The preset field names the converter preset; it appears on every row a
-# converter branch reads (`convert_qwen35moe`, `convert_qwen35moe_dense16`,
-# `convert_qwen35moe_solo`). The sibling field appears only on the paired
-# `convert_qwen35moe` rows: their converter can write *both* widths from one
-# 70 GB download, so a row names the sibling width it pairs with. That is what
-# makes `tools/install_models.sh katcoder both` cost one download instead of
-# two, and it also lets a second width reuse a snapshot a previous run already
-# converted. The bf16-dense row is not paired: it is a third conversion, so it
-# has a preset and no sibling.
+# converter branch reads (`convert_qwen35moe`, `convert_qwen35moe_solo`).
+# The sibling field appears only on the paired `convert_qwen35moe` rows: their
+# converter can write *both* widths from one 70 GB download, so a row names the
+# sibling width it pairs with. That is what makes
+# `tools/install_models.sh katcoder both` cost one download instead of two, and
+# it also lets a second width reuse a snapshot a previous run already
+# converted.
+#
+# The keys are the installer's historical spellings; the launcher's canonical
+# keys (ornith, qwen38, ...) and every resolver alias are accepted too, through
+# `tinytitan_install_target` in tools/tinytitan_models.sh. Both scripts print
+# the same display names: the menu reads TINYTITAN_MODEL_CHOICES, whose labels
+# `test_launcher_install` holds equal to `tinytitan_resolve_model`'s.
 CATALOGUE=(
   "ornith15|ornith-1.5_35B_A3B_4Bit|4|convert_qwen35moe|ornith15|ornith15-8bit"
   "ornith15-8bit|ornith-1.5_35B_A3B_8Bit|8|convert_qwen35moe|ornith15|ornith15"
-  # One width only, and a different dense policy: see convert_qwen35moe_dense16.
-  "ornith15-bf16dense|ornith-1.5_35B_A3B-bf16dense_4Bit|4|convert_qwen35moe_dense16|ornith15"
-  "ornith15-mtp|ornith-1.5_35B_A3B_MTP_4Bit|4|prepare_ornith_mtp"
   # Ornith-1.5-122B. Deliberately *not* a paired `convert_qwen35moe` row: one
   # `--bits 4 8` pass would stage 69.5 GB and 129.8 GB of snapshots at once,
   # and then a 120 GB install beside them, which no 24 GB/1 TB Mac can hold.
@@ -309,7 +331,6 @@ CATALOGUE=(
   "ornith122-8bit|ornith-1.5_122B_8Bit|8|convert_qwen35moe_solo|ornith122"
   "qwen36|qwen3.6_35B_A3B_4Bit|4|convert_qwen35moe|qwen36|qwen36-8bit"
   "qwen36-8bit|qwen3.6_35B_A3B_8Bit|8|convert_qwen35moe|qwen36|qwen36"
-  "qwen36-mtp|qwen3.6_35B_A3B_MTP_4Bit|4|convert_qwen36_mtp"
   # Qwen3.8-Flash-Next ships two install types and the quant recipe is
   # hardcoded per type, not a --bits dial: the "4-bit" type routes its experts
   # at 4 bits and keeps every always-resident tensor (attention, GDN,
@@ -346,6 +367,15 @@ Commands
   tools/install_models.sh --all-8bit      every 8-bit model
   tools/install_models.sh clean           drop staging that cannot be reused
 
+Model keys
+
+  Every row answers to the launcher's canonical key (ornith, ornith122,
+  qwen36, agentworld, katcoder, qwen38, qwen35-2b, qwen35-4b, qwen35-9b),
+  with -8bit appended for the 8-bit width, and to the historical installer
+  spellings (ornith15, ornith15-8bit, qwen38flash, qwen38flash-8bit, ...).
+  Both scripts accept the same keys and print the same display names; the
+  list is TINYTITAN_MODEL_CHOICES in tools/tinytitan_models.sh.
+
 Where things go
 
   Models install to $TINYTITAN_MODELS_DIR (the installer sets
@@ -356,8 +386,7 @@ Where things go
 
   Staging is kept only while it can save a download: the converted snapshot is
   what makes the *other* width of the same model free, so it lives until that
-  width is installed and is removed automatically at that point. Draft-head
-  staging has no second consumer and goes as soon as the install exists.
+  width is installed and is removed automatically at that point.
   `clean` applies those rules to everything at once and says what is left.
 
   A download is refused before it starts when the staging volume or the models
@@ -370,17 +399,14 @@ What a run costs
   The sizes in the menu are the space an install occupies. Installing also
   downloads the model's own bf16 release and stages it under
   $TINYTITAN_WORK_DIR: about 70 GB for a 35B-A3B, which serves both widths,
-  and 360 GB per width for Qwen3.8-Flash-Next. The bf16-dense variant is a
-  third conversion of the same 70 GB, not a width of either snapshot, so it
-  fetches again when installed on its own. A draft head fetches only its
-  own shards. The disk guard above names both volumes and both numbers before
-  anything starts.
+  and 360 GB per width for Qwen3.8-Flash-Next. The disk guard above names
+  both volumes and both numbers before anything starts.
 
 Coverage
 
-  Ornith 1.5 35B-A3B        4-bit, 8-bit, bf16 dense (4-bit experts), MTP draft
+  Ornith 1.5 35B-A3B        4-bit, 8-bit
   Ornith 1.5 122B           4-bit, 8-bit (one width per run)
-  Qwen 3.6 35B-A3B          4-bit, 8-bit, MTP draft
+  Qwen 3.6 35B-A3B          4-bit, 8-bit
   Qwen3.8-Flash-Next        4-bit (experts 4-bit, the rest 8-bit), 8-bit
   Qwen-AgentWorld 35B-A3B   4-bit, 8-bit
   KAT-Coder-V2.5-Dev 35B-A3B 4-bit, 8-bit
@@ -400,12 +426,6 @@ Sources
                       `<name> both` installs 4-bit and 8-bit for the cost of
                       one fetch; one width alone already converts both and
                       keeps the other snapshot for a later run.
-  convert_qwen35moe_dense16
-                      the same converter for Ornith-1.5-35B, with the dense
-                      projections kept at the checkpoint's bf16 and only the
-                      routed experts at the build width (--bits 4
-                      --dense-bits 16). One width only: the install is a
-                      different model, not a second width of the 4-bit one.
   convert_qwen35moe_solo
                       the same converter for Ornith-1.5-122B, one width per
                       run. A 250 GB source cannot stage both snapshots (69.5
@@ -429,8 +449,6 @@ Sources
                       bf16 in both. Qwen's own FP8 build is not used either: it
                       quantizes only the routed experts, in [128, 128] blocks
                       that do not map onto affine group-64.
-  convert_qwen36_mtp  the same converter's --draft-head mode (two shards).
-  prepare_ornith_mtp  tools/prepare_ornith_mtp.py (shard 16 of the original).
 
 USAGE
 }
@@ -440,10 +458,8 @@ USAGE
 # fetched" — which is exactly how people read it. Every row downloads first.
 source_label() {
   case "$1" in
-    convert|convert_qwen35|convert_qwen35moe|convert_qwen35moe_solo|convert_qwen35moe_dense16)
+    convert|convert_qwen35|convert_qwen35moe|convert_qwen35moe_solo)
       printf 'download + convert' ;;
-    convert_qwen36_mtp|prepare_ornith_mtp)
-      printf 'download + convert (draft head)' ;;
     repack)
       printf 'download + install' ;;
     *)
@@ -488,7 +504,7 @@ status() {
 # `TinyTitanRepack --help` accepts.
 tinytitan_repack_streams() {
   case "$1" in
-    qwen36|qwen36-8bit|qwen36-mtp|ornith15|ornith15-8bit) return 0 ;;
+    qwen36|qwen36-8bit|ornith15|ornith15-8bit) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -520,6 +536,14 @@ tinytitan_no_python_fallback() {
 
 install_one() {
   local want="$1" found=0 preset_field=""
+  # The launcher's canonical keys and resolver aliases (ornith, qwen38-8bit,
+  # aw) mean the same rows as the historical catalogue keys; one shared
+  # function decides, so the two scripts cannot disagree about what a key is.
+  if ! want="$(tinytitan_install_target "$want")"; then
+    echo "unknown model: $1" >&2
+    status >&2
+    return 2
+  fi
   # Every conversion path runs a Python converter, so resolve the interpreter
   # once, here, rather than emitting a raw "command not found" per call.
   local python
@@ -562,8 +586,7 @@ install_one() {
     if [[ "${TINYTITAN_SKIP_DISK_CHECK:-0}" != "1" ]]; then
       local size_gb="" snap_exists=0 install_exists=0 probe work_ok=1 models_ok=1
       local stream_gb=12 stage_need=""
-      [[ "$source" == convert_qwen35moe || "$source" == convert_qwen35moe_dense16 ]] \
-        && stream_gb=104
+      [[ "$source" == convert_qwen35moe ]] && stream_gb=104
       size_gb="$(choice_gb "$name")"
       if [[ -n "$size_gb" ]]; then
         while IFS=: read -r _kind probe; do
@@ -665,19 +688,6 @@ install_one() {
         "$BIN" --input-snapshot "$WORK/qwen38-affine-${width}bit" \
             --model-id "$model_id" ${share_arg:+"$share_arg"} --output "$MODELS/$dir"
         ;;
-      convert_qwen36_mtp)
-        # Qwen3.6's draft head: 19 tensors of the `mtp.*` namespace in two
-        # shards of Qwen's original, converted as a qwen3_5_mtp sidecar.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
-        if [[ ! -f "$WORK/qwen36-mtp-affine/model.safetensors.index.json" ]]; then
-          echo "downloading the draft head (two shards) and converting $name -> $WORK/qwen36-mtp-affine"
-          "$python" "$ROOT/tools/prepare_agentworld.py" --model qwen36 --draft-head --bits "$width" \
-              --output "$WORK/qwen36-mtp-affine" --work "$WORK/qwen36-mtp-shards" || return 1
-        fi
-        echo "installing $name -> models/$dir"
-        "$BIN" --input-snapshot "$WORK/qwen36-mtp-affine" \
-            --model-id qwen3.6-35b-a3b-mtp-4bit --output "$MODELS/$dir"
-        ;;
       convert_qwen35moe)
         # Qwen's own bf16 release, quantized one shard at a time by
         # tools/prepare_agentworld.py (about 70 GB fetched, at most two
@@ -713,34 +723,6 @@ install_one() {
         "$BIN" --input-snapshot "$snap" \
             --model-id "$model_id" --output "$MODELS/$dir"
         ;;
-      convert_qwen35moe_dense16)
-        # Ornith 1.5 35B with the dense blocks at the checkpoint's bf16.
-        # `--dense-bits 16` copies attention, GDN and shared-expert weights
-        # through unquantized, so the runtime reads them by dtype through
-        # BF16GEMV, while the routed experts keep the 4-bit width the catalogue
-        # names. The repacker records the promoted tensors in the manifest's
-        # `promoted` list, which is what stops a reader from dequantizing them.
-        # The model id carries the variant: the catalog id is `<id>_4-Bit`, and
-        # without the suffix this install would advertise the same one as the
-        # plain 4-bit row.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
-        local preset="${preset_field:-${name}}" model_id
-        case "$preset" in
-          ornith15) model_id="ornith-1.5-35b-a3b-bf16dense" ;;
-          *) echo "unknown bf16-dense preset: $preset" >&2; return 2 ;;
-        esac
-        local snap="$WORK/${preset}-bf16dense-affine"
-        if [[ ! -f "$snap/model.safetensors.index.json" ]]; then
-          echo "downloading and converting $preset (~70 GB fetch, bf16 dense) -> $snap"
-          "$python" "$ROOT/tools/prepare_agentworld.py" --model "$preset" \
-              --bits "$width" --dense-bits 16 \
-              --output "$snap" --work "$WORK/${preset}-bf16dense-shards" || return 1
-        fi
-        echo "installing $name -> models/$dir"
-        "$BIN" --input-snapshot "$snap" --model-id "$model_id" --output "$MODELS/$dir" \
-          || return 1
-        "$BIN" --verify-install --input-ssdai "$MODELS/$dir" || return 1
-        ;;
       convert_qwen35moe_solo)
         # The 122B path. One width per run, because the two snapshots plus an
         # install cannot coexist on a 1 TB Mac (69.5 + 129.8 + 120 GB). The
@@ -767,35 +749,6 @@ install_one() {
         # snapshot + a ~125 GB install cannot coexist on this class of Mac.
         "$BIN" --input-snapshot "$snap" --consume-snapshot \
             --model-id "$model_id" --output "$MODELS/$dir"
-        ;;
-      prepare_ornith_mtp)
-        # Ornith's draft head lives in shard 16 of its original checkpoint;
-        # tools/prepare_ornith_mtp.py verifies that shard against its pinned
-        # revision and converts it.
-        [[ -x "$BIN" ]] || { echo "build TinyTitanRepack first: swift build -c release" >&2; return 1; }
-        local src="$WORK/ornith-mtp-src" rev=e4dfb35a93d4b6822a811a7676f3488514abe7e2
-        local base="https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B/resolve/$rev"
-        mkdir -p "$src"
-        # A file is trusted only at the size the server reports; a partial
-        # left by an interrupted run is resumed, not skipped.
-        for f in config.json model.safetensors.index.json model-00016-of-00016.safetensors; do
-          local want have
-          want=$(curl -sIL --retry 5 "$base/$f" | grep -i '^content-length:' | tail -1 | tr -dc '0-9')
-          have=$(stat -f %z "$src/$f" 2>/dev/null || echo 0)
-          if [[ -z "$want" || "$have" != "$want" ]]; then
-            curl -fL --retry 20 --retry-delay 15 --retry-all-errors -C - -o "$src/$f" "$base/$f" || return 1
-          fi
-        done
-        if [[ ! -f "$WORK/ornith-mtp-affine/model.safetensors.index.json" ]]; then
-          echo "downloading shard 16 and converting $name -> $WORK/ornith-mtp-affine"
-          "$python" "$ROOT/tools/prepare_ornith_mtp.py" --bits "$width" \
-              --source-shard "$src/model-00016-of-00016.safetensors" \
-              --source-config "$src/config.json" --source-index "$src/model.safetensors.index.json" \
-              --output "$WORK/ornith-mtp-affine" || return 1
-        fi
-        echo "installing $name -> models/$dir"
-        "$BIN" --input-snapshot "$WORK/ornith-mtp-affine" \
-            --model-id ornith-1.5-35b-a3b-mtp-4bit --output "$MODELS/$dir"
         ;;
       convert_qwen35)
         # The dense Qwen 3.5 models, from Qwen's own bf16 release. One
@@ -892,6 +845,11 @@ EOF
 # nothing to pair with, so say so rather than silently installing one width.
 install_both() {
   local want="$1" row name dir width source preset sibling
+  if ! want="$(tinytitan_install_target "$want")"; then
+    echo "unknown model: $1" >&2
+    status >&2
+    return 2
+  fi
   for row in "${CATALOGUE[@]+"${CATALOGUE[@]}"}"; do
     IFS='|' read -r name dir width source preset sibling <<<"$row"
     [[ "$name" == "$want" ]] || continue
