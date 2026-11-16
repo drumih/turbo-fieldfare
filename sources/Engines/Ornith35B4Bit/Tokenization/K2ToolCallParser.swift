@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// Parses K2-Horizon's tool-call block.
