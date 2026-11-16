@@ -100,21 +100,40 @@ func diagnosticCountersAreEnumerated() throws {
 
 ### Task 3: Add `EngineStatistics` + `EngineRunner` protocol to Core
 
+**Refinement discovered at execution start (2026-11-16, evidence):** the session's
+forward path already uses `any LogitProducer` (in `ServerModelSession.swift`,
+`+Generation.swift`, `+Diagnostics.swift`), so `produce`/`produceBatch`/
+`prefillChunked`/`prepareForContinuation`/`resetSequence` are *already* protocol-
+decoupled — but via **module-local** copies of the protocol (6.x and each variant
+define their own). `EngineRunner` therefore cannot merely *reference* the internal
+`ChunkedPrefillRunner`; this task must **promote the whole `LogitProducer` family
+into `TinyTitanCore` as one shared definition**, then define `EngineRunner` on top,
+and have 6.x + every variant delete their local copy and use the Core one.
+
+The promotion closure (all verified model-free; `PrefillRuntimeConfig` names no
+family): `LogitProducer`, `ContinuableLogitProducer`, `ChunkedPrefillRunner`,
+`ContextWindowReporting`, `InferenceAuxiliaryState(+Error)`, `PrefillError`,
+`PrefillOutputMode`, `PrefillSeed`, `PrefillResult`, `PrefillRuntimeConfig`(+
+`Mode`), `RawCompletion`. Types they reference that must be Core-visible:
+`MTLBuffer` (Metal), `ArraySlice<Int32>`, the value types above. This is one
+coupled green commit — 6.x + all variants switch to the Core definitions together,
+then build + suite + goldens (all still-6.x at runtime, so goldens are unchanged).
+
 **Files:**
 - Create: `sources/TinyTitanCore/Engine/EngineStatistics.swift`
 - Create: `sources/TinyTitanCore/Engine/EngineRunner.swift`
+- Move: `sources/TinyTitan/Runtime/Generation/LogitProducer.swift` + `Prefill/PrefillRuntimeConfig.swift` (+ `RawCompletion.swift`, `InferenceAuxiliaryState.swift`) -> `TinyTitanCore/Engine/`; replace the 6.x + variant local copies with `import TinyTitanCore` + re-export `typealias` so existing references resolve.
 
 **Interfaces:**
 - Consumes: Task 1's counter list.
 - Produces:
-  - `public struct EngineStatistics: Sendable, Equatable` — one `let` per each of the 35 counters (exact names/types from `RealForwardRunner+Diagnostics.swift`), read-only aggregate.
-  - `public protocol EngineRunner: Sendable, ChunkedPrefillRunner, ContextWindowReporting` (reuse the Core-promoted `ChunkedPrefillRunner`/`ContextWindowReporting` — see note) with members copied verbatim: `var continuationPosition: Int { get }`, `var supportsInferenceStateRestore: Bool { get }`, `func captureInferenceState(...) -> ...`, `func captureAuxiliaryState() throws -> InferenceAuxiliaryState?`, `func restoreInferenceState(...)`, `func decodeExpertIO() -> (hits: UInt64, misses: UInt64, bytes: UInt64)?`, `var prefetchRingSummary: String? { get }`, `func expertStreamingStatistics() -> ...`, `func kernelGPUGaps() -> ...`, `func kernelGPUOccupancy() -> ...`, `func kernelGPUTimingSummary() -> ...`, `func prefillTensorOpsLogLine() -> ...`, `func reset()`, `func resetKernelGPUTimings()`, `var statistics: EngineStatistics { get }`, `func resetStatistics()`, plus every prefill/run/decode entry point `ServerModelSession+Generation.swift` calls on the runner.
+  - Core `LogitProducer`/`ChunkedPrefillRunner`/… (the promoted family, now `public`, single-nominal).
+  - `public struct EngineStatistics: Sendable, Equatable` — one `let` per each of the 32 diagnostic counters (exact names/types from `RealForwardRunner+Diagnostics.swift`), read-only aggregate.
+  - `public protocol EngineRunner: Sendable, ChunkedPrefillRunner, ContinuableLogitProducer, ContextWindowReporting` with the 32 diagnostics collapsed to `var statistics: EngineStatistics { get }` + `func resetStatistics()`, plus the state members copied verbatim from `RealForwardRunner+State.swift`/`+Diagnostics.swift`: `func captureAuxiliaryState() throws -> InferenceAuxiliaryState?`, `func captureInferenceState(...)`, `func restoreInferenceState(...)`, `func decodeExpertIO() -> (hits: UInt64, misses: UInt64, bytes: UInt64)?`, `var prefetchRingSummary: String? { get }`, `func expertStreamingStatistics() -> ...`, `func kernelGPUGaps()/kernelGPUOccupancy()/kernelGPUTimingSummary()`, `func prefillTensorOpsLogLine() -> ...`, `func reset()`, `func resetKernelGPUTimings()`, `var usesFusedGreedyHead/byteCap/missCap/slowCallNanos` if the session reads them.
 
-- [ ] **Step 1: Promote the two protocols.** Move `ChunkedPrefillRunner` + `ContextWindowReporting` (+ their value types, e.g. `InferenceAuxiliaryState`) into `TinyTitanCore/Engine/` as the single nominal definitions; have the 6.x `LogitProducer.swift` and the variant's re-export/alias them (pure code motion; keep `@_exported`/`typealias` so existing conformances resolve unchanged).
-- [ ] **Step 2: Write `EngineStatistics`** with the 35 named `let`s (from the diagnostics file).
-- [ ] **Step 3: Write `EngineRunner`.** To enumerate the full member set precisely, run
-  `grep -rhoE 'runner\.[a-zA-Z]+' sources/TinyTitanLib/ServerModelSession*.swift | sort -u`
-  and declare exactly those (minus the `total*` which now live on `statistics`).
+- [ ] **Step 1: Promote the family** — move the seven source files' declarations into `TinyTitanCore/Engine/` (pure code motion), make them `public`, and in 6.x + each variant replace the local copy with a `typealias` re-export so references keep resolving. Build the Core target first, then the dependents.
+- [ ] **Step 2: Write `EngineStatistics`** with the 32 named `let`s.
+- [ ] **Step 3: Write `EngineRunner`** listing exactly the 32-collapse + state members above (enumerate via `grep -rhoE 'runner\.[a-zA-Z]+' sources/TinyTitanLib/ServerModelSession*.swift | sort -u` to confirm completeness against the session).
 - [ ] **Step 4: Build.** `swift build -c release`.
 - [ ] **Step 5: Commit.**
 
