@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 private func q6kBlocks(_ count: Int, seed: UInt64) -> [UInt8] {
     var rng = SeedTree(seed).key("q6k-blocks")

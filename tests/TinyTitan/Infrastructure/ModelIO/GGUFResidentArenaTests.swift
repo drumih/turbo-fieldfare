@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitan
 import TinyTitanFormat
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The resident arena: every non-expert tensor decoded to bf16 into one buffer.
 /// The assertion is byte-for-byte agreement with the CPU decoders the GPU

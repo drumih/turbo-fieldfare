@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct QuantizationAffineTests {
 

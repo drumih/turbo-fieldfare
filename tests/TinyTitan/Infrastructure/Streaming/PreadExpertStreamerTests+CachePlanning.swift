@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import Metal
 import Testing
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @testable import TinyTitan
 

@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// K2-Horizon's MoVA value step end to end: bf16 router GEMV, sigmoid + bias
 /// selection over 4 of N experts, four 4-bit value GEMVs, then SiLU before the

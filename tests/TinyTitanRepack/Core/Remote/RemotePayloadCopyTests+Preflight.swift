@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// `RemoteStreamingRepacker.run()` reads the install state on disk before it
 /// issues a single request, and every branch of that read is a decision about

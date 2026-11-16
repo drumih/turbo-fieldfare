@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The MoE stage on the sparse toy install's real packed experts: fetch a
 /// layer's blobs through the streaming cache, convert them to per-role views

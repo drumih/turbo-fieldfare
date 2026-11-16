@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 import TinyTitanMemory
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore

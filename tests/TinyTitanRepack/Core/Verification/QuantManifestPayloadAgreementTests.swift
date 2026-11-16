@@ -3,7 +3,7 @@ import Testing
 import TinyTitanFormat
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The manifest must describe the payload truthfully, and `--verify-install`
 /// must refuse an install that does not.

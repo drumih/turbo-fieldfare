@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The Laguna loader path end to end on a CI-safe synthetic install: the
 /// checked geometry, the resident schema with the per-layer head widths, the

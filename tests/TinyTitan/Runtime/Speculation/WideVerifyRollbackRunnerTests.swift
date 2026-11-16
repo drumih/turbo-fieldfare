@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The rollback window end to end on a real runner: the qwen toy's hybrid
 /// stack (linear layers 0 and 2, gated full attention on 1 and 3) runs a

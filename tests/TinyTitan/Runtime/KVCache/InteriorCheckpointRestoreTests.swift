@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// T21: an interior checkpoint captured from a live runner must restore into a
 /// fresh runner and continue the prompt with the same logits as the run that

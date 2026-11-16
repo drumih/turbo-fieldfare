@@ -3,7 +3,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// `--ram-budget` names a target for the whole server, and the floor under which
 /// that target cannot be honoured is a hard argument error rather than a warning.

@@ -3,7 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanCLICore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// TT-036: pointing `--model` at a path that is not there used to fail with
 /// "installed tokenizer is missing chat_template.jinja; reinstall the model",

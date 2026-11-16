@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The prefill loop over the as-is decoder: a prompt walks through the
 /// token-at-a-time path and produces the last token's logits. This is the GPU

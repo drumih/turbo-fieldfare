@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Random weights, activations and byte comparison for the multi-row GEMV
 /// identity tests. The weights are random bit patterns rather than quantized

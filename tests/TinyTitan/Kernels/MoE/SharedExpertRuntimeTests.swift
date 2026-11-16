@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The shared-expert dispatcher's own contract: which widths it builds an
 /// implementation for, and what it does with the ones it does not.

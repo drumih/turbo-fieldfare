@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The GGUF carries its tokenizer as metadata; this checks the sidecar the
 /// exporter writes is one the runtime can actually load, and that it tokenizes

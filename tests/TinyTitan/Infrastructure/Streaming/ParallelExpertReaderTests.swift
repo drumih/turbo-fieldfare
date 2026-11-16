@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The reader replaces v3.x's one-at-a-time fetch, so what has to be pinned is
 /// that parallelism never reorders or mixes up destinations: expert `i` must land

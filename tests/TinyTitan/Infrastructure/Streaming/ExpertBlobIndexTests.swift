@@ -3,7 +3,7 @@ import Testing
 
 @testable import TinyTitan
 import TinyTitanFormat
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The seek index a compressed expert layer cannot do without: an uncompressed
 /// layer is `n * stride`, a compressed one is wherever its blobs landed, and a

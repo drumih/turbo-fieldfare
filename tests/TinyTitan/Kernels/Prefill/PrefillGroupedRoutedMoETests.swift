@@ -3,7 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct PrefillGroupedRoutedMoETests {
     static func measuredPressureRoutes() throws -> PrefillMoEGroupedRoutes {

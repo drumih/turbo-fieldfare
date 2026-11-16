@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct ExpertLoadOperationTests {
     @Test func operationPublishesStateAndResumesAsyncWaiter() async throws {

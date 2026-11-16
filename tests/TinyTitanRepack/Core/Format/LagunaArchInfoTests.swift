@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// `ArchInfo` parsing for `model_type: laguna`, checked against the pinned
 /// checkpoint's config values (poolside/Laguna-S-2.1 at 0f573140).

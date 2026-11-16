@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// K2-Horizon's router is not the Qwen softmax router: sigmoid scores, the
 /// bias applied only to the ranking, the selected sigmoid scores normalized

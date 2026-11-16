@@ -5,7 +5,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite("Server prompt state store")
 struct ServerPromptStateStoreTests {

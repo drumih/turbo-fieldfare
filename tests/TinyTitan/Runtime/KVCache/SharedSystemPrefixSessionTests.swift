@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// K1 end-to-end: two real `ServerModelSession`s share only the rendered
 /// system prefix. The second session restores it, prefills only the user turn

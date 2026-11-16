@@ -3,7 +3,7 @@ import Testing
 import Tokenizers
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// A thinking level earns its place in a family's list only by rendering a
 /// prompt no other listed level renders, and a level the family refuses must

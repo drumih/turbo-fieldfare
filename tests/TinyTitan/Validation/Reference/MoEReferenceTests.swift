@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 import TinyTitanValidationSupport
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct MoEReferenceTests {
     @Test("gelu_pytorch_tanh matches scalar definition")

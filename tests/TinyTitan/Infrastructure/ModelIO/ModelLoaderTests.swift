@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct ModelLoaderTests {
     static func dummySource(_ name: String) -> SourceTensor {

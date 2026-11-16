@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 extension RawCompletionLoopTests {
     @Test func cancellationPropagatesMidDecode() async throws {

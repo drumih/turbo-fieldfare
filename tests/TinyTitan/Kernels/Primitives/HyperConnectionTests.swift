@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The two stream-axis kernels of Qwen3.8-Flash-Next's Gated Residual, against
 /// CPU references. Everything else in the block (the three INT4 projections,

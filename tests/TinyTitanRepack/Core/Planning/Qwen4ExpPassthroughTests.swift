@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Non-tensor files Qwen3.8-Flash-Next needs copied into the install: the PLE
 /// hash constants and the n-gram table. The table is 102 GB, so how it is

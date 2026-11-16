@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitan
 import TinyTitanFormat
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// A streamer reading a *compressed* layer.
 ///

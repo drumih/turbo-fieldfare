@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Paired, interleaved comparison of the two ways to get an expert's bytes in
 /// front of the GPU: map the slice and let the pages fault in, or pread it into

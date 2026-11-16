@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// T34: the fused loop keeps GDN layers per row while the attention stage is
 /// batched, so the linear-attention decode must read a row slice of the batch

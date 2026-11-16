@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// End to end on the hybrid Qwen toy: a W-row decode-order verify pass must
 /// leave every row with the residual scalar decode reaches for the same token

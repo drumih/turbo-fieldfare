@@ -3,7 +3,7 @@ import TinyTitanFormat
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct GGUFInstallPlannerTests {
     private static var realModelPath: String? {

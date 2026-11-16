@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 // MPP (matrix-product pipeline) TensorOps is a runtime/hardware capability:
 // it is unavailable on some Apple Silicon configurations. These tests are

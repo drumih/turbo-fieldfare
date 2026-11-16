@@ -2,7 +2,7 @@ import Darwin
 import Testing
 
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The server binds its listener only after the model is resident, so the cheap
 /// startup check has to answer the same question the bind will: is anything

@@ -3,7 +3,7 @@ import Testing
 import TinyTitanLib
 
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct CalibrationProfileArgumentsTests {
     /// A manifest the real `ManifestReader.peekIdentity` accepts, so the

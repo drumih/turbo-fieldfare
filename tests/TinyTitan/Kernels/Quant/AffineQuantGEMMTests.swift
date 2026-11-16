@@ -3,7 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The affine GEMM is the prefill foundation: one row of 4/8-bit weights held
 /// in registers while a chunk of tokens is multiplied against it. These tests

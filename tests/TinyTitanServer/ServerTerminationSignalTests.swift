@@ -4,7 +4,7 @@ import Testing
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite("Server termination signals", .serialized)
 struct ServerTerminationSignalTests {

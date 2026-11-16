@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// A tiered install keeps hot experts at 4-bit and cold experts at 2-bit in the
 /// same layer file. `layout.json` already describes that shape — every expert

@@ -1,7 +1,7 @@
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The PLE n-gram window: the token, then up to `ngram_size - 1` predecessors,
 /// newest first. Qwen3.8-Flash-Next declares `ple.ngram_size = 3`; a window one

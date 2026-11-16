@@ -4,7 +4,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 // A layer opened with a persisted routing profile restores that prior at the
 // prefill-to-decode reset instead of zeroing the LFU score. Without a profile

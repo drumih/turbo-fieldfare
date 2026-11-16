@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import TinyTitanFormat
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @testable import TinyTitanRepackCore
 

@@ -2,7 +2,7 @@ import Darwin
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// One profile per (model, width), resolved family -> table -> environment.
 @Suite struct ModelProfileTests {

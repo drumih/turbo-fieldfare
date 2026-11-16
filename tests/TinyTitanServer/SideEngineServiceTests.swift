@@ -5,7 +5,7 @@ import TinyTitanMemory
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The resident side-engine's home in the server: which install it loads, and
 /// how the engine's vocabulary becomes memory's.

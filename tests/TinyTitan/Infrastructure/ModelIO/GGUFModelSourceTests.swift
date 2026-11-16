@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The loader's data layer: the architecture the file declares, the resident
 /// set the arena will decode, and per-expert access - all on the real install.

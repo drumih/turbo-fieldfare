@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Compares the Metal `logit_softcap_softmax` kernel against
 /// `LogitSoftcapSoftmaxRef`, an Accelerate-based two-pass reference (apply

@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Rolls a W-row Gated-DeltaNet pass back to k accepted rows and checks the
 /// state and conv tail bit for bit against a run of only those k rows from the

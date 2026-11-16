@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The library's log destination belongs to whoever embedded it.
 ///

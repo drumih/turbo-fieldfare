@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The shared-expert stage on real GGUF weights: Q6_K gate/up, Q8_0 down and
 /// the F32 scalar gate, against a CPU reference.

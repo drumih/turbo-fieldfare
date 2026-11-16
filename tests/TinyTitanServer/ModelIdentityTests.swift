@@ -3,7 +3,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct ModelIdentityTests {
     @Test func apiIDsAlwaysEndInTheQuantization() {

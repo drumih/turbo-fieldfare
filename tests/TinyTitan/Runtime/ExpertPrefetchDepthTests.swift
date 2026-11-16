@@ -3,7 +3,7 @@ import Foundation
 import Metal
 import Testing
 import TinyTitanValidationSupport
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @testable import TinyTitan
 

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 // The fake HF URL protocol is process-global state (`resetFakeHF`);
 // tests that share it cannot run concurrently. Nesting under the serialized

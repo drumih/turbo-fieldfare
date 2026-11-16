@@ -3,7 +3,7 @@ import Testing
 
 @testable import TinyTitan
 import TinyTitanFormat
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The compressed-expert format's codec, pinned.
 ///

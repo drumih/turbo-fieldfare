@@ -1,7 +1,7 @@
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The multirow bf16 GEMV's dispatch, pinned without a Metal device.
 ///

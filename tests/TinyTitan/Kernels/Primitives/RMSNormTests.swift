@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Compares the Metal `rmsnorm` kernel against the Accelerate-based
 /// `RmsNormRef`. The reference uses `vDSP_svesq` + `vDSP_vmul` + `vDSP_vsmul`

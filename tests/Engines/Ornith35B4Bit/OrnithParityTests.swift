@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import Metal
-import TinyTitanCore
+@testable import TinyTitanCore
 @testable import Ornith35B4Bit
 @testable import TinyTitan
 

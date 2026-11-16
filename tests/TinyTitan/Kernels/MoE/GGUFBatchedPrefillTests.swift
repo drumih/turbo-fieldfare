@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Layer-major prefill against the token-at-a-time loop. Every token runs the
 /// same kernels in the same order either way, so the last token's logits must

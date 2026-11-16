@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The vectorised Q6_K and Q8_0 GEMVs (`gguf_gemv_vec.metal`) against the CPU
 /// decoder, which is bit-exact with ggml, on random blocks: every scale, high

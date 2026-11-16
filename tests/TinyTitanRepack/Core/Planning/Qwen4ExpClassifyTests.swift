@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Classification over the complete tensor-name list of the pinned
 /// Qwen3.8-Flash-Next checkpoint (all 3,164 names from its

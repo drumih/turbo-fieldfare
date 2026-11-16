@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// One layer's worth of the conversion question: how large do the routed experts
 /// become as TinyTitan's affine 4-bit (group 64, BF16 scale+bias), and how much

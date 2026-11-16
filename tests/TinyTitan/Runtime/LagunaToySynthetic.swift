@@ -4,7 +4,7 @@ import TinyTitanFormat
 
 @testable import TinyTitan
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// A tiny, runnable Laguna-S-2.1 install: layer 0 dense, layer 1 sparse with
 /// four routed experts at top-2, the checkpoint's tensor spelling, and the

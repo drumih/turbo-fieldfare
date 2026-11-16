@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The non-GPU half of a wide-verify rollback: the n-gram context rebuild, the
 /// KV cursor rewind and the ring-safety bound.

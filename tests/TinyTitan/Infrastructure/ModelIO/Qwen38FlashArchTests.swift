@@ -1,7 +1,7 @@
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Pins the Qwen3.8-Flash-Next geometry against the checkpoint facts recorded
 /// in docs/qwen38-flash-next-port.md, so a later edit cannot silently drift

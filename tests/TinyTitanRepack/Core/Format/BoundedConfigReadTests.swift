@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The converter's own ceiling on the checkpoint's `config.json` (AUD-142 group 2).
 ///

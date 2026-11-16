@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct FusedQKVGEMVTests {
     @Test func fusedQKVGEMV_matchesThreeGEMVs_smallShape() throws {

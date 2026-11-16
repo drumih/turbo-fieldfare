@@ -3,7 +3,7 @@ import Testing
 import TinyTitan
 
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct CalibrationProfileTests {
     private func profile(

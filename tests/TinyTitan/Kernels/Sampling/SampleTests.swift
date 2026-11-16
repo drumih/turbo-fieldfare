@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// `sample` kernel exercises. Inputs are pre-softmaxed FP16 probability
 /// vectors (no upstream softmax needed) so the tests can hand-craft known

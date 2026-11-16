@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct FusedQKVEpilogueTests {
     @Test func fusedQKVEpilogue_matchesLegacyChainBitwise_swaShape() throws {

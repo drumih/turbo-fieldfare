@@ -3,7 +3,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The `--share-ngram-table` link path.
 ///

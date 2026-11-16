@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The whole resident set as one bf16 arena: every non-expert, non-PLE tensor
 /// from the real checkpoint. This is what a GGUF `Model` would present to the

@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The model's tail on the real checkpoint: the output hyper-connection
 /// collapses 4 streams to 2560, and the Q6_K head projects it to logits.

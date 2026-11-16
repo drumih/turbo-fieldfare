@@ -2,7 +2,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 extension PrefillGroupedRoutedMoETests {
     @Test func streamedTileBindingMapsGlobalExpertsToLocalSlots() throws {

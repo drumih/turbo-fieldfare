@@ -3,7 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 extension PrefillGroupedRoutedMoETests {
     @Test(arguments: [2, 4, 8])

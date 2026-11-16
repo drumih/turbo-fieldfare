@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// GPU time of the batched routed stage on real experts, per layer, against
 /// the bytes it reads: the number that says whether the expert kernels run at

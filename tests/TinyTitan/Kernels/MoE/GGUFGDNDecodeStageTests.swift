@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// A whole GDN decode step on layer 0 of the real checkpoint: projections,
 /// conv+SiLU, qk norm, the delta rule with its FP32 state, the gated norm and

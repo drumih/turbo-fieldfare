@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Tests `KVCacheManager` FP16 shape, growth, separate K/V storage, ring,
 /// and reset semantics against the Qwen 3.6 config. Qwen has no

@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// What a bare command-buffer round trip costs on this machine. The decoder
 /// makes 96 of them a token, so if this is tens of milliseconds the waits - not

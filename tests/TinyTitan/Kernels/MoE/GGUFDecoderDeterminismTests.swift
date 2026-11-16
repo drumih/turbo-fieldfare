@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Two fresh decoders over the same prompt must agree bit for bit: the
 /// precondition every parity and bit-identity check here rests on.

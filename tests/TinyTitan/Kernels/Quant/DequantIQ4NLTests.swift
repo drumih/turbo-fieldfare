@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Checks the GPU IQ4_NL decoder against the CPU one that is bit-exact against
 /// ggml, then measures how fast the GPU decodes a real expert matrix.

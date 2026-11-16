@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The `ram profile` / `ram target` lines are the operator's only record of what
 /// the engine allocated, so they must name the rung in effect rather than the

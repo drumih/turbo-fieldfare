@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 @testable import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct CalibrationRunnerTests {
     private func arm(_ name: String, _ knobs: CalibrationProfile.Knobs = .init())

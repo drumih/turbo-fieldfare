@@ -3,7 +3,7 @@ import Metal
 import Testing
 
 import TinyTitanLib
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The tool loop, against a real install.
 ///

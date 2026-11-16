@@ -2,7 +2,7 @@ import Testing
 
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 private actor TestGate {
     private var continuation: CheckedContinuation<Void, Never>?

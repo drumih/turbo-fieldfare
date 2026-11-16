@@ -4,7 +4,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Records how often it was built and lets a load be held open, so residency
 /// policy can be tested without a model on disk.

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TinyTitan
 import TinyTitanValidationSupport
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @Suite struct EmbedLookupReferenceTests {
     @Test(

@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// Validates the standalone 8-bit dense MLP wrapper used as the shared-expert
 /// branch of the MoE (gelu_pytorch_tanh default activation; the Qwen runtime

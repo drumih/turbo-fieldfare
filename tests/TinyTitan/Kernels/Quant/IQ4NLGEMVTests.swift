@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The down-projection GEMV on real GGUF weights: correctness against a CPU
 /// decode-then-dot, then the per-matrix time.

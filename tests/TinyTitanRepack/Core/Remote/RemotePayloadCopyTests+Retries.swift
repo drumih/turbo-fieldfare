@@ -3,7 +3,7 @@ import Synchronization
 import Testing
 
 @testable import TinyTitanRepackCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 extension RemotePayloadCopyTests {
     @Test func remoteRangeRetriesURLErrorAndCompletes() async throws {

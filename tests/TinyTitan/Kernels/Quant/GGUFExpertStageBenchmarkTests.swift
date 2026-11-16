@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The whole routed-expert stage on real weights: every layer's gate/up/down
 /// matrix in its own GGUF format, ten experts per layer, 1,440 fused GEMVs for

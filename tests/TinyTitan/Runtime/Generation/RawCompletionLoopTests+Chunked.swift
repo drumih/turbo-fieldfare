@@ -1,5 +1,5 @@
 import Testing
-import TinyTitanCore
+@testable import TinyTitanCore
 
 @testable import TinyTitan
 

@@ -4,7 +4,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// The CPU serving path's ceilings, which it enforces rather than promises,
 /// and its handling of a thinking model's output.

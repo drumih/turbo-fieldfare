@@ -3,7 +3,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// attention_decode_partial_simd (simdgroup-per-key pass 1) against the
 /// serial pass 1 and the FP32 reference, under a sparse key selection --

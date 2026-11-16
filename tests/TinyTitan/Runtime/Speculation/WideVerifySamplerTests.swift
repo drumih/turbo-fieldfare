@@ -4,7 +4,7 @@ import Testing
 import TinyTitanValidationSupport
 
 @testable import TinyTitan
-import TinyTitanCore
+@testable import TinyTitanCore
 
 /// `WideVerifySampler` against a simulated scalar decode loop: synthetic
 /// logits rows, the real GPU sampler, and the same seeds and growing penalty

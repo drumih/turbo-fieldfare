@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-import TinyTitanCore
+@testable import TinyTitanCore
 @testable import Qwen35Dense2B4Bit
 
 /// The variant matrix test (7.0 spec §12.6, plan task 9, tracker row TT-080):
