@@ -161,3 +161,20 @@ sidecar**, so there is no valid ANE on/off measurement to take. No ANE change
 or performance claim. If a sidecar is later produced, evaluate a full
 4,096-token chunk on/off (compile cost, TTFT, decode cost, parity) before
 considering it.
+
+## 10. P1 adopted: M=16 dequantize-once + SGEMM prefill
+
+**Adopted `07cecaf1`.** The dense variants now use dequantize-once + Accelerate
+SGEMM for **M >= 16 prompt tokens**, with the shipping per-token GEMV below 16
+and for decode. `DenseVariantBatchedMatmulTests` 4/4 and `CPUBatchedPrefillTests`
+5/5 green. Microbenchmark (dequant included): M=16 1.7–2.9x, M=64 5.7–6.2x on
+2B/4B 4/8-bit, projections only. Full-model golden text/timing **not checked**
+(no dense installs; none downloaded).
+
+## 11. P2 measured non-adoption: attention-CB coalescing
+
+A candidate reused `attnCB` for softmax/tail, reducing three command buffers to
+one. Policy tests 3/3 and golden `ornith-4` passed, but the paired A/B was too
+swap-confounded to accept: 13.19–13.75 GB swap, 3.5–8.6 tok/s, per-round deltas
+−7.18%, +15.11%, +61.44%, +114.14% (parity OK). **Reverted; no coalescing change
+adopted.** A future retry needs an acceptable-memory, clean paired run.
