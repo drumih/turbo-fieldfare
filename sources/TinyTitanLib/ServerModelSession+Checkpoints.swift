@@ -1,3 +1,4 @@
+import TinyTitanCore
 // Interior-checkpoint capture planning for one generation.
 //
 // Split out of ServerModelSession+Generation.swift (2026-10-22) under the

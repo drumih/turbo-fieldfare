@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// The seven single-decision tasks the side-engine is asked, and the prompts

@@ -359,6 +359,23 @@ Correct sequence: (a) `GeneratorError` + `GFTokenizer`/`GFDetokenizer`/`Tokenize
 (b) split `GenerationConfig` (Core) from `GenerationDefaults` (runtime); (c) grammar subsystem
 → Core; (d) then the dense GPUEngine port. Each step build + parity + gate verified.
 
+**BLOCKER measured 2026-11-16 (phase (a) attempted twice, reverted both times to keep the
+tree green): Core → Tokenizers breaks TEST-target builds.** Adding `Tokenizers` (and even an
+explicit `yyjson` product) to `TinyTitanCore` makes the RELEASE products build, but every
+test target that depends on Core fails with `clang dependency scanning failure … unable to
+resolve module dependency: 'yyjson'` (yyjson is the transitive C dep of swift-transformers).
+Clearing the module cache and release-config test builds do NOT fix it. The variant tests
+built fine before because Tokenizers was a DIRECT dep of the variant; once it becomes
+transitive-through-Core for the many Core-dependent test targets, the explicit-module
+scanner cannot resolve yyjson for them. Until this SwiftPM issue is resolved (candidate
+workarounds: declare yyjson/Tokenizers directly on each Core-dependent test target, or a
+build setting that disables explicit clang module scanning for tests), the tokenizer cannot
+move to Core, and phases (a)–(d) are blocked. Stages 1–3 (data vocabulary + reasoning types,
+which need NO Tokenizers) are landed and green. Also measured: moving GFTokenizer to Core
+requires elevating a web of internal members/types to `package` (thinkStartMark/EndMark,
+tokenizer, generationSuffix, GFByteLevelDecoderConfiguration + nested AddedToken,
+GFDetokenizer.@usableFromInline members, byteLevelScalarToByte) — doable but broad.
+
 The server-level CPU/GPU choice already works today via the 6.x engines (catalog `<id>` GPU
 default + `<id>@cpu`; launcher `--engine cpu|gpu` + interactive menu) — verified on 2B/4B/9B
 both engines. The 7.0 goal is to move that choice into the dedicated variant code paths.

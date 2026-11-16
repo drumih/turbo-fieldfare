@@ -1,10 +1,9 @@
 import Foundation
 import Tokenizers
-import TinyTitanCore
 
 /// The control-token dialect a tokenizer speaks.
 public enum TokenizerDialect: String, Sendable, Equatable {
-    /// Qwen/Ornith ChatML: `<|im_start|>`, `<think>`, `<tool_call>`.
+    /// ChatML: `<|im_start|>`, `<think>`, `<tool_call>`.
     case chatML
     /// K2-Horizon: `<|ifm|im_start|>`, `<ifm|think>`, `<ifm|tool_call>`.
     case k2
@@ -49,15 +48,15 @@ public struct GFTokenizer: @unchecked Sendable {
     /// The literal spellings of the markers, for the streaming decoder's
     /// boundary check. The ids alone cannot answer "what text ended this
     /// delta" when the two dialects spell the same slot differently.
-    let thinkStartMark: String
-    let thinkEndMark: String
-    let toolCallStartMark: String
-    let toolCallEndMark: String
+    package let thinkStartMark: String
+    package let thinkEndMark: String
+    package let toolCallStartMark: String
+    package let toolCallEndMark: String
     /// The outer `<ifm|tool_calls>` wrapper: present for K2, nil elsewhere.
     public let toolCallsStartID: Int32?
     public let toolCallsEndID: Int32?
-    let toolCallsStartMark: String
-    let toolCallsEndMark: String
+    package let toolCallsStartMark: String
+    package let toolCallsEndMark: String
 
     /// Tokens that stand for a control marker rather than for text: the ChatML
     /// turn and tool barriers, the channel markers, and every stop token.
@@ -91,17 +90,17 @@ public struct GFTokenizer: @unchecked Sendable {
     /// inject an effort sentence; binary templates inject nothing). Derived
     /// from the template so it owns the wording; the manual ChatML renderer
     /// mirrors it.
-    let effortSystemInstruction: String?
+    package let effortSystemInstruction: String?
 
     /// Generation-prompt suffix appended after the last message: derived from
     /// the tokenizer's bundled `chat_template.jinja`
     /// (`add_generation_prompt` with thinking disabled) when available,
     /// falling back to the pinned constant otherwise (R6).
-    let generationSuffix: String
+    package let generationSuffix: String
 
     @usableFromInline
-    let tokenizer: any Tokenizer
-    let byteLevelDecoderConfiguration: GFByteLevelDecoderConfiguration
+    package let tokenizer: any Tokenizer
+    package let byteLevelDecoderConfiguration: GFByteLevelDecoderConfiguration
 
     public init(
         tokenizer: any Tokenizer,
@@ -115,7 +114,7 @@ public struct GFTokenizer: @unchecked Sendable {
             reasoningEffort: reasoningEffort)
     }
 
-    init(
+    package init(
         tokenizer: any Tokenizer,
         byteLevelDecoderConfiguration: GFByteLevelDecoderConfiguration,
         thinkingMode: ModelThinkingMode = .off,
@@ -206,8 +205,7 @@ public struct GFTokenizer: @unchecked Sendable {
         /// The name a chat template is handed for this role.
         ///
         /// OpenAI's `developer` role is the documented successor of `system`,
-        /// and every chat template this project ships (Qwen 3.5/3.6/3.8,
-        /// AgentWorld, Ornith, KAT) defines only `system`, `user`, `assistant`
+        /// and every chat template this project ships defines only `system`, `user`, `assistant`
         /// and `tool`. Handing the name through raised the template's own
         /// `raise_exception('Unexpected message role.')`, which the Chat
         /// Completions surface answered as HTTP 500 — for a role the OpenAI API
@@ -282,8 +280,8 @@ public struct GFTokenizer: @unchecked Sendable {
     /// Text-only, no-tool rendering of the pinned checkpoint's bundled
     /// `chat_template.jinja`, with thinking disabled. Keeping this narrow makes
     /// unsupported tool/media behavior explicit instead of approximating it.
-    static let imStartMark = "<|im_start|>"
-    static let imEndMark = "<|im_end|>"
+    package static let imStartMark = "<|im_start|>"
+    package static let imEndMark = "<|im_end|>"
     /// Generation prompt with thinking disabled, matching the Jinja template's
     /// `add_generation_prompt` + `enable_thinking=false` branch. Used only
     /// when the tokenizer has no chat template or template rendering fails
@@ -380,7 +378,7 @@ public struct GFTokenizer: @unchecked Sendable {
     /// `content.split('</think>')[0] … split('<think>')[-1]` for the reasoning
     /// and `content.split('</think>')[-1].lstrip('\n')` for the answer. The
     /// reasoning is whitespace-trimmed either way (`reasoning_content|trim`).
-    static func splitThinking(_ content: String) -> (reasoning: String, answer: String) {
+    package static func splitThinking(_ content: String) -> (reasoning: String, answer: String) {
         guard let firstClose = content.range(of: "</think>") else { return ("", content) }
         let beforeFirst = String(content[content.startIndex..<firstClose.lowerBound])
         let afterLast =

@@ -1,12 +1,11 @@
 import Foundation
 import Tokenizers
-import TinyTitanCore
 
-enum GFDetokenizerError: Error, Equatable, CustomStringConvertible {
+package enum GFDetokenizerError: Error, Equatable, CustomStringConvertible {
     case invalidTokenID(Int32)
     case invalidByteLevelToken(id: Int32, token: String)
 
-    var description: String {
+    package var description: String {
         switch self {
         case .invalidTokenID(let id):
             return "tokenizer cannot decode generated token id \(id)"
@@ -20,10 +19,14 @@ enum GFDetokenizerError: Error, Equatable, CustomStringConvertible {
 /// Model vocabulary entries are deliberately not decoded here: there are
 /// 248K of them, while only the added-token barriers and decoder kind matter.
 @usableFromInline
-struct GFByteLevelDecoderConfiguration: Sendable {
-    struct AddedToken: Sendable {
-        let content: String
-        let special: Bool
+package struct GFByteLevelDecoderConfiguration: Sendable {
+    package struct AddedToken: Sendable {
+        package let content: String
+        package let special: Bool
+        package init(content: String, special: Bool) {
+            self.content = content
+            self.special = special
+        }
     }
 
     private struct FileMetadata: Decodable {
@@ -43,12 +46,16 @@ struct GFByteLevelDecoderConfiguration: Sendable {
         }
     }
 
-    let addedTokens: [Int32: AddedToken]
+    package let addedTokens: [Int32: AddedToken]
 
-    static func load(
+    package init(addedTokens: [Int32: AddedToken]) {
+        self.addedTokens = addedTokens
+    }
+
+    package static func load(
         from tokenizerJSON: URL,
         tokenizer: any Tokenizer,
-        maxBytes: UInt64 = ManifestReader.defaultMaxBytes
+        maxBytes: UInt64 = SSDAIManifestReader.defaultMaxBytes
     ) throws -> Self {
         // `tokenizer.json` is the largest document the load path reads: 12,809,320
         // bytes for the installed 125B tokenizer measured on this host. It is
@@ -80,7 +87,7 @@ struct GFByteLevelDecoderConfiguration: Sendable {
     /// Compatibility initializer for callers that construct `GFTokenizer`
     /// directly instead of loading its sidecar. Production loads always use
     /// `load(from:tokenizer:)`, which validates every added token.
-    static func knownChatMLTokens(tokenizer: any Tokenizer) -> Self {
+    package static func knownChatMLTokens(tokenizer: any Tokenizer) -> Self {
         let special = [
             "<|endoftext|>", "<|im_start|>", "<|im_end|>",
             "<|object_ref_start|>", "<|object_ref_end|>",
@@ -134,9 +141,9 @@ struct GFByteLevelDecoderConfiguration: Sendable {
 /// the same per-token deltas: the structured decoder recognises `<think>` and
 /// `<tool_call>` by their literal text on the delta.
 public struct GFDetokenizer {
-    @usableFromInline let tokenizer: any Tokenizer
-    @usableFromInline let configuration: GFByteLevelDecoderConfiguration
-    @usableFromInline var pendingBytes: [UInt8] = []
+    @usableFromInline package let tokenizer: any Tokenizer
+    @usableFromInline package let configuration: GFByteLevelDecoderConfiguration
+    @usableFromInline package var pendingBytes: [UInt8] = []
 
     public init(tokenizer: GFTokenizer) {
         self.tokenizer = tokenizer.tokenizer
@@ -186,7 +193,7 @@ public struct GFDetokenizer {
     /// Returns the start of the trailing, structurally valid prefix of a UTF-8
     /// scalar. When there is no incomplete suffix the returned index is `count`.
     @usableFromInline
-    static func incompleteSuffixStart(_ bytes: [UInt8]) -> Int {
+    package static func incompleteSuffixStart(_ bytes: [UInt8]) -> Int {
         guard let last = bytes.last, last >= 0x80 else { return bytes.count }
         var lead = bytes.count - 1
         while lead > 0, bytes[lead] & 0xC0 == 0x80,
@@ -220,7 +227,7 @@ public struct GFDetokenizer {
 
     /// Inverse GPT-2 / Hugging Face ByteLevel byte-to-Unicode mapping.
     @usableFromInline
-    static let byteLevelScalarToByte: [UInt32: UInt8] = {
+    package static let byteLevelScalarToByte: [UInt32: UInt8] = {
         var bytes: [Int] = Array(0x21...0x7E) + Array(0xA1...0xAC) + Array(0xAE...0xFF)
         var scalars: [Int] = bytes
         var next = 0

@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// Tracks the `<tool_call>` / `</tool_call>` barrier tokens as they are emitted,

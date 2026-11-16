@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitanCore
 
 public enum GeneratorError: Error, CustomStringConvertible, Equatable {
     case contextOverflow(prompt: Int, maxNew: Int, maxContext: Int)

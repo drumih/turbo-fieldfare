@@ -1,6 +1,5 @@
 import Foundation
 import Tokenizers
-import TinyTitanCore
 
 // Tokenizer introspection helpers: the Jinja context, the resolved-special-token
 // type, the streaming-decoder check and the special-token resolution.
@@ -115,8 +114,8 @@ extension GFTokenizer {
         return nil
     }
 
-    /// The tokenizer's control dialect. ChatML is the Qwen/Ornith family;
-    /// K2-Horizon writes `<|ifm|…>` markers instead.
+    /// The tokenizer's control dialect. ChatML is the default dialect;
+    /// some families write `<|ifm|…>` markers instead.
     static func resolveSpecialTokens(
         _ tokenizer: any Tokenizer,
         reasoningEffort: ModelReasoningEffort?

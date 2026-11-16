@@ -53,6 +53,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
+        .package(url: "https://github.com/ibireme/yyjson.git", exact: "0.12.0"),
         .package(url: "https://github.com/apple/swift-nio.git", exact: "2.100.0"),
     ],
     targets: [
@@ -115,7 +116,11 @@ let package = Package(
         // GF* coupling is split (tracker row TT-073 records the finding).
         .target(
             name: "TinyTitanCore",
-            dependencies: ["TinyTitanFormat"],
+            dependencies: [
+                "TinyTitanFormat",
+                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "sources/TinyTitanCore",
             resources: [.copy("Metal")],
             swiftSettings: tinytitanLanguageStandard
@@ -293,6 +298,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
+                .product(name: "yyjson", package: "yyjson"),
                 "Qwen35Dense2B4Bit",
                 "Qwen35Dense2B8Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
@@ -315,44 +321,55 @@ let package = Package(
             name: "TinyTitanRepackTests",
             // `TinyTitanFormat` directly: the manifest and resident-index validation
             // tests assert on those types rather than on JSON dictionaries.
-            dependencies: ["TinyTitanRepackCore", "TinyTitanFormat"],
+            dependencies: [
+                "TinyTitanRepackCore", "TinyTitanFormat",
+                .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "tests/TinyTitanRepack/Core",
             resources: [.copy("Support/qwen38_tensor_names.txt")],
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "ContinuityCoreTests",
-            dependencies: ["ContinuityCore"],
+            dependencies: ["ContinuityCore", .product(name: "yyjson", package: "yyjson")],
             path: "tests/ContinuityCore",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "TinyTitanCoreTests",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", .product(name: "yyjson", package: "yyjson")],
             path: "tests/TinyTitanCore",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "Qwen35Dense2B4BitTests",
-            dependencies: ["Qwen35Dense2B4Bit", "TinyTitanCore"],
+            dependencies: [
+                "Qwen35Dense2B4Bit", "TinyTitanCore", .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "tests/Engines/Qwen35Dense2B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "Ornith35B4BitTests",
-            dependencies: ["Ornith35B4Bit", "TinyTitan", "TinyTitanCore"],
+            dependencies: [
+                "Ornith35B4Bit", "TinyTitan", "TinyTitanCore",
+                .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "tests/Engines/Ornith35B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "TinyTitanMemoryTests",
-            dependencies: ["TinyTitanMemory", "ContinuityCore"],
+            dependencies: [
+                "TinyTitanMemory", "ContinuityCore", .product(name: "yyjson", package: "yyjson"),
+            ],
             path: "tests/TinyTitanMemory",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
             name: "TinyTitanServerTests",
             dependencies: [
+                .product(name: "yyjson", package: "yyjson"),
                 "TinyTitanCore",
                 "TinyTitanServerCore",
                 "TinyTitanLib",
@@ -374,6 +391,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanLibTests",
             dependencies: [
+                .product(name: "yyjson", package: "yyjson"),
                 "TinyTitanCore", "TinyTitanLib", "TinyTitan",
             ],
             path: "tests/TinyTitanLib",

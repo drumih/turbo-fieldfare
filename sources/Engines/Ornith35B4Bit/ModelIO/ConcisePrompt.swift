@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// Built-in system prompts for TinyTitan "concise mode": answer directly and

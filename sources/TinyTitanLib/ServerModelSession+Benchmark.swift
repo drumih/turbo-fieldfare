@@ -1,3 +1,4 @@
+import TinyTitanCore
 import TinyTitan
 
 // Benchmark access to the loaded runner.

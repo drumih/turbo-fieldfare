@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 package enum GGUFTokenizerError: Error, Equatable, CustomStringConvertible {
