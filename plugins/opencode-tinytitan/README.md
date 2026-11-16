@@ -1,9 +1,9 @@
 # OpenCode provider for TinyTitan
 
 `opencode.json` adds TinyTitanServer to [OpenCode](https://opencode.ai) as the
-provider `tinytitan` ("TinyTitan"), with the Qwen3.8-Flash-Next 4/8/16 hybrid as
+provider `tinytitan` ("TinyTitan"), with the shipped Ornith 1.5 35B-A3B 4-bit as
 the default model. It lists **every model the installer supports** — all
-nineteen `install_models.sh` rows, every family and width — so OpenCode shows
+eighteen `install_models.sh` rows, every family and width — so OpenCode shows
 the full list even where only one install is on disk; a model whose install is
 missing serves a 404 until it is installed. It is a config file, not a package:
 copy it, or merge its `provider` block, into `~/.config/opencode/opencode.json`.
@@ -13,8 +13,8 @@ change the default model of everyone who runs OpenCode inside this checkout.
 ```bash
 cp plugins/opencode-tinytitan/opencode.json ~/.config/opencode/opencode.json   # no config yet
 .build/release/TinyTitanServer --models-dir models \
-  --model models/qwen3.8-flash-next_125B_A6B_4Bit --max-context 262144
-opencode -m tinytitan/qwen3.8-flash-next-8bitrest_4-Bit
+  --model models/ornith-1.5_35B_A3B_4Bit --max-context 262144
+opencode -m tinytitan/ornith-1.5-35b-a3b_4-Bit
 ```
 
 `tools/server_launcher.sh --client opencode` does this for you: it merges this

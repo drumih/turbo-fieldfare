@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "model": "tinytitan/qwen3.8-flash-next-8bitrest_4-Bit",
+  "model": "tinytitan/ornith-1.5-35b-a3b_4-Bit",
   "provider": {
     "tinytitan": {
       "npm": "@ai-sdk/openai-compatible",
