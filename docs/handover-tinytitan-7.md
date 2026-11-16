@@ -289,3 +289,33 @@ Staged plan (each gated on the previous; NO destructive deletion before stage 3)
 
 This is a multi-thousand-line refactor — execute as a focused phase, verifying the
 build + gates at every stage and keeping the tree green between stages.
+
+### Progress 2026-11-16 (data-vocabulary stage done)
+
+- **Done:** the shared backend data vocabulary now lives in `TinyTitanCore` and is
+  used by both 6.x and the Ornith variant — `StopReason` (`Generation/StopReason.swift`),
+  `JSONValue` + `ParsedToolCall` + `ToolCallParserError` (`Tokenization/`),
+  `OpenAIUsage` (`Server/OpenAIUsage.swift`). Commits `f8bc3de3`, `d6df22d6` (6.x side),
+  `87f92877` (Ornith variant side). The Ornith variant's duplicate copies were removed;
+  `greedyParityAgainst6x` still passes (37.5s). The dense variants carry none of these
+  types (their CPU engine is simpler), so nothing to unify there.
+- **Consequence:** the Ornith variant's tool decoder now emits `Core.ParsedToolCall`,
+  which is exactly the type `ServerInferenceEvent.toolCall` carries — the event boundary
+  is already type-compatible.
+- **Remaining engine-integration crux (measured, not guessed):** the backends still
+  import the engine from 6.x. `CPUModelBackend` (341 lines) needs `CPUQwen35`,
+  `AffineSnapshot`, `CPUSampler`, `GenerationDefaults`, `RequestReasoning` (all present
+  in each dense variant) **plus `GenerationConfig`, `GFTokenizer`, `ModelThinkingMode`
+  (absent from the dense variants — they live in the 6.x generation/tokenizer
+  subsystems).** `ServerModelSession` (~2,234 lines) similarly needs the GPU engine +
+  tokenizer + `GenerationConfig` (which cascades into the `JSONConstraint` grammar
+  subsystem) + `WatchdogSet` (cascades into the 6.x-coupled detectors) +
+  `ValidatedChatRequest`. So before a backend can drive a variant, those shared
+  engine/tokenizer/config types must either move to Core (large cascade) or the adapter
+  must be duplicated per variant. Recommended: a variant backend inside TinyTitanLib
+  (which may import the variant) translating into the existing contract, lifting only
+  the genuinely shared types — not the whole grammar/watchdog/validation subsystems.
+- **Dense trio shipped (TT-096 Done):** all six dense variants (2B/4B/9B × 4/8-bit)
+  installed via the installer and parity-verified vs 6.x (2B4 183.9s, 2B8 57.6s,
+  4B4 430.2s, 4B8 164.5s, 9B4 230.2s, 9B8 677.8s). Installer resume-after-kill race in
+  `prepare_qwen35.py`'s threaded downloader noted as a follow-up (fresh download avoids it).
