@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// Which architectures the CPU engine can serve, and a straight answer when

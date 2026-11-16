@@ -29,9 +29,9 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
     }
 }
 
-/// The binary reasoning switch exposed by compatible Qwen/Ornith chat
-/// templates. Ornith 1.5 accepts `enable_thinking=true|false`; it does not
-/// define low/medium/high effort levels or a thinking-token budget.
+/// The binary reasoning switch exposed by compatible chat templates. A
+/// template that accepts `enable_thinking=true|false` uses this; such
+/// templates define no low/medium/high effort levels or thinking-token budget.
 public enum ModelThinkingMode: String, Codable, CaseIterable, Sendable {
     case off
     case on
@@ -52,15 +52,13 @@ public enum ModelThinkingMode: String, Codable, CaseIterable, Sendable {
 }
 
 /// The reasoning-effort levels defined by chat templates that support them.
-/// The Qwen3.8-Flash-Next template accepts `reasoning_effort` while thinking
-/// is on and injects an effort-specific instruction into the system block
-/// (`xhigh` is its default; `medium` is accepted but injects no text). K2's
-/// template accepts `low`, `medium` and `high` (`high` is its default) and
-/// raises on `xhigh`. Each family lists the subset it accepts in
-/// `ModelReasoningControl`, so this enum is the union, not one template's set.
-/// Ornith 1.5 and Qwen 3.6 templates define no effort levels, so those
-/// families reject these values at the surface instead of faking them.
-/// `ReasoningLevel` is the one-picker view over this and `ModelThinkingMode`.
+/// A template may accept `reasoning_effort` while thinking is on and inject an
+/// effort-specific instruction into the system block; templates differ in the
+/// subset they accept and in their default level. Each family lists the subset
+/// it accepts in its reasoning control, so this enum is the union, not one
+/// template's set. A template that defines no effort levels rejects these
+/// values at the surface instead of faking them. `ReasoningLevel` is the
+/// one-picker view over this and `ModelThinkingMode`.
 public enum ModelReasoningEffort: String, Codable, CaseIterable, Sendable {
     case low
     case medium

@@ -1,3 +1,4 @@
+import TinyTitanCore
 // Building a `ModelSessionPlan` from the server's launch flags.
 //
 // Moved out of `ModelSessionPlan.swift` (2026-10-02, phase A1 of

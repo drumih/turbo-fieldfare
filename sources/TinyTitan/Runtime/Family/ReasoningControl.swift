@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Foundation
 
 /// Which reasoning controls a family's chat template truthfully defines.

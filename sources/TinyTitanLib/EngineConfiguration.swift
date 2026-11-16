@@ -1,3 +1,4 @@
+import TinyTitanCore
 // The configuration vocabulary an embedder passes in: `EngineConfiguration`
 // and the kit's own enum names that keep an engine type out of a public
 // signature, plus the sampling row an install declares.

@@ -1,3 +1,4 @@
+import TinyTitanCore
 import Darwin
 import Foundation
 // `MemberImportVisibility`: `ServerArguments` exposes `ModelFamily` (an TinyTitan
