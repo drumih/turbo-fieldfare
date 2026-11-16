@@ -4,11 +4,10 @@ import TinyTitanCore
 
 /// A quantized matrix multiplied against many token rows at once.
 ///
-/// This is the batched counterpart of `CPUTensorOps.gemv`. The GEMV reads the
-/// packed weights in place because one token is one pass over them; a prefill
-/// of T tokens would read the same bytes T times, so the weights are
-/// unpacked to FP32 once and the matrix engine does the rest. The decode path
-/// keeps the GEMV.
+/// This is the batched counterpart of `CPUTensorOps.gemv`. At 16 tokens and
+/// above, the weights are unpacked to FP32 once and the matrix engine multiplies
+/// every token row. Smaller batches and the decode path keep the packed-weight
+/// GEMV, avoiding an FP32 materialization that their batch cannot amortize.
 ///
 /// The unpacking is the only new numeric step. It computes the same
 /// `q * scale + bias` per group the GEMV kernels factor, in the same order
@@ -16,6 +15,9 @@ import TinyTitanCore
 /// dot products, which is why a batched result agrees with the per-token one
 /// to a rounding error rather than bit for bit.
 public enum CPUBatchedMatmul {
+
+    /// Below this batch size the shipping GEMV avoids materializing FP32 weights.
+    static let minimumTokens = 16
 
     /// `out[t, r] = sum_k x[t, k] * W[r, k]` for T rows of `x`.
     ///
@@ -49,6 +51,23 @@ public enum CPUBatchedMatmul {
         guard matrix.bits == 4 || matrix.bits == 8 else {
             throw ModelError.internalInconsistency(
                 detail: "batched matmul: no dequantizer for \(matrix.bits)-bit weights")
+        }
+
+        guard tokenCount >= Self.minimumTokens else {
+            var result = [Float](repeating: 0, count: tokenCount * matrix.rows)
+            for token in 0..<tokenCount {
+                try x.withUnsafeBufferPointer { input in
+                    try result.withUnsafeMutableBufferPointer { output in
+                        guard let inputBase = input.baseAddress,
+                            let outputBase = output.baseAddress
+                        else { return }
+                        try CPUOps.gemv(
+                            matrix, x: inputBase + token * matrix.columns,
+                            out: outputBase + token * matrix.rows, threads: threads)
+                    }
+                }
+            }
+            return result
         }
 
         var dequantized = [Float](repeating: 0, count: matrix.rows * matrix.columns)

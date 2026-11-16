@@ -13,8 +13,8 @@ import Foundation
 /// still sequential inside a chunk; its projections are batched.
 ///
 /// `TINYTITAN_CPU_PREFILL=token` forces the per-token path and
-/// `TINYTITAN_CPU_PREFILL=batch` forces the batched one, which is how the two
-/// are compared on a real model at sizes below the automatic threshold.
+/// `TINYTITAN_CPU_PREFILL=batch` selects the chunked runner. Quantized
+/// projections still use the shipping GEMV below the 16-token boundary.
 extension CPUQwen35 {
 
     /// Tokens one batched pass carries. Bounds the T-by-intermediate buffers
@@ -23,13 +23,9 @@ extension CPUQwen35 {
     /// between chunks is the state the per-token loop would carry.
     static let prefillChunkTokens = 2048
 
-    /// Below this many tokens the per-token path wins. The batched path
-    /// dequantizes every matrix in the model once; for a handful of prompt
-    /// tokens that is more traffic than reading each weight a handful of
-    /// times. Measured with twelve prompts per size on the 2B and 4B, ten
-    /// tokens favour the per-token path and fifteen favour the batched one,
-    /// so the crossover sits between them.
-    static let prefillMinimumTokens = 12
+    /// The projection primitive shares this boundary: below sixteen tokens the
+    /// shipping GEMV avoids dequantizing every matrix in the model to FP32.
+    static let prefillMinimumTokens = CPUBatchedMatmul.minimumTokens
 
     /// Run prompt tokens through the batched path, returning the logits of
     /// the last one. A one-token prompt is just `step`.

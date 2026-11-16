@@ -120,14 +120,10 @@ value products; the gated-DeltaNet convolution and recurrence stay token-ordered
 with the recurrence in a chunked kernel (`tinytitan_delta_rule_chunk`, see
 `plan-gdn-chunked-scan.md`) because the token-ordered one was three quarters of
 the prefill once the projections were cheap.
-`TINYTITAN_CPU_PREFILL=token` restores the per-token path and `=batch` forces
-the batched one, which is how the two were compared below the automatic
-threshold. Prompts shorter than 12 tokens stay on the per-token path:
-dequantizing the whole model for a handful of tokens costs more than reading
-each weight a handful of times. Measured with twelve prompts per size on both
-the 2B and the 4B, ten tokens favour the per-token path by 0.06 s (2B) and
-0.41 s (4B) per prompt, while fifteen favour the batched path by 0.17 s and
-0.28 s, so the crossover sits between them.
+`TINYTITAN_CPU_PREFILL=token` restores the per-token path and `=batch` selects
+the chunked runner. The projection primitive shares the automatic 16-token
+boundary even in that mode: below 16 tokens it calls the shipping GEMV once per
+token instead of materializing FP32 weights. Decode is unchanged.
 
 Measured on the installed 2B 4-bit with greedy decoding; the prompt is the
 repeated pangram, and the times include model load and the generated tokens:
