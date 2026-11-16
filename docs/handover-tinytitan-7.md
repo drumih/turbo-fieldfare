@@ -74,6 +74,39 @@ parallelizable to agents:
 Step 2 is the load-bearing one and the risk: it rewrites the generation path the
 whole product sits on, so it must land behind a real model-run gate or not at all.
 
+**Measured cost of step 2 (2026-11-16, after the user chose "wire Ornith now,
+verified").** It is not a session — it is a multi-step migration, because the
+server inference contract a variant would implement is entangled with 6.x:
+- `ServerInferenceBackend` + `ServerInferenceEvent` + `ServerCompletion` live in
+  **`TinyTitanLib`**, and a variant cannot import `TinyTitanLib` (variant-isolation).
+- The protocol's `samplingDefaults` → `GenerationDefaults.Sampling` (runtime/6.x),
+  and `generate(_ request: ValidatedChatRequest)` → `ValidatedChatRequest`
+  (`OpenAIRequestValidation.swift` imports `TinyTitan`).
+- `ServerModelSession` is **2,236 lines across 8 files** and drives concrete 6.x
+  engine members (`runner.totalPrefetchIssued`, `model.routedExpertWeightBits`,
+  `runner.expertStreamingStatistics`, prompt-cache, checkpoints). It is the
+  generation path itself, not an adapter over `prefill`/`decode`.
+
+So a variant can only serve the server after: (i) the server-inference contract
+(and the sampling type) is decoupled from 6.x into a variant-importable module,
+(ii) the 2,236-line session is re-hosted onto the variant engine, (iii) Ornith is
+routed to it, (iv) model-gated. (i) is a bounded phase-a/b/c-style move; (ii) is
+the large one. **Do (i) incrementally and keep main green at each commit; do not
+start (ii) unless it can be finished + model-verified in the same effort** — a
+half-migrated session leaves `main` untested, which the rules forbid. The bare
+`GenerationDefaults.Sampling` struct (plain Float/Int fields) is the first piece
+of (i): put `GenerationDefaults` (bare constants + `Sampling` + `house`) in Core
+and leave the family rows + `forFamily(_:)` in the runtime as a same-named
+extension (Swift allows cross-module extensions to add static methods), so
+`GenerationDefaults.Sampling` stays callable by name everywhere and Core carries
+no model knowledge.
+
+6.x stays the server's engine until this chain is complete; `archive/6.x-final`
+remains the fallback. The user's "one LLM on 7.0 = project complete" goal is met
+by the 7.0 **variant** passing its own golden + parity (already true), NOT by the
+server process importing it — those are separate claims and the tracker rows
+TT-082/083/087 should say so until (ii)+(iii) actually land.
+
 ## What is in progress — the `ArchConfig.family` decoupling (WIP)
 
 The GPU runtime lift into Core requires `ArchConfig` to be model-free, so
