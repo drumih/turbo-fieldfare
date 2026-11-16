@@ -192,9 +192,9 @@ extension PreadExpertStreamer {
             } else if let boundedReader {
                 try executeBoundedReads(plan, reader: boundedReader, firstStage: firstStage)
             } else {
-                // Always parallel when there is more than one miss: the
-                // serial alternative (TINYTITAN_PARALLEL_IO=0) measured a wash
-                // (+0.4%, 2/3) and is gone.
+                // Always parallel when there is more than one miss; the reads
+                // fan out through parallelFor (the serial alternative measured
+                // a wash, +0.4% 2/3, and concurrentPerform deadlocked here).
                 try executeCachedPreads(plan, parallel: plan.misses.count > 1)
             }
             try markPlanMissesResident(plan)

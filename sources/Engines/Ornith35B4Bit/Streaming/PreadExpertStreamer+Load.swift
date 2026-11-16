@@ -349,7 +349,7 @@ extension PreadExpertStreamer {
         let phaseWork = work.filter { $0.phase == phase }
         guard !phaseWork.isEmpty else { return }
         let firstError = Mutex<Error?>(nil)
-        DispatchQueue.concurrentPerform(iterations: phaseWork.count) { index in
+        parallelFor(iterations: phaseWork.count) { index in
             let item = phaseWork[index]
             do {
                 try ExpertBlobCodec.decompress(
@@ -380,9 +380,9 @@ extension PreadExpertStreamer {
         }
         let firstError = Mutex<Error?>(nil)
         let safeDestinations = PrefetchDestinations(destinations)
-        DispatchQueue.concurrentPerform(iterations: offsets.count) { index in
+        parallelFor(iterations: offsets.count) { index in
             do {
-                try readFull(
+                try self.readFull(
                     into: safeDestinations.values[index], fileOffset: offsets[index],
                     count: counts[index])
             } catch {

@@ -235,9 +235,12 @@ extension PreadExpertStreamer {
     ) throws {
         if parallel {
             let firstError = Mutex<Error?>(nil)
-            DispatchQueue.concurrentPerform(iterations: plan.misses.count) { offset in
+            // parallelFor, not concurrentPerform: this runs on the expert-I/O
+            // scheduler's worker threads, where concurrentPerform starves the
+            // GCD pool and deadlocks a full-chunk prefill (see ParallelFor).
+            parallelFor(iterations: plan.misses.count) { offset in
                 do {
-                    try readPlanMiss(plan, index: plan.misses[offset])
+                    try self.readPlanMiss(plan, index: plan.misses[offset])
                 } catch {
                     firstError.withLock { if $0 == nil { $0 = error } }
                 }
