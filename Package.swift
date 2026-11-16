@@ -124,7 +124,7 @@ let package = Package(
         // only the generic library — the variant-isolation gate enforces it.
         .target(
             name: "Qwen35Dense2B4Bit",
-            dependencies: ["TinyTitanCore"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC"],
             path: "sources/Engines/Qwen35Dense2B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -287,6 +287,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
+                "Qwen35Dense2B4Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
                 "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
                 "TinyTitanCore",

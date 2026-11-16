@@ -7,10 +7,11 @@
 import Foundation
 import TinyTitanCore
 
-/// The Qwen 3.5 2B at 4-bit, as a 7.0 engine variant. This is the scaffold: the
-/// statics are real, but the graph is not ported yet — init/prefill/decode refuse
-/// with `VariantError.notPorted` until task 7 lands the dense CPU forward.
-public struct Qwen35Dense2B4BitVariant: EngineVariant {
+/// The Qwen 3.5 2B at 4-bit, as a 7.0 engine variant serving the dense CPU path.
+/// unchecked-invariant: the CPUQwen35 instance and its last-logits buffer are
+/// confined to a single generation session and accessed serially by that
+/// session's prefill/decode loop; no two sessions share one variant instance.
+public final class Qwen35Dense2B4BitVariant: EngineVariant, @unchecked Sendable {
     public static let id: VariantID = {
         do { return try VariantID("qwen35-2b-4bit") } catch {
             fatalError("invalid variant id literal: \(error)")
@@ -50,16 +51,35 @@ public struct Qwen35Dense2B4BitVariant: EngineVariant {
         variantID: id, renames: [:], keepBF16Stems: [],
         headBits: nil, embeddingBits: nil)
 
+    private let engine: CPUQwen35
+    private var lastLogits: [Float] = []
+
     public init(context: EngineContext, model: LoadedModelHandle) throws {
-        throw VariantError.notPorted(Self.id.raw)
+        guard let directory = model.directoryURL else {
+            throw VariantError.notPorted(Self.id.raw)
+        }
+        let snapshot = try AffineSnapshot(ssdai: directory)
+        engine = try CPUQwen35(snapshot: snapshot)
     }
 
     public func prefill(_ tokens: [Int], state: inout SessionState) throws {
-        throw VariantError.notPorted(Self.id.raw)
+        lastLogits = try engine.prefill(tokens: tokens)
+        state.position = tokens.count
+        state.tokens = tokens
     }
 
     public func decode(_ state: inout SessionState) throws -> Int {
-        throw VariantError.notPorted(Self.id.raw)
+        guard !lastLogits.isEmpty else {
+            throw VariantError.notPorted(Self.id.raw)
+        }
+        var best = 0
+        for index in lastLogits.indices where lastLogits[index] > lastLogits[best] {
+            best = index
+        }
+        lastLogits = try engine.step(token: best)
+        state.position += 1
+        state.tokens.append(best)
+        return best
     }
 
     public static func qualify() throws -> Qualification {
