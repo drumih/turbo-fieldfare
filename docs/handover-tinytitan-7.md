@@ -6,6 +6,79 @@ TT-072…TT-087 and issue #32, closed with the work tracked in the tracker).
 The task list lives in the tracker and the git log; this file carries the
 state a fresh session cannot discover from those quickly.
 
+## ACTIVE WORK: TT-097 — make the server run the 7.0 variant engines (in progress)
+
+The 7.0 *release* is closed at the variant-qualification bar (see "CLOSURE"
+below); **TT-097 reopens the deferred piece**: the server process still generates
+through 6.x, and the owner asked to make it run the 7.0 variant engines for all
+served scenarios (Ornith GPU + dense CPU + dense GPU). The design is approved and
+the plan is written — this is execution-in-progress, resuming at Phase 1.
+
+**The four authoritative artifacts (read in this order):**
+1. `AGENTS.md` — the working rules (toolchain, gates, model-run discipline, rule 2
+   "one generation path").
+2. **Spec** `docs/superpowers/specs/2026-11-16-tt097-engine-agnostic-session-design.md`
+   (approved 2026-11-16).
+3. **Plan** `docs/superpowers/plans/2026-11-16-tt097-engine-agnostic-session.md`
+   (16 tasks, 4 phases, TDD-shaped; each task is an independently-green commit).
+4. Task table rows **#69–#72** (Phase 1–4); this handover for state not in git.
+
+**The design in one paragraph:** the server already dispatches to
+`ServerInferenceBackend` with two impls (`ServerModelSession` GPU in `TinyTitanLib`,
+`CPUModelBackend` dense-CPU in `TinyTitanServerCore`), both `import TinyTitan` (6.x).
+The forward path already runs through the existential `any LogitProducer`, but each
+module defines its **own** copy of `LogitProducer`/`ChunkedPrefillRunner`/etc. The
+fix: promote that engine-protocol family into `TinyTitanCore` as **one** shared,
+model-free definition that 6.x and every variant conform to, type the two sessions
+against a Core `EngineRunner`/`EngineModel` protocol, move concrete engine
+construction behind an injected **`EngineFactory`** so `TinyTitanLib` imports no
+engine module for inference, and have `TinyTitanServerCore` (which may import the
+variants) select the 6.x or variant factory per catalog identity. Dense GPU needs a
+new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
+`numExperts==0` runner from `plan-dense-gpu-engine.md`). 6.x is **never deleted**
+(it is the regression engine all the way; retired only by TT-087 after Phase 4).
+
+**Landed so far (all pushed to `main`):**
+- Spec `f4be7a78`; plan `01c1df59`; plan refinement `248d6efc`.
+- **Phase 1 Task 2** `89df297e`: `sources/TinyTitanCore/Engine/EngineModel.swift`
+  (6 `Model` members verbatim; build + core-purity + swift-format + swiftlint clean).
+
+**Resume exactly here — Phase 1 remaining (each = a green gated commit):**
+- **Task 1** pin the 32 `runner.total*` diagnostic counters as a list; their
+  declarations are **scattered across `sources/TinyTitan/Runtime/Inference/
+  RealForwardRunner+Diagnostics.swift`, `+State.swift`** and the phase files (only
+  `totalPrefetchIssued` is in `+Diagnostics.swift`) — enumerate all 32 names+types
+  before writing `EngineStatistics`. The 32 names the session reads: `grep -rhoE
+  'runner\.total[A-Za-z0-9]+' sources/TinyTitanLib/ServerModelSession*.swift | sort -u`.
+- **Task 3** promote the `LogitProducer` family into Core (LogitProducer,
+  ContinuableLogitProducer, ChunkedPrefillRunner, ContextWindowReporting,
+  InferenceAuxiliaryState+Error, PrefillError/OutputMode/Seed/Result/RuntimeConfig,
+  RawCompletion) as one shared `public` definition; make 6.x **and** `Ornith35B4Bit`
+  replace their local copies with `import TinyTitanCore` + `typealias` re-exports
+  (dense CPU variants have no GPU engine, so they are untouched here). Then add
+  `EngineStatistics` (32 lets) + `EngineRunner` (Core, extending the promoted
+  family, diagnostics collapsed to `var statistics`/`resetStatistics()`). This is
+  ONE coupled commit that must build whole.
+- **Tasks 4–5** conform 6.x `Model`/`RealForwardRunner` and the Ornith variant's
+  identical copies to `EngineModel`/`EngineRunner` (add the `statistics` aggregate
+  that returns the existing counters — no recomputation); write the conformance +
+  statistics-match tests first (TDD). Runtime is still all-6.x, so goldens must be
+  byte-identical. Verify: `swift build -c release`, `swift test --no-parallel`,
+  `tools/golden-baseline.sh --check 8` **and** `--check 4`, `tools/lint.sh`
+  (core-purity, variant-isolation, swift-format, swiftlint, func-length,
+  file-length, stdout-clean) — run with `export PATH=".build/shims:$PATH"`.
+- Then Phases 2–4 per the plan (Phase 2 re-types the 2,236-line session; Phase 3
+  builds `DenseGPU` + 7 model-gated routing flips; Phase 4 is the full acceptance
+  matrix + paired benchmarks + records).
+
+**Invariants this work must never break:** zero numerics change until a model is
+routed to a variant (then golden/parity byte-identical or it is a finding, not a
+re-baseline); one generation path (reuse the session, do not fork it); every commit
+green (never leave `main` mid-migration); no model fetched to satisfy a gate;
+Apple Silicon only; 6.x preserved (on `main` live + `archive/6.x-final`).
+Model runs are gated: require macOS 26+, Swift 6.4, `memory_pressure -Q` ok, no
+competing model process, valid install receipt; run tests serially, one at a time.
+
 ## What is done and verified (all pushed to origin/main)
 
 - **Generic 7.0 foundation in `TinyTitanCore`** — registry
