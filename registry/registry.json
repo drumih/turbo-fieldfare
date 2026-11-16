@@ -155,17 +155,6 @@
           }
         },
         {
-          "id": "ornith-1.5-35b-bf16dense-4bit",
-          "target": null,
-          "bits": 4,
-          "engine": "gpu",
-          "shipped": false,
-          "installedSizeBytes": 23613919232,
-          "sourceSizeBytes": null,
-          "qualification": null,
-          "recipeNote": "attention, GDN and the shared expert stay at the checkpoint's bf16; routed experts 4-bit"
-        },
-        {
           "id": "ornith-1.5-35b-8bit",
           "target": null,
           "bits": 8,

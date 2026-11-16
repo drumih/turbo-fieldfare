@@ -81,9 +81,9 @@ struct RegistryInventoryTests {
                 #expect(seen.insert(id).inserted)
             }
         }
-        // 19 shipped pairs: 6 dense + 2 qwen36 + 3 ornith 35B (incl. bf16dense)
-        // + 2 agentworld + 2 katcoder + 2 qwen3.8 + 2 ornith 122B.
-        #expect(seen.count == 19)
+        // 18 shipped pairs after removing bf16dense on 2026-11-16: 6 dense + 2 qwen36
+        // + 2 ornith 35B + 2 agentworld + 2 katcoder + 2 qwen3.8 + 2 ornith 122B.
+        #expect(seen.count == 18)
     }
 
     @Test func everyShippedPairMatchesTheInstallerTable() throws {
@@ -102,6 +102,6 @@ struct RegistryInventoryTests {
         let rows = script[tableStart.upperBound..<tableEnd.lowerBound]
             .split(separator: "\n")
             .filter { $0.contains("|") }
-        #expect(rows.count == 19)
+        #expect(rows.count == 18)
     }
 }

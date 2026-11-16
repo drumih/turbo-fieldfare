@@ -1,6 +1,6 @@
 # Post-7.0 Ornith 1.5 35B-A3B 4-bit — performance investigation
 
-Status: in progress (2026-11-16). Subject: the shipped server path, which runs the
+Status: complete (2026-11-16). Subject: the shipped server path, which runs the
 6.x `TinyTitan` runtime (the `Ornith35B4Bit` variant is parity-verified but not yet
 the server's engine). Host: Apple M3 MacBook Pro, 24 GB, macOS 27.2, Swift 6.4.
 Method: paired, interleaved A/B (`benchmark/minor_wins_ab.py`), text-parity checked
@@ -178,3 +178,30 @@ one. Policy tests 3/3 and golden `ornith-4` passed, but the paired A/B was too
 swap-confounded to accept: 13.19–13.75 GB swap, 3.5–8.6 tok/s, per-round deltas
 −7.18%, +15.11%, +61.44%, +114.14% (parity OK). **Reverted; no coalescing change
 adopted.** A future retry needs an acceptable-memory, clean paired run.
+
+## 12. P1–P5 final verdict
+
+The five-item plan was measured first, then implemented only where the evidence
+justified it. One item was adopted; four were measured and not adopted.
+
+| item | hypothesis | verdict | evidence |
+| --- | --- | --- | --- |
+| **P1** batched CPU prefill (dequantize-once + SGEMM, M≥16) | GEMV-per-token wastes repeated weight dequantization at large M | **ADOPTED** `07cecaf1` | microbench M=16 1.7–2.9×, M=64 5.7–6.2×; 4/4 + 5/5 tests green; full-model golden **not checked** (no dense installs) |
+| **P2** attention command-buffer coalescing | fewer CBs → less per-layer CPU barrier | **NOT ADOPTED** | policy 3/3 + golden passed, but A/B swap-confounded (−7%…+114%); reverted |
+| **P3** expert-read size / readahead tuning | larger readahead at the 1.69 MiB expert stride | **NO CHANGE** | direct-I/O probe within noise; no monotonic win |
+| **P4** measured CPU thread-count selection | a fixed thread count is suboptimal | **NO CHANGE** | 1/2/4/8 sweep swung between rounds; no stable winner |
+| **P5** ANE prefill sidecar | ANE offloads prefill | **NO CHANGE** | installed model has no `ane_prefill*` sidecar; nothing to measure |
+
+**Net result:** one real improvement shipped (P1, dense prefill projections), zero
+regressions, zero quality cost. The Ornith decode path was left at its measured-
+optimal defaults — every scheduling/occupancy lever tried (early attention-CB
+commit, CB coalescing) was rejected on clean-condition evidence, and the I/O,
+chunk, readahead and thread knobs were confirmed already optimal. A further solid
+decode gain requires the GPU-occupancy restructure scoped in §5 (deferred as
+funded future work, not forced at the tail of this investigation).
+
+**Final audit:** all 20 lint gates green (`LINT_EXIT=0`); `catalog --check` ok;
+docs gate ok; full serial suite green (the only prior failure was a stale test
+binary expecting the pre-removal 19 shipped pairs — rebuilt to the correct 18 and
+passing). P1 full-model golden text/timing remains **not checked** because no
+dense model is installed and none was downloaded, per the model-install policy.
