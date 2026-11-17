@@ -954,6 +954,41 @@ import Testing
         #expect(CPUOps.softplus(-100) >= 0)
         #expect(abs(CPUOps.softplus(0) - logf(2)) < 1e-6)
     }
+
+    /// TT-097 Phase 1 Task 5: the CPU engine satisfies the Core
+    /// `CPUEngineRunner` contract, runtime-driven on the tiny synthetic
+    /// model: the contract's `reset`/`prefill`/`step` loop runs for real.
+    /// (The dense variants' conformances are pinned compile-shaped in
+    /// tests/TinyTitan/Engine/ — importing those modules here would make the
+    /// duplicated engine family's names ambiguous in one file.)
+    @Test func cpuEngineSatisfiesTheCoreContract() throws {
+        func serve<R: CPUEngineRunner>(_ type: R.Type) -> Int {
+            String(describing: type).isEmpty ? 1 : 0
+        }
+        #expect(serve(CPUQwen35.self) == 0)
+
+        var rng = SplitMix(state: 9)
+        var model = tinyModel(interval: 1, &rng)
+        let prefix = Self.tinyPrefix + "layers.0.self_attn."
+        model.matrices[prefix + "q_proj"] = Rows.random(128, 64, &rng)
+        model.matrices[prefix + "k_proj"] = Rows.random(32, 64, &rng)
+        model.matrices[prefix + "v_proj"] = Rows.random(32, 64, &rng)
+        model.matrices[prefix + "o_proj"] = Rows.random(64, 64, &rng)
+        model.floats[prefix + "q_norm.weight"] = ([16], randomFloats(16, 0.5...1.5, &rng))
+        model.floats[prefix + "k_norm.weight"] = ([16], randomFloats(16, 0.5...1.5, &rng))
+        let directory = try writeTinyModel(model)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let engine: any CPUEngineRunner = try CPUQwen35(
+            snapshot: try AffineSnapshot(directory: directory),
+            threads: 1)
+        #expect(engine.threads == 1)
+        #expect(engine.configuration.vocabulary == 8)
+        engine.reset()
+        let promptLogits = try engine.prefill(tokens: [3, 1])
+        #expect(promptLogits.count == engine.configuration.vocabulary)
+        let next = try engine.step(token: 4)
+        #expect(next.count == engine.configuration.vocabulary)
+    }
 }
 
 /// The CPU serving path: which architectures it will take, how it samples,

@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // Reading one row of a quantized matrix, and the bfloat widening the kernels
 // share.

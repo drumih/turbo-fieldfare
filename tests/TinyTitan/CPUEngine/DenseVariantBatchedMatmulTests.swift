@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TinyTitanCore
 
 @testable import Qwen35Dense4B4Bit
 @testable import Qwen35Dense4B8Bit

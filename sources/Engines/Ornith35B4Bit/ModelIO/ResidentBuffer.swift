@@ -6,7 +6,12 @@ import TinyTitanCore
 /// `mmap`'d view of `model_weights.bin`'s tensor data region, wrapped in
 /// one shared `MTLBuffer`. All resident `TensorView`s alias byte offsets
 /// inside `buffer`.
-final class ResidentBuffer {
+///
+/// unchecked-invariant: the mapping and the wrapped `MTLBuffer` are `let`,
+/// created once in init and never mutated; Metal buffers are safe to read
+/// from any thread, so concurrent holders of one `ResidentBuffer` are safe.
+/// Needed so `Model` can witness the Sendable-bounded TT-097 engine contract.
+final class ResidentBuffer: @unchecked Sendable {
     let buffer: MTLBuffer
 
     /// `mmap` the page-aligned window covering `[fileOffset, fileOffset + residentSize)`

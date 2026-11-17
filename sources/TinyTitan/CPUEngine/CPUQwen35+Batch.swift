@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 /// Batched prompt prefill for the CPU engine.
 ///
