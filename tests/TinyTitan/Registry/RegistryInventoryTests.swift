@@ -76,14 +76,20 @@ struct RegistryInventoryTests {
             let modelID = try #require(model["modelID"] as? String)
             for variant in try #require(model["variants"] as? [[String: Any]]) {
                 let id = try #require(variant["id"] as? String)
-                #expect(id.hasSuffix("bit"))
+                // The width suffix is the convention; a `-gpu` suffix may
+                // follow it for a second engine over the same pair (TT-097
+                // Task 12 added the dense-GPU rows).
+                #expect(
+                    id.hasSuffix("bit") || id.hasSuffix("bit-gpu"),
+                    "\(id) must end in the width suffix")
                 #expect(id.hasPrefix(modelID))
                 #expect(seen.insert(id).inserted)
             }
         }
-        // 18 shipped pairs after removing bf16dense on 2026-11-16: 6 dense + 2 qwen36
-        // + 2 ornith 35B + 2 agentworld + 2 katcoder + 2 qwen3.8 + 2 ornith 122B.
-        #expect(seen.count == 18)
+        // 24 pairs: the 18 shipped pairs (bf16dense removed 2026-11-16) plus
+        // the six dense-GPU rows Task 12 added — same dense pairs, second
+        // engine, target DenseGPU, unshipped until Task 13 qualifies them.
+        #expect(seen.count == 24)
     }
 
     @Test func everyShippedPairMatchesTheInstallerTable() throws {

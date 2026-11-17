@@ -23,9 +23,29 @@
         },
         {
           "id": "qwen35-2b-8bit",
-          "target": null,
+          "target": "Qwen35Dense2B8Bit",
           "bits": 8,
           "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 2363888640,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-2b-4bit-gpu",
+          "target": "DenseGPU",
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 2470440960,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-2b-8bit-gpu",
+          "target": "DenseGPU",
+          "bits": 8,
+          "engine": "gpu",
           "shipped": false,
           "installedSizeBytes": 2363888640,
           "sourceSizeBytes": null,
@@ -61,6 +81,26 @@
           "installedSizeBytes": 5691643904,
           "sourceSizeBytes": null,
           "qualification": null
+        },
+        {
+          "id": "qwen35-4b-4bit-gpu",
+          "target": "DenseGPU",
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 3973342208,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-4b-8bit-gpu",
+          "target": "DenseGPU",
+          "bits": 8,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 5691643904,
+          "sourceSizeBytes": null,
+          "qualification": null
         }
       ]
     },
@@ -88,6 +128,26 @@
           "target": "Qwen35Dense9B8Bit",
           "bits": 8,
           "engine": "cpu",
+          "shipped": false,
+          "installedSizeBytes": 11811160064,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-9b-4bit-gpu",
+          "target": "DenseGPU",
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 8053063680,
+          "sourceSizeBytes": null,
+          "qualification": null
+        },
+        {
+          "id": "qwen35-9b-8bit-gpu",
+          "target": "DenseGPU",
+          "bits": 8,
+          "engine": "gpu",
           "shipped": false,
           "installedSizeBytes": 11811160064,
           "sourceSizeBytes": null,

@@ -165,6 +165,21 @@ let package = Package(
             path: "sources/Engines/Qwen35Dense9B8Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
+        // The shared config-driven dense-GPU engine (TT-097 Task 12): one
+        // target for the whole dense Qwen 3.5 family, geometry taken from each
+        // install's manifest (`numExperts == 0` makes the same graph dense),
+        // refusing non-dense installs by name. A spec-sanctioned copy of the
+        // shipped variant's engine — the variant-isolation rule forbids a
+        // cross-variant import.
+        .target(
+            name: "DenseGPU",
+            dependencies: [
+                "TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC",
+                .product(name: "Tokenizers", package: "swift-transformers"),
+            ],
+            path: "sources/Engines/DenseGPU",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "Ornith35B4Bit",
             dependencies: [
@@ -374,6 +389,15 @@ let package = Package(
                 .product(name: "yyjson", package: "yyjson"),
             ],
             path: "tests/Engines/Ornith35B4Bit",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
+            name: "DenseGPUTests",
+            dependencies: [
+                "DenseGPU", "TinyTitanCore",
+                .product(name: "yyjson", package: "yyjson"),
+            ],
+            path: "tests/Engines/DenseGPU",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
