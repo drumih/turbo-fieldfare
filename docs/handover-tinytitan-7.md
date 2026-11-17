@@ -50,12 +50,19 @@ new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
   model-free tests across nine targets, all required lint gates, and golden
   `ornith-4` byte-identical. Golden `ornith-8` was **not checked** (no install;
   none fetched).
+- **Phase 2 Task 6** `57b4fed2`: Core `EngineFactory` and `SessionBuildOptions`
+  now define the injection boundary; KV-cache precision and RoPE scaling types
+  are shared through Core aliases in both runtime copies. `promptCacheMode`
+  deliberately remains session policy. Verified with a release build, 2,390
+  model-free tests across nine targets, all required lint gates, and golden
+  `ornith-4` byte-identical. Golden `ornith-8` was **not checked** (no install;
+  none fetched).
 
-**Resume exactly here — Phase 2 Task 6 (each = a green gated commit):**
-- Add the Core `EngineFactory` injection surface and `SessionBuildOptions`, then
-  re-type `ServerModelSession` and `CPUModelBackend` against the Phase 1
-  protocols. Concrete construction stays behind the factory; the default factory
-  still returns 6.x throughout Phase 2, so output must remain byte-identical.
+**Resume exactly here — Phase 2 Task 7 (each = a green gated commit):**
+- Re-type `ServerModelSession` against the Phase 1 protocols and move concrete
+  construction behind the injected factory. The package-private default factory
+  still returns 6.x throughout Phase 2, so output must remain byte-identical;
+  then re-type `CPUModelBackend` the same way.
 - Then Phases 3–4 per the plan (Phase 3 builds `DenseGPU` + model-gated routing
   flips; Phase 4 is the full acceptance matrix + paired benchmarks + records).
 
