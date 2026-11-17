@@ -226,3 +226,15 @@ final class ExpertPrefetchRing: @unchecked Sendable {
         }
     }
 }
+
+extension ExpertPrefetchRing {
+    /// Zero the reads-issued counter `RealForwardRunner.totalPrefetchIssued`
+    /// derives from (`resetStatistics`). Slot table, in-flight operations and
+    /// the other diagnostic counters keep their own lifecycle — this zeroes
+    /// exactly the number statistics exposes, nothing else.
+    func resetIssuedReads() {
+        lock.lock()
+        defer { lock.unlock() }
+        issuedReads = 0
+    }
+}

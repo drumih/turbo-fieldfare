@@ -63,13 +63,12 @@ extension Model {
     /// The open is retried synchronously by `ensureLayerOpened(_:)` before any
     /// expert fetch on the layer, which rethrows the identical error — so a
     /// failure here is never dropped end-to-end.
-    ///
-    /// `nonisolated(unsafe)` is required because `Model` is not formally
-    /// `Sendable`; the capture is safe because every mutable member
-    /// (`streamersBox`) is confined behind the serial `streamersQueue` and the
-    /// remaining members are immutable values.
+    /// The capture needs no `nonisolated(unsafe)` anymore: `Model` is
+    /// Sendable (implicit, once its handles carry `@unchecked Sendable` for
+    /// the TT-097 contract), and the mutable members it does have
+    /// (`streamersBox`) stay confined behind the serial `streamersQueue`.
     public func beginOpeningRoutedExpertStreamer(layer L: Int) {
-        nonisolated(unsafe) let model = self
+        let model = self
         streamersQueue.async {
             do {
                 try model.openLayerLocked(L)

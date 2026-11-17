@@ -111,4 +111,119 @@ import Testing
         #expect(!Self.knownDiagnosticCounters.contains("totalRDAdviseFailures"))
         #expect(!Self.knownDiagnosticCounters.contains("totalRDAdviseSkipped"))
     }
+
+    /// The 33 counter names paired with their `EngineStatistics` and runner
+    /// key paths, in the same order as `knownDiagnosticCounters`. A rename on
+    /// either side breaks the build here, which is the pin. Computed (not a
+    /// stored `let`): key-path tuples do not infer Sendable, and a stored
+    /// static of them fails the concurrency-safety check.
+    private static var counterKeyPaths:
+        [(
+            statistics: KeyPath<EngineStatistics, UInt64>,
+            runner: KeyPath<RealForwardRunner, UInt64>
+        )]
+    {
+        [
+            (\EngineStatistics.totalBodyNanos, \RealForwardRunner.totalBodyNanos),
+            (\EngineStatistics.totalCachePlanNanos, \RealForwardRunner.totalCachePlanNanos),
+            (\EngineStatistics.totalCb1Nanos, \RealForwardRunner.totalCb1Nanos),
+            (\EngineStatistics.totalCb2Nanos, \RealForwardRunner.totalCb2Nanos),
+            (\EngineStatistics.totalEmbedNanos, \RealForwardRunner.totalEmbedNanos),
+            (\EngineStatistics.totalExpertIOHostWaits, \RealForwardRunner.totalExpertIOHostWaits),
+            (
+                \EngineStatistics.totalExpertIOHostWaitsAvoided,
+                \RealForwardRunner.totalExpertIOHostWaitsAvoided
+            ),
+            (\EngineStatistics.totalExposedIoNanos, \RealForwardRunner.totalExposedIoNanos),
+            (\EngineStatistics.totalGPUClassifiedHits, \RealForwardRunner.totalGPUClassifiedHits),
+            (
+                \EngineStatistics.totalGPUClassifiedMisses,
+                \RealForwardRunner.totalGPUClassifiedMisses
+            ),
+            (
+                \EngineStatistics.totalGPUResidencyAllHitLayers,
+                \RealForwardRunner.totalGPUResidencyAllHitLayers
+            ),
+            (\EngineStatistics.totalGatherNanos, \RealForwardRunner.totalGatherNanos),
+            (\EngineStatistics.totalHeadFusedNanos, \RealForwardRunner.totalHeadFusedNanos),
+            (\EngineStatistics.totalHeadNanos, \RealForwardRunner.totalHeadNanos),
+            (\EngineStatistics.totalHitFixupLayers, \RealForwardRunner.totalHitFixupLayers),
+            (
+                \EngineStatistics.totalIOCompletionToFixupSubmitNanos,
+                \RealForwardRunner.totalIOCompletionToFixupSubmitNanos
+            ),
+            (\EngineStatistics.totalIOQueueNanos, \RealForwardRunner.totalIOQueueNanos),
+            (\EngineStatistics.totalIoNanos, \RealForwardRunner.totalIoNanos),
+            (\EngineStatistics.totalLoopOtherNanos, \RealForwardRunner.totalLoopOtherNanos),
+            (\EngineStatistics.totalLoopProgressNanos, \RealForwardRunner.totalLoopProgressNanos),
+            (\EngineStatistics.totalLoopSampleNanos, \RealForwardRunner.totalLoopSampleNanos),
+            (\EngineStatistics.totalMissIoNanos, \RealForwardRunner.totalMissIoNanos),
+            (\EngineStatistics.totalPreambleNanos, \RealForwardRunner.totalPreambleNanos),
+            (\EngineStatistics.totalPreamblePinNanos, \RealForwardRunner.totalPreamblePinNanos),
+            (
+                \EngineStatistics.totalPreambleReleaseNanos,
+                \RealForwardRunner.totalPreambleReleaseNanos
+            ),
+            (
+                \EngineStatistics.totalPreambleReserveNanos,
+                \RealForwardRunner.totalPreambleReserveNanos
+            ),
+            (\EngineStatistics.totalPrefetchAdopted, \RealForwardRunner.totalPrefetchAdopted),
+            (\EngineStatistics.totalPrefetchIssued, \RealForwardRunner.totalPrefetchIssued),
+            (\EngineStatistics.totalRDAdviseBytes, \RealForwardRunner.totalRDAdviseBytes),
+            (\EngineStatistics.totalRDAdviseCalls, \RealForwardRunner.totalRDAdviseCalls),
+            (\EngineStatistics.totalRDAdviseNanos, \RealForwardRunner.totalRDAdviseNanos),
+            (
+                \EngineStatistics.totalRouterReadbackNanos,
+                \RealForwardRunner.totalRouterReadbackNanos
+            ),
+            (\EngineStatistics.totalWaitNanos, \RealForwardRunner.totalWaitNanos),
+        ]
+    }
+
+    @Test("statistics forward every pinned counter, and resetStatistics zeroes them")
+    func statisticsMatchCounters() throws {
+        #expect(Self.counterKeyPaths.count == Self.knownDiagnosticCounters.count)
+        let (dir, runner) = try makeRunner()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let engineRunner: any EngineRunner = runner
+
+        // Seed non-zero values so equality cannot pass on both sides being 0.
+        runner.totalWaitNanos = 11
+        runner.totalBodyNanos = 22
+        runner.totalCb1Nanos = 33
+        runner.totalCb2Nanos = 44
+        runner.totalLoopSampleNanos = 55
+        runner.totalPrefetchAdopted = 66
+
+        let stats = engineRunner.statistics
+        for (statisticsPath, runnerPath) in Self.counterKeyPaths {
+            #expect(
+                stats[keyPath: statisticsPath] == runner[keyPath: runnerPath],
+                "\(statisticsPath) does not forward its runner counter")
+        }
+
+        runner.resetStatistics()
+        #expect(
+            runner.statistics == EngineStatistics.zero,
+            "resetStatistics must zero every counter, including the ring-issued one")
+    }
+
+    @Test("Model forwards its members through EngineModel")
+    func engineModelMembersForward() throws {
+        let dir = try QwenToySynthetic.write(weightBits: 4, qsa: false)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ctx = try MetalContext()
+        let model = try Model.load(
+            directoryURL: dir,
+            device: ctx.device,
+            expecting: .qwenToy())
+        let engineModel: any EngineModel = model
+        #expect(engineModel.config == model.config)
+        #expect(engineModel.modelID == model.modelID)
+        #expect(engineModel.sourceSnapshotHash == model.sourceSnapshotHash)
+        #expect(engineModel.routedExpertWeightBits == model.routedExpertWeightBits)
+        #expect(
+            engineModel.routedExpertCacheSlotCount() == model.routedExpertCacheSlotCount())
+    }
 }

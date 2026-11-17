@@ -484,3 +484,8 @@ public struct Model {
     // explicit no-scale variant rather than consuming a unit-weight buffer.
 
 }
+
+// TT-097 Phase 1: the Core engine contract. Every `EngineModel` member already
+// exists on `Model` (verified verbatim when the protocol was written), so the
+// conformance is a declaration only — no behavior changes.
+extension Model: EngineModel {}

@@ -2,7 +2,12 @@ import Darwin
 import Foundation
 import TinyTitanFormat
 
-package final class SSDAIModelDirectory {
+/// unchecked-invariant: `rootURL` and `rootFD` are `let`, set once in init,
+/// and every method is stateless — `openFile` duplicates the root descriptor
+/// per call, so concurrent readers of one directory instance are safe. The
+/// unchecked conformance exists so the install handle can travel inside
+/// `Model`, which is a Sendable witness of the TT-097 engine contract.
+package final class SSDAIModelDirectory: @unchecked Sendable {
     package let rootURL: URL
     private let rootFD: Int32
 

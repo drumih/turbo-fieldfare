@@ -280,3 +280,88 @@ extension RealForwardRunner {
         let end: TimeInterval
     }
 }
+
+// MARK: - TT-097 engine contract (EngineRunner)
+
+// The session-facing aggregate and reset. Every member forwards an existing
+// counter — no recomputation, no accounting change; the per-counter
+// `internal(set)` writes below are the same ones the record helpers have
+// always made, now reachable from one place.
+extension RealForwardRunner: EngineRunner {
+    /// Every counter the session reads, forwarded from the live counters.
+    public var statistics: EngineStatistics {
+        EngineStatistics(
+            totalBodyNanos: totalBodyNanos,
+            totalCachePlanNanos: totalCachePlanNanos,
+            totalCb1Nanos: totalCb1Nanos,
+            totalCb2Nanos: totalCb2Nanos,
+            totalEmbedNanos: totalEmbedNanos,
+            totalExpertIOHostWaits: totalExpertIOHostWaits,
+            totalExpertIOHostWaitsAvoided: totalExpertIOHostWaitsAvoided,
+            totalExposedIoNanos: totalExposedIoNanos,
+            totalGPUClassifiedHits: totalGPUClassifiedHits,
+            totalGPUClassifiedMisses: totalGPUClassifiedMisses,
+            totalGPUResidencyAllHitLayers: totalGPUResidencyAllHitLayers,
+            totalGatherNanos: totalGatherNanos,
+            totalHeadFusedNanos: totalHeadFusedNanos,
+            totalHeadNanos: totalHeadNanos,
+            totalHitFixupLayers: totalHitFixupLayers,
+            totalIOCompletionToFixupSubmitNanos: totalIOCompletionToFixupSubmitNanos,
+            totalIOQueueNanos: totalIOQueueNanos,
+            totalIoNanos: totalIoNanos,
+            totalLoopOtherNanos: totalLoopOtherNanos,
+            totalLoopProgressNanos: totalLoopProgressNanos,
+            totalLoopSampleNanos: totalLoopSampleNanos,
+            totalMissIoNanos: totalMissIoNanos,
+            totalPreambleNanos: totalPreambleNanos,
+            totalPreamblePinNanos: totalPreamblePinNanos,
+            totalPreambleReleaseNanos: totalPreambleReleaseNanos,
+            totalPreambleReserveNanos: totalPreambleReserveNanos,
+            totalPrefetchAdopted: totalPrefetchAdopted,
+            totalPrefetchIssued: totalPrefetchIssued,
+            totalRDAdviseBytes: totalRDAdviseBytes,
+            totalRDAdviseCalls: totalRDAdviseCalls,
+            totalRDAdviseNanos: totalRDAdviseNanos,
+            totalRouterReadbackNanos: totalRouterReadbackNanos,
+            totalWaitNanos: totalWaitNanos)
+    }
+
+    /// Zero every counter `statistics` exposes: the 32 stored totals plus the
+    /// prefetch ring's reads-issued (the one computed member). The GPU timing
+    /// list has its own reset (`resetKernelGPUTimings`); the ring's other
+    /// diagnostic counters keep their own lifecycle.
+    public func resetStatistics() {
+        totalIoNanos = 0
+        totalCb1Nanos = 0
+        totalCb2Nanos = 0
+        totalHeadNanos = 0
+        totalHeadFusedNanos = 0
+        totalWaitNanos = 0
+        totalBodyNanos = 0
+        totalPrefetchAdopted = 0
+        totalPreambleNanos = 0
+        totalPreambleReleaseNanos = 0
+        totalPreamblePinNanos = 0
+        totalPreambleReserveNanos = 0
+        totalEmbedNanos = 0
+        totalGatherNanos = 0
+        totalLoopSampleNanos = 0
+        totalLoopProgressNanos = 0
+        totalLoopOtherNanos = 0
+        totalMissIoNanos = 0
+        totalExposedIoNanos = 0
+        totalHitFixupLayers = 0
+        totalRouterReadbackNanos = 0
+        totalCachePlanNanos = 0
+        totalIOQueueNanos = 0
+        totalIOCompletionToFixupSubmitNanos = 0
+        totalExpertIOHostWaits = 0
+        totalExpertIOHostWaitsAvoided = 0
+        totalGPUClassifiedHits = 0
+        totalGPUResidencyAllHitLayers = 0
+        totalRDAdviseNanos = 0
+        totalRDAdviseCalls = 0
+        totalRDAdviseBytes = 0
+        predictivePrefetch?.resetIssuedReads()
+    }
+}

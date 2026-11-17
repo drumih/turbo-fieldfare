@@ -110,10 +110,9 @@ package actor K2ProbeRuntime {
                 expertsPerLayer: config.numExperts),
             !profile.isEmpty
         else { return }
-        // The model is a non-Sendable class owned by this actor; the narrow
-        // opt-out is for sending it into the fetch's async call, not a claim
-        // it is safe to share.
-        nonisolated(unsafe) let model = self.model
+        // The model is Sendable (TT-097 engine contract), so the capture
+        // into the fetch's async call needs no opt-out.
+        let model = self.model
         let config = self.config
         let perLayer = min(limit, slotCount, config.numExperts)
         let sparseLayers = (0..<config.numLayers).filter {
