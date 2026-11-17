@@ -39,7 +39,8 @@ import Testing
                 model: model, context: context, maxContext: 1536, slots: 1,
                 runtimeConfiguration: try RuntimeConfiguration(forceLogitsHead: !fusedHead))
             tokenizer = try await GFTokenizer.load(from: ChatMLTemplateTests.fixtureFolder())
-            scratch = try TinyTitan.RawCompletionScratch(context: context, vocab: runner.cfg.vocabSize)
+            scratch = try TinyTitan.RawCompletionScratch(
+                context: context, vocab: runner.cfg.vocabSize)
         }
 
         deinit { try? FileManager.default.removeItem(at: directory) }

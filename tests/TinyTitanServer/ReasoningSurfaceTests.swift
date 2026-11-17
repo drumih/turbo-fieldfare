@@ -245,7 +245,8 @@ struct AnthropicReasoningTests {
         let backend = ThinkingBackend()
         let loaded = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue, thinkingMode: .on,
-            reasoningEffort: .low)
+            reasoningEffort: .low,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         try await withServer(backend, profile: loaded) { port in
             let asked =
                 #"{"model":"test-model","max_tokens":65536,"messages":[{"role":"user","content":"hi"}]"#

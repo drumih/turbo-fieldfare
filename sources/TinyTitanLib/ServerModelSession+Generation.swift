@@ -269,53 +269,53 @@ extension ServerModelSession {
         // generation loop is the wrong place to rely on it.
         let result = try await runCompletion(
             RawCompletionRequest(
-            producer: activeProducer,
-            tokenizer: renderTokenizer,
-            promptIDs: activePromptIDs,
-            configuration: config,
-            context: context,
-            scratch: scratches[slot],
-            prefillConfiguration: prefillConfig,
-            start: activeStart,
-            slot: slot,
-            checkpointPositions: interiorCapture.positions,
-            onPrefillCheckpoint: interiorCapture.onCheckpoint,
-            wideVerify: wideVerifyOptions,
-            // A watchdog stop is polled here, between tokens, alongside the
-            // stop-string matcher's own flag.
-            shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
-            onProgress: { @Sendable progress in
-                guard state.decodingError == nil else { return }
-                do {
-                    switch progress {
-                    case .prefill(let done, let total):
-                        // The runtime reports prefill chunk by chunk; the prompt
-                        // is read when the last chunk lands. A request that
-                        // asked for reading progress gets each chunk before
-                        // that, which is the only signal a long prompt has.
-                        if done >= total {
-                            publishPromptProcessed(total)
-                        } else if request.returnProgress {
-                            onEvent(.promptProgress(done: done, total: total))
+                producer: activeProducer,
+                tokenizer: renderTokenizer,
+                promptIDs: activePromptIDs,
+                configuration: config,
+                context: context,
+                scratch: scratches[slot],
+                prefillConfiguration: prefillConfig,
+                start: activeStart,
+                slot: slot,
+                checkpointPositions: interiorCapture.positions,
+                onPrefillCheckpoint: interiorCapture.onCheckpoint,
+                wideVerify: wideVerifyOptions,
+                // A watchdog stop is polled here, between tokens, alongside the
+                // stop-string matcher's own flag.
+                shouldStop: { @Sendable in state.shouldStop || watchdogs.wantsStop },
+                onProgress: { @Sendable progress in
+                    guard state.decodingError == nil else { return }
+                    do {
+                        switch progress {
+                        case .prefill(let done, let total):
+                            // The runtime reports prefill chunk by chunk; the prompt
+                            // is read when the last chunk lands. A request that
+                            // asked for reading progress gets each chunk before
+                            // that, which is the only signal a long prompt has.
+                            if done >= total {
+                                publishPromptProcessed(total)
+                            } else if request.returnProgress {
+                                onEvent(.promptProgress(done: done, total: total))
+                            }
+                        case .token(_, let tokenID, let delta):
+                            if let decoder = state.decoder {
+                                publish(try decoder.consume(tokenID: tokenID, delta: delta), true)
+                            } else {
+                                publish(delta.isEmpty ? [] : [.content(delta)], true)
+                            }
+                        case .tail(let text):
+                            if let decoder = state.decoder {
+                                publish(try decoder.consumeTail(text), false)
+                            } else {
+                                publish(text.isEmpty ? [] : [.content(text)], false)
+                            }
                         }
-                    case .token(_, let tokenID, let delta):
-                        if let decoder = state.decoder {
-                            publish(try decoder.consume(tokenID: tokenID, delta: delta), true)
-                        } else {
-                            publish(delta.isEmpty ? [] : [.content(delta)], true)
-                        }
-                    case .tail(let text):
-                        if let decoder = state.decoder {
-                            publish(try decoder.consumeTail(text), false)
-                        } else {
-                            publish(text.isEmpty ? [] : [.content(text)], false)
-                        }
+                    } catch {
+                        state.decodingError = error
+                        state.shouldStop = true
                     }
-                } catch {
-                    state.decodingError = error
-                    state.shouldStop = true
-                }
-            }))
+                }))
         emitGenerationDiagnostics(
             activeProducer: activeProducer,
             result: result,

@@ -109,3 +109,58 @@ public enum GenerationDefaults {
         }
     }
 }
+
+// MARK: - TT-097: the Core contract a served model advertises
+
+extension ModelReasoningControl {
+    /// The Core control the validator, the router and the session speak. The
+    /// runtime row is the truth; this is its spelling in the shared contract,
+    /// so the family knowledge lives in exactly one place.
+    public var engineControl: ReasoningControl {
+        switch self {
+        case .binaryThinking:
+            .binaryThinking
+        case .thinkingWithEffortLevels(let defaultEffort, let supported):
+            .thinkingWithEffortLevels(defaultEffort: defaultEffort, supported: supported)
+        case .effortOnly(let defaultEffort, let supported):
+            .effortOnly(defaultEffort: defaultEffort, supported: supported)
+        }
+    }
+}
+
+extension ModelFamily {
+    /// The family's reasoning control in the shared contract's spelling.
+    public var engineReasoningControl: ReasoningControl {
+        reasoningControl.engineControl
+    }
+
+    /// The Core sampling profile a served model advertises, derived from the
+    /// identity the install manifest carries. The two-row families publish an
+    /// instruct row and a thinking row: the instruct row is the base (what a
+    /// thinking-off request must sample with) and the thinking row the twin,
+    /// because the Core validator resolves the row from the profile it is
+    /// handed and has no family table to fall back to. Single-row families
+    /// advertise their profile row with no twin.
+    ///
+    /// `EngineModelMetadata` (the loaded model) and the server catalog (the
+    /// model before it loads) both advertise through this one helper, so a
+    /// mid-session thinking switch samples the same row wherever the model
+    /// was when the request arrived.
+    public func engineSamplingProfile(identity: ManifestIdentity) -> SamplingProfile {
+        let profile = ModelProfile.resolve(identity: identity).sampling
+        let twoRow =
+            self == .qwen38flash || self == .qwen38flashMTP
+            || self == .qwen4flash || self == .qwen4flashMTP
+        let base = twoRow ? GenerationDefaults.forFamily(self, thinking: false) : profile
+        let thinking = twoRow ? GenerationDefaults.forFamily(self, thinking: true) : nil
+        return SamplingProfile(
+            temperature: base.temperature, topK: base.topK,
+            topP: base.topP, minP: base.minP,
+            presencePenalty: base.presencePenalty,
+            thinking: thinking.map {
+                ThinkingDefaults(
+                    enabledByDefault: true, temperature: $0.temperature,
+                    topK: $0.topK, topP: $0.topP, presencePenalty: $0.presencePenalty)
+            })
+    }
+}

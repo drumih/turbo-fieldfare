@@ -175,28 +175,28 @@ extension ServerModelSession {
                         .utf8))
         }
         let options = SessionBuildOptions(
-                modelDirectory: modelDirectory,
-                context: context,
-                maxContext: maxContext,
-                slots: effectiveSlots,
-                promptCacheMaximumEntries: promptCacheMaximumEntries,
-                promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
-                promptCacheDiskDirectory: promptCacheDiskDirectory,
-                promptCacheDiskLimitBytes: promptCacheDiskLimitBytes,
-                prefillChunkTokens: requestedPrefillChunkTokens,
-                kvCachePrecision: kvCachePrecision,
-                hostKVWindowTokens: hostKVWindowTokens,
-                ropeScalingMode: ropeScalingMode,
-                thinkingMode: thinkingMode,
-                reasoningEffort: reasoningEffort,
-                expertCacheSlots: requestedExpertCacheSlots,
-                expertCacheBudgetBytes: expertCacheBudgetBytes,
-                mtpModelDirectory: mtpModelDirectory,
-                mtpMemoryMiB: mtpMemoryMiB,
-                integrityPolicy: requestedIntegrityPolicy,
-                rdAdvicePolicy: requestedRDAdvisePolicy,
-                forceLogitsHead: forceLogitsHead,
-                engineConfiguration: loadPlan.engineConfiguration)
+            modelDirectory: modelDirectory,
+            context: context,
+            maxContext: maxContext,
+            slots: effectiveSlots,
+            promptCacheMaximumEntries: promptCacheMaximumEntries,
+            promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
+            promptCacheDiskDirectory: promptCacheDiskDirectory,
+            promptCacheDiskLimitBytes: promptCacheDiskLimitBytes,
+            prefillChunkTokens: requestedPrefillChunkTokens,
+            kvCachePrecision: kvCachePrecision,
+            hostKVWindowTokens: hostKVWindowTokens,
+            ropeScalingMode: ropeScalingMode,
+            thinkingMode: thinkingMode,
+            reasoningEffort: reasoningEffort,
+            expertCacheSlots: requestedExpertCacheSlots,
+            expertCacheBudgetBytes: expertCacheBudgetBytes,
+            mtpModelDirectory: mtpModelDirectory,
+            mtpMemoryMiB: mtpMemoryMiB,
+            integrityPolicy: requestedIntegrityPolicy,
+            rdAdvicePolicy: requestedRDAdvisePolicy,
+            forceLogitsHead: forceLogitsHead,
+            engineConfiguration: loadPlan.engineConfiguration)
         factory.prepare(options)
         let runner = try factory.buildRunner(model, options)
         let mtpDecoder = factory.mtpDecoder()
@@ -297,7 +297,8 @@ extension ServerModelSession {
             context: context,
             model: model,
             metadata: try factory.metadata(modelDirectory),
-            defaultModelID: try factory.preview(modelDirectory, requestedPrefillChunkTokens).modelID,
+            defaultModelID: try factory.preview(modelDirectory, requestedPrefillChunkTokens)
+                .modelID,
             tokenizer: tokenizer,
             tokenizerFolder: tokenizerFolder,
             loadedReasoning: RequestReasoning(

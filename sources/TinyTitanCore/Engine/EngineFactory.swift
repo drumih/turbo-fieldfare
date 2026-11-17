@@ -26,13 +26,10 @@ public struct EngineFactory: Sendable {
     public let buildRunner:
         @Sendable (any EngineModel, SessionBuildOptions) throws -> any EngineRunner
     public let mtpDecoder: @Sendable () -> (any EngineMTPDecoder)?
-    public let makeScratch:
-        @Sendable (MetalContext, Int, Float) throws -> RawCompletionScratch
-    public let runRawCompletion:
-        @Sendable (RawCompletionRequest) async throws -> RawDecodeResult
+    public let makeScratch: @Sendable (MetalContext, Int, Float) throws -> RawCompletionScratch
+    public let runRawCompletion: @Sendable (RawCompletionRequest) async throws -> RawDecodeResult
     public let makeWarmup: @Sendable (any EngineModel, Int?) -> EngineExpertWarmup?
-    public let perSlotBytes:
-        @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int
+    public let perSlotBytes: @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int
 
     public init(
         prepare: @escaping @Sendable (SessionBuildOptions) -> Void = { _ in },
@@ -46,11 +43,13 @@ public struct EngineFactory: Sendable {
         metadata: @escaping @Sendable (URL) throws -> EngineModelMetadata = { _ in
             throw EngineFactoryError.unsupported("the selected factory has no metadata reader")
         },
-        validateReasoning: @escaping @Sendable (
-            EngineModelMetadata, ModelThinkingMode, ModelReasoningEffort?
-        ) throws -> Void = { _, _, _ in },
+        validateReasoning:
+            @escaping @Sendable (
+                EngineModelMetadata, ModelThinkingMode, ModelReasoningEffort?
+            ) throws -> Void = { _, _, _ in },
         resolveArchitecture: @escaping @Sendable (URL) throws -> ArchConfig = { _ in
-            throw EngineFactoryError.unsupported("the selected factory has no architecture resolver")
+            throw EngineFactoryError.unsupported(
+                "the selected factory has no architecture resolver")
         },
         preview: @escaping @Sendable (URL, Int?) throws -> EngineSessionPreview = { _, _ in
             throw EngineFactoryError.unsupported("the selected factory has no session preview")
@@ -64,15 +63,19 @@ public struct EngineFactory: Sendable {
         mtpDecoder: @escaping @Sendable () -> (any EngineMTPDecoder)? = { nil },
         makeScratch: @escaping @Sendable (MetalContext, Int, Float) throws -> RawCompletionScratch =
             { _, _, _ in RawCompletionScratch() },
-        runRawCompletion: @escaping @Sendable (RawCompletionRequest) async throws -> RawDecodeResult =
+        runRawCompletion:
+            @escaping @Sendable (RawCompletionRequest) async throws -> RawDecodeResult =
             { _ in
                 throw GeneratorError.invalidGenerationConfig(
                     "the selected engine factory does not provide raw completion")
             },
-        makeWarmup: @escaping @Sendable (any EngineModel, Int?) -> EngineExpertWarmup? = { _, _ in nil },
-        perSlotBytes: @escaping @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int = {
-            _, _, _ in 0
-        }
+        makeWarmup: @escaping @Sendable (any EngineModel, Int?) -> EngineExpertWarmup? = { _, _ in
+            nil
+        },
+        perSlotBytes:
+            @escaping @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int = {
+                _, _, _ in 0
+            }
     ) {
         self.prepare = prepare
         self.makeContext = makeContext

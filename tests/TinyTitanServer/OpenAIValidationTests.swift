@@ -124,8 +124,13 @@ struct OpenAIValidationTests {
             reasoningProfile: ServerReasoningProfile(
                 family: ModelFamily.qwen38flash.rawValue,
                 thinkingMode: .on,
-                reasoningEffort: nil),
-            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
+                reasoningEffort: nil,
+                reasoningControl: ModelFamily.qwen38flash.engineReasoningControl),
+            sampling: SamplingProfile(
+                temperature: 0.7, topK: 20, topP: 0.80, presencePenalty: 1.5,
+                thinking: ThinkingDefaults(
+                    enabledByDefault: true, temperature: 1.0, topK: 20, topP: 0.95,
+                    presencePenalty: 0)))
         #expect(on.generationConfig.temperature == 1.0)
         #expect(on.generationConfig.topP == 0.95)
         #expect(on.generationConfig.topK == 20)
@@ -138,8 +143,13 @@ struct OpenAIValidationTests {
             reasoningProfile: ServerReasoningProfile(
                 family: ModelFamily.qwen38flash.rawValue,
                 thinkingMode: .off,
-                reasoningEffort: nil),
-            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
+                reasoningEffort: nil,
+                reasoningControl: ModelFamily.qwen38flash.engineReasoningControl),
+            sampling: SamplingProfile(
+                temperature: 0.7, topK: 20, topP: 0.80, presencePenalty: 1.5,
+                thinking: ThinkingDefaults(
+                    enabledByDefault: true, temperature: 1.0, topK: 20, topP: 0.95,
+                    presencePenalty: 0)))
         #expect(off.generationConfig.temperature == 0.7)
         #expect(off.generationConfig.topP == 0.80)
         #expect(off.generationConfig.topK == 20)
@@ -892,7 +902,8 @@ struct ServerArgumentTests {
         let profile = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: nil)
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         // With no override the template default xhigh is the active level, so
         // asking for it is exact and silent.
         let exact = try OpenAIRequestValidator.validate(
@@ -921,7 +932,8 @@ struct ServerArgumentTests {
         let lowProfile = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: .low)
+            reasoningEffort: .low,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         let low = try OpenAIRequestValidator.validate(
             try Self.effortRequest("low"), modelID: "m",
             reasoningProfile: lowProfile)
@@ -936,7 +948,8 @@ struct ServerArgumentTests {
         let binary = ServerReasoningProfile(
             family: ModelFamily.qwen36.rawValue,
             thinkingMode: .off,
-            reasoningEffort: nil)
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen36.engineReasoningControl)
         let wantsThinking = try OpenAIRequestValidator.validate(
             try Self.effortRequest("xhigh"), modelID: "m",
             reasoningProfile: binary)
@@ -947,7 +960,8 @@ struct ServerArgumentTests {
         let effortOn = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: .xhigh)
+            reasoningEffort: .xhigh,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         let wantsOff = try OpenAIRequestValidator.validate(
             try Self.effortRequest("off"), modelID: "m",
             reasoningProfile: effortOn)
@@ -990,7 +1004,8 @@ struct ServerArgumentTests {
         let loadedOn = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: .xhigh)
+            reasoningEffort: .xhigh,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         let off = try OpenAIRequestValidator.validate(
             try Self.request(withExtra: #""chat_template_kwargs":{"enable_thinking":false}"#),
             modelID: "m", reasoningProfile: loadedOn)
@@ -1002,7 +1017,8 @@ struct ServerArgumentTests {
         let loadedOff = ServerReasoningProfile(
             family: ModelFamily.qwen36.rawValue,
             thinkingMode: .off,
-            reasoningEffort: nil)
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen36.engineReasoningControl)
         let on = try OpenAIRequestValidator.validate(
             try Self.request(withExtra: #""chat_template_kwargs":{"enable_thinking":true}"#),
             modelID: "m", reasoningProfile: loadedOff)
@@ -1016,7 +1032,8 @@ struct ServerArgumentTests {
         let profile = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: .xhigh)
+            reasoningEffort: .xhigh,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         let fromKwargs = try OpenAIRequestValidator.validate(
             try Self.request(withExtra: #""chat_template_kwargs":{"reasoning_effort":"low"}"#),
             modelID: "m", reasoningProfile: profile)
@@ -1080,7 +1097,8 @@ struct ServerArgumentTests {
         let profile = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
-            reasoningEffort: nil)
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         for word in [
             "ultra", "none", "extra-high", "thinking", "auto",
             "max", "minimal", "EXTRA HIGH", "highest",

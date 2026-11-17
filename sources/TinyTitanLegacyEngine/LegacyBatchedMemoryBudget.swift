@@ -18,11 +18,12 @@ package enum LegacyBatchedMemoryBudget {
             slidingWindow: slidingWindow,
             maxPrefillChunkTokens: maxPrefillChunkTokens,
             windowTokens: hostKVWindowTokens)
-        let hostArena = hostKVWindowTokens.map { _ in
-            KVCacheManager.worstCaseHostArenaBytes(
-                config: config, maxContext: maxContext,
-                precision: precision, slots: 1)
-        } ?? 0
+        let hostArena =
+            hostKVWindowTokens.map { _ in
+                KVCacheManager.worstCaseHostArenaBytes(
+                    config: config, maxContext: maxContext,
+                    precision: precision, slots: 1)
+            } ?? 0
         let gdn = GDNStateManager.worstCaseBytes(config: config, slots: 1)
         let scratch = 2 * vocab * MemoryLayout<Float16>.size + MemoryLayout<UInt32>.size
         return kv + hostArena + gdn + scratch

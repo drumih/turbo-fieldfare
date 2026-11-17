@@ -145,7 +145,11 @@ import Testing
                 "TINYTITAN_GPU_KEEPWARM_US": "\(RuntimeGPUKeepWarm.maximumIntervalUs)"
             ]) == RuntimeGPUKeepWarm.maximumIntervalUs)
         for rejected in ["abc", "200.0", "0", "99", "20001", "999999", "-200", ""] {
-            #expect(throws: RuntimeConfigurationError.self) {
+            // The knob moved to TinyTitanCore with the TT-097 engine contract,
+            // and Core cannot name the runtime's RuntimeConfigurationError, so
+            // it throws its own. The fail-closed intent and the message are
+            // the assertions; the type follows the module.
+            #expect(throws: GPUKeepWarmError.self) {
                 try RuntimeGPUKeepWarm.environmentValue([
                     "TINYTITAN_GPU_KEEPWARM_US": rejected
                 ])

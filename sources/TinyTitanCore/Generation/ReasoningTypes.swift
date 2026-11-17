@@ -9,7 +9,8 @@ public enum ReasoningControl: Sendable, Equatable {
     public var supportedLevels: [ReasoningLevel] {
         switch self {
         case .binaryThinking: [.off, .on]
-        case .thinkingWithEffortLevels(_, let supported): [.off] + supported.map(ReasoningLevel.init)
+        case .thinkingWithEffortLevels(_, let supported):
+            [.off] + supported.map(ReasoningLevel.init)
         case .effortOnly(_, let supported): supported.map(ReasoningLevel.init)
         }
     }
@@ -53,7 +54,8 @@ public enum ReasoningLevel: String, CaseIterable, Sendable, Codable {
         case "": return nil
         case "0", "off", "false", "no", "none", "disabled", "nothink", "no_think": return .off
         case "1", "on", "true", "yes", "enabled", "think", "thinking", "auto", "adaptive",
-            "default": return .on
+            "default":
+            return .on
         case "minimal", "min", "least", "tiny": return .minimal
         case "low", "light": return .low
         case "medium", "med", "moderate", "normal", "standard", "balanced": return .medium

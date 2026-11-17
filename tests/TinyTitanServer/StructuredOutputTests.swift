@@ -109,7 +109,8 @@ struct StructuredOutputRequestTests {
     @Test func thinkingIsOffForAConstrainedRequest() throws {
         let on = ServerReasoningProfile(
             family: ModelFamily.qwen38flash.rawValue, thinkingMode: .on,
-            reasoningEffort: .xhigh)
+            reasoningEffort: .xhigh,
+            reasoningControl: ModelFamily.qwen38flash.engineReasoningControl)
         let request = try JSONDecoder().decode(
             OpenAIChatRequest.self,
             from: Data(

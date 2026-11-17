@@ -284,12 +284,9 @@ public struct ModelCatalog: Sendable {
                 kind: .gpu(identity.family),
                 quant: identity.weightBits,
                 path: directory,
-                sampling: SamplingProfile(
-                    temperature: ModelProfile.resolve(identity: identity).sampling.temperature,
-                    topK: ModelProfile.resolve(identity: identity).sampling.topK,
-                    topP: ModelProfile.resolve(identity: identity).sampling.topP,
-                    minP: ModelProfile.resolve(identity: identity).sampling.minP,
-                    presencePenalty: ModelProfile.resolve(identity: identity).sampling.presencePenalty),
+                // Two-row shape, matching the loaded model's metadata: a
+                // thinking switch on a not-yet-loaded model still resolves.
+                sampling: identity.family.engineSamplingProfile(identity: identity),
                 // The probe's KV caches are what cap it, not the checkpoint.
                 contextLimit:
                     identity.family == .k2Horizon

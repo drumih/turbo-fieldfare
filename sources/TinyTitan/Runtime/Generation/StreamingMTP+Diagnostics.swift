@@ -2,9 +2,12 @@ import Foundation
 import TinyTitanCore
 
 extension StreamingMTPDecoder {
-    public func diagnosticLines(result: TinyTitanCore.RawDecodeResult, includePhases: Bool) -> [String] {
+    public func diagnosticLines(result: TinyTitanCore.RawDecodeResult, includePhases: Bool)
+        -> [String]
+    {
         let stats = statistics
-        let decodeRate = result.decodeSeconds > 0
+        let decodeRate =
+            result.decodeSeconds > 0
             ? Double(result.newTokens) / result.decodeSeconds : 0
         var lines = [
             String(

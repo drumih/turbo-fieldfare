@@ -122,11 +122,18 @@ enum RoutingFixture {
         id: "alpha_4-Bit", name: "Alpha 35B", kind: .gpu(.qwen36), quant: 4,
         path: URL(fileURLWithPath: "/models/alpha_4Bit"),
         sampling: .house)
-    /// An effort-level GPU install whose card asks for temperature 1.0.
+    /// An effort-level GPU install whose card publishes two rows: the
+    /// instruct row is the base and the thinking row the twin — the shape
+    /// `ModelFamily.qwen38flash.engineSamplingProfile` derives for the real
+    /// catalog — so a thinking-off request samples the instruct row.
     static let flash = ModelCatalog.Entry(
         id: "flash_8-Bit", name: "Flash 125B", kind: .gpu(.qwen38flash), quant: 8,
         path: URL(fileURLWithPath: "/models/flash_8Bit"),
-        sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
+        sampling: SamplingProfile(
+            temperature: 0.7, topK: 20, topP: 0.80, presencePenalty: 1.5,
+            thinking: ThinkingDefaults(
+                enabledByDefault: true, temperature: 1.0, topK: 20, topP: 0.95,
+                presencePenalty: 0)))
     /// A dense Qwen 3.5 install: the one shape both engines implement, so it
     /// is listed once and reachable as `@gpu` (its default) and `@cpu`.
     static let dense = ModelCatalog.Entry(

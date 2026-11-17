@@ -172,7 +172,8 @@ do {
         reasoningProfile = ServerReasoningProfile(
             family: ModelFamily.qwen36.rawValue,
             thinkingMode: reasoning.thinking,
-            reasoningEffort: nil)
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen36.engineReasoningControl)
     } else if (try? ManifestReader.peekFamily(directoryURL: modelURL)) == .k2Horizon {
         // K2 has a graph, but not this runner's: the probe is the engine. It
         // is a backend of its own, like the CPU path, because
@@ -248,7 +249,8 @@ do {
         reasoningProfile = ServerReasoningProfile(
             family: ModelFamily.k2Horizon.rawValue,
             thinkingMode: reasoning.thinking,
-            reasoningEffort: reasoning.effort)
+            reasoningEffort: reasoning.effort,
+            reasoningControl: ModelFamily.k2Horizon.engineReasoningControl)
     } else if arguments.managesResidency {
         let plan = makePlan()
         // Reads manifest.json only; a bad --model still fails here at launch
@@ -293,7 +295,8 @@ do {
         queueLimit: arguments.queueLimit,
         maxConcurrentSequences: concurrency,
         backend: servingBackend,
-        reasoningProfile: try reasoningProfile ?? makePlan().reasoningProfile(factory: EngineFactories.sixXGPU()),
+        reasoningProfile: try reasoningProfile
+            ?? makePlan().reasoningProfile(factory: EngineFactories.sixXGPU()),
         router: router,
         coordinator: coordinator)
     _ = try await server.start(port: arguments.port)

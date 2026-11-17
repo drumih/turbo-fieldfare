@@ -142,11 +142,15 @@ package struct ServerReasoningProfile: Sendable, Equatable {
     package let reasoningEffort: ModelReasoningEffort?
     package let reasoningControl: ReasoningControl
 
+    /// `reasoningControl` has no default on purpose: it is the family's own
+    /// fact (`ModelFamily.engineReasoningControl`), and a silent binary
+    /// fallback downgraded every effort-level family that constructed this
+    /// profile without stating it.
     package init(
         family: String,
         thinkingMode: ModelThinkingMode,
         reasoningEffort: ModelReasoningEffort?,
-        reasoningControl: ReasoningControl = .binaryThinking
+        reasoningControl: ReasoningControl
     ) {
         self.family = family
         self.thinkingMode = thinkingMode
@@ -165,7 +169,10 @@ package struct ServerReasoningProfile: Sendable, Equatable {
     }
 
     package static let `default` = ServerReasoningProfile(
-        family: "", thinkingMode: .off, reasoningEffort: nil)
+        family: "", thinkingMode: .off, reasoningEffort: nil,
+        // An unknown family validates as the compatible binary baseline; an
+        // explicit construction site states its family's control.
+        reasoningControl: .binaryThinking)
 
     /// The effort the template actually applies under this profile; nil for
     /// binary families and while thinking is off.

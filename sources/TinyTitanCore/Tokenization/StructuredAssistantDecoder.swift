@@ -83,8 +83,8 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     ///
     /// Thinking off used to mean *no decoder*, on the reasoning that a prompt
     /// which closes the block cannot produce a thought to split, and the
-    /// verbatim path that produced was simpler and byte-stable. Qwen
-    /// AgentWorld 35B-A3B 8-bit disproves it: with `--reasoning off` it opens a
+    /// verbatim path that produced was simpler and byte-stable. One shipped
+    /// checkpoint disproves it: with `--reasoning off` it opens a
     /// `<think>` block of its own, spends the entire token budget inside it,
     /// and that verbatim path streamed the scaffold as the *answer*, so a
     /// client that capped tokens received no answer at all and

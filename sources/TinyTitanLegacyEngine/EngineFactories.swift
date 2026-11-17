@@ -162,9 +162,10 @@ public final class EngineFactories: @unchecked Sendable {
             tunedBudget = RuntimeConfiguration.defaultExpertCacheBudgetBytes
         }
         let manifest = try? ManifestReader.load(directoryURL: directory, expecting: arch)
-        let cachePerSlot = manifest.map {
-            Double($0.expertStride) * Double($0.arch.numLayers)
-        } ?? 0
+        let cachePerSlot =
+            manifest.map {
+                Double($0.expertStride) * Double($0.arch.numLayers)
+            } ?? 0
         let residentFloor = RuntimeConfiguration.residentFloorBytes(
             residentWeightBytes: manifest?.files["model_weights.bin"].map { Int($0.size) } ?? 0)
         let appliedSlots = { options.expertCacheSlots ?? slotOverride ?? $0 }
@@ -202,9 +203,10 @@ public final class EngineFactories: @unchecked Sendable {
             expertCachePolicy: loadRuntime.expertCachePolicy,
             rdadvisePolicy: options.rdAdvicePolicy
                 ?? ProcessInfo.processInfo.environment["TINYTITAN_RDADVISE_POLICY"]
-                    .map(RDAdvicePolicyMode.parse)
+                .map(RDAdvicePolicyMode.parse)
                 ?? loadRuntime.rdadvisePolicy,
-            prefillChunkTokens: options.prefillChunkTokens ?? profile.prefillChunkTokens ?? fallback,
+            prefillChunkTokens: options.prefillChunkTokens ?? profile.prefillChunkTokens
+                ?? fallback,
             prefillAttentionPath: loadRuntime.prefillAttentionPath,
             forceLogitsHead: options.forceLogitsHead,
             decodeExpertExecution: loadRuntime.decodeExpertExecution,
@@ -256,46 +258,18 @@ public final class EngineFactories: @unchecked Sendable {
     private func metadata(_ directory: URL) throws -> EngineModelMetadata {
         let identity = try ManifestReader.peekIdentity(directoryURL: directory)
         let family = identity.family
-        let profile = ModelProfile.resolve(identity: identity).sampling
-        let special =
-            family == .qwen38flash || family == .qwen38flashMTP
-            || family == .qwen4flash || family == .qwen4flashMTP
-        let base = special ? GenerationDefaults.forFamily(family, thinking: false) : profile
-        let thinking = special ? GenerationDefaults.forFamily(family, thinking: true) : nil
         return EngineModelMetadata(
-            modelID: identity.modelID, family: family.rawValue, weightBits: identity.weightBits,
-            sampling: samplingProfile(base, thinking: thinking),
-            reasoningControl: reasoningControl(family.reasoningControl))
-    }
-
-    private func samplingProfile(
-        _ sampling: GenerationDefaults.Sampling, thinking: GenerationDefaults.Sampling?
-    ) -> SamplingProfile {
-        SamplingProfile(
-            temperature: sampling.temperature, topK: sampling.topK, topP: sampling.topP,
-            minP: sampling.minP,
-            presencePenalty: sampling.presencePenalty,
-            thinking: thinking.map {
-                ThinkingDefaults(
-                    enabledByDefault: true, temperature: $0.temperature, topK: $0.topK,
-                    topP: $0.topP, presencePenalty: $0.presencePenalty)
-            })
-    }
-
-    private func reasoningControl(_ control: ModelReasoningControl) -> ReasoningControl {
-        switch control {
-        case .binaryThinking: .binaryThinking
-        case .thinkingWithEffortLevels(let defaultEffort, let supported):
-            .thinkingWithEffortLevels(defaultEffort: defaultEffort, supported: supported)
-        case .effortOnly(let defaultEffort, let supported):
-            .effortOnly(defaultEffort: defaultEffort, supported: supported)
-        }
+            modelID: identity.modelID, family: family.rawValue,
+            weightBits: identity.weightBits,
+            sampling: family.engineSamplingProfile(identity: identity),
+            reasoningControl: family.engineReasoningControl)
     }
 
     private func preview(_ directory: URL, requestedChunk: Int?) throws -> EngineSessionPreview {
         let identity = try ManifestReader.peekIdentity(directoryURL: directory)
         let family = identity.family
-        let chunk = requestedChunk
+        let chunk =
+            requestedChunk
             ?? ModelProfile.resolve(identity: identity).prefillChunkTokens
             ?? (family == .qwen36
                 ? RuntimeConfiguration.qwenLongPrefillChunkTokens
@@ -325,7 +299,8 @@ public final class EngineFactories: @unchecked Sendable {
         _ request: RawCompletionRequest
     ) async throws -> TinyTitanCore.RawDecodeResult {
         guard let scratch = request.scratch.payload as? TinyTitan.RawCompletionScratch else {
-            throw ServerInferenceError.unsupportedModel("6.x completion requires its scratch buffers")
+            throw ServerInferenceError.unsupportedModel(
+                "6.x completion requires its scratch buffers")
         }
         let options = request.wideVerify as? TinyTitanCore.WideVerifyDecodeOptions
         let result = try await TinyTitan.runRawCompletion(

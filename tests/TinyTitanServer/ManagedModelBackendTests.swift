@@ -179,7 +179,8 @@ struct ManagedModelBackendTests {
                 promptCacheMode: .off,
                 expertCacheSlots: 16),
             maximumContext: 8_192,
-            samplingDefaults: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0),
+            samplingDefaults: SamplingProfile(
+                temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0),
             idleTimeout: idleTimeout,
             loader: { context in
                 try recorder.record(context)
@@ -193,7 +194,9 @@ struct ManagedModelBackendTests {
 
         // Before any load: the values a request is validated against.
         #expect(managed.maximumContext == 8_192)
-        #expect(managed.samplingDefaults == SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
+        #expect(
+            managed.samplingDefaults
+                == SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
         #expect(managed.samplingDefaults.temperature == 1.0)
         #expect(recorder.loads == 0)
 

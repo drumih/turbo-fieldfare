@@ -82,7 +82,8 @@ public struct ServerArguments: Equatable, Sendable {
     public var requestedReasoningLevel: TinyTitanCore.ReasoningLevel {
         if let reasoningLevel { return reasoningLevel }
         guard thinkingMode.isEnabled else { return .off }
-        return reasoningEffort.flatMap { TinyTitanCore.ReasoningLevel(rawValue: $0.rawValue) } ?? .on
+        return reasoningEffort.flatMap { TinyTitanCore.ReasoningLevel(rawValue: $0.rawValue) }
+            ?? .on
     }
 
     /// Unloading implies deferring the first load — loading at boot only to
@@ -320,7 +321,8 @@ public struct ServerArguments: Equatable, Sendable {
                 guard let parsed = TinyTitanCore.ReasoningLevel(rawValue: value) else {
                     throw ServerArgumentError.invalid(
                         "--reasoning must be one of "
-                            + TinyTitanCore.ReasoningLevel.allCases.map(\.rawValue).joined(separator: ", "))
+                            + TinyTitanCore.ReasoningLevel.allCases.map(\.rawValue).joined(
+                                separator: ", "))
                 }
                 reasoningLevel = parsed
             case "--models-dir":

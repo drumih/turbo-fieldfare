@@ -4,6 +4,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanCore
+@testable import TinyTitanLegacyEngine
 @testable import TinyTitanLib
 
 @Suite struct EngineRoutingTests {
@@ -13,7 +14,19 @@ import Testing
         let tokenizer = directory.appendingPathComponent("tokenizer", isDirectory: true)
         try FileManager.default.copyItem(
             at: ChatMLTemplateTests.fixtureFolder(), to: tokenizer)
+        // The stub supplies the engine stages; the load-planner, metadata and
+        // preview stages come from the production 6.x factory, because the
+        // session's load path is now factory-driven end to end (Task 9) and a
+        // factory without a planner refuses rather than improvising one.
+        let sixX = EngineFactories.sixXGPU()
         let factory = EngineFactory(
+            prepare: sixX.prepare,
+            makeContext: sixX.makeContext,
+            prepareLoad: sixX.prepareLoad,
+            metadata: sixX.metadata,
+            validateReasoning: sixX.validateReasoning,
+            resolveArchitecture: sixX.resolveArchitecture,
+            preview: sixX.preview,
             buildModel: { directory, arch, context in
                 StubEngineModel(
                     try Model.load(

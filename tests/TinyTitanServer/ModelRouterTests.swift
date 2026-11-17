@@ -167,7 +167,9 @@ struct ModelRouterTests {
         let flash = try #require(router.servedModel(named: Fixture.flash.id))
         let small = try #require(router.servedModel(named: Fixture.small.id))
         #expect(alpha.maximumContext == Fixture.configuredContext)
-        #expect(flash.sampling.temperature == 1.0)
+        // The two-row card advertises both rows: instruct base, thinking twin.
+        #expect(flash.sampling.temperature == 0.7)
+        #expect(flash.sampling.thinking?.temperature == 1.0)
         // The CPU engine's own ceiling, not the checkpoint's 262k claim.
         #expect(small.maximumContext == CPUModelBackend.contextCeiling)
         #expect(small.displayName == "Small 2B")

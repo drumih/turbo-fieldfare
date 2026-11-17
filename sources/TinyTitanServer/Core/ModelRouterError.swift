@@ -174,7 +174,8 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         }
         return ServerReasoningProfile(
             family: family.rawValue, thinkingMode: choice.thinking,
-            reasoningEffort: choice.effort)
+            reasoningEffort: choice.effort,
+            reasoningControl: family.engineReasoningControl)
     }
 
     @available(

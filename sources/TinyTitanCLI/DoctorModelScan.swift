@@ -180,7 +180,8 @@ enum DoctorModelScanner {
             physicalMemory: physicalMemory,
             installBytes: installBytes,
             environment: environment)
-        let chunk = profile.prefillChunkTokens
+        let chunk =
+            profile.prefillChunkTokens
             ?? defaultPrefillChunkTokens(
                 family: identity.family,
                 fallback: RuntimeConfiguration.production.prefillChunkTokens)

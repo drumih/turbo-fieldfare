@@ -8,8 +8,10 @@ extension EngineFactories {
         guard let slotCount = engineModel.routedExpertCacheSlotCount(),
             let model = engineModel as? Model
         else { return nil }
-        let requested = requested ?? ExpertWarmup.requestedPerLayer(
-            environment: ProcessInfo.processInfo.environment)
+        let requested =
+            requested
+            ?? ExpertWarmup.requestedPerLayer(
+                environment: ProcessInfo.processInfo.environment)
         let perLayer = ExpertWarmup.perLayer(
             requested: requested, slotCount: slotCount,
             expertsPerLayer: model.config.numExperts)
