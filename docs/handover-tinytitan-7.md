@@ -40,36 +40,24 @@ new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
 
 **Landed so far (all pushed to `main`):**
 - Spec `f4be7a78`; plan `01c1df59`; plan refinement `248d6efc`.
-- **Phase 1 Task 2** `89df297e`: `sources/TinyTitanCore/Engine/EngineModel.swift`
-  (6 `Model` members verbatim; build + core-purity + swift-format + swiftlint clean).
+- **Phase 1 Tasks 1–4** `71ce076b`, `7b8f6a29`, `effe7e07`: diagnostic counter
+  pins, the shared Core engine-protocol family + `EngineStatistics`, and 6.x
+  `Model`/`RealForwardRunner` conformance.
+- **Phase 1 Task 5** `267b8829`: `CPUEngineRunner` +
+  `CPUEngineConfiguration`, Ornith variant GPU conformance, and 6.x + all six
+  dense-variant CPU conformances. The synthetic CPU contract test drives
+  `reset`/`prefill`/`step` for real. Verified with a release build, 2,389
+  model-free tests across nine targets, all required lint gates, and golden
+  `ornith-4` byte-identical. Golden `ornith-8` was **not checked** (no install;
+  none fetched).
 
-**Resume exactly here — Phase 1 remaining (each = a green gated commit):**
-- **Task 1** pin the 32 `runner.total*` diagnostic counters as a list; their
-  declarations are **scattered across `sources/TinyTitan/Runtime/Inference/
-  RealForwardRunner+Diagnostics.swift`, `+State.swift`** and the phase files (only
-  `totalPrefetchIssued` is in `+Diagnostics.swift`) — enumerate all 32 names+types
-  before writing `EngineStatistics`. The 32 names the session reads: `grep -rhoE
-  'runner\.total[A-Za-z0-9]+' sources/TinyTitanLib/ServerModelSession*.swift | sort -u`.
-- **Task 3** promote the `LogitProducer` family into Core (LogitProducer,
-  ContinuableLogitProducer, ChunkedPrefillRunner, ContextWindowReporting,
-  InferenceAuxiliaryState+Error, PrefillError/OutputMode/Seed/Result/RuntimeConfig,
-  RawCompletion) as one shared `public` definition; make 6.x **and** `Ornith35B4Bit`
-  replace their local copies with `import TinyTitanCore` + `typealias` re-exports
-  (dense CPU variants have no GPU engine, so they are untouched here). Then add
-  `EngineStatistics` (32 lets) + `EngineRunner` (Core, extending the promoted
-  family, diagnostics collapsed to `var statistics`/`resetStatistics()`). This is
-  ONE coupled commit that must build whole.
-- **Tasks 4–5** conform 6.x `Model`/`RealForwardRunner` and the Ornith variant's
-  identical copies to `EngineModel`/`EngineRunner` (add the `statistics` aggregate
-  that returns the existing counters — no recomputation); write the conformance +
-  statistics-match tests first (TDD). Runtime is still all-6.x, so goldens must be
-  byte-identical. Verify: `swift build -c release`, `swift test --no-parallel`,
-  `tools/golden-baseline.sh --check 8` **and** `--check 4`, `tools/lint.sh`
-  (core-purity, variant-isolation, swift-format, swiftlint, func-length,
-  file-length, stdout-clean) — run with `export PATH=".build/shims:$PATH"`.
-- Then Phases 2–4 per the plan (Phase 2 re-types the 2,236-line session; Phase 3
-  builds `DenseGPU` + 7 model-gated routing flips; Phase 4 is the full acceptance
-  matrix + paired benchmarks + records).
+**Resume exactly here — Phase 2 Task 6 (each = a green gated commit):**
+- Add the Core `EngineFactory` injection surface and `SessionBuildOptions`, then
+  re-type `ServerModelSession` and `CPUModelBackend` against the Phase 1
+  protocols. Concrete construction stays behind the factory; the default factory
+  still returns 6.x throughout Phase 2, so output must remain byte-identical.
+- Then Phases 3–4 per the plan (Phase 3 builds `DenseGPU` + model-gated routing
+  flips; Phase 4 is the full acceptance matrix + paired benchmarks + records).
 
 **Invariants this work must never break:** zero numerics change until a model is
 routed to a variant (then golden/parity byte-identical or it is a finding, not a
