@@ -279,6 +279,15 @@ let package = Package(
                 "TinyTitan",
                 "TinyTitanLegacyEngine",
                 "TinyTitanMemory",
+                // The shipped variants the server may select as engines
+                // (TT-097 Phase 3; server→variant import is allowed by the
+                // variant-isolation rule — only a variant may not import the
+                // server). `EngineFactories+Variants.swift` is the only file
+                // that names them.
+                "Ornith35B4Bit",
+                "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
+                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
+                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
