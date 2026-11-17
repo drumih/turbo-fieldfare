@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 import Metal
 
 // Range, slot and view construction checks, and the residency advice.

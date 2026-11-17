@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 // The runtime configuration's enums: the head, prefill, expert-cache, expert-
 // IO and KV-precision choices, and the configuration error type.
@@ -129,22 +130,8 @@ public enum RuntimeGPUKeepWarm {
     }
 }
 
-/// Storage precision for the autoregressive attention key/value cache.
-/// Quantized modes use affine groups of 64 values and keep their scale and
-/// bias alongside each token row; model weights are unaffected.
-public enum KVCachePrecision: Int, Codable, CaseIterable, Sendable {
-    case int4 = 4
-    case int8 = 8
-    case fp16 = 16
-
-    public var label: String { "\(rawValue)-bit" }
-    public var isQuantized: Bool { self != .fp16 }
-}
-
-public enum RuntimeRoPEScalingMode: String, Codable, CaseIterable, Sendable {
-    case none
-    case yarn
-}
+public typealias KVCachePrecision = TinyTitanCore.KVCachePrecision
+public typealias RuntimeRoPEScalingMode = TinyTitanCore.RuntimeRoPEScalingMode
 
 public enum RuntimeConfigurationError: Error, CustomStringConvertible, Equatable {
     case invalidExpertCacheSlots(Int)

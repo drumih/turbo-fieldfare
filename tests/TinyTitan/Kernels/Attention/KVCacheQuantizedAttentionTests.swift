@@ -6,8 +6,10 @@ import TinyTitanValidationSupport
 @testable import TinyTitanCore
 
 @Suite struct KVCacheQuantizedAttentionTests {
-    @Test(arguments: [KVCachePrecision.int8, .int4])
-    func quantizedDecodeAttentionTracksFP16Reference(_ precision: KVCachePrecision) throws {
+    @Test(arguments: [TinyTitanCore.KVCachePrecision.int8, .int4])
+    func quantizedDecodeAttentionTracksFP16Reference(_ precision: TinyTitanCore.KVCachePrecision)
+        throws
+    {
         let config = ArchConfig.qwen36_35B_A3B
         let headDim = config.fullHeadDim
         let numQHeads = config.numHeads
@@ -98,8 +100,9 @@ import TinyTitanValidationSupport
         #expect(int4.stride(layer: 3) == 288)
     }
 
-    @Test(arguments: [KVCachePrecision.int8, .int4])
-    func quantizedChunkedPrefillTracksFP16Kernel(_ precision: KVCachePrecision) throws {
+    @Test(arguments: [TinyTitanCore.KVCachePrecision.int8, .int4])
+    func quantizedChunkedPrefillTracksFP16Kernel(_ precision: TinyTitanCore.KVCachePrecision) throws
+    {
         let config = ArchConfig.qwen36_35B_A3B
         let headDim = config.fullHeadDim
         let numQHeads = config.numHeads
