@@ -147,10 +147,12 @@ package struct ModelSessionPlan: Sendable {
     }
 
     package func makeSession(
-        reusingContext: MetalContext? = nil
+        reusingContext: MetalContext? = nil,
+        factory: EngineFactory? = nil
     ) async throws -> ServerModelSession {
         try await ServerModelSession.load(
             modelDirectory: modelDirectory,
+            factory: factory,
             maxContext: maxContext,
             slots: slots,
             promptCacheMode: promptCacheMode,

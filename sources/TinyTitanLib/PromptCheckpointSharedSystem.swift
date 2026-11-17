@@ -136,7 +136,7 @@ enum PromptCheckpointSharedSystem {
     static func restore(
         store: PromptCheckpointStore,
         domain: ServerPromptCacheDomain,
-        runner: RealForwardRunner,
+        runner: any EngineRunner,
         prefix: Prefix,
         promptTokenCount: Int
     ) async -> Int? {

@@ -502,6 +502,18 @@ enum QwenToySynthetic {
             "attentionKEqV": toy.attentionKEqV,
             "hiddenActivation": toy.hiddenActivation,
             "fullAttentionLayerMask": toy.fullAttentionLayerMask.map { Int($0) },
+            "attnOutputGate": toy.attnOutputGate,
+            "attentionScale": toy.attentionScale,
+            "embeddingScaledBySqrtHidden": toy.embeddingScaledBySqrtHidden,
+            "routerScaled": toy.routerScaled,
+            "ffnSandwichNorms": toy.ffnSandwichNorms,
+            "sharedExpertGated": toy.sharedExpertGated,
+            "ropeNeoxSubdim": toy.ropeNeoxSubdim,
+            "linearNumKHeads": toy.linearAttention.numKHeads,
+            "linearNumVHeads": toy.linearAttention.numVHeads,
+            "linearKeyHeadDim": toy.linearAttention.keyHeadDim,
+            "linearValueHeadDim": toy.linearAttention.valueHeadDim,
+            "linearConvKernelSize": toy.linearAttention.convKernelSize,
         ]
         if qsa {
             archDict["indexerNumHeads"] = toy.sparseIndexer.numHeads
@@ -907,6 +919,18 @@ enum QwenToySynthetic {
             "attentionKEqV": toy.attentionKEqV,
             "hiddenActivation": toy.hiddenActivation,
             "fullAttentionLayerMask": toy.fullAttentionLayerMask.map { Int($0) },
+            "attnOutputGate": toy.attnOutputGate,
+            "attentionScale": toy.attentionScale,
+            "embeddingScaledBySqrtHidden": toy.embeddingScaledBySqrtHidden,
+            "routerScaled": toy.routerScaled,
+            "ffnSandwichNorms": toy.ffnSandwichNorms,
+            "sharedExpertGated": toy.sharedExpertGated,
+            "ropeNeoxSubdim": toy.ropeNeoxSubdim,
+            "linearNumKHeads": toy.linearAttention.numKHeads,
+            "linearNumVHeads": toy.linearAttention.numVHeads,
+            "linearKeyHeadDim": toy.linearAttention.keyHeadDim,
+            "linearValueHeadDim": toy.linearAttention.valueHeadDim,
+            "linearConvKernelSize": toy.linearAttention.convKernelSize,
         ]
         let manifestRoot: [String: Any] = [
             "magic": "SSDAI",

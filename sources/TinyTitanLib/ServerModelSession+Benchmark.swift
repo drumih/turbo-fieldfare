@@ -10,6 +10,11 @@ import TinyTitan
 // re-deriving a RuntimeConfiguration that could drift from the server's.
 // `package`, not `public`: this is not part of the library's promise.
 extension ServerModelSession {
-    package nonisolated var benchmarkRunner: RealForwardRunner { runner }
+    package nonisolated var benchmarkRunner: RealForwardRunner {
+        guard let runner = runner as? RealForwardRunner else {
+            fatalError("benchmark probes require the 6.x runner")
+        }
+        return runner
+    }
     package nonisolated var benchmarkTokenizer: GFTokenizer { tokenizer }
 }

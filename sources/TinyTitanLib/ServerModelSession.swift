@@ -54,7 +54,7 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     nonisolated let modelFamily: ModelFamily
 
     let context: MetalContext
-    let model: Model
+    let model: any EngineModel
     let tokenizer: GFTokenizer
     /// The tokenizer's vocabulary as byte strings, built the first time a
     /// request asks for structured output and kept for the life of the model.
@@ -69,7 +69,7 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// the model was loaded with. `nil` reasoning means the session's own.
     let tokenizerFolder: URL
     nonisolated let loadedReasoning: RequestReasoning
-    let runner: RealForwardRunner
+    let runner: any EngineRunner
     /// Non-nil when the session runs more than one slot: decode steps park
     /// here so concurrent slots reach one `produceBatch` together.
     let batchedProducer: (any LogitProducer)?
@@ -168,11 +168,11 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
 
     init(
         context: MetalContext,
-        model: Model,
+        model: any EngineModel,
         tokenizer: GFTokenizer,
         tokenizerFolder: URL,
         loadedReasoning: RequestReasoning,
-        runner: RealForwardRunner,
+        runner: any EngineRunner,
         mtpDecoder: StreamingMTPDecoder?,
         scratches: [RawCompletionScratch],
         prefillConfig: PrefillRuntimeConfig,

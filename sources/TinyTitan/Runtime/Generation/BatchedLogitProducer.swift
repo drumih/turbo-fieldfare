@@ -31,10 +31,10 @@ private struct LogitsBuffer: @unchecked Sendable {
 public final class BatchedLogitProducer: LogitProducer, ContinuableLogitProducer,
     @unchecked Sendable
 {
-    private let runner: RealForwardRunner
+    private let runner: any EngineRunner
     private let gate: BatchGate
 
-    public init(runner: RealForwardRunner, width: Int) {
+    public init(runner: any EngineRunner, width: Int) {
         self.runner = runner
         self.gate = BatchGate(width: width)
     }
@@ -119,7 +119,7 @@ private actor BatchGate {
     }
 
     func submit(
-        runner: RealForwardRunner, token: Int32, position: Int, slot: Int,
+        runner: any EngineRunner, token: Int32, position: Int, slot: Int,
         logits: LogitsBuffer
     ) async throws {
         try await withCheckedThrowingContinuation { continuation in
@@ -139,7 +139,7 @@ private actor BatchGate {
         }
     }
 
-    private func flush(runner: RealForwardRunner) async {
+    private func flush(runner: any EngineRunner) async {
         guard !busy, !pending.isEmpty else { return }
         busy = true
         flushScheduled = false

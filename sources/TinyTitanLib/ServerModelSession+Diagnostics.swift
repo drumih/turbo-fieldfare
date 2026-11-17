@@ -344,20 +344,21 @@ extension ServerModelSession {
         snapshot: RunnerCounterSnapshot
     ) {
         let tokens = max(1, result.newTokens)
+        let statistics = runner.statistics
         let ms: (UInt64, UInt64) -> Double = { delta, base in
             Double(delta > base ? delta - base : 0) / Double(tokens) / 1_000_000
         }
-        let missIoNanos = runner.totalMissIoNanos - snapshot.missIo
-        let exposedIoNanos = runner.totalExposedIoNanos - snapshot.exposedIo
+        let missIoNanos = statistics.totalMissIoNanos - snapshot.missIo
+        let exposedIoNanos = statistics.totalExposedIoNanos - snapshot.exposedIo
         let hiddenPercent =
             missIoNanos == 0
             ? 100.0
             : 100 * (1 - Double(exposedIoNanos) / Double(missIoNanos))
         let expert = runner.expertStreamingStatistics()
             .subtracting(snapshot.expertStreaming)
-        let gpuHits = runner.totalGPUClassifiedHits - snapshot.gpuClassifiedHits
-        let gpuMisses = runner.totalGPUClassifiedMisses - snapshot.gpuClassifiedMisses
-        let gpuAllHit = runner.totalGPUResidencyAllHitLayers - snapshot.gpuAllHitLayers
+        let gpuHits = statistics.totalGPUClassifiedHits - snapshot.gpuClassifiedHits
+        let gpuMisses = statistics.totalGPUClassifiedMisses - snapshot.gpuClassifiedMisses
+        let gpuAllHit = statistics.totalGPUResidencyAllHitLayers - snapshot.gpuAllHitLayers
         ServerLog.diagnostic(
             String(
                 format: "TinyTitan runner cb1_ms=%.3f io_ms=%.3f cb2_ms=%.3f "
@@ -375,40 +376,41 @@ extension ServerModelSession {
                     + "pre_ms=%.3f pre_release_ms=%.3f pre_pin_ms=%.3f pre_reserve_ms=%.3f "
                     + "embed_ms=%.3f gather_ms=%.3f loop_sample_ms=%.3f "
                     + "loop_progress_ms=%.3f loop_other_ms=%.3f",
-                ms(runner.totalCb1Nanos, snapshot.cb1),
-                ms(runner.totalIoNanos, snapshot.io),
-                ms(runner.totalCb2Nanos, snapshot.cb2),
-                ms(runner.totalHeadNanos, snapshot.head),
-                ms(runner.totalHeadFusedNanos, snapshot.headFused),
-                ms(runner.totalRDAdviseNanos, snapshot.rdadvise),
-                ms(runner.totalWaitNanos, snapshot.wait),
-                ms(runner.totalBodyNanos, snapshot.body),
-                runner.totalRDAdviseCalls - snapshot.rdadviseCalls,
-                Double(runner.totalRDAdviseBytes - snapshot.rdadviseBytes) / 1_048_576,
+                ms(statistics.totalCb1Nanos, snapshot.cb1),
+                ms(statistics.totalIoNanos, snapshot.io),
+                ms(statistics.totalCb2Nanos, snapshot.cb2),
+                ms(statistics.totalHeadNanos, snapshot.head),
+                ms(statistics.totalHeadFusedNanos, snapshot.headFused),
+                ms(statistics.totalRDAdviseNanos, snapshot.rdadvise),
+                ms(statistics.totalWaitNanos, snapshot.wait),
+                ms(statistics.totalBodyNanos, snapshot.body),
+                statistics.totalRDAdviseCalls - snapshot.rdadviseCalls,
+                Double(statistics.totalRDAdviseBytes - snapshot.rdadviseBytes) / 1_048_576,
                 expert.hitRate, expert.hits, expert.misses, expert.evictions,
                 expert.reloads, Double(expert.bytesRead) / 1_048_576,
                 Double(expert.loadLatencyPercentile(0.50)) / 1_000_000,
                 Double(expert.loadLatencyPercentile(0.95)) / 1_000_000,
                 Double(expert.loadLatencyPercentile(0.99)) / 1_000_000,
-                hiddenPercent, runner.totalHitFixupLayers - snapshot.hitFixupLayers,
-                ms(runner.totalRouterReadbackNanos, snapshot.routerReadback),
-                ms(runner.totalCachePlanNanos, snapshot.cachePlan),
-                ms(runner.totalIOQueueNanos, snapshot.ioQueue),
-                ms(runner.totalIOCompletionToFixupSubmitNanos, snapshot.ioCompletionToFixup),
-                runner.totalExpertIOHostWaits - snapshot.ioHostWaits,
-                runner.totalExpertIOHostWaitsAvoided - snapshot.ioHostWaitsAvoided,
+                hiddenPercent, statistics.totalHitFixupLayers - snapshot.hitFixupLayers,
+                ms(statistics.totalRouterReadbackNanos, snapshot.routerReadback),
+                ms(statistics.totalCachePlanNanos, snapshot.cachePlan),
+                ms(statistics.totalIOQueueNanos, snapshot.ioQueue),
+                ms(statistics.totalIOCompletionToFixupSubmitNanos, snapshot.ioCompletionToFixup),
+                statistics.totalExpertIOHostWaits - snapshot.ioHostWaits,
+                statistics.totalExpertIOHostWaitsAvoided - snapshot.ioHostWaitsAvoided,
                 gpuHits, gpuMisses, gpuAllHit,
-                Double(runner.totalPrefetchIssued &- snapshot.prefetchIssued) / Double(tokens),
-                Double(runner.totalPrefetchAdopted &- snapshot.prefetchAdopted) / Double(tokens),
-                ms(runner.totalPreambleNanos, snapshot.preamble),
-                ms(runner.totalPreambleReleaseNanos, snapshot.preambleRelease),
-                ms(runner.totalPreamblePinNanos, snapshot.preamblePin),
-                ms(runner.totalPreambleReserveNanos, snapshot.preambleReserve),
-                ms(runner.totalEmbedNanos, snapshot.embed),
-                ms(runner.totalGatherNanos, snapshot.gather),
-                ms(runner.totalLoopSampleNanos, snapshot.loopSample),
-                ms(runner.totalLoopProgressNanos, snapshot.loopProgress),
-                ms(runner.totalLoopOtherNanos, snapshot.loopOther)))
+                Double(statistics.totalPrefetchIssued &- snapshot.prefetchIssued) / Double(tokens),
+                Double(statistics.totalPrefetchAdopted &- snapshot.prefetchAdopted)
+                    / Double(tokens),
+                ms(statistics.totalPreambleNanos, snapshot.preamble),
+                ms(statistics.totalPreambleReleaseNanos, snapshot.preambleRelease),
+                ms(statistics.totalPreamblePinNanos, snapshot.preamblePin),
+                ms(statistics.totalPreambleReserveNanos, snapshot.preambleReserve),
+                ms(statistics.totalEmbedNanos, snapshot.embed),
+                ms(statistics.totalGatherNanos, snapshot.gather),
+                ms(statistics.totalLoopSampleNanos, snapshot.loopSample),
+                ms(statistics.totalLoopProgressNanos, snapshot.loopProgress),
+                ms(statistics.totalLoopOtherNanos, snapshot.loopOther)))
         if let ring = runner.prefetchRingSummary { ServerLog.diagnostic("TinyTitan \(ring)") }
     }
 

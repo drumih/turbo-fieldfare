@@ -25,7 +25,8 @@ extension ServerModelSession {
             environment: ProcessInfo.processInfo.environment)
     ) {
         guard expertWarmupTask == nil,
-            let slotCount = model.routedExpertCacheSlotCount()
+            let slotCount = model.routedExpertCacheSlotCount(),
+            let model = model as? Model
         else { return }
         let perLayer = ExpertWarmup.perLayer(
             requested: requestedPerLayer, slotCount: slotCount,

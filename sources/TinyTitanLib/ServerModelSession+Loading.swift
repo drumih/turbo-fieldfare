@@ -52,6 +52,7 @@ extension ServerModelSession {
     /// tuple straight back into the next -- the same shape as Model.load.
     package static func load(
         modelDirectory: URL,
+        factory: EngineFactory? = nil,
         maxContext: Int,
         slots: Int = 1,
         promptCacheMode: ServerPromptCacheMode = .multiPrefix,
@@ -219,14 +220,21 @@ extension ServerModelSession {
         // file the engine computes on, not a document.
         let integrityPolicy =
             requestedIntegrityPolicy ?? .resolved(directoryURL: modelDirectory)
-        let model = try Model.load(
-            directoryURL: modelDirectory,
-            device: context.device,
-            expecting: expectedArch,
-            streamingMode: .pread(slotCount: loadSlots),
-            expertCachePolicy: loadRuntime.modelExpertCachePolicy,
-            expertIOTimeline: loadRuntime.expertIOTimeline,
-            integrityPolicy: integrityPolicy)
+        let defaultFactory: DefaultEngineFactory?
+        let engineFactory: EngineFactory
+        if let factory {
+            defaultFactory = nil
+            engineFactory = factory
+        } else {
+            let factory = DefaultEngineFactory(
+                loadRuntime: loadRuntime,
+                integrityPolicy: integrityPolicy,
+                requestedIntegrityPolicy: requestedIntegrityPolicy,
+                loadSlots: loadSlots)
+            defaultFactory = factory
+            engineFactory = factory.factory
+        }
+        let model = try engineFactory.buildModel(modelDirectory, expectedArch, context)
         let runtime = try RuntimeConfiguration(
             expertCacheSlots: loadSlots,
             expertCachePolicy: loadRuntime.expertCachePolicy,
@@ -299,50 +307,28 @@ extension ServerModelSession {
                         + "\(slotBudget / 1_048_576) MiB); serving \(effectiveSlots) at once\n")
                         .utf8))
         }
-        let mtpDecoder: StreamingMTPDecoder?
-        let runner: RealForwardRunner
-        if let mtpModelDirectory {
-            let sidecarFamily = try ManifestReader.peekFamily(
-                directoryURL: mtpModelDirectory)
-            // Resolved rather than looked up: a 4.0 draft derived from a
-            // differently-shaped target must come from its own manifest, the
-            // same way the target did.
-            let sidecarArch: ArchConfig
-            do {
-                sidecarArch = try ArchConfig.resolved(
-                    forFamily: sidecarFamily, directoryURL: mtpModelDirectory)
-            } catch {
-                throw ServerInferenceError.unsupportedModel(
-                    "MTP sidecar declares family \(sidecarFamily.rawValue), "
-                        + "which this runtime does not implement")
-            }
-            let sidecar = try Model.load(
-                directoryURL: mtpModelDirectory,
-                device: context.device,
-                expecting: sidecarArch,
-                streamingMode: .pread(slotCount: StreamingMTPMemoryPlan.expertSlots),
-                expertCachePolicy: runtime.modelExpertCachePolicy,
-                expertIOTimeline: runtime.expertIOTimeline,
-                integrityPolicy: requestedIntegrityPolicy
-                    ?? .resolved(directoryURL: mtpModelDirectory))
-            let decoder = try StreamingMTPDecoder(
-                targetModel: model,
-                mtpSidecar: sidecar,
-                context: context,
-                maxContext: maxContext,
-                memoryBudgetMiB: mtpMemoryMiB,
-                runtimeConfiguration: runtime)
-            mtpDecoder = decoder
-            runner = decoder.target
-        } else {
-            mtpDecoder = nil
-            runner = try RealForwardRunner(
-                model: model,
+        defaultFactory?.setRuntime(runtime)
+        let runner = try engineFactory.buildRunner(
+            model,
+            SessionBuildOptions(
                 context: context,
                 maxContext: maxContext,
                 slots: effectiveSlots,
-                runtimeConfiguration: runtime)
-        }
+                promptCacheMaximumEntries: promptCacheMaximumEntries,
+                promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
+                promptCacheDiskDirectory: promptCacheDiskDirectory,
+                promptCacheDiskLimitBytes: promptCacheDiskLimitBytes,
+                prefillChunkTokens: requestedPrefillChunkTokens,
+                kvCachePrecision: kvCachePrecision,
+                hostKVWindowTokens: hostKVWindowTokens,
+                ropeScalingMode: ropeScalingMode,
+                thinkingMode: thinkingMode,
+                reasoningEffort: reasoningEffort,
+                expertCacheSlots: requestedExpertCacheSlots,
+                expertCacheBudgetBytes: expertCacheBudgetBytes,
+                mtpModelDirectory: mtpModelDirectory,
+                mtpMemoryMiB: mtpMemoryMiB))
+        let mtpDecoder = defaultFactory?.mtpDecoder
         // K0: one line per model load naming the prefill tensor-ops path and
         // why it was chosen. Written before the first request so the reason is
         // in the startup log even if no generation runs.

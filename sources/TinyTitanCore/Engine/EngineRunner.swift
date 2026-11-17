@@ -1,3 +1,5 @@
+import Metal
+
 /// The runner-facing half of the TT-097 engine contract: everything the
 /// shared server session reads off a loaded engine, in one nominal protocol
 /// the 6.x runtime and every `EngineVariant` engine conform to.
@@ -18,6 +20,12 @@ public protocol EngineRunner:
     var statistics: EngineStatistics { get }
     /// Clear the diagnostic counters through the engine's own resets.
     func resetStatistics()
+
+    /// Decode one row per slot into the corresponding logits buffer.
+    func produceBatch(
+        _ rows: [(token: Int32, position: Int, slot: Int)],
+        logits: [MTLBuffer]
+    ) async throws
 
     /// Reset one slot's KV and recurrent state, leaving other slots live.
     func reset(slot: Int)
