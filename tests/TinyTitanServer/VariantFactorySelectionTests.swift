@@ -83,6 +83,38 @@ import TinyTitanCore
         }
     }
 
+    @Test("the router dispatch hands ornith its variant factory, others 6.x")
+    func routerDispatchSelectsPerIdentity() {
+        // With no Metal context the engine stage is where the two factories
+        // differ, and the error names the engine: a model-free probe of
+        // which factory the dispatch returned.
+        func engineStageError(_ factory: EngineFactory) -> String {
+            do {
+                _ = try factory.buildModel(
+                    URL(fileURLWithPath: "/nonexistent"),
+                    ArchConfig.qwen36_35B_A3B,
+                    nil)
+                return "no error"
+            } catch {
+                return "\(error)"
+            }
+        }
+
+        let ornith = EngineFactories.gpuFactory(
+            family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b",
+            routedExpertWeightBits: 4)
+        #expect(
+            engineStageError(ornith).contains("ornith variant"),
+            "the shipped ornith identity must dispatch to the variant factory")
+
+        let legacy = EngineFactories.gpuFactory(
+            family: .qwen36, manifestModelID: "some-private-checkpoint",
+            routedExpertWeightBits: 4)
+        #expect(
+            engineStageError(legacy).contains("6.x"),
+            "every other identity stays on the 6.x engine")
+    }
+
     @Test("the dense CPU variant factory is built per install width")
     func denseCPUFactorySelection() throws {
         #expect(try EngineFactories.variantCPUEngineSelection(weightBits: 4) == .qwen35Dense4Bit)

@@ -109,9 +109,19 @@ extension ModelRouter {
                     thinking: reasoning.thinking,
                     reasoningEffort: reasoning.effort,
                     mtpModelDirectory: nil)
+                // TT-097 Task 11: the shipped variant installs route to their
+                // dedicated engines; the identity read is the same bounded
+                // manifest read the plan's reasoning profile performs, and
+                // every identity without a shipped variant stays on the 6.x
+                // engine (TT-087).
+                let identity = try ManifestReader.peekIdentity(
+                    directoryURL: entry.path)
                 return try await plan.makeSession(
                     reusingContext: try await metal.context(),
-                    factory: EngineFactories.sixXGPU())
+                    factory: EngineFactories.gpuFactory(
+                        family: identity.family,
+                        manifestModelID: identity.modelID,
+                        routedExpertWeightBits: identity.weightBits))
             case .cpu:
                 return try await CPUModelBackend(
                     snapshotDirectory: entry.path,

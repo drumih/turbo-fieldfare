@@ -37,6 +37,26 @@ extension EngineFactories {
         return .legacy
     }
 
+    /// The GPU factory a catalog identity selects. The router reads the
+    /// install manifest identity (the same bounded read its plan performs)
+    /// and dispatches through the selection table: the shipped variant
+    /// engines for their installs, the 6.x engine for everything else —
+    /// which keeps serving every model without a shipped variant (TT-087).
+    public static func gpuFactory(
+        family: TinyTitan.ModelFamily,
+        manifestModelID: String,
+        routedExpertWeightBits: Int
+    ) -> EngineFactory {
+        switch gpuSelection(
+            family: family,
+            manifestModelID: manifestModelID,
+            routedExpertWeightBits: routedExpertWeightBits)
+        {
+        case .ornith35B4Bit: return variantGPUOrnith()
+        case .legacy: return sixXGPU()
+        }
+    }
+
     /// The Ornith 1.5 35B-A3B 4-bit variant as the server's GPU engine. The
     /// planner, metadata, preview and architecture stages are the
     /// family-generic production ones shared with the 6.x factory; the model
@@ -88,6 +108,66 @@ extension EngineFactories {
                     maxContext: options.maxContext,
                     slots: options.slots,
                     runtimeConfiguration: runtime)
+            },
+            // The variant's own scratch buffers and generation loop: the Core
+            // contract erases them, and the loop itself is engine-generic
+            // through the session's `any LogitProducer` — the variant
+            // difference is only which concrete scratch and loop the closures
+            // name.
+            makeScratch: { context, vocabulary, softcap in
+                RawCompletionScratch(
+                    payload: try Ornith35B4Bit.RawCompletionScratch(
+                        context: context, vocab: vocabulary, logitSoftcap: softcap))
+            },
+            runRawCompletion: { request in
+                guard
+                    let scratch = request.scratch.payload
+                        as? Ornith35B4Bit.RawCompletionScratch
+                else {
+                    throw ServerInferenceError.unsupportedModel(
+                        "the ornith variant completion requires its scratch buffers")
+                }
+                let result = try await Ornith35B4Bit.runRawCompletion(
+                    producer: request.producer,
+                    tokenizer: request.tokenizer,
+                    promptIds: request.promptIDs,
+                    config: request.configuration,
+                    context: request.context,
+                    scratch: scratch,
+                    prefillConfig: request.prefillConfiguration,
+                    // The variant's start enum is its own copy of the promoted
+                    // shape; map the two cases across the eraser.
+                    start: {
+                        switch request.start {
+                        case .reset: return .reset
+                        case .resume(let cached): return .resume(cachedPromptTokens: cached)
+                        }
+                    }(),
+                    slot: request.slot,
+                    checkpointPositions: request.checkpointPositions,
+                    onPrefillCheckpoint: request.onPrefillCheckpoint,
+                    shouldStop: request.shouldStop,
+                    onProgress: { progress in
+                        switch progress {
+                        case .prefill(let done, let total):
+                            request.onProgress(.prefill(done: done, total: total))
+                        case .token(let index, let id, let delta):
+                            request.onProgress(.token(index: index, id: id, delta: delta))
+                        case .tail(let text):
+                            request.onProgress(.tail(text))
+                        }
+                    })
+                return RawDecodeResult(
+                    prefillTokens: result.prefillTokens,
+                    cachedPromptTokens: result.cachedPromptTokens,
+                    computedPrefillTokens: result.computedPrefillTokens,
+                    prefillSeconds: result.prefillSeconds,
+                    newTokens: result.newTokens,
+                    decodeSeconds: result.decodeSeconds,
+                    reason: result.reason,
+                    kvPosition: result.kvPosition,
+                    kvBackedTokenIDs: result.kvBackedTokenIDs,
+                    uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs)
             })
     }
 
