@@ -66,10 +66,19 @@ new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
   byte-identical, and Ornith greedy parity against 6.x (37.83 s). Golden
   `ornith-8` was **not checked** (no install; none fetched).
 
-**Resume exactly here — Phase 2 Task 8 (each = a green gated commit):**
-- Re-type `CPUModelBackend` against the Core engine contracts. Concrete
-  construction stays behind a factory and existing defaults retain current
-  behavior; then Phase 3 routes variant factories per model.
+- **Phase 2 Task 8** `a6731816`: `CPUModelBackend` now stores any Core
+  `CPUEngineRunner` and builds through `CPUEngineFactory`; the zero-argument
+  factory lets each variant capture its own snapshot representation, while the
+  server-side default still constructs 6.x `CPUQwen35`. Verified with a release
+  build, 2,392 model-free tests, all required lint gates, and golden `ornith-4`
+  byte-identical. Golden `ornith-8` was **not checked** (no install; none
+  fetched).
+
+**Resume exactly here — Phase 3 Task 9 (each = a green gated commit):**
+- Select variant factories by catalog identity in the server, then route Ornith
+  and dense engines through the protocol-typed sessions. Every routing flip is
+  model-gated for byte-identical output; 6.x remains available as the regression
+  engine throughout.
 - Then Phases 3–4 per the plan (Phase 3 builds `DenseGPU` + model-gated routing
   flips; Phase 4 is the full acceptance matrix + paired benchmarks + records).
 
