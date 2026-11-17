@@ -57,12 +57,19 @@ new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
   model-free tests across nine targets, all required lint gates, and golden
   `ornith-4` byte-identical. Golden `ornith-8` was **not checked** (no install;
   none fetched).
+- **Phase 2 Task 7** `c5bdf926`: `ServerModelSession` now holds Core
+  `EngineModel`/`EngineRunner` contracts and loads through an injected factory;
+  the package-private default still constructs 6.x, including MTP. Multi-slot
+  batching and diagnostics use the Core contracts. Benchmark probes and expert
+  warm-up remain explicitly 6.x-only capabilities. Verified with a release
+  build, 2,391 model-free tests, all required lint gates, golden `ornith-4`
+  byte-identical, and Ornith greedy parity against 6.x (37.83 s). Golden
+  `ornith-8` was **not checked** (no install; none fetched).
 
-**Resume exactly here — Phase 2 Task 7 (each = a green gated commit):**
-- Re-type `ServerModelSession` against the Phase 1 protocols and move concrete
-  construction behind the injected factory. The package-private default factory
-  still returns 6.x throughout Phase 2, so output must remain byte-identical;
-  then re-type `CPUModelBackend` the same way.
+**Resume exactly here — Phase 2 Task 8 (each = a green gated commit):**
+- Re-type `CPUModelBackend` against the Core engine contracts. Concrete
+  construction stays behind a factory and existing defaults retain current
+  behavior; then Phase 3 routes variant factories per model.
 - Then Phases 3–4 per the plan (Phase 3 builds `DenseGPU` + model-gated routing
   flips; Phase 4 is the full acceptance matrix + paired benchmarks + records).
 
