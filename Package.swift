@@ -41,8 +41,10 @@ let package = Package(
         // both (`tools/build_library.sh` links it with an install name of
         // `@rpath/libTinyTitanLib.dylib` so the published file can carry the
         // plain name).
-        .library(name: "TinyTitanLib", targets: ["TinyTitanLib"]),
-        .library(name: "TinyTitanLibDynamic", type: .dynamic, targets: ["TinyTitanLib"]),
+        .library(name: "TinyTitanLib", targets: ["TinyTitanLib", "TinyTitanLegacyEngine"]),
+        .library(
+            name: "TinyTitanLibDynamic", type: .dynamic,
+            targets: ["TinyTitanLib", "TinyTitanLegacyEngine"]),
         // Product 2 of 2: the engine, embedding the library above.
         .executable(name: "TinyTitanRepack", targets: ["TinyTitanRepack"]),
         .executable(name: "TinyTitanCLI", targets: ["TinyTitanCLI"]),
@@ -190,8 +192,14 @@ let package = Package(
         // drift from what the server actually needs.
         .target(
             name: "TinyTitanLib",
-            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanFormat"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat"],
             path: "sources/TinyTitanLib",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .target(
+            name: "TinyTitanLegacyEngine",
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib"],
+            path: "sources/TinyTitanLegacyEngine",
             swiftSettings: tinytitanLanguageStandard
         ),
         .target(
@@ -211,7 +219,7 @@ let package = Package(
             // The CLI is a front end of the library (phase A2 of
             // `docs/plan-embedded-library.md`), so it depends on the facade it
             // drives. `TinyTitan` stays for the few value types `Args` parses.
-            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib"],
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine"],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
             swiftSettings: tinytitanLanguageStandard
@@ -269,6 +277,7 @@ let package = Package(
                 "TinyTitanCore",
                 "TinyTitanLib",
                 "TinyTitan",
+                "TinyTitanLegacyEngine",
                 "TinyTitanMemory",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
@@ -285,7 +294,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanBench",
-            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib"],
+            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine"],
             path: "sources/TinyTitanBench",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -392,7 +401,7 @@ let package = Package(
             name: "TinyTitanLibTests",
             dependencies: [
                 .product(name: "yyjson", package: "yyjson"),
-                "TinyTitanCore", "TinyTitanLib", "TinyTitan",
+                "TinyTitanCore", "TinyTitanLib", "TinyTitan", "TinyTitanLegacyEngine",
             ],
             path: "tests/TinyTitanLib",
             swiftSettings: tinytitanLanguageStandard

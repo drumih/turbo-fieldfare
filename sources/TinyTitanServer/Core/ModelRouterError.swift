@@ -54,7 +54,7 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     /// The protocol's single-model view, answered for the model loaded first.
     /// The HTTP layer asks `servedModel(named:)` instead once it routes.
     public nonisolated var maximumContext: Int { initial.maximumContext }
-    public nonisolated var samplingDefaults: GenerationDefaults.Sampling { initial.sampling }
+    public nonisolated var samplingDefaults: SamplingProfile { initial.sampling }
 
     private struct Resident {
         let id: String
@@ -88,7 +88,7 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
     package init(
         catalog: ModelCatalog,
         initialModelID: String,
-        reasoning: ReasoningLevel,
+        reasoning: TinyTitanCore.ReasoningLevel,
         maximumContext: Int,
         loader: @escaping Loader,
         counter: @escaping Counter = ModelRouter.standardCounter
@@ -173,7 +173,7 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         case .cpu: family = .qwen36
         }
         return ServerReasoningProfile(
-            family: family, thinkingMode: choice.thinking,
+            family: family.rawValue, thinkingMode: choice.thinking,
             reasoningEffort: choice.effort)
     }
 

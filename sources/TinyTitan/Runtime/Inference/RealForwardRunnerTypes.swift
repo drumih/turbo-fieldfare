@@ -1,24 +1,8 @@
 import Foundation
 
-public enum RDAdvicePolicyMode: String, Codable, Sendable, Equatable {
-    case `default`
-    case off
-    case bounded
-    case adaptive
+import TinyTitanCore
 
-    public static func parse(_ raw: String?) -> RDAdvicePolicyMode {
-        switch raw?.lowercased() {
-        case "off", "none", "disabled":
-            return .off
-        case "bounded":
-            return .bounded
-        case "adaptive":
-            return .adaptive
-        default:
-            return .default
-        }
-    }
-}
+public typealias RDAdvicePolicyMode = TinyTitanCore.RDAdvicePolicyMode
 
 public struct RDAdviceAdaptivePolicyConfig: Sendable, Equatable {
     public var missCap: Int

@@ -108,7 +108,7 @@ struct StructuredOutputRequestTests {
     /// written as part of the JSON. Thinking is off, and the note says why.
     @Test func thinkingIsOffForAConstrainedRequest() throws {
         let on = ServerReasoningProfile(
-            family: .qwen38flash, thinkingMode: .on,
+            family: ModelFamily.qwen38flash.rawValue, thinkingMode: .on,
             reasoningEffort: .xhigh)
         let request = try JSONDecoder().decode(
             OpenAIChatRequest.self,

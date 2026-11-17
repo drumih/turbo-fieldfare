@@ -249,7 +249,7 @@ public enum AnthropicMapper {
     /// the empty string, because an Anthropic signature is an attestation this
     /// server cannot produce and a made-up token would only pretend to be
     /// verifiable. Turning the level off is therefore what removes the block.
-    static func requestedThinking(_ thinking: JSONValue?, maxTokens: Int) throws -> ReasoningLevel?
+    static func requestedThinking(_ thinking: JSONValue?, maxTokens: Int) throws -> TinyTitanCore.ReasoningLevel?
     {
         guard let thinking else { return nil }
         guard case .object(let dict) = thinking, case .string(let type)? = dict["type"] else {

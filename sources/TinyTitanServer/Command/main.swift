@@ -6,6 +6,7 @@ import Foundation
 // relying on TinyTitanServerCore re-exporting it.
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanMemory
 import TinyTitanServerCore
 
@@ -169,7 +170,7 @@ do {
                     ? "\(cpuBackend.residentBytes / 1_000_000) MB resident, " : "",
                 seconds, cpuBackend.threads))
         reasoningProfile = ServerReasoningProfile(
-            family: .qwen36,
+            family: ModelFamily.qwen36.rawValue,
             thinkingMode: reasoning.thinking,
             reasoningEffort: nil)
     } else if (try? ManifestReader.peekFamily(directoryURL: modelURL)) == .k2Horizon {
@@ -202,7 +203,12 @@ do {
             let residency = ManagedModelBackend(
                 facts: k2Facts,
                 maximumContext: contextLimit,
-                samplingDefaults: GenerationDefaults.forFamily(.k2Horizon),
+                samplingDefaults: SamplingProfile(
+                    temperature: GenerationDefaults.forFamily(.k2Horizon).temperature,
+                    topK: GenerationDefaults.forFamily(.k2Horizon).topK,
+                    topP: GenerationDefaults.forFamily(.k2Horizon).topP,
+                    minP: GenerationDefaults.forFamily(.k2Horizon).minP,
+                    presencePenalty: GenerationDefaults.forFamily(.k2Horizon).presencePenalty),
                 idleTimeout: arguments.idleUnloadSeconds > 0
                     ? .seconds(arguments.idleUnloadSeconds) : nil,
                 loader: { context in
@@ -240,14 +246,15 @@ do {
                     identifier, seconds, k2.maximumContext, k2.expertCacheSlots))
         }
         reasoningProfile = ServerReasoningProfile(
-            family: .k2Horizon,
+            family: ModelFamily.k2Horizon.rawValue,
             thinkingMode: reasoning.thinking,
             reasoningEffort: reasoning.effort)
     } else if arguments.managesResidency {
         let plan = makePlan()
         // Reads manifest.json only; a bad --model still fails here at launch
         // rather than on the first request.
-        facts = try plan.previewFacts(modelIDOverride: arguments.modelIDOverride)
+        facts = try plan.previewFacts(
+            modelIDOverride: arguments.modelIDOverride, factory: EngineFactories.sixXGPU())
         let residency = ManagedModelBackend(
             plan: plan,
             facts: facts,
@@ -257,7 +264,7 @@ do {
         backend = residency
     } else {
         let plan = makePlan()
-        let session = try await plan.makeSession()
+        let session = try await plan.makeSession(factory: EngineFactories.sixXGPU())
         backend = session
         facts = ModelSessionFacts(
             modelID: arguments.modelIDOverride ?? session.defaultModelID,
@@ -286,7 +293,7 @@ do {
         queueLimit: arguments.queueLimit,
         maxConcurrentSequences: concurrency,
         backend: servingBackend,
-        reasoningProfile: try reasoningProfile ?? makePlan().reasoningProfile(),
+        reasoningProfile: try reasoningProfile ?? makePlan().reasoningProfile(factory: EngineFactories.sixXGPU()),
         router: router,
         coordinator: coordinator)
     _ = try await server.start(port: arguments.port)

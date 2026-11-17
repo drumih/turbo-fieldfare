@@ -6,7 +6,6 @@ import TinyTitanCore
 // file owns the boundary selection, the snapshot capture and the detached
 // store writes.
 import Foundation
-import TinyTitan
 
 extension ServerModelSession {
     /// What one generation should capture, and the callback that captures it.

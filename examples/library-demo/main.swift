@@ -25,6 +25,7 @@ import Darwin
 import Foundation
 import Metal
 import TinyTitanLib
+import TinyTitanLegacyEngine
 
 // Which library form this binary was linked against. The build scripts define
 // exactly one of these, so the demo can say what it is instead of guessing.
@@ -136,7 +137,8 @@ do {
     // the Metal pipelines, and it is expensive to create.
     let engine = try await Engine(
         directory: URL(fileURLWithPath: modelDirectory),
-        device: device)
+        device: device,
+        factory: EngineFactories.sixXGPU())
 
     let descriptor = engine.descriptor
     status(

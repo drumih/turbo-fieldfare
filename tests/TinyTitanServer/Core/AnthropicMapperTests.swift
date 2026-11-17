@@ -45,7 +45,7 @@ import Testing
             """)
         let validated = try OpenAIRequestValidator.validate(
             chat, modelID: "m",
-            sampling: GenerationDefaults.Sampling(temperature: 1.0, topK: 20, topP: 0.95))
+            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
         #expect(validated.generationConfig.temperature == 1.0)
     }
 

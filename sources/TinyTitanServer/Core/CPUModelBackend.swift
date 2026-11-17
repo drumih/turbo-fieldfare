@@ -35,7 +35,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// snapshot, its `tokenizer/` sidecar for a `.ssdai` install. Kept so a
     /// mid-session re-render reads from the same place the load did.
     private let tokenizerFolder: URL
-    private let loadedReasoning: RequestReasoning
+    private let loadedReasoning: TinyTitanCore.RequestReasoning
     /// The vocabulary-as-bytes table for structured output, built on first use
     /// and shared by every request this backend serves.
     private var jsonTokenTable: JSONTokenTable?
@@ -54,7 +54,11 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// same diagnostic on the side engine, which does narrow.
     package var threadWidthInUse: Int { model.threads }
     public nonisolated var maximumContext: Int { context }
-    public nonisolated var samplingDefaults: GenerationDefaults.Sampling { defaults }
+    public nonisolated var samplingDefaults: SamplingProfile {
+        SamplingProfile(
+            temperature: defaults.temperature, topK: defaults.topK, topP: defaults.topP,
+            minP: defaults.minP, presencePenalty: defaults.presencePenalty)
+    }
     /// The CPU engine has no prompt cache, and says so rather than borrowing the
     /// mode the server was asked for. `.off` is what the launch banner reports
     /// for this backend, so the banner and the residency line agree.
@@ -137,7 +141,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             from: folder,
             thinkingMode: thinkingMode)
         self.snapshotDirectory = snapshotDirectory
-        self.loadedReasoning = RequestReasoning(
+        self.loadedReasoning = TinyTitanCore.RequestReasoning(
             thinkingMode: thinkingMode,
             effort: nil)
         context = min(
@@ -229,7 +233,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // way on either engine. This path renders no tool template, so the
         // decoder only ever splits thoughts -- including one the model opens
         // itself while the switch is off.
-        let decoder = StructuredAssistantDecoder.forGeneration(
+        let decoder = TinyTitanCore.StructuredAssistantDecoder.forGeneration(
             tokenizer: renderTokenizer, promptIDs: promptIDs, allowedTools: nil)
         var detokenizer = GFDetokenizer(tokenizer: renderTokenizer)
         var output = AssistantOutput(stops: configuration.stopStrings, onEvent: onEvent)
@@ -298,9 +302,9 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// same rule wherever a model runs" true rather than aspirational.
     private func events(
         for token: Int32,
-        decoder: StructuredAssistantDecoder,
+        decoder: TinyTitanCore.StructuredAssistantDecoder,
         detokenizer: inout GFDetokenizer
-    ) throws -> [StructuredAssistantEvent] {
+    ) throws -> [TinyTitanCore.StructuredAssistantEvent] {
         try decoder.consume(tokenID: token, delta: detokenizer.push(token))
     }
 }
@@ -319,7 +323,7 @@ extension CPUModelBackend: PromptTokenCounting {
     /// The tokenizer this request should be rendered with; the loaded one
     /// unless the request named a different thinking mode or effort.
     private func resolvedTokenizer(
-        for reasoning: RequestReasoning?
+        for reasoning: TinyTitanCore.RequestReasoning?
     ) async throws -> GFTokenizer {
         guard let reasoning, !reasoning.matches(loadedReasoning) else {
             return tokenizer

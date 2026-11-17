@@ -5,7 +5,7 @@ import TinyTitanCore
 /// Target-verified greedy native-MTP session. The target always verifies the draft; a
 /// rejected draft is rolled back to the GPU checkpoint captured immediately
 /// after the confirmed boundary row.
-public final class StreamingMTPDecoder: LogitProducer, ContextWindowReporting,
+public final class StreamingMTPDecoder: EngineMTPDecoder,
     /// unchecked-invariant: owns two RealForwardRunners and is driven by one
     /// task at a time, inheriting their exclusive-ownership rule.
     @unchecked Sendable

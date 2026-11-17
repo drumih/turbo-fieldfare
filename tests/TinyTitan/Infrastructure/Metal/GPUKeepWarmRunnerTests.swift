@@ -3,6 +3,7 @@ import Testing
 
 @testable import TinyTitan
 @testable import TinyTitanCore
+@testable import TinyTitanLib
 
 @Suite(.serialized)
 struct GPUKeepWarmRunnerTests {

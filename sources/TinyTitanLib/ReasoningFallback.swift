@@ -1,3 +1,5 @@
+import TinyTitanCore
+
 // Fitting one reasoning level to a model that exposes different ones.
 //
 // Moved out of `ReasoningFallback` in `TinyTitanServerCore`'s
@@ -9,7 +11,6 @@
 // Only `effectiveLevel` moves: it is arithmetic over the engine's
 // `ReasoningLevel` and needs nothing from the server. The sibling
 // `choice(for:requested:)` reads the server's catalog, so it stays there.
-import TinyTitan
 
 /// Fits one server-wide reasoning level to models that expose different ones.
 ///

@@ -94,7 +94,7 @@ public actor MemoryBackend: ServerInferenceBackend, PromptTokenCounting, Residen
     }
 
     public nonisolated var maximumContext: Int { inner.maximumContext }
-    public nonisolated var samplingDefaults: GenerationDefaults.Sampling { inner.samplingDefaults }
+    public nonisolated var samplingDefaults: SamplingProfile { inner.samplingDefaults }
 
     /// Counts the request as the client sent it. The memory fragment and
     /// bootstrap are not included: they are added per session at generation
@@ -136,7 +136,7 @@ public actor MemoryBackend: ServerInferenceBackend, PromptTokenCounting, Residen
         let memoryTools = ServerMemory.functionDefinitions(await service.toolDefinitions())
 
         var current = request.replacingMessages(
-            ConcisePrompt.appendingSystemPrompt(instructions, to: request.messages),
+            TinyTitanCore.ConcisePrompt.appendingSystemPrompt(instructions, to: request.messages),
             tools: ServerMemory.merging(tools: request.tools, memory: memoryTools))
         let startedAt = Date()
 

@@ -1,6 +1,5 @@
 import TinyTitanCore
 import Foundation
-import TinyTitan
 
 /// One interior checkpoint position in a rendered chat prompt.
 struct PromptCheckpointBoundary: Sendable, Equatable {

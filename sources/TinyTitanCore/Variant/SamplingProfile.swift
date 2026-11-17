@@ -8,16 +8,18 @@ public struct SamplingProfile: Sendable, Equatable {
     public let temperature: Float
     public let topK: Int
     public let topP: Float
+    public let minP: Float
     public let presencePenalty: Float
     public let thinking: ThinkingDefaults?
 
     public init(
         temperature: Float, topK: Int, topP: Float,
-        presencePenalty: Float, thinking: ThinkingDefaults? = nil
+        minP: Float = 0, presencePenalty: Float, thinking: ThinkingDefaults? = nil
     ) {
         self.temperature = temperature
         self.topK = topK
         self.topP = topP
+        self.minP = minP
         self.presencePenalty = presencePenalty
         self.thinking = thinking
     }

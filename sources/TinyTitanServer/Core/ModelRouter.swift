@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanCore
 
 /// What the HTTP layer needs to validate a request for one model before that
@@ -11,12 +12,12 @@ public struct ServedModel: Sendable, Equatable {
     public let id: String
     public let displayName: String
     public let maximumContext: Int
-    public let sampling: GenerationDefaults.Sampling
+    public let sampling: SamplingProfile
     package let reasoningProfile: ServerReasoningProfile
 
     package init(
         id: String, displayName: String, maximumContext: Int,
-        sampling: GenerationDefaults.Sampling,
+        sampling: SamplingProfile,
         reasoningProfile: ServerReasoningProfile
     ) {
         self.id = id
@@ -49,8 +50,8 @@ extension ModelRouting {
 
 /// The reasoning one model runs under for the server-wide level.
 public struct ReasoningChoice: Sendable, Equatable {
-    public let requested: ReasoningLevel
-    public let effective: ReasoningLevel
+    public let requested: TinyTitanCore.ReasoningLevel
+    public let effective: TinyTitanCore.ReasoningLevel
     public let thinking: ModelThinkingMode
     public let effort: ModelReasoningEffort?
 }
@@ -64,7 +65,7 @@ public struct ReasoningChoice: Sendable, Equatable {
 extension ReasoningFallback {
     package static func choice(
         for kind: ModelCatalog.Kind,
-        requested: ReasoningLevel
+        requested: TinyTitanCore.ReasoningLevel
     ) throws -> ReasoningChoice {
         let effective = effectiveLevel(
             requested, supported: kind.supportedReasoningLevels,
@@ -108,7 +109,9 @@ extension ModelRouter {
                     thinking: reasoning.thinking,
                     reasoningEffort: reasoning.effort,
                     mtpModelDirectory: nil)
-                return try await plan.makeSession(reusingContext: try await metal.context())
+                return try await plan.makeSession(
+                    reusingContext: try await metal.context(),
+                    factory: EngineFactories.sixXGPU())
             case .cpu:
                 return try await CPUModelBackend(
                     snapshotDirectory: entry.path,

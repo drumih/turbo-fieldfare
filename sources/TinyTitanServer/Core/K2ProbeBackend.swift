@@ -3,6 +3,7 @@ import Metal
 import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
+import TinyTitanLegacyEngine
 
 /// Serving K2-Horizon from the GPU probe, through the same HTTP surface as the
 /// other families.
@@ -32,7 +33,7 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
     private let directory: URL
     private let tokenizer: GFTokenizer
     private let tokenizerFolder: URL
-    private let loadedReasoning: RequestReasoning
+    private let loadedReasoning: TinyTitanCore.RequestReasoning
     private let contextLimit: Int
     private let defaults: GenerationDefaults.Sampling
     private let slotCount: Int
@@ -40,7 +41,11 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
     private let runtime: K2ProbeRuntime
 
     public nonisolated var maximumContext: Int { contextLimit }
-    public nonisolated var samplingDefaults: GenerationDefaults.Sampling { defaults }
+    public nonisolated var samplingDefaults: SamplingProfile {
+        SamplingProfile(
+            temperature: defaults.temperature, topK: defaults.topK, topP: defaults.topP,
+            minP: defaults.minP, presencePenalty: defaults.presencePenalty)
+    }
     /// The probe keeps no prompt cache and says so rather than borrowing the
     /// mode the server was asked for.
     package nonisolated var promptCacheMode: ServerPromptCacheMode { .off }
@@ -103,7 +108,7 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
         self.tokenizerFolder = folder
         self.tokenizer = try await GFTokenizer.load(
             from: folder, thinkingMode: thinking, reasoningEffort: reasoningEffort)
-        self.loadedReasoning = RequestReasoning(
+        self.loadedReasoning = TinyTitanCore.RequestReasoning(
             thinkingMode: thinking, effort: reasoningEffort)
         self.contextLimit = min(maximumContext, Self.contextCeiling)
         self.defaults = GenerationDefaults.forFamily(.k2Horizon)
@@ -163,7 +168,7 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
     }
 
     private func resolvedTokenizer(
-        for reasoning: RequestReasoning?
+        for reasoning: TinyTitanCore.RequestReasoning?
     ) async throws -> GFTokenizer {
         guard let reasoning, !reasoning.matches(loadedReasoning) else {
             return tokenizer

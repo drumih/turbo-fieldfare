@@ -2,10 +2,9 @@ import Foundation
 import TinyTitanFormat
 import TinyTitanCore
 
-public enum ModelIntegrityPolicy: Sendable, Equatable {
-    case fullSha256
-    case sizeCheckTrustedReceipt
+public typealias ModelIntegrityPolicy = TinyTitanCore.ModelIntegrityPolicy
 
+extension ModelIntegrityPolicy {
     /// Strongest policy that skips re-hashing the full payload: when the
     /// installer's `verified-install.json` receipt is present, the per-file
     /// digests were pinned at install time, so this trusts them rather than

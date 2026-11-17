@@ -10,6 +10,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanCore
 
 private struct MessageJSON: Decodable {
@@ -89,7 +90,7 @@ public func run(
         // pure greedy. Anything the caller named on the command line wins;
         // this only fills what they left alone.
         let declared = SamplingDefaults.forInstall(
-            at: modelURL, thinkingMode: thinkingMode)
+            at: modelURL, thinkingMode: thinkingMode, factory: EngineFactories.sixXGPU())
         let options = GenerationOptions(
             maxTokens: min(args.maxNew, args.maxContext),
             temperature: args.temperatureWasSet
@@ -158,7 +159,8 @@ public func run(
             return errored(stderr, "no Metal device", 1)
         }
         let engine = try await Engine(
-            directory: modelURL, device: device, configuration: configuration)
+            directory: modelURL, device: device,
+            factory: EngineFactories.sixXGPU(), configuration: configuration)
         // The one request would arrive before any layer is warm and stop the
         // warm-up at once, so the CLI lets it finish (it logs its own line;
         // TINYTITAN_WARM_EXPERTS=0 skips it).
@@ -219,7 +221,7 @@ public func run(
 /// One of `--prompt` (raw, or templated when `--concise` asks for it) or
 /// `--messages-file` (always templated), with concise mode folded in.
 private func buildPrompt(args: Args) throws -> Prompt {
-    let concise = args.concise ? ConcisePrompt.standard : nil
+    let concise = args.concise ? TinyTitanCore.ConcisePrompt.standard : nil
     if let rawPrompt = args.prompt {
         // Concise mode turns the raw prompt into a one-turn conversation, the
         // same shape the pre-facade CLI rendered through the chat template.

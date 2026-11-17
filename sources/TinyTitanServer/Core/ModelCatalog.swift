@@ -2,6 +2,7 @@ import Foundation
 import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
+import TinyTitanLegacyEngine
 
 /// Every model a models directory holds that this server can actually serve,
 /// GPU installs and CPU snapshots alike.
@@ -53,14 +54,14 @@ public struct ModelCatalog: Sendable {
             }
         }
 
-        public var supportedReasoningLevels: [ReasoningLevel] {
+        public var supportedReasoningLevels: [TinyTitanCore.ReasoningLevel] {
             switch self {
             case .gpu(let family): family.supportedReasoningLevels
             case .cpu(let family): family.supportedReasoningLevels
             }
         }
 
-        public var levelWhenOn: ReasoningLevel {
+        public var levelWhenOn: TinyTitanCore.ReasoningLevel {
             switch self {
             case .gpu(let family): family.reasoningControl.levelWhenOn
             case .cpu(let family): family.levelWhenOn
@@ -68,7 +69,7 @@ public struct ModelCatalog: Sendable {
         }
 
         public func runtimeReasoning(
-            for level: ReasoningLevel
+            for level: TinyTitanCore.ReasoningLevel
         ) throws -> (thinking: ModelThinkingMode, effort: ModelReasoningEffort?) {
             switch self {
             case .gpu(let family): try family.runtimeReasoning(for: level)
@@ -88,7 +89,7 @@ public struct ModelCatalog: Sendable {
         /// The sampling the model will really use for anything a request
         /// omits: the tuning profile's for a GPU install, the family's for a
         /// CPU snapshot.
-        public let sampling: GenerationDefaults.Sampling
+        public let sampling: SamplingProfile
         /// The context the checkpoint claims, where the engine honours less
         /// than the server's --max-context. Nil for GPU installs, which serve
         /// whatever the server was configured for.
@@ -105,7 +106,7 @@ public struct ModelCatalog: Sendable {
 
         package init(
             id: String, name: String, kind: Kind, quant: Int, path: URL,
-            sampling: GenerationDefaults.Sampling, contextLimit: Int? = nil,
+            sampling: SamplingProfile, contextLimit: Int? = nil,
             sizeBytes: Int64 = 0, engines: [Backend]? = nil
         ) {
             self.id = id
@@ -283,7 +284,12 @@ public struct ModelCatalog: Sendable {
                 kind: .gpu(identity.family),
                 quant: identity.weightBits,
                 path: directory,
-                sampling: ModelProfile.resolve(identity: identity).sampling,
+                sampling: SamplingProfile(
+                    temperature: ModelProfile.resolve(identity: identity).sampling.temperature,
+                    topK: ModelProfile.resolve(identity: identity).sampling.topK,
+                    topP: ModelProfile.resolve(identity: identity).sampling.topP,
+                    minP: ModelProfile.resolve(identity: identity).sampling.minP,
+                    presencePenalty: ModelProfile.resolve(identity: identity).sampling.presencePenalty),
                 // The probe's KV caches are what cap it, not the checkpoint.
                 contextLimit:
                     identity.family == .k2Horizon
@@ -364,7 +370,12 @@ public struct ModelCatalog: Sendable {
                 kind: .cpu(family),
                 quant: bits,
                 path: directory,
-                sampling: family.samplingDefaults,
+                sampling: SamplingProfile(
+                    temperature: family.samplingDefaults.temperature,
+                    topK: family.samplingDefaults.topK,
+                    topP: family.samplingDefaults.topP,
+                    minP: family.samplingDefaults.minP,
+                    presencePenalty: family.samplingDefaults.presencePenalty),
                 contextLimit: config["max_position_embeddings"] as? Int,
                 sizeBytes: sizeOnDisk(directory)))
     }

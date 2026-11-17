@@ -6,6 +6,7 @@ import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
 @testable import TinyTitanCore
+@testable import TinyTitanLegacyEngine
 
 /// The batched-serving headroom rule: a worst-case per-slot size computed from
 /// the architecture, and a width clamped so the slots fit beside the wired
@@ -100,7 +101,7 @@ import TinyTitan
     /// A shipped install at the advertised context must fit: the clamp exists
     /// for the models that do not, not to shrink the common case.
     @Test func aShippedModelFitsItsWorstCaseAtTheAdvertisedContext() {
-        let perSlot = BatchedMemoryBudget.perSlotBytes(
+        let perSlot = LegacyBatchedMemoryBudget.perSlotBytes(
             config: config, maxContext: 262_144, precision: .int8,
             fp16RingEnabled: false, slidingWindow: config.slidingWindow,
             maxPrefillChunkTokens: 128, vocab: config.vocabSize)
@@ -118,7 +119,7 @@ import TinyTitan
     @Test func hostKVCountsTheWindowAndTheArena() {
         let maxContext = 262_144
         let window = 65_536
-        let streamed = BatchedMemoryBudget.perSlotBytes(
+        let streamed = LegacyBatchedMemoryBudget.perSlotBytes(
             config: config, maxContext: maxContext, precision: .int8,
             fp16RingEnabled: false, slidingWindow: config.slidingWindow,
             maxPrefillChunkTokens: 128, vocab: config.vocabSize,

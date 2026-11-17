@@ -121,24 +121,24 @@ enum RoutingFixture {
     static let alpha = ModelCatalog.Entry(
         id: "alpha_4-Bit", name: "Alpha 35B", kind: .gpu(.qwen36), quant: 4,
         path: URL(fileURLWithPath: "/models/alpha_4Bit"),
-        sampling: GenerationDefaults.house)
+        sampling: .house)
     /// An effort-level GPU install whose card asks for temperature 1.0.
     static let flash = ModelCatalog.Entry(
         id: "flash_8-Bit", name: "Flash 125B", kind: .gpu(.qwen38flash), quant: 8,
         path: URL(fileURLWithPath: "/models/flash_8Bit"),
-        sampling: GenerationDefaults.Sampling(temperature: 1.0, topK: 20, topP: 0.95))
+        sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
     /// A dense Qwen 3.5 install: the one shape both engines implement, so it
     /// is listed once and reachable as `@gpu` (its default) and `@cpu`.
     static let dense = ModelCatalog.Entry(
         id: "dense-2b_4-Bit", name: "Dense 2B", kind: .gpu(.qwen35Dense), quant: 4,
         path: URL(fileURLWithPath: "/models/dense_2B_4Bit"),
-        sampling: GenerationDefaults.house, engines: [.gpu, .cpu])
+        sampling: .house, engines: [.gpu, .cpu])
 
     /// A CPU snapshot, whose context the CPU engine caps.
     static let small = ModelCatalog.Entry(
         id: "small-2b", name: "Small 2B", kind: .cpu(.qwen35Dense), quant: 8,
         path: URL(fileURLWithPath: "/models/small_2B_8Bit"),
-        sampling: CPUModelFamily.qwen35Dense.samplingDefaults,
+        sampling: .house,
         contextLimit: 262_144)
 
     static var catalog: ModelCatalog {

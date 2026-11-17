@@ -1,6 +1,5 @@
 import TinyTitanCore
 import Foundation
-import TinyTitan
 
 /// Request validation results: the server's request errors and the validated
 /// shape a handler receives.

@@ -49,7 +49,7 @@ import TinyTitanValidationSupport
     static let firstSampleIndex = 5
 
     static func warmedScratch(context: MetalContext, config: GenerationConfig) throws
-        -> RawCompletionScratch
+        -> TinyTitan.RawCompletionScratch
     {
         let scratch = try RawCompletionScratch(context: context, vocab: vocab)
         scratch.sampler.resetPenaltyHistory()

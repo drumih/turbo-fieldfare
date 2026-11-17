@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 package enum ServerPromptCacheMode: String, Codable, Sendable, Equatable {

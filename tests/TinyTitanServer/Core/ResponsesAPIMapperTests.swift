@@ -42,7 +42,7 @@ import TinyTitan
         // "the mapper left it alone" apart from "the mapper hardcoded 0.6".
         let validated = try OpenAIRequestValidator.validate(
             chat, modelID: "m",
-            sampling: GenerationDefaults.Sampling(temperature: 1.0, topK: 20, topP: 0.95))
+            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
 
         #expect(validated.generationConfig.temperature == 1.0)
     }
@@ -77,7 +77,7 @@ import TinyTitan
         let chat = try ResponsesAPIMapper.chatRequest(request)
         let validated = try OpenAIRequestValidator.validate(
             chat, modelID: "m",
-            sampling: GenerationDefaults.Sampling(temperature: 1.0, topK: 20, topP: 0.8))
+            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.8, presencePenalty: 0))
 
         let echo = ResponsesAPIEcho(
             request: request, effectiveEffort: nil,

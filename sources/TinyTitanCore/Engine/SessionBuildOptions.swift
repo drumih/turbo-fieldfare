@@ -21,6 +21,7 @@ public enum RuntimeRoPEScalingMode: String, Codable, CaseIterable, Sendable {
 /// and cache construction stages. Engine-specific configuration remains inside
 /// the factory; this value does not expose a concrete runtime module.
 public struct SessionBuildOptions: Sendable {
+    public let modelDirectory: URL
     public let context: MetalContext?
     public let maxContext: Int
     public let slots: Int
@@ -38,8 +39,14 @@ public struct SessionBuildOptions: Sendable {
     public let expertCacheBudgetBytes: Int?
     public let mtpModelDirectory: URL?
     public let mtpMemoryMiB: Int
+    public let integrityPolicy: ModelIntegrityPolicy?
+    public let rdAdvicePolicy: RDAdvicePolicyMode?
+    public let forceLogitsHead: Bool
+    /// Engine-owned configuration consumed only by the selected factory.
+    public let engineConfiguration: (any Sendable)?
 
     public init(
+        modelDirectory: URL = URL(fileURLWithPath: ""),
         context: MetalContext?,
         maxContext: Int,
         slots: Int,
@@ -56,8 +63,13 @@ public struct SessionBuildOptions: Sendable {
         expertCacheSlots: Int?,
         expertCacheBudgetBytes: Int?,
         mtpModelDirectory: URL?,
-        mtpMemoryMiB: Int
+        mtpMemoryMiB: Int,
+        integrityPolicy: ModelIntegrityPolicy? = nil,
+        rdAdvicePolicy: RDAdvicePolicyMode? = nil,
+        forceLogitsHead: Bool = true,
+        engineConfiguration: (any Sendable)? = nil
     ) {
+        self.modelDirectory = modelDirectory
         self.context = context
         self.maxContext = maxContext
         self.slots = slots
@@ -75,5 +87,9 @@ public struct SessionBuildOptions: Sendable {
         self.expertCacheBudgetBytes = expertCacheBudgetBytes
         self.mtpModelDirectory = mtpModelDirectory
         self.mtpMemoryMiB = mtpMemoryMiB
+        self.integrityPolicy = integrityPolicy
+        self.rdAdvicePolicy = rdAdvicePolicy
+        self.forceLogitsHead = forceLogitsHead
+        self.engineConfiguration = engineConfiguration
     }
 }

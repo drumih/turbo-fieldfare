@@ -122,10 +122,10 @@ struct OpenAIValidationTests {
         let on = try OpenAIRequestValidator.validate(
             request, modelID: "m",
             reasoningProfile: ServerReasoningProfile(
-                family: .qwen38flash,
+                family: ModelFamily.qwen38flash.rawValue,
                 thinkingMode: .on,
                 reasoningEffort: nil),
-            sampling: GenerationDefaults.qwen38Thinking)
+            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
         #expect(on.generationConfig.temperature == 1.0)
         #expect(on.generationConfig.topP == 0.95)
         #expect(on.generationConfig.topK == 20)
@@ -136,10 +136,10 @@ struct OpenAIValidationTests {
         let off = try OpenAIRequestValidator.validate(
             request, modelID: "m",
             reasoningProfile: ServerReasoningProfile(
-                family: .qwen38flash,
+                family: ModelFamily.qwen38flash.rawValue,
                 thinkingMode: .off,
                 reasoningEffort: nil),
-            sampling: GenerationDefaults.qwen38Thinking)
+            sampling: SamplingProfile(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0))
         #expect(off.generationConfig.temperature == 0.7)
         #expect(off.generationConfig.topP == 0.80)
         #expect(off.generationConfig.topK == 20)
@@ -890,7 +890,7 @@ struct ServerArgumentTests {
     /// what the model will actually do instead.
     @Test func reasoningEffortReportsWhatWasApplied() throws {
         let profile = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: nil)
         // With no override the template default xhigh is the active level, so
@@ -919,7 +919,7 @@ struct ServerArgumentTests {
         #expect(max.reasoningNotes[0].contains("extra high"))
 
         let lowProfile = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: .low)
         let low = try OpenAIRequestValidator.validate(
@@ -934,7 +934,7 @@ struct ServerArgumentTests {
         // Loaded on/off and thinking off: a request naming an effort level
         // must come back wanting thinking on.
         let binary = ServerReasoningProfile(
-            family: .qwen36,
+            family: ModelFamily.qwen36.rawValue,
             thinkingMode: .off,
             reasoningEffort: nil)
         let wantsThinking = try OpenAIRequestValidator.validate(
@@ -945,7 +945,7 @@ struct ServerArgumentTests {
         // And naming "off" on a server loaded with thinking on must come back
         // wanting it off -- the switch a coding agent reaches for.
         let effortOn = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: .xhigh)
         let wantsOff = try OpenAIRequestValidator.validate(
@@ -988,7 +988,7 @@ struct ServerArgumentTests {
     /// cap and truncate the summary -- had the fix silently lost.
     @Test func templateKwargsTurnThinkingOff() throws {
         let loadedOn = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: .xhigh)
         let off = try OpenAIRequestValidator.validate(
@@ -1000,7 +1000,7 @@ struct ServerArgumentTests {
         // `true` is the switch the other way: it must turn a thinking-off
         // server on rather than being ignored as a no-op.
         let loadedOff = ServerReasoningProfile(
-            family: .qwen36,
+            family: ModelFamily.qwen36.rawValue,
             thinkingMode: .off,
             reasoningEffort: nil)
         let on = try OpenAIRequestValidator.validate(
@@ -1014,7 +1014,7 @@ struct ServerArgumentTests {
     /// that sends both cannot be surprised by which one applied.
     @Test func templateKwargsEffortIsHonouredAndTopLevelWins() throws {
         let profile = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: .xhigh)
         let fromKwargs = try OpenAIRequestValidator.validate(
@@ -1078,7 +1078,7 @@ struct ServerArgumentTests {
     /// ladder, so none of them is a failure.
     @Test func unfamiliarReasoningVocabularyIsAccepted() throws {
         let profile = ServerReasoningProfile(
-            family: .qwen38flash,
+            family: ModelFamily.qwen38flash.rawValue,
             thinkingMode: .on,
             reasoningEffort: nil)
         for word in [

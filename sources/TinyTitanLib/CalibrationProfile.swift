@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 /// A measured tuning profile for one (machine, model, context) triple.
@@ -147,20 +146,20 @@ public struct CalibrationProfile: Codable, Equatable, Sendable {
                 "weightBits \(target.weightBits) is not 4 or 8")
         }
         guard
-            RuntimeConfiguration.supportedContextTokens.contains(
+            [4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144].contains(
                 target.contextTokens)
         else {
             throw CalibrationProfileError.invalidTarget(
                 "contextTokens \(target.contextTokens) is not a supported context")
         }
         if let chunk = knobs.prefillChunkTokens,
-            !RuntimeConfiguration.allowedPrefillChunkTokens.contains(chunk)
+            !PrefillRuntimeConfig.allowedProductionChunkTokens.contains(chunk)
         {
             throw CalibrationProfileError.invalidKnob(
                 "prefillChunkTokens \(chunk) is not an allowed chunk")
         }
         if let slots = knobs.expertCacheSlots,
-            !RuntimeConfiguration.allowedExpertCacheSlots.contains(slots)
+            ![8, 16, 24, 32, 40, 48, 64, 96, 112, 128, 160, 192, 256].contains(slots)
         {
             throw CalibrationProfileError.invalidKnob(
                 "expertCacheSlots \(slots) is not an allowed slot count")

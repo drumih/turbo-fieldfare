@@ -17,7 +17,6 @@
 //     `EngineConfiguration` cannot expose those two knobs yet.
 import Foundation
 import Metal
-import TinyTitan
 import TinyTitanCore
 
 /// One loaded install and the device it runs on.
@@ -49,6 +48,7 @@ public actor Engine {
     public init(
         directory: URL,
         device: MTLDevice,
+        factory: EngineFactory,
         configuration: EngineConfiguration = .init()
     ) async throws {
         // Before anything that can log: the loader's first line is the RAM
@@ -62,18 +62,20 @@ public actor Engine {
         else {
             throw TinyTitanError.modelNotFound(directory)
         }
-        let family: ModelFamily
+        let metadata: EngineModelMetadata
         do {
-            family = try ManifestReader.peekFamily(directoryURL: directory)
+            metadata = try factory.metadata(directory)
         } catch {
             throw TinyTitanError.notAnInstall(directory)
         }
-        let arch = try Self.resolveArch(family: family, directory: directory)
-        let manifest = try Self.readManifest(directory: directory, arch: arch)
+        let family = metadata.family
+        let arch = try Self.resolveArch(directory: directory, factory: factory)
+        let manifest = try Self.readManifest(directory: directory, arch: arch, factory: factory)
         let loaded: ServerModelSession
         do {
             loaded = try await ServerModelSession.load(
                 modelDirectory: directory,
+                factory: factory,
                 maxContext: configuration.contextWindow,
                 slots: configuration.maxConcurrentGenerations,
                 prefillChunkTokens: configuration.prefillChunkTokens,
@@ -89,7 +91,7 @@ public actor Engine {
                 device: device)
         } catch is ServerInferenceError {
             // The loader's only typed refusal is "this build cannot run it".
-            throw TinyTitanError.unsupportedFamily(family: family.rawValue)
+            throw TinyTitanError.unsupportedFamily(family: family)
         } catch let error as GFTokenizerError {
             switch error {
             case .modelDirectoryNotFound:
@@ -122,11 +124,11 @@ public actor Engine {
         self.reasoningProfile = ServerReasoningProfile(
             family: loaded.modelFamily,
             thinkingMode: loaded.loadedReasoning.thinkingMode,
-            reasoningEffort: loaded.loadedReasoning.effort)
-        self.samplingDefaults = Self.effectiveSampling(
-            profile: loaded.samplingDefaults,
-            family: loaded.modelFamily,
-            thinking: loaded.loadedReasoning.thinkingMode.isEnabled)
+            reasoningEffort: loaded.loadedReasoning.effort,
+            reasoningControl: loaded.reasoningControl)
+        self.samplingDefaults = SamplingDefaults(
+            loaded.samplingDefaults.effective(
+                thinking: loaded.loadedReasoning.thinkingMode.isEnabled))
         self.modelSession = loaded
     }
 
@@ -161,30 +163,6 @@ public actor Engine {
         await modelSession?.awaitExpertWarmup()
     }
 
-    /// The sampling row an install declares, resolved for `thinkingMode`.
-    ///
-    /// Read from `manifest.json` alone — no weights, no Metal, no load — so a
-    /// caller that must decide something before the engine exists (whether a
-    /// pure-greedy plan may take the fused head) can still ask. An unreadable
-    /// install falls back to the house row, exactly as the CLI did.
-    static func effectiveSampling(
-        profile: GenerationDefaults.Sampling,
-        family: ModelFamily?,
-        thinking: Bool
-    ) -> SamplingDefaults {
-        // Qwen3.8 publishes a row per mode and the profile carries only the
-        // thinking one, so the mode picks between them here — the same choice
-        // the server makes during validation.
-        if let family,
-            family == .qwen38flash || family == .qwen38flashMTP
-                || family == .qwen4flash || family == .qwen4flashMTP
-        {
-            return SamplingDefaults(
-                GenerationDefaults.forFamily(family, thinking: thinking))
-        }
-        return SamplingDefaults(profile)
-    }
-
     /// The smallest prefill chunk the engine accepts that covers `prompt`, or
     /// the largest allowed chunk when none does.
     ///
@@ -215,7 +193,7 @@ public actor Engine {
                 })
             tokenCount = tokenizer.encode(rendered, addBOS: false).count
         }
-        return RuntimeConfiguration.allowedPrefillChunkTokens
+        return PrefillRuntimeConfig.allowedProductionChunkTokens
             .first { $0 >= tokenCount }
             ?? PrefillRuntimeConfig.maxChunkTokens
     }
@@ -236,7 +214,7 @@ public actor Engine {
     package static func classify(
         _ error: ModelError,
         directory: URL,
-        family: ModelFamily
+        family: String
     ) -> TinyTitanError? {
         switch error {
         case .notASSDAIDirectory, .unsupportedVersion, .unknownFlag:
@@ -250,7 +228,7 @@ public actor Engine {
             // support question: the install is the caller's to replace.
             return .integrityFailure(path: directory.path, detail: error.description)
         case .archMismatch, .unsupportedArchitecture:
-            return .unsupportedFamily(family: family.rawValue)
+            return .unsupportedFamily(family: family)
         case .partialInstall, .missingFile, .tensorNotFound, .tensorSizeMismatch,
             .expertStrideNotPageAligned:
             return .notAnInstall(directory)
@@ -260,27 +238,21 @@ public actor Engine {
         }
     }
 
-    private static func resolveArch(family: ModelFamily, directory: URL) throws -> ArchConfig {
+    private static func resolveArch(directory: URL, factory: EngineFactory) throws -> ArchConfig {
         do {
-            return try ArchConfig.resolved(forFamily: family, directoryURL: directory)
-        } catch let error as ArchResolutionError {
-            switch error {
-            case .unsupportedFamily(let name):
-                throw TinyTitanError.unsupportedFamily(family: name)
-            case .manifestOmitsField:
-                throw TinyTitanError.notAnInstall(directory)
-            case .manifestDeclaresInvalidValue(let family, let field, let value):
-                throw TinyTitanError.unsupportedFamily(
-                    family: "\(family) (\(field)=\(value))")
-            }
+            return try factory.resolveArchitecture(directory)
+        } catch let error as ServerInferenceError {
+            throw TinyTitanError.unsupportedFamily(family: error.description)
         } catch {
             throw TinyTitanError.notAnInstall(directory)
         }
     }
 
-    private static func readManifest(directory: URL, arch: ArchConfig) throws -> Manifest {
+    private static func readManifest(
+        directory: URL, arch: ArchConfig, factory: EngineFactory
+    ) throws -> Manifest {
         do {
-            return try ManifestReader.load(directoryURL: directory, expecting: arch)
+            return try factory.readManifest(directory, arch)
         } catch {
             throw TinyTitanError.notAnInstall(directory)
         }
@@ -292,7 +264,7 @@ public actor Engine {
     ) -> ModelDescriptor {
         ModelDescriptor(
             id: session.defaultModelID,
-            family: session.modelFamily.rawValue,
+            family: session.modelFamily,
             contextWindow: session.maximumContext,
             weightBytes: manifest.files.values.reduce(UInt64(0)) { $0 + $1.size },
             expertCacheBytes: UInt64(session.expertCacheSlots) * manifest.expertStride

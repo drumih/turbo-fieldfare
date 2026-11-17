@@ -244,7 +244,7 @@ struct AnthropicReasoningTests {
     @Test func requestThinkingOverridesTheLoadedProfile() async throws {
         let backend = ThinkingBackend()
         let loaded = ServerReasoningProfile(
-            family: .qwen38flash, thinkingMode: .on,
+            family: ModelFamily.qwen38flash.rawValue, thinkingMode: .on,
             reasoningEffort: .low)
         try await withServer(backend, profile: loaded) { port in
             let asked =

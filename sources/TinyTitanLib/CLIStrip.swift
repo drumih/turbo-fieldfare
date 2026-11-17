@@ -1,6 +1,5 @@
 import TinyTitanCore
 import Foundation
-import TinyTitan
 
 /// Helpers for TINYTITAN_STRIP_CLI_PROMPT: drop coding-CLI boilerplate (agent
 /// system prompts, tool definitions, tool-call history, and in-message

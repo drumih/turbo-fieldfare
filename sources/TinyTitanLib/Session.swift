@@ -15,7 +15,6 @@
 //   * Request validation failures are rethrown as the validator's own error;
 //     `TinyTitanError` has no case for a malformed request.
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 public actor Session {
@@ -172,7 +171,7 @@ public actor Session {
             topK: options.topK == 0 ? nil : options.topK,
             topP: Float(options.topP),
             presencePenalty: Float(options.presencePenalty),
-            minP: GenerationDefaults.minP,
+            minP: 0,
             repetitionPenalty: Float(options.repetitionPenalty),
             seed: options.seed,
             stopStrings: options.stop,

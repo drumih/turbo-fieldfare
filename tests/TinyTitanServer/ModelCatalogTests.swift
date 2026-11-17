@@ -137,13 +137,13 @@ struct ModelCatalogTests {
         #expect(gpu.name == "Qwen 3.6 35B-A3B")
         #expect(gpu.kind == .gpu(.qwen36))
         #expect(gpu.quant == 8)
-        #expect(gpu.sampling == GenerationDefaults.house)
+        #expect(gpu.sampling == .house)
         #expect(gpu.sizeBytes > 0)
         let cpu = try #require(catalog.entry(id: "qwen3.5-2b_4-Bit"))
         #expect(cpu.name == "Qwen 3.5 2B")
         #expect(cpu.kind == .cpu(.qwen35Dense))
         #expect(cpu.quant == 4)
-        #expect(cpu.sampling == CPUModelFamily.qwen35Dense.samplingDefaults)
+        #expect(cpu.sampling == SamplingProfile.house)
         #expect(cpu.contextLimit == 262_144)
         // No model_id or display_name: the directory names it.
         #expect(catalog.entry(id: "unnamed_2B_8Bit")?.name == "unnamed_2B_8Bit")
@@ -248,7 +248,7 @@ struct ModelCatalogTests {
                 ModelCatalog.Entry(
                     id: "qwen3.6-35b-a3b_8-Bit", name: "Qwen 3.6 35B-A3B",
                     kind: .gpu(.qwen36), quant: 8, path: URL(fileURLWithPath: "/abs/path"),
-                    sampling: GenerationDefaults.house, sizeBytes: 36_200_000_000)
+                    sampling: .house, sizeBytes: 36_200_000_000)
             ])
         let text = try catalog.jsonData().lossyUTF8String
         #expect(
@@ -264,15 +264,12 @@ struct ModelCatalogTests {
                 ModelCatalog.Entry(
                     id: "qwen3.8-flash-next_4-Bit", name: "Qwen 3.8 Flash Next 125B-A6B",
                     kind: .gpu(.qwen38flash), quant: 4, path: URL(fileURLWithPath: "/f"),
-                    sampling: ModelProfile.resolve(
-                        modelID: "qwen3.8-flash-next",
-                        family: .qwen38flash, weightBits: 4,
-                        environment: [:]
-                    ).sampling),
+                    sampling: SamplingProfile(
+                        temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0)),
                 ModelCatalog.Entry(
                     id: "qwen3.5-2b_8-Bit", name: "Qwen 3.5 2B", kind: .cpu(.qwen35Dense),
                     quant: 8, path: URL(fileURLWithPath: "/c"),
-                    sampling: CPUModelFamily.qwen35Dense.samplingDefaults),
+                    sampling: SamplingProfile.house),
             ])
         let document = try #require(
             JSONSerialization.jsonObject(with: try catalog.jsonData()) as? [String: Any])
@@ -292,7 +289,7 @@ struct ModelCatalogTests {
         let dense = ModelCatalog.Entry(
             id: "dense_4-Bit", name: "Dense", kind: .gpu(.qwen35Dense), quant: 4,
             path: URL(fileURLWithPath: "/models/dense_4Bit"),
-            sampling: GenerationDefaults.house, engines: [.gpu, .cpu])
+            sampling: .house, engines: [.gpu, .cpu])
         #expect(dense.backend == .gpu)
         #expect(dense.engines == [.gpu, .cpu])
         // The alias keeps the install and switches the engine.
@@ -309,13 +306,13 @@ struct ModelCatalogTests {
         let moe = ModelCatalog.Entry(
             id: "moe_4-Bit", name: "MoE", kind: .gpu(.qwen36), quant: 4,
             path: URL(fileURLWithPath: "/models/moe_4Bit"),
-            sampling: GenerationDefaults.house)
+            sampling: .house)
         #expect(moe.engines == [.gpu])
         #expect(moe.served(by: .cpu, id: "moe_4-Bit@cpu") == nil)
         let snapshot = ModelCatalog.Entry(
             id: "snap", name: "Snap", kind: .cpu(.qwen35Dense), quant: 8,
             path: URL(fileURLWithPath: "/models/snap"),
-            sampling: CPUModelFamily.qwen35Dense.samplingDefaults)
+            sampling: SamplingProfile.house)
         // A converted snapshot is CPU-only whatever the family: the GPU path
         // reads `.ssdai` installs, so there is no GPU engine to name.
         #expect(snapshot.engines == [.cpu])

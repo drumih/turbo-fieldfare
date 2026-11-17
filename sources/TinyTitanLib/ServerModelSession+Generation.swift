@@ -6,7 +6,6 @@
 // in another file.
 import CryptoKit
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 extension ServerModelSession {
@@ -227,10 +226,10 @@ extension ServerModelSession {
                 batchedProducer ?? runner
             }
         let activeStart: RawCompletionStart =
-            activeProducer is StreamingMTPDecoder
+            activeProducer is any EngineMTPDecoder
             ? .reset : completionStart
         let activePromptIDs =
-            activeProducer is StreamingMTPDecoder
+            activeProducer is any EngineMTPDecoder
             ? promptIDs : effectivePromptIDs
         // `@Sendable`: `runRawCompletion` is @concurrent, so a progress closure
         // that is still actor-isolated cannot be sent into it (Swift 6.4).
@@ -259,7 +258,7 @@ extension ServerModelSession {
             promptIDs: activePromptIDs,
             messages: cacheRequest.messages,
             imStartID: renderTokenizer.imStartID,
-            enabled: !isRaw && activeProducer is RealForwardRunner)
+            enabled: !isRaw && activeProducer is any EngineRunner)
         // `renderTokenizer` is the one this request's reasoning resolves to, and
         // it is already what rendered the prompt and what the assistant decoder
         // was built with. `tokenizer` is the session's -- the level the model was
@@ -268,14 +267,15 @@ extension ServerModelSession {
         // stop ids and special tokens coincide across a loaded folder today,
         // which is why this looked harmless; it is not guaranteed, and the
         // generation loop is the wrong place to rely on it.
-        let result = try await runRawCompletion(
+        let result = try await runCompletion(
+            RawCompletionRequest(
             producer: activeProducer,
             tokenizer: renderTokenizer,
-            promptIds: activePromptIDs,
-            config: config,
+            promptIDs: activePromptIDs,
+            configuration: config,
             context: context,
             scratch: scratches[slot],
-            prefillConfig: prefillConfig,
+            prefillConfiguration: prefillConfig,
             start: activeStart,
             slot: slot,
             checkpointPositions: interiorCapture.positions,
@@ -315,7 +315,7 @@ extension ServerModelSession {
                     state.decodingError = error
                     state.shouldStop = true
                 }
-            })
+            }))
         emitGenerationDiagnostics(
             activeProducer: activeProducer,
             result: result,

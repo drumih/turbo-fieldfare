@@ -18,6 +18,7 @@
 import Foundation
 import Metal
 import TinyTitanLib
+import TinyTitanLegacyEngine
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("EmbeddedDemo: \(message)\n".utf8))
@@ -63,7 +64,8 @@ guard let device = MTLCreateSystemDefaultDevice() else {
 do {
     let engine = try await Engine(
         directory: URL(fileURLWithPath: modelDirectory),
-        device: device)
+        device: device,
+        factory: EngineFactories.sixXGPU())
     let descriptor = engine.descriptor
     print(
         "loaded \(descriptor.id) [\(descriptor.family)], context \(descriptor.contextWindow), "

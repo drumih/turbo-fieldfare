@@ -6,7 +6,6 @@
 // in another file.
 import CryptoKit
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 extension ServerModelSession {

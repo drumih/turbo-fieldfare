@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 package struct OpenAIChatRequest: Codable, Equatable, Sendable {
@@ -138,28 +137,40 @@ package struct OpenAIChatRequest: Codable, Equatable, Sendable {
 /// rendered prompt, so a request may only confirm the active level, never
 /// switch it.
 package struct ServerReasoningProfile: Sendable, Equatable {
-    package let family: ModelFamily
+    package let family: String
     package let thinkingMode: ModelThinkingMode
     package let reasoningEffort: ModelReasoningEffort?
+    package let reasoningControl: ReasoningControl
 
     package init(
-        family: ModelFamily,
+        family: String,
         thinkingMode: ModelThinkingMode,
-        reasoningEffort: ModelReasoningEffort?
+        reasoningEffort: ModelReasoningEffort?,
+        reasoningControl: ReasoningControl = .binaryThinking
     ) {
         self.family = family
         self.thinkingMode = thinkingMode
         self.reasoningEffort = reasoningEffort
+        self.reasoningControl = reasoningControl
     }
 
-    /// The compatible Qwen3.5-MoE baseline: binary thinking, off.
+    package init(
+        metadata: EngineModelMetadata,
+        thinkingMode: ModelThinkingMode,
+        reasoningEffort: ModelReasoningEffort?
+    ) {
+        self.init(
+            family: metadata.family, thinkingMode: thinkingMode,
+            reasoningEffort: reasoningEffort, reasoningControl: metadata.reasoningControl)
+    }
+
     package static let `default` = ServerReasoningProfile(
-        family: .qwen36, thinkingMode: .off, reasoningEffort: nil)
+        family: "", thinkingMode: .off, reasoningEffort: nil)
 
     /// The effort the template actually applies under this profile; nil for
     /// binary families and while thinking is off.
     package var effectiveEffort: ModelReasoningEffort? {
-        family.effectiveReasoningEffort(
+        reasoningControl.effectiveEffort(
             thinkingMode: thinkingMode,
             effort: reasoningEffort)
     }

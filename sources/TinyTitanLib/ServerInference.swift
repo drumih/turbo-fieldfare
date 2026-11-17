@@ -6,58 +6,16 @@
 // in another file.
 import CryptoKit
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 /// A model the server was asked to load but this build cannot run.
-enum ServerInferenceError: Error, CustomStringConvertible {
+package enum ServerInferenceError: Error, CustomStringConvertible {
     case unsupportedModel(String)
 
-    var description: String {
+    package var description: String {
         switch self {
         case .unsupportedModel(let detail): return detail
         }
-    }
-}
-
-/// Prefill chunk size when the caller has not asked for one. Both families
-/// with a long-chunk default want it for the same reason -- routed experts are
-/// what prefill spends itself on, and a longer chunk amortizes them.
-package func defaultPrefillChunkTokens(family: ModelFamily, fallback: Int) -> Int {
-    switch family {
-    case .qwen36: return RuntimeConfiguration.qwenLongPrefillChunkTokens
-    // 4,096 for Qwen3.8 too. Prefill's expert cache is inert -- a chunk routes
-    // essentially every expert in a layer against 96 slots, so the hit rate is
-    // 0.6% and each chunk re-streams what the last evicted. The cost is
-    // therefore proportional to the chunk *count*: an 8k prompt is 5 chunks at
-    // 2,048 and 3 at 4,096, measured at 167.5 -> 111.0 GiB of expert reads and
-    // 506.4 -> 450.5 s of prefill (-11%), with identical output on a
-    // multi-chunk prompt. The 2,048 here predates that measurement.
-    //
-    // It is a trade, not free. A/B/A on one machine state, 0.4% drift
-    // between the repeated arms: decode 6.97 / 7.19 / 7.00 tok/s at
-    // 4096 / 2048 / 4096, so 2,048 decodes ~3% faster -- the KV ring is
-    // sized from the chunk and this machine feels the reservation.
-    // 4,096 still wins for the long-prompt case it is chosen for: 56 s
-    // of prefill on a 10k prompt against ~2 s of a 512-token generation.
-    // A short-prompt, long-generation workload would want 2,048 back.
-    case .qwen38flash, .qwen4flash:
-        return RuntimeConfiguration.qwenLongPrefillChunkTokens
-    // The dense Qwen 3.5 family wants the long chunk as well, and for a second
-    // reason: the ANE prefill sidecar is a fixed 4,096-token program, and
-    // `eligibleChunk` routes a chunk to it only when the configured chunk is
-    // exactly that size — so a family left on the 128 default can never reach
-    // the ANE at all, which is how the dense installs saw no ANE prefill
-    // despite shipping a default-on switch. Measured on the dense 2B: chunk size
-    // does not change the GPU path's output (byte-identical greedy text at 128
-    // and at 4,096) and prefill time is flat, so this is a scheduling choice
-    // that makes the ANE reachable, not a numerics change.
-    //
-    // The CLI's own switch did this before the library took the path over; when
-    // the switch moved here the case did not come with it, and dense Qwen 3.5
-    // quietly dropped to 128. That was a regression, not a preference.
-    case .qwen35Dense: return RuntimeConfiguration.qwenLongPrefillChunkTokens
-    default: return fallback
     }
 }
 
@@ -171,7 +129,7 @@ package protocol ServerInferenceBackend: Sendable {
     /// model card differs from the house settings reports its own here, so a
     /// client that sends no temperature gets what the model was tuned for
     /// rather than what the last family to need tuning wanted.
-    var samplingDefaults: GenerationDefaults.Sampling { get }
+    var samplingDefaults: SamplingProfile { get }
     func generate(
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
@@ -180,9 +138,9 @@ package protocol ServerInferenceBackend: Sendable {
 
 extension ServerInferenceBackend {
     package var maximumContext: Int {
-        RuntimeConfiguration.nativeMaximumContextTokens
+        262_144
     }
-    package var samplingDefaults: GenerationDefaults.Sampling { GenerationDefaults.house }
+    package var samplingDefaults: SamplingProfile { .house }
 }
 
 /// A backend that owns the model's residency and can release it on demand.

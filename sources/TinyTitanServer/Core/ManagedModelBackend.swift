@@ -1,6 +1,7 @@
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanCore
 
 /// Manages when the model is resident: loads it on the first inference request
@@ -51,7 +52,7 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
     /// The row a request that omits sampling gets. The runner plans fill it
     /// from their own catalog entry elsewhere; the wrapper answers the house
     /// row unless the caller names one (the K2 probe passes its card row).
-    public nonisolated let samplingDefaults: GenerationDefaults.Sampling
+    public nonisolated let samplingDefaults: SamplingProfile
     package nonisolated let facts: ModelSessionFacts
 
     private var session: (any ServerInferenceBackend)?
@@ -71,13 +72,14 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
         facts: ModelSessionFacts,
         idleTimeout: Duration?,
         loader: @escaping Loader = { plan, context in
-            try await plan.makeSession(reusingContext: context)
+            try await plan.makeSession(
+                reusingContext: context, factory: EngineFactories.sixXGPU())
         }
     ) {
         self.facts = facts
         self.idleTimeout = idleTimeout
         self.maximumContext = plan.maxContext
-        self.samplingDefaults = GenerationDefaults.house
+        self.samplingDefaults = .house
         self.loader = { context in try await loader(plan, context) }
     }
 
@@ -85,7 +87,7 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
     package init(
         facts: ModelSessionFacts,
         maximumContext: Int,
-        samplingDefaults: GenerationDefaults.Sampling,
+        samplingDefaults: SamplingProfile,
         idleTimeout: Duration?,
         loader:
             @escaping @Sendable (MetalContext) async throws

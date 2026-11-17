@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanCore
+import TinyTitanLib
 
 /// The K2-Horizon probe as a reusable generation engine.
 ///
@@ -192,7 +193,7 @@ package actor K2ProbeRuntime {
             repetitionPenalty: configuration.repetitionPenalty,
             seed: configuration.seed)
         let generator = sampler.makeGenerator()
-        let decoder = StructuredAssistantDecoder.forGeneration(
+        let decoder = TinyTitanCore.StructuredAssistantDecoder.forGeneration(
             tokenizer: tokenizer, promptIDs: promptIDs,
             allowedTools: allowedTools)
         var detokenizer = GFDetokenizer(tokenizer: tokenizer)
@@ -290,7 +291,7 @@ package actor K2ProbeRuntime {
     private func decode(
         promptIDs: [Int32], budget: Int,
         configuration: GenerationConfig, sampler: CPUSampler,
-        generator: CPUSampler.Generator, decoder: StructuredAssistantDecoder,
+        generator: CPUSampler.Generator, decoder: TinyTitanCore.StructuredAssistantDecoder,
         detokenizer: inout GFDetokenizer, output: inout AssistantOutput,
         tokenizer: GFTokenizer, logits initialLogits: [Float]
     ) async throws -> DecodeResult {

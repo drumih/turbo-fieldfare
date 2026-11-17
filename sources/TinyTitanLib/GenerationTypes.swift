@@ -5,7 +5,6 @@
 // §4). Every type here is kit-native: the shapes are the engine's, but no
 // engine type appears in a signature. The wrapper in `Session` maps to and
 // from `OpenAIChatRequest`/`ServerInferenceEvent` internally.
-import TinyTitan
 import TinyTitanCore
 
 /// One turn of a conversation, in the shape the chat template expects.

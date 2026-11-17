@@ -17,7 +17,7 @@ import TinyTitan
     private let family = ModelFamily.qwen35Dense
 
     private func classify(_ error: ModelError) -> TinyTitanError? {
-        Engine.classify(error, directory: directory, family: family)
+        Engine.classify(error, directory: directory, family: family.rawValue)
     }
 
     @Test func aFormatThisBuildDoesNotReadIsTheCallersToFix() {

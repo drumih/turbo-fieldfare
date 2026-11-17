@@ -7,31 +7,9 @@ import TinyTitanCore
 /// prefill-capable producer may report per internal chunk. `.token` fires per
 /// decoded non-stop token; `.tail` carries the detokenizer flush remainder at a
 /// stop boundary.
-public enum RawDecodeProgress: Sendable {
-    case prefill(done: Int, total: Int)
-    case token(index: Int, id: Int32, delta: String)
-    case tail(String)
-}
-
-public enum RawCompletionStart: Sendable, Equatable {
-    case reset
-    case resume(cachedPromptTokens: Int)
-}
-
-public struct RawDecodeResult: Sendable {
-    public let prefillTokens: Int
-    public let cachedPromptTokens: Int
-    public let computedPrefillTokens: Int
-    public let prefillSeconds: Double
-    public let newTokens: Int
-    public let decodeSeconds: Double
-    public let reason: StopReason
-    public let kvPosition: Int
-    public let kvBackedTokenIDs: [Int32]
-    public let uncommittedBoundaryTokenIDs: [Int32]
-    /// Wide verify's counters when the generation ran with it, else nil.
-    public var wideVerify: WideVerifyDecodeStats?
-}
+public typealias RawDecodeProgress = TinyTitanCore.RawDecodeProgress
+public typealias RawCompletionStart = TinyTitanCore.RawCompletionStart
+public typealias RawDecodeResult = TinyTitanCore.RawDecodeResult
 
 /// Preallocated per-generation buffers (two 512 KiB vocab buffers plus a token
 /// slot) and sampler. A warm session reuses them for every token, avoiding
@@ -66,16 +44,6 @@ public struct RawCompletionScratch: @unchecked Sendable {
             context: context, vocab: vocab,
             logitSoftcap: logitSoftcap)
     }
-}
-
-extension GenerationConfig {
-    /// A pure-greedy config can use the fused head's GPU argmax
-    /// (`RealForwardRunner.lastGreedyToken`) instead of sampling from the
-    /// logits buffer. Anything else needs real logits.
-    public var isPureGreedy: Bool {
-        temperature == 0 && presencePenalty == 0 && repetitionPenalty == 1
-    }
-
 }
 
 /// Raw-completion prefill + decode loop shared by the CLI and the server.

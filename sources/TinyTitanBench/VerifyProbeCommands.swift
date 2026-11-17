@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanCore
 
 /// `TinyTitanBench verifyprobe <install> [width=8] [dumpDir] [promptFile]`: the
@@ -49,15 +50,16 @@ extension TinyTitanBench {
         setenv("TINYTITAN_ACT_DUMP", dumpDirectory, 1)
         let session = try await ServerModelSession.load(
             modelDirectory: URL(fileURLWithPath: install),
+            factory: EngineFactories.sixXGPU(),
             maxContext: 8192,
             expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: true,
             device: device,
             warmExperts: false)
-        let runner = session.benchmarkRunner
+        let runner = await session.benchmarkRunner
         // Nothing is dumped until the window is moved onto the probe.
         runner.activationDumpPositionCount = 0
-        let prompt = session.benchmarkTokenizer.encode(
+        let prompt = await session.benchmarkTokenizer.encode(
             try passCostPrompt(promptFile: promptFile), addBOS: true)
         let installURL = URL(fileURLWithPath: install)
         let vocab = try ArchConfig.resolved(

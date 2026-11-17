@@ -384,8 +384,8 @@ struct ServerPromptCacheTests {
         kvBacked: [Int32],
         boundary: Int32,
         reason: StopReason
-    ) -> RawDecodeResult {
-        RawDecodeResult(
+    ) -> TinyTitanCore.RawDecodeResult {
+        TinyTitanCore.RawDecodeResult(
             prefillTokens: prompt.count,
             cachedPromptTokens: 0,
             computedPrefillTokens: prompt.count,

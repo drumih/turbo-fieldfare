@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 // The nested input the validator has to walk: a `response_format`, a tool's

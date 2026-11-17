@@ -1,4 +1,3 @@
-import TinyTitan
 import TinyTitanCore
 
 /// Where a generation's decoded output goes, the same for every engine.

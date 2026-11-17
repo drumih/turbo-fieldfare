@@ -1,6 +1,5 @@
 import TinyTitanCore
 import Foundation
-import TinyTitan
 
 /// Cross-session reuse of the system-end checkpoint ("warm subagents").
 ///

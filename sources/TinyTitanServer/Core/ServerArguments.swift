@@ -75,14 +75,14 @@ public struct ServerArguments: Equatable, Sendable {
     /// Print the catalog of `modelsDirectory` as JSON and exit.
     public let catalogOnly: Bool
     /// The explicit `--reasoning` level; nil when the older flags were used.
-    public let reasoningLevel: ReasoningLevel?
+    public let reasoningLevel: TinyTitanCore.ReasoningLevel?
 
     /// The server-wide level, however it was spelled: `--reasoning` wins,
     /// otherwise `--thinking` and `--reasoning-effort` say the same thing.
-    public var requestedReasoningLevel: ReasoningLevel {
+    public var requestedReasoningLevel: TinyTitanCore.ReasoningLevel {
         if let reasoningLevel { return reasoningLevel }
         guard thinkingMode.isEnabled else { return .off }
-        return reasoningEffort.flatMap { ReasoningLevel(rawValue: $0.rawValue) } ?? .on
+        return reasoningEffort.flatMap { TinyTitanCore.ReasoningLevel(rawValue: $0.rawValue) } ?? .on
     }
 
     /// Unloading implies deferring the first load — loading at boot only to
@@ -144,7 +144,7 @@ public struct ServerArguments: Equatable, Sendable {
         var idleUnloadSeconds = 0
         var modelsDirectory: String?
         var catalogOnly = false
-        var reasoningLevel: ReasoningLevel?
+        var reasoningLevel: TinyTitanCore.ReasoningLevel?
         // Tracked apart from the values, which the environment can also set:
         // only flags typed next to --reasoning conflict with it.
         var thinkingWasSet = false
@@ -317,10 +317,10 @@ public struct ServerArguments: Equatable, Sendable {
                 reasoningEffort = parsed
                 effortWasSet = true
             case "--reasoning":
-                guard let parsed = ReasoningLevel(rawValue: value) else {
+                guard let parsed = TinyTitanCore.ReasoningLevel(rawValue: value) else {
                     throw ServerArgumentError.invalid(
                         "--reasoning must be one of "
-                            + ReasoningLevel.allCases.map(\.rawValue).joined(separator: ", "))
+                            + TinyTitanCore.ReasoningLevel.allCases.map(\.rawValue).joined(separator: ", "))
                 }
                 reasoningLevel = parsed
             case "--models-dir":

@@ -12,7 +12,6 @@ import TinyTitanCore
 // the `engineValue` bridging each enum carries is the only place the
 // runtime's vocabulary is allowed to show.
 import Foundation
-import TinyTitan
 
 /// How an engine loads and runs its model.
 public struct EngineConfiguration: Sendable {
@@ -226,7 +225,7 @@ public struct SamplingDefaults: Sendable, Equatable {
         self.presencePenalty = presencePenalty
     }
 
-    init(_ sampling: GenerationDefaults.Sampling) {
+    init(_ sampling: SamplingProfile) {
         self.init(
             temperature: Double(sampling.temperature),
             topK: sampling.topK,
@@ -244,15 +243,11 @@ public struct SamplingDefaults: Sendable, Equatable {
     /// what the pre-facade CLI did.
     public static func forInstall(
         at directory: URL,
-        thinkingMode: ThinkingMode = .off
+        thinkingMode: ThinkingMode = .off,
+        factory: EngineFactory
     ) -> SamplingDefaults {
-        let identity = try? ManifestReader.peekIdentity(directoryURL: directory)
-        let profile =
-            identity.map { ModelProfile.resolve(identity: $0).sampling }
-            ?? GenerationDefaults.forFamily(.qwen36)
-        return Engine.effectiveSampling(
-            profile: profile,
-            family: identity?.family,
-            thinking: thinkingMode == .on)
+        let metadata = try? factory.metadata(directory)
+        return SamplingDefaults(
+            (metadata?.sampling ?? .house).effective(thinking: thinkingMode == .on))
     }
 }

@@ -1,6 +1,5 @@
 import Foundation
 import TinyTitanCore
-import TinyTitan
 
 /// Which request limits apply.
 ///
@@ -30,12 +29,12 @@ package enum OpenAIRequestValidator {
     package static func validate(
         _ request: OpenAIChatRequest,
         modelID: String,
-        maxContext: Int = RuntimeConfiguration.nativeMaximumContextTokens,
+        maxContext: Int = 262_144,
         reasoningProfile: ServerReasoningProfile = .default,
         // Filled in for a request that omits the value.
         // Defaults to the house settings so callers that
         // do not know the family keep today's behaviour.
-        sampling: GenerationDefaults.Sampling = GenerationDefaults.house,
+        sampling: SamplingProfile = .house,
         rules: RequestRules = .wire
     ) throws -> ValidatedChatRequest {
         // The "<model>-fast" alias selects the same weights as the base model
@@ -99,7 +98,7 @@ package enum OpenAIRequestValidator {
                     + "bounds thinking by the requested level, not by a token count")
         }
         if let effortRaw = requestedEffortRaw {
-            let control = reasoningProfile.family.reasoningControl
+            let control = reasoningProfile.reasoningControl
             let supported = control.supportedLevels
             if let requested = ReasoningLevel.requested(effortRaw) {
                 // The same mapping the server-wide level goes through, so a
@@ -176,14 +175,8 @@ package enum OpenAIRequestValidator {
         // Qwen3.8 publishes a different sampling row inside and outside thinking
         // mode, so the row is chosen from the mode the request actually runs in
         // rather than from the one the model was loaded with.
-        let effectiveSampling: GenerationDefaults.Sampling
-        switch reasoningProfile.family {
-        case .qwen38flash, .qwen38flashMTP, .qwen4flash, .qwen4flashMTP:
-            effectiveSampling = GenerationDefaults.forFamily(
-                reasoningProfile.family, thinking: reasoning.thinkingMode == .on)
-        default:
-            effectiveSampling = sampling
-        }
+        let effectiveSampling = sampling.effective(
+            thinking: reasoning.thinkingMode == .on)
         let temperature = request.temperature ?? effectiveSampling.temperature
         guard temperature >= 0, temperature <= 2 else {
             throw invalid(

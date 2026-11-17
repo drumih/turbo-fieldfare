@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 /// The facts a caller needs before a model is resident.
@@ -26,52 +25,6 @@ package struct ModelSessionFacts: Sendable, Equatable {
         self.prefillChunkTokens = prefillChunkTokens
         self.promptCacheMode = promptCacheMode
         self.expertCacheSlots = expertCacheSlots
-    }
-}
-
-package enum ServerModelIdentity {
-    /// The advertised id, which always ends in the quantization.
-    ///
-    /// Two installs of the same weights at different widths are different
-    /// models to anyone choosing between them, and an id that hides which one
-    /// is loaded makes `/v1/models` useless for telling them apart. The width
-    /// comes from the manifest's routed-expert slot rather than from parsing
-    /// the id, so it is right even when the id says nothing.
-    package static func apiModelID(
-        manifestModelID: String,
-        family: ModelFamily,
-        weightBits: Int
-    ) -> String {
-        base(manifestModelID: manifestModelID, family: family)
-            + "_\(weightBits)-Bit"
-    }
-
-    /// The id with any quantization the manifest already spelled removed, so
-    /// the suffix is added exactly once. The catalog names installs by it.
-    package static func base(
-        manifestModelID: String,
-        family: ModelFamily
-    ) -> String {
-        for suffix in ["-4bit", "-8bit", "-6bit"]
-        where manifestModelID.hasSuffix(suffix) {
-            return String(manifestModelID.dropLast(suffix.count))
-        }
-        if manifestModelID != "unknown/snapshot" {
-            return manifestModelID
-        }
-        switch family {
-        case .qwen36: return "qwen3.6-35b-a3b"
-        case .qwen36MTP: return "qwen3.6-35b-a3b-mtp"
-        case .qwen38flash: return "qwen3.8-flash-next"
-        case .qwen38flashMTP: return "qwen3.8-flash-next-mtp"
-        case .qwen4flash: return "qwen4-omni-120b-think"
-        case .qwen4flashMTP: return "qwen4-omni-120b-think-mtp"
-        // Reached only for an install whose manifest carries no model id; the
-        // dense converter always writes one.
-        case .qwen35Dense: return "qwen3.5-dense"
-        case .k2Horizon: return "k2-horizon"
-        case .laguna: return "laguna-s-2-1"
-        }
     }
 }
 
@@ -148,7 +101,7 @@ package struct ModelSessionPlan: Sendable {
 
     package func makeSession(
         reusingContext: MetalContext? = nil,
-        factory: EngineFactory? = nil
+        factory: EngineFactory
     ) async throws -> ServerModelSession {
         try await ServerModelSession.load(
             modelDirectory: modelDirectory,
@@ -180,39 +133,23 @@ package struct ModelSessionPlan: Sendable {
     /// `--model` fails at launch rather than on the first request.
     /// The per-family reasoning profile the HTTP layer validates requests
     /// against. Reads `manifest.json` only.
-    package func reasoningProfile() throws -> ServerReasoningProfile {
-        let family = try ManifestReader.peekIdentity(directoryURL: modelDirectory).family
+    package func reasoningProfile(factory: EngineFactory) throws -> ServerReasoningProfile {
+        let metadata = try factory.metadata(modelDirectory)
         return ServerReasoningProfile(
-            family: family,
+            metadata: metadata,
             thinkingMode: thinkingMode,
             reasoningEffort: reasoningEffort)
     }
 
-    package func previewFacts(modelIDOverride: String? = nil) throws -> ModelSessionFacts {
-        let identity = try ManifestReader.peekIdentity(directoryURL: modelDirectory)
-        let family = identity.family
-        // Fail a lazy-load server at launch, not on the first request, when
-        // the installed family's template defines no effort levels.
-        try family.validateReasoning(
-            thinkingMode: thinkingMode,
-            effort: reasoningEffort)
-        let defaultModelID = ServerModelIdentity.apiModelID(
-            manifestModelID: identity.modelID,
-            family: family,
-            weightBits: identity.weightBits)
-        // Mirrors the precedence in ServerModelSession.load: an explicit
-        // --prefill-chunk wins, otherwise qwen36 takes the long-prefill chunk
-        // and anything else takes the runtime default. Family is the only
-        // input, and family comes from the manifest.
-        let resolvedChunk =
-            prefillChunkTokens
-            ?? ModelProfile.resolve(identity: identity).prefillChunkTokens
-            ?? (family == .qwen36
-                ? RuntimeConfiguration.qwenLongPrefillChunkTokens
-                : RuntimeConfiguration.production.prefillChunkTokens)
+    package func previewFacts(
+        modelIDOverride: String? = nil, factory: EngineFactory
+    ) throws -> ModelSessionFacts {
+        let metadata = try factory.metadata(modelDirectory)
+        try factory.validateReasoning(metadata, thinkingMode, reasoningEffort)
+        let preview = try factory.preview(modelDirectory, prefillChunkTokens)
         return ModelSessionFacts(
-            modelID: modelIDOverride ?? defaultModelID,
-            prefillChunkTokens: resolvedChunk,
+            modelID: modelIDOverride ?? preview.modelID,
+            prefillChunkTokens: preview.prefillChunkTokens,
             promptCacheMode: ServerModelSession.effectivePromptCacheMode(
                 requested: promptCacheMode,
                 mtpEnabled: mtpModelDirectory != nil,

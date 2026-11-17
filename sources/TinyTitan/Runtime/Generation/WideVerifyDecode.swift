@@ -7,77 +7,8 @@ import TinyTitanCore
 /// several rows per pass, and the loop emits exactly the tokens scalar decode
 /// would have. Off unless a caller passes options; the server reads
 /// `TINYTITAN_WIDE_VERIFY=1`.
-public struct WideVerifyDecodeOptions: Sendable, Equatable {
-    /// Rows per pass, the boundary token included (W). Clamped to the
-    /// runner's `wideVerifyMaximumRows`.
-    public var maxRows: Int
-    public var costModel: WideVerifyCostModel
-    public var minN: Int
-    public var maxN: Int
-
-    public init(
-        maxRows: Int = 9,
-        costModel: WideVerifyCostModel = .measuredDedicatedVerify,
-        minN: Int = 2,
-        maxN: Int = PromptLookupDrafter.maximumN
-    ) {
-        self.maxRows = maxRows
-        self.costModel = costModel
-        self.minN = minN
-        self.maxN = maxN
-    }
-
-    /// `TINYTITAN_WIDE_VERIFY=1` turns the mode on; `TINYTITAN_WIDE_VERIFY_ROWS`
-    /// optionally narrows W (2...9). Nil when the mode is off.
-    public static func fromEnvironment(
-        _ environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> WideVerifyDecodeOptions? {
-        guard environment["TINYTITAN_WIDE_VERIFY"] == "1" else { return nil }
-        var options = WideVerifyDecodeOptions()
-        if let raw = environment["TINYTITAN_WIDE_VERIFY_ROWS"], let rows = Int(raw),
-            rows >= 2
-        {
-            options.maxRows = rows
-        }
-        return options
-    }
-}
-
-/// What wide verify did during one generation.
-public struct WideVerifyDecodeStats: Sendable, Equatable {
-    /// The W the generation ran at (0 when the producer could not verify).
-    public var maxRows = 0
-    public var passes = 0
-    /// Steps where the controller declined (no match, or a pass would not pay).
-    public var scalarSteps = 0
-    public var draftedTokens = 0
-    public var acceptedDrafts = 0
-    /// Passes that rejected at least one draft.
-    public var rejectingPasses = 0
-    /// Tokens the passes emitted that reached the output, after stop truncation.
-    public var emittedTokens = 0
-    /// Passes whose emitted tokens a stop cut short (rolled back past rows a
-    /// pass had already fed).
-    public var passesCutAtStop = 0
-    public var passNanos: UInt64 = 0
-
-    public var acceptanceRate: Double {
-        draftedTokens > 0 ? Double(acceptedDrafts) / Double(draftedTokens) : 0
-    }
-
-    /// One log line for a real run.
-    public var summary: String {
-        String(
-            format:
-                "TinyTitan wide-verify rows=%d passes=%d drafted=%d accepted=%d "
-                + "acceptance=%.1f%% rejecting_passes=%d emitted=%d emitted_per_pass=%.3f "
-                + "scalar_steps=%d pass_ms=%.1f",
-            maxRows, passes, draftedTokens, acceptedDrafts, acceptanceRate * 100,
-            rejectingPasses, emittedTokens,
-            passes > 0 ? Double(emittedTokens) / Double(passes) : 0,
-            scalarSteps, passes > 0 ? Double(passNanos) / Double(passes) / 1_000_000 : 0)
-    }
-}
+public typealias WideVerifyDecodeOptions = TinyTitanCore.WideVerifyDecodeOptions
+public typealias WideVerifyDecodeStats = TinyTitanCore.WideVerifyDecodeStats
 
 /// The decode loop's side of wide verify: drafter, controller, the pass, and
 /// the rollback owed after it.

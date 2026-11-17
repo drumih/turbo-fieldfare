@@ -2,6 +2,7 @@ import Foundation
 import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
+import TinyTitanLegacyEngine
 
 /// Reads a `models/` tree without loading a model or touching its weights.
 ///
@@ -179,8 +180,7 @@ enum DoctorModelScanner {
             physicalMemory: physicalMemory,
             installBytes: installBytes,
             environment: environment)
-        let chunk =
-            profile.prefillChunkTokens
+        let chunk = profile.prefillChunkTokens
             ?? defaultPrefillChunkTokens(
                 family: identity.family,
                 fallback: RuntimeConfiguration.production.prefillChunkTokens)

@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 @testable import TinyTitan
+@testable import TinyTitanLegacyEngine
 @testable import TinyTitanLib
 @testable import TinyTitanCore
 
@@ -273,18 +274,29 @@ private struct Harness {
             maxContext: contextWindow,
             slots: 1,
             runtimeConfiguration: runtime)
-        let scratch = try RawCompletionScratch(
-            context: context,
-            vocab: model.config.vocabSize,
-            logitSoftcap: Float(model.config.finalLogitSoftcap))
+        // The injected factory closures are the production 6.x pair, exactly
+        // as the ExpertWarmupTests fixture supplies them; the scratch comes
+        // from the factory so it is the Core-typed buffer the session holds.
+        let factory = EngineFactories.sixXGPU()
+        let scratch = try factory.makeScratch(
+            context,
+            model.config.vocabSize,
+            Float(model.config.finalLogitSoftcap))
         return ServerModelSession(
             context: context,
             model: model,
+            metadata: EngineModelMetadata(
+                modelID: model.modelID, family: model.config.modelFamily.rawValue,
+                weightBits: model.routedExpertWeightBits, sampling: .house,
+                reasoningControl: .binaryThinking),
+            defaultModelID: model.modelID,
             tokenizer: tokenizer,
             tokenizerFolder: fixture,
             loadedReasoning: RequestReasoning(thinkingMode: .off, effort: nil),
             runner: runner,
             mtpDecoder: nil,
+            runCompletion: factory.runRawCompletion,
+            makeWarmup: factory.makeWarmup,
             scratches: [scratch],
             prefillConfig: .production(chunkTokens: 64),
             expertCacheSlots: 0,

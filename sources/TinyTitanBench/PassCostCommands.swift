@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import TinyTitan
 import TinyTitanLib
+import TinyTitanLegacyEngine
 import TinyTitanCore
 
 enum PassCostError: Error, CustomStringConvertible {
@@ -139,13 +140,14 @@ extension TinyTitanBench {
         // The decode head production picks for a pure-greedy request.
         let session = try await ServerModelSession.load(
             modelDirectory: URL(fileURLWithPath: install),
+            factory: EngineFactories.sixXGPU(),
             maxContext: 8192,
             expertCacheBudgetBytes: benchRAMBudgetBytes(),
             forceLogitsHead: false,
             device: device,
             warmExperts: false)
-        let runner = session.benchmarkRunner
-        let prompt = session.benchmarkTokenizer.encode(
+        let runner = await session.benchmarkRunner
+        let prompt = await session.benchmarkTokenizer.encode(
             try passCostPrompt(promptFile: promptFile), addBOS: true)
         let installURL = URL(fileURLWithPath: install)
         let vocab = try ArchConfig.resolved(

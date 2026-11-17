@@ -6,7 +6,6 @@
 // in another file.
 import CryptoKit
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 extension ServerModelSession {
@@ -258,51 +257,12 @@ extension ServerModelSession {
         result: RawDecodeResult,
         snapshot runnerSnapshot: RunnerCounterSnapshot
     ) {
-        if let activeMTP = activeProducer as? StreamingMTPDecoder {
-            let stats = activeMTP.statistics
-            let decodeRate =
-                result.decodeSeconds > 0
-                ? Double(result.newTokens) / result.decodeSeconds : 0
-            ServerLog.diagnostic(
-                String(
-                    format:
-                        "TinyTitan mtp drafted=%d accepted=%d acceptance=%.1f%% "
-                        + "target_passes=%d emitted_per_pass=%.3f "
-                        + "prefill_s=%.3f decode_s=%.3f decode_tok_s=%.3f "
-                        + "memory_required_mib=%.1f memory_budget_mib=%.1f",
-                    stats.draftedTokens,
-                    stats.acceptedTokens,
-                    stats.acceptanceRate * 100,
-                    stats.targetBackbonePasses,
-                    stats.emittedTokensPerTargetPass,
-                    result.prefillSeconds,
-                    result.decodeSeconds,
-                    decodeRate,
-                    Double(activeMTP.memoryPlan.requiredBytes) / 1_048_576,
-                    Double(activeMTP.memoryPlan.budgetBytes) / 1_048_576))
-            if ProcessInfo.processInfo.environment["TINYTITAN_RUNNER_STATS"] != nil,
-                stats.targetBackbonePasses > 0
+        if let activeMTP = activeProducer as? any EngineMTPDecoder {
+            for line in activeMTP.diagnosticLines(
+                result: result,
+                includePhases: ProcessInfo.processInfo.environment["TINYTITAN_RUNNER_STATS"] != nil)
             {
-                // Per-pass phase attribution for the Track B1 investigation:
-                // where a verify pass's wall time actually goes. Milliseconds
-                // averaged over the request's target passes.
-                let passes = Double(stats.targetBackbonePasses)
-                let ms: (UInt64) -> Double = { Double($0) / passes / 1_000_000 }
-                ServerLog.diagnostic(
-                    String(
-                        format:
-                            "TinyTitan mtp-phases per_pass_ms proposal=%.3f checkpoint=%.3f "
-                            + "verify=%.3f verify_backbone=%.3f verify_head=%.3f "
-                            + "verify_argmax=%.3f commit=%.3f rollback=%.3f passes=%d",
-                        ms(stats.proposalNanos),
-                        ms(stats.checkpointNanos),
-                        ms(stats.verifyNanos),
-                        ms(stats.verifyBackboneNanos),
-                        ms(stats.verifyHeadNanos),
-                        ms(stats.verifyArgmaxNanos),
-                        ms(stats.commitNanos),
-                        ms(stats.rollbackNanos),
-                        stats.targetBackbonePasses))
+                ServerLog.diagnostic(line)
             }
         } else {
             let decodeRate =

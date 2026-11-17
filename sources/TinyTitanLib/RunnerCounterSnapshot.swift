@@ -5,7 +5,6 @@
 // in this target builds the snapshot and diffs it to report this request's
 // per-stage deltas; the declaration had been split into the coordinator's file
 // only because the two shared `ServerInference.swift` before it was split.
-import TinyTitan
 import TinyTitanCore
 
 struct RunnerCounterSnapshot {

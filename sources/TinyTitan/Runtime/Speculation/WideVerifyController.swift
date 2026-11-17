@@ -2,49 +2,9 @@
 /// count, which is the shape gate 2 of docs/plan-wide-verify.md fits
 /// (`TinyTitanBench passcost`); the defaults are the plan's projection and are
 /// replaced by the measured fit before anything ships.
-public struct WideVerifyCostModel: Sendable, Equatable {
-    public var scalarMilliseconds: Double
-    public var passBaseMilliseconds: Double
-    public var passRowMilliseconds: Double
+import TinyTitanCore
 
-    /// The plan's projection, fitted to the two-row MTP pass; never measured
-    /// at W > 2.
-    public static let planProjection = WideVerifyCostModel(
-        scalarMilliseconds: 211, passBaseMilliseconds: 370, passRowMilliseconds: 55)
-
-    /// Gate 2, measured 2026-11-12 on Qwen3.8-Flash-Next 4-bit, M3 24 GB, 96
-    /// slots, 1,461-token edit prompt (`TinyTitanBench passcost`, six passes per
-    /// width): a scalar token at 293.4 ms median and the production chunked
-    /// prefill as the pass. Under it a pass pays only at per-token acceptance
-    /// of about 0.97 or more, and even certain acceptance at W=16 is 16 tokens
-    /// in ~3.76 s, 1.25x scalar -- so the controller drafts only inside a span it
-    /// has been copying perfectly, which is the gate's verdict held in the
-    /// default.
-    public static let measuredChunkedPrefill = WideVerifyCostModel(
-        scalarMilliseconds: 293.4, passBaseMilliseconds: 1352, passRowMilliseconds: 150.7)
-
-    /// The dedicated W-row verify (`verifyGreedyRows`), measured 2026-11-12
-    /// interleaved with the chunked path in one process (`passcost ... both`):
-    /// 299.2 ms scalar, W=8 at 3.53 scalar tokens. Not the default: that path
-    /// does not yet produce scalar decode's tokens (58% of rows at W=8).
-    public static let measuredDedicatedVerify = WideVerifyCostModel(
-        scalarMilliseconds: 299.2, passBaseMilliseconds: 259, passRowMilliseconds: 103.4)
-
-    public init(
-        scalarMilliseconds: Double, passBaseMilliseconds: Double, passRowMilliseconds: Double
-    ) {
-        precondition(
-            scalarMilliseconds > 0 && passBaseMilliseconds >= 0 && passRowMilliseconds >= 0,
-            "cost model needs a positive scalar token and non-negative pass terms")
-        self.scalarMilliseconds = scalarMilliseconds
-        self.passBaseMilliseconds = passBaseMilliseconds
-        self.passRowMilliseconds = passRowMilliseconds
-    }
-
-    public func passMilliseconds(rows: Int) -> Double {
-        passBaseMilliseconds + passRowMilliseconds * Double(rows)
-    }
-}
+public typealias WideVerifyCostModel = TinyTitanCore.WideVerifyCostModel
 
 /// Decides, per step, whether to verify a draft and how much of it.
 ///

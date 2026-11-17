@@ -5,6 +5,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanCore
+@testable import TinyTitanLegacyEngine
 
 /// The startup expert warm-up on the toy MoE install (4 layers, 8 experts,
 /// top-8) with a synthetic `expert-profile.bin`: the hottest experts land in
@@ -95,7 +96,7 @@ import Testing
         let (session, model6) = try await fixture.session(slots: 6)
         await session.startExpertWarmup(requestedPerLayer: 100)
         let report = try #require(await session.awaitExpertWarmup())
-        #expect(report.perLayer == 6)
+        #expect((report as? ExpertWarmupReport)?.perLayer == 6)
         for layer in 0..<fixture.layers {
             let streamer = try model6.openStreamer(for: layer)
             #expect(
@@ -141,7 +142,7 @@ import Testing
 
         await warm.startExpertWarmup(requestedPerLayer: 3)
         let report = try #require(await warm.awaitExpertWarmup())
-        #expect(report.layersWarmed == fixture.layers)
+        #expect((report as? ExpertWarmupReport)?.layersWarmed == fixture.layers)
         let warmCompletion = try await warm.generate(fixture.request()) { _ in }
         let warmStatistics = warmModel.routedExpertStatistics()
 
@@ -239,15 +240,23 @@ private struct Fixture {
             runtimeConfiguration: try RuntimeConfiguration(
                 forceLogitsHead: true, kvCachePrecision: .int8))
         let tokenizer = try await GFTokenizer.load(from: tokenizerFolder)
-        let scratch = try RawCompletionScratch(
-            context: context, vocab: model.config.vocabSize,
-            logitSoftcap: Float(model.config.finalLogitSoftcap))
+        let factory = EngineFactories.sixXGPU()
+        let scratch = try factory.makeScratch(
+            context, model.config.vocabSize, Float(model.config.finalLogitSoftcap))
         let session = ServerModelSession(
             context: context, model: model,
+            metadata: EngineModelMetadata(
+                modelID: model.modelID, family: model.config.modelFamily.rawValue,
+                weightBits: model.routedExpertWeightBits, sampling: .house,
+                reasoningControl: .binaryThinking),
+            defaultModelID: model.modelID,
             tokenizer: tokenizer,
             tokenizerFolder: tokenizerFolder,
             loadedReasoning: RequestReasoning(thinkingMode: .off, effort: nil),
-            runner: runner, mtpDecoder: nil, scratches: [scratch],
+            runner: runner, mtpDecoder: nil,
+            runCompletion: factory.runRawCompletion,
+            makeWarmup: factory.makeWarmup,
+            scratches: [scratch],
             prefillConfig: .production(chunkTokens: 64),
             expertCacheSlots: slots, slots: 1, maxContext: 256,
             promptCacheMode: .off,
@@ -257,7 +266,7 @@ private struct Fixture {
                 kvStorage: "int8", fp16RingEnabled: false, templateSHA256: "template"),
             promptCache: ServerPromptCache(maximumEntries: 1),
             promptStateStore: nil, promptCheckpointStore: nil, concisePrompt: nil)
-        return (session, session.benchmarkRunner.model)
+        return (session, await session.benchmarkRunner.model)
     }
 
     func request(maxNewTokens: Int = 8) -> ValidatedChatRequest {

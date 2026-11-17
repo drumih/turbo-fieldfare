@@ -3,6 +3,7 @@ import Metal
 import Testing
 
 import TinyTitanLib
+import TinyTitanLegacyEngine
 @testable import TinyTitanCore
 
 /// The concurrency and lifetime contract of §5 of
@@ -30,6 +31,7 @@ struct LibraryContractTests {
         return try await Engine(
             directory: model,
             device: device,
+            factory: EngineFactories.sixXGPU(),
             configuration: EngineConfiguration(contextWindow: Self.window))
     }
 

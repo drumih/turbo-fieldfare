@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 /// The OpenAI-compatible wire types: the error envelope, message content and

@@ -6,7 +6,6 @@
 // in another file.
 import CryptoKit
 import Foundation
-import TinyTitan
 import TinyTitanCore
 
 /// Per-generation decode state that `runRawCompletion`'s progress closure
@@ -47,15 +46,16 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// The session's configured context window; the HTTP layer validates
     /// max_tokens against it (S11).
     package nonisolated var maximumContext: Int { maxContext }
-    package nonisolated var samplingDefaults: GenerationDefaults.Sampling {
+    package nonisolated var samplingDefaults: SamplingProfile {
         profileSampling
     }
-    nonisolated let profileSampling: GenerationDefaults.Sampling
-    nonisolated let modelFamily: ModelFamily
+    nonisolated let profileSampling: SamplingProfile
+    nonisolated let modelFamily: String
+    nonisolated let reasoningControl: ReasoningControl
 
     let context: MetalContext
     let model: any EngineModel
-    let tokenizer: GFTokenizer
+    package let tokenizer: GFTokenizer
     /// The tokenizer's vocabulary as byte strings, built the first time a
     /// request asks for structured output and kept for the life of the model.
     /// The bytes of a token id do not change with the reasoning level a request
@@ -69,11 +69,12 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// the model was loaded with. `nil` reasoning means the session's own.
     let tokenizerFolder: URL
     nonisolated let loadedReasoning: RequestReasoning
-    let runner: any EngineRunner
+    package let runner: any EngineRunner
     /// Non-nil when the session runs more than one slot: decode steps park
     /// here so concurrent slots reach one `produceBatch` together.
     let batchedProducer: (any LogitProducer)?
-    let mtpDecoder: StreamingMTPDecoder?
+    let mtpDecoder: (any EngineMTPDecoder)?
+    let runCompletion: @Sendable (RawCompletionRequest) async throws -> RawDecodeResult
     /// Opt-in wide verify (`TINYTITAN_WIDE_VERIFY=1`), read once at load. It
     /// applies to single-slot runner generations only; `runRawCompletion`
     /// leaves MTP, batched slots and constrained requests on scalar decode.
@@ -110,7 +111,8 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     /// The startup expert warm-up while it may still be running; see
     /// `ServerModelSession+ExpertWarmup.swift`. A request stops it before it
     /// touches the runner, so the two never plan the slot cache at once.
-    var expertWarmupTask: Task<ExpertWarmupReport?, Never>?
+    var expertWarmupTask: Task<(any Sendable)?, Never>?
+    let makeWarmup: @Sendable (any EngineModel, Int?) -> EngineExpertWarmup?
 
     deinit {
         // A session dropped mid-warm (a catalog switch, `Engine.unload`) must
@@ -169,11 +171,15 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
     init(
         context: MetalContext,
         model: any EngineModel,
+        metadata: EngineModelMetadata,
+        defaultModelID: String,
         tokenizer: GFTokenizer,
         tokenizerFolder: URL,
         loadedReasoning: RequestReasoning,
         runner: any EngineRunner,
-        mtpDecoder: StreamingMTPDecoder?,
+        mtpDecoder: (any EngineMTPDecoder)?,
+        runCompletion: @escaping @Sendable (RawCompletionRequest) async throws -> RawDecodeResult,
+        makeWarmup: @escaping @Sendable (any EngineModel, Int?) -> EngineExpertWarmup?,
         scratches: [RawCompletionScratch],
         prefillConfig: PrefillRuntimeConfig,
         expertCacheSlots: Int,
@@ -191,20 +197,16 @@ package actor ServerModelSession: ServerInferenceBackend, PromptTokenCounting, P
         self.tokenizer = tokenizer
         self.tokenizerFolder = tokenizerFolder
         self.loadedReasoning = loadedReasoning
-        self.modelFamily = model.config.modelFamily
-        self.profileSampling =
-            ModelProfile.resolve(
-                modelID: model.modelID, family: model.config.modelFamily,
-                weightBits: model.routedExpertWeightBits
-            ).sampling
-        self.defaultModelID = ServerModelIdentity.apiModelID(
-            manifestModelID: model.modelID,
-            family: model.config.modelFamily,
-            weightBits: model.routedExpertWeightBits)
+        self.modelFamily = metadata.family
+        self.reasoningControl = metadata.reasoningControl
+        self.profileSampling = metadata.sampling
+        self.defaultModelID = defaultModelID
         self.runner = runner
         self.batchedProducer =
             slots > 1 ? BatchedLogitProducer(runner: runner, width: slots) : nil
         self.mtpDecoder = mtpDecoder
+        self.runCompletion = runCompletion
+        self.makeWarmup = makeWarmup
         self.scratches = scratches
         self.slots = max(1, slots)
         self.freeSlots = Array(0..<max(1, slots))

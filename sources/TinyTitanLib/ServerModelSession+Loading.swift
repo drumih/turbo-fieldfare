@@ -7,7 +7,6 @@
 import CryptoKit
 import Foundation
 import Metal
-import TinyTitan
 import TinyTitanCore
 
 extension ServerModelSession {
@@ -52,7 +51,7 @@ extension ServerModelSession {
     /// tuple straight back into the next -- the same shape as Model.load.
     package static func load(
         modelDirectory: URL,
-        factory: EngineFactory? = nil,
+        factory: EngineFactory,
         maxContext: Int,
         slots: Int = 1,
         promptCacheMode: ServerPromptCacheMode = .multiPrefix,
@@ -72,7 +71,7 @@ extension ServerModelSession {
         rdadvisePolicy requestedRDAdvisePolicy: RDAdvicePolicyMode? = nil,
         forceLogitsHead: Bool = true,
         mtpModelDirectory: URL? = nil,
-        mtpMemoryMiB: Int = StreamingMTPMemoryPlan.defaultBudgetMiB,
+        mtpMemoryMiB: Int = 384,
         device: MTLDevice? = nil,
         reusingContext: MetalContext? = nil,
         warmExperts: Bool = true
@@ -89,12 +88,9 @@ extension ServerModelSession {
         // Reasoning effort is defined per family; reject it before the
         // tokenizer bakes an unsupported control into its rendering. An
         // unreadable manifest is left for Model.load, which reports it better.
-        if reasoningEffort != nil,
-            let family = try? ManifestReader.peekFamily(directoryURL: modelDirectory)
-        {
-            try family.validateReasoning(
-                thinkingMode: thinkingMode,
-                effort: reasoningEffort)
+        if reasoningEffort != nil {
+            let metadata = try factory.metadata(modelDirectory)
+            try factory.validateReasoning(metadata, thinkingMode, reasoningEffort)
         }
         let tokenizer = try await GFTokenizer.load(
             from: tokenizerFolder,
@@ -110,157 +106,36 @@ extension ServerModelSession {
         let context: MetalContext
         if let reusingContext {
             context = reusingContext
-        } else if let device {
-            context = try MetalContext.runtimeDefault(device: device)
         } else {
-            context = try MetalContext.runtimeDefault()
+            context = try factory.makeContext(device)
         }
-        let loadRuntime = try RuntimeConfiguration(
-            forceLogitsHead: true,
-            decodeExpertExecution: try RuntimeDecodeExpertExecution.environmentValue(),
-            expertIOSynchronization: try RuntimeExpertIOSynchronization.environmentValue(),
-            expertIOSubmission: try RuntimeExpertIOSubmission.environmentValue(),
-            expertIOTimeline: try RuntimeExpertIOTimeline.environmentValue())
-        let slotOverride = ProcessInfo.processInfo.environment["TINYTITAN_EXPERT_CACHE_SLOTS"]
-            .flatMap(Int.init)
-        // Precedence: --expert-cache-slots flag, then the env override, then a
-        // count derived from the model's own expert stride against a 1 GiB budget.
-        //
-        // Derived rather than fixed because the right count depends on the
-        // quantisation: 1 GiB is 16 slots at 4-bit and 8 at 8-bit, which are the
-        // measured optima for each. The previous fixed default of 64 was slower
-        // *and* larger than either -- benchmarked at the shipped 262144 context,
-        // 4-bit managed 9.85 tok/s at 64 slots against 13.61 at 16.
-        // The architecture comes from the manifest rather than being assumed,
-        // exactly as the CLI resolves it: a payload of any other family should
-        // load, not fail on a dimension mismatch.
-        let modelFamily = try ManifestReader.peekFamily(directoryURL: modelDirectory)
-        let expectedArch: ArchConfig
-        do {
-            // The family's preset, or -- for a family with more than one
-            // geometry, like the dense Qwen 3.5 models -- the manifest's own
-            // declaration. `ServerInferenceError` keeps the shape callers
-            // expect; the reason travels in the message.
-            expectedArch = try ArchConfig.resolved(
-                forFamily: modelFamily,
-                directoryURL: modelDirectory)
-        } catch {
-            throw ServerInferenceError.unsupportedModel("\(error)")
-        }
-        let derivedSlots: Int
-        // An explicit --ram-budget names what the whole server may hold; this
-        // only supplies the cache default: clamped so a family tuned on a
-        // 24 GiB machine cannot hand a smaller one a budget it has no room
-        // for, and grown on a larger one, which has working set the tune left
-        // unused.
-        let tunedBudget: Int
-        if let identity = try? ManifestReader.peekIdentity(directoryURL: modelDirectory) {
-            tunedBudget = RuntimeConfiguration.affordableExpertCacheBudget(
-                ModelProfile.resolve(identity: identity).expertCacheBudgetBytes)
-        } else {
-            tunedBudget = RuntimeConfiguration.defaultExpertCacheBudgetBytes
-        }
-        let loadedManifest = try? ManifestReader.load(
-            directoryURL: modelDirectory,
-            expecting: expectedArch)
-        // Bytes one expert occupies in the cache, across every layer.
-        let cachePerSlotBytes =
-            loadedManifest.map {
-                Double($0.expertStride) * Double($0.arch.numLayers)
-            } ?? 0
-        let residentFloor = RuntimeConfiguration.residentFloorBytes(
-            residentWeightBytes: loadedManifest?.files["model_weights.bin"]
-                .map { Int($0.size) } ?? 0)
-        // One definition of the precedence, shared by the lines below and by the
-        // load. The diagnostics have to print the count that is actually
-        // allocated: before this, an operator's `--expert-cache-slots` changed
-        // the rung and the log still named the derived one.
-        let appliedSlots = { (derived: Int) in
-            requestedExpertCacheSlots ?? slotOverride ?? derived
-        }
-        if let explicitTarget = expertCacheBudgetBytes {
-            // The flag is a target for the whole process, not just the cache:
-            // the weights and the runtime are resident either way, so the cache
-            // is what is left, and the slot count steps down to stay inside the
-            // number the user named.
-            derivedSlots = RuntimeConfiguration.expertCacheSlotsFitting(
-                expertStrideBytes: loadedManifest?.expertStride ?? 0,
-                layers: loadedManifest?.arch.numLayers ?? 0,
-                cacheBytes: explicitTarget - residentFloor)
-            for line in ExpertCacheDiagnostics.targetLines(
-                targetBytes: explicitTarget,
-                appliedSlots: appliedSlots(derivedSlots),
-                derivedSlots: derivedSlots,
-                cacheBytesPerSlot: cachePerSlotBytes,
-                residentFloorBytes: residentFloor
-            ) {
-                ServerLog.diagnostic(line)
-            }
-        } else if let manifest = loadedManifest {
-            derivedSlots = RuntimeConfiguration.expertCacheSlots(
-                expertStrideBytes: manifest.expertStride,
-                layers: manifest.arch.numLayers,
-                budgetBytes: tunedBudget)
-            ServerLog.diagnostic(
-                ExpertCacheDiagnostics.profileLine(
-                    appliedSlots: appliedSlots(derivedSlots),
-                    derivedSlots: derivedSlots,
-                    cacheBytesPerSlot: cachePerSlotBytes,
-                    residentFloorBytes: residentFloor))
-        } else {
-            // Unreadable manifest means the load below will fail with a better
-            // message than anything this could throw, so pick the safe small end.
-            derivedSlots = RuntimeConfiguration.minimumExpertCacheSlots
-        }
-        let loadSlots = appliedSlots(derivedSlots)
-        // `nil` keeps the long-standing rule: an installer receipt means the
-        // payload's digests were pinned at install time, so the check is against
-        // the manifest and the path; without one, hash the payload. An explicit
-        // policy is the caller's and applies to the draft head too — it is a
-        // file the engine computes on, not a document.
-        let integrityPolicy =
-            requestedIntegrityPolicy ?? .resolved(directoryURL: modelDirectory)
-        let defaultFactory: DefaultEngineFactory?
-        let engineFactory: EngineFactory
-        if let factory {
-            defaultFactory = nil
-            engineFactory = factory
-        } else {
-            let factory = DefaultEngineFactory(
-                loadRuntime: loadRuntime,
-                integrityPolicy: integrityPolicy,
-                requestedIntegrityPolicy: requestedIntegrityPolicy,
-                loadSlots: loadSlots)
-            defaultFactory = factory
-            engineFactory = factory.factory
-        }
-        let model = try engineFactory.buildModel(modelDirectory, expectedArch, context)
-        let runtime = try RuntimeConfiguration(
-            expertCacheSlots: loadSlots,
-            expertCachePolicy: loadRuntime.expertCachePolicy,
-            rdadvisePolicy: requestedRDAdvisePolicy
-                ?? ProcessInfo.processInfo.environment["TINYTITAN_RDADVISE_POLICY"]
-                .map(RDAdvicePolicyMode.parse)
-                ?? loadRuntime.rdadvisePolicy,
-            prefillChunkTokens: requestedPrefillChunkTokens
-                ?? ModelProfile.resolve(
-                    modelID: model.modelID, family: model.config.modelFamily,
-                    weightBits: model.routedExpertWeightBits
-                ).prefillChunkTokens
-                ?? defaultPrefillChunkTokens(
-                    family: model.config.modelFamily,
-                    fallback: loadRuntime.prefillChunkTokens),
-            prefillAttentionPath: loadRuntime.prefillAttentionPath,
-            forceLogitsHead: forceLogitsHead,
-            decodeExpertExecution: loadRuntime.decodeExpertExecution,
-            expertIOSynchronization: loadRuntime.expertIOSynchronization,
-            expertIOSubmission: loadRuntime.expertIOSubmission,
-            expertIOTimeline: loadRuntime.expertIOTimeline,
+        let baseOptions = SessionBuildOptions(
+            modelDirectory: modelDirectory,
+            context: context,
+            maxContext: maxContext,
+            slots: slots,
+            promptCacheMaximumEntries: promptCacheMaximumEntries,
+            promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
+            promptCacheDiskDirectory: promptCacheDiskDirectory,
+            promptCacheDiskLimitBytes: promptCacheDiskLimitBytes,
+            prefillChunkTokens: requestedPrefillChunkTokens,
             kvCachePrecision: kvCachePrecision,
             hostKVWindowTokens: hostKVWindowTokens,
             ropeScalingMode: ropeScalingMode,
-            yarnContextTokens: ropeScalingMode == .yarn
-                ? maxContext : RuntimeConfiguration.defaultYaRNContextTokens)
+            thinkingMode: thinkingMode,
+            reasoningEffort: reasoningEffort,
+            expertCacheSlots: requestedExpertCacheSlots,
+            expertCacheBudgetBytes: expertCacheBudgetBytes,
+            mtpModelDirectory: mtpModelDirectory,
+            mtpMemoryMiB: mtpMemoryMiB,
+            integrityPolicy: requestedIntegrityPolicy,
+            rdAdvicePolicy: requestedRDAdvisePolicy,
+            forceLogitsHead: forceLogitsHead)
+        let loadPlan = try factory.prepareLoad(baseOptions)
+        let expectedArch = loadPlan.architecture
+        let loadSlots = loadPlan.expertCacheSlots
+        let tunedBudget = loadPlan.tunedExpertCacheBudgetBytes
+        let model = try factory.buildModel(modelDirectory, expectedArch, context)
         // MTP owns the target's runner and is single-sequence, so it cannot
         // batch. Otherwise the requested width is capped by what the worst-case
         // per-slot stores can hold beside the wired expert cache: the whole
@@ -279,15 +154,7 @@ extension ServerModelSession {
                         + "QSA/PLE model (per-sequence indexer/ngram state is "
                         + "not slot-keyed); serving 1 at once\n").utf8))
         }
-        let perSlotBytes = BatchedMemoryBudget.perSlotBytes(
-            config: model.config,
-            maxContext: maxContext,
-            precision: runtime.kvCachePrecision,
-            fp16RingEnabled: runtime.fp16RingEnabled,
-            slidingWindow: model.config.slidingWindow,
-            maxPrefillChunkTokens: runtime.prefillChunkTokens,
-            vocab: model.config.vocabSize,
-            hostKVWindowTokens: runtime.hostKVWindowTokens)
+        let perSlotBytes = factory.perSlotBytes(model, baseOptions, loadPlan)
         let slotBudget = BatchedMemoryBudget.slotBudgetBytes(
             physicalMemory: ProcessInfo.processInfo.physicalMemory,
             // A dense family has no routed experts, so it has no expert cache to
@@ -307,10 +174,8 @@ extension ServerModelSession {
                         + "\(slotBudget / 1_048_576) MiB); serving \(effectiveSlots) at once\n")
                         .utf8))
         }
-        defaultFactory?.setRuntime(runtime)
-        let runner = try engineFactory.buildRunner(
-            model,
-            SessionBuildOptions(
+        let options = SessionBuildOptions(
+                modelDirectory: modelDirectory,
                 context: context,
                 maxContext: maxContext,
                 slots: effectiveSlots,
@@ -327,16 +192,21 @@ extension ServerModelSession {
                 expertCacheSlots: requestedExpertCacheSlots,
                 expertCacheBudgetBytes: expertCacheBudgetBytes,
                 mtpModelDirectory: mtpModelDirectory,
-                mtpMemoryMiB: mtpMemoryMiB))
-        let mtpDecoder = defaultFactory?.mtpDecoder
+                mtpMemoryMiB: mtpMemoryMiB,
+                integrityPolicy: requestedIntegrityPolicy,
+                rdAdvicePolicy: requestedRDAdvisePolicy,
+                forceLogitsHead: forceLogitsHead,
+                engineConfiguration: loadPlan.engineConfiguration)
+        factory.prepare(options)
+        let runner = try factory.buildRunner(model, options)
+        let mtpDecoder = factory.mtpDecoder()
         // K0: one line per model load naming the prefill tensor-ops path and
         // why it was chosen. Written before the first request so the reason is
         // in the startup log even if no generation runs.
         ServerLog.diagnostic(runner.prefillTensorOpsLogLine)
         let scratches = try (0..<effectiveSlots).map { _ in
-            try RawCompletionScratch(
-                context: context, vocab: model.config.vocabSize,
-                logitSoftcap: Float(model.config.finalLogitSoftcap))
+            try factory.makeScratch(
+                context, model.config.vocabSize, Float(model.config.finalLogitSoftcap))
         }
         // Bounded like every other document copied into a model directory: the
         // installed template measures 8,952 bytes, and the digest below is taken
@@ -344,22 +214,11 @@ extension ServerModelSession {
         let templateDigest = SHA256.hash(
             data: try BoundedMetadataRead.read(
                 fileAt: templateURL,
-                maxBytes: ManifestReader.defaultMaxBytes)
+                maxBytes: 64 * 1024 * 1024)
         )
         .map { String(format: "%02x", $0) }
         .joined()
-        let runtimeIdentity = [
-            String(runtime.expertCacheSlots),
-            runtime.expertCachePolicy.rawValue,
-            runtime.rdadvisePolicy.rawValue,
-            runtime.prefillPolicy.rawValue,
-            String(runtime.prefillChunkTokens),
-            runtime.headPath.rawValue,
-            String(runtime.kvCachePrecision.rawValue),
-            runtime.ropeScalingMode.rawValue,
-            String(runtime.yarnContextTokens),
-        ].joined(separator: ":")
-        let runtimeDigest = SHA256.hash(data: Data(runtimeIdentity.utf8))
+        let runtimeDigest = SHA256.hash(data: Data(loadPlan.runtimeIdentity.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
         let promptCacheDomain = ServerPromptCacheDomain(
@@ -367,8 +226,8 @@ extension ServerModelSession {
             sourceSnapshotHash: model.sourceSnapshotHash,
             runtimeProfileHash: runtimeDigest,
             maximumContext: maxContext,
-            kvStorage: runtime.kvCachePrecision.label,
-            fp16RingEnabled: runtime.fp16RingEnabled,
+            kvStorage: kvCachePrecision.label,
+            fp16RingEnabled: loadPlan.fp16RingEnabled,
             templateSHA256: templateDigest)
         let effectivePromptCacheMode = Self.effectivePromptCacheMode(
             requested: promptCacheMode,
@@ -437,6 +296,8 @@ extension ServerModelSession {
         let session = ServerModelSession(
             context: context,
             model: model,
+            metadata: try factory.metadata(modelDirectory),
+            defaultModelID: try factory.preview(modelDirectory, requestedPrefillChunkTokens).modelID,
             tokenizer: tokenizer,
             tokenizerFolder: tokenizerFolder,
             loadedReasoning: RequestReasoning(
@@ -444,8 +305,10 @@ extension ServerModelSession {
                 effort: reasoningEffort),
             runner: runner,
             mtpDecoder: mtpDecoder,
+            runCompletion: factory.runRawCompletion,
+            makeWarmup: factory.makeWarmup,
             scratches: scratches,
-            prefillConfig: runtime.prefillConfig,
+            prefillConfig: loadPlan.prefillConfiguration,
             expertCacheSlots: loadSlots,
             slots: effectiveSlots,
             maxContext: maxContext,

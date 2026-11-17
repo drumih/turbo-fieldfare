@@ -1,7 +1,6 @@
 import CryptoKit
 import Darwin
 import Foundation
-import TinyTitanCore
 
 public enum Sha256Verifier {
 
