@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// Diagnostics: TINYTITAN_KERNEL_STATS timing, route/prefetch traces, and the RDAdvise policy. Never on the production hot path unless the corresponding env switch is set.
 ///

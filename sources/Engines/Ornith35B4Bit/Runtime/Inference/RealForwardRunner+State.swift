@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Reset, continuation and inference-state snapshot/restore for the runner.
 // Split out of RealForwardRunner.swift (2026-09-28) under the 500-line-per-file

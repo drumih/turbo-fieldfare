@@ -27,7 +27,7 @@ public struct InferenceStateSnapshotDescriptor: Codable, Equatable, Sendable {
 }
 
 /// In-memory inference-state checkpoint. The payload is a concatenation of the
-/// K/V segments followed by Qwen gated-DeltaNet recurrent-state segments.
+/// K/V segments followed by gated-DeltaNet recurrent-state segments.
 public struct InferenceStateSnapshot: Equatable, Sendable {
     public let descriptor: InferenceStateSnapshotDescriptor
     public let payload: Data

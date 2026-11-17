@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // The native-MTP value types: the memory plan, the error type, the checkpoint
 // and verification shapes, the statistics and the verify-schedule enum.

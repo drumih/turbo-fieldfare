@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Synchronization
 import TinyTitan
+import TinyTitanCore
 
 // Disk payload IO for the turn-end prompt-state store.
 //

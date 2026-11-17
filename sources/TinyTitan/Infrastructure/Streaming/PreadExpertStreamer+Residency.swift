@@ -397,11 +397,6 @@ extension PreadExpertStreamer {
         return 16
     }
 
-    static func latencyBucketUpperBound(index: Int) -> UInt64 {
-        guard index < 16 else { return UInt64.max }
-        return 125_000 << UInt64(index)
-    }
-
     func expertAdviceRanges(
         experts: [Int],
         layer: Int

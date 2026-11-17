@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 /// MTLBuffer is not Sendable; the gate only carries the handle to its owner,
 /// which is the runner the gate was created for.
@@ -79,7 +80,7 @@ public final class BatchedLogitProducer: LogitProducer, ContinuableLogitProducer
             into: logits, onProgress: onProgress)
     }
 
-    func prefillChunked(
+    public func prefillChunked(
         tokens: ArraySlice<Int32>,
         startPosition: Int,
         slot: Int,

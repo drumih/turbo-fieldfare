@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import TinyTitan
+import TinyTitanCore
 
 /// What boundary an interior checkpoint sits on.
 enum PromptCheckpointKind: String, Codable, Sendable, Equatable, CaseIterable {

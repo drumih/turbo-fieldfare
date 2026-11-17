@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 
 public struct RuntimeConfiguration: Sendable, Equatable {
     public static let supportedContextTokens = [
@@ -372,9 +373,11 @@ public struct RuntimeConfiguration: Sendable, Equatable {
         return fitting.max() ?? Self.minimumExpertCacheSlots
     }
 
-    public static let allowedPrefillChunkTokens = [
-        32, 64, 128, 256, 512, 1_024, 2_048, 4_096,
-    ]
+    /// The canonical list lives on `PrefillRuntimeConfig` in TinyTitanCore;
+    /// this row is the runtime-facing name for it, so the CLI validation and
+    /// the production factory cannot drift apart.
+    public static let allowedPrefillChunkTokens =
+        PrefillRuntimeConfig.allowedProductionChunkTokens
     public static let qwenLongPrefillChunkTokens = 4_096
 
     public let expertCacheSlots: Int

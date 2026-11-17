@@ -6,6 +6,7 @@
 // per-stage deltas; the declaration had been split into the coordinator's file
 // only because the two shared `ServerInference.swift` before it was split.
 import TinyTitan
+import TinyTitanCore
 
 struct RunnerCounterSnapshot {
     let cb1: UInt64

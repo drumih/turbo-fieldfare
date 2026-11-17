@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import TinyTitanCore
 
 // Auxiliary-state snapshot/restore for the QSA indexer.
 //

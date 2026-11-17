@@ -32,7 +32,7 @@ extension RealForwardRunner {
     /// under the same policy, so each records a line too. They are emitted as
     /// one diagnostic (the caller logs the string once) and the subject keeps
     /// them distinguishable.
-    package var prefillTensorOpsLogLine: String {
+    public var prefillTensorOpsLogLine: String {
         var lines = [
             prefillAttention.tensorOpsDecision.logLine(subject: "prefill attention")
         ]

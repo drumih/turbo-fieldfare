@@ -1,5 +1,10 @@
 import Foundation
 
+/// The chunked-prefill value vocabulary, promoted from the 6.x runtime
+/// (whose shipped variant carried a byte-identical copy). The internal
+/// planning helpers became `package` so the engine modules keep using them;
+/// nothing else about the types changed.
+
 public enum PrefillError: Error, CustomStringConvertible, Equatable {
     public static let chunkedRequiresChunkedRunnerReason =
         "chunked prefill requires a ChunkedPrefillRunner-backed runtime"
@@ -20,7 +25,7 @@ public enum PrefillError: Error, CustomStringConvertible, Equatable {
     }
 }
 
-struct PrefillChunkCommitState: Sendable, Equatable {
+package struct PrefillChunkCommitState: Sendable, Equatable {
     private(set) var isDirty = false
     private(set) var inFlightStartPosition: Int?
     private(set) var inFlightTokenCount: Int?
@@ -32,9 +37,9 @@ struct PrefillChunkCommitState: Sendable, Equatable {
         return start + count
     }
 
-    init() {}
+    package init() {}
 
-    mutating func markDirty(startPosition: Int, tokenCount: Int) {
+    package mutating func markDirty(startPosition: Int, tokenCount: Int) {
         precondition(startPosition >= 0, "prefill dirty startPosition must be non-negative")
         precondition(tokenCount > 0, "prefill dirty tokenCount must be positive")
         isDirty = true
@@ -42,17 +47,17 @@ struct PrefillChunkCommitState: Sendable, Equatable {
         inFlightTokenCount = tokenCount
     }
 
-    mutating func markCommitted() {
+    package mutating func markCommitted() {
         isDirty = false
         inFlightStartPosition = nil
         inFlightTokenCount = nil
     }
 
-    mutating func reset() {
+    package mutating func reset() {
         markCommitted()
     }
 
-    func requireClean(operation: String) throws {
+    package func requireClean(operation: String) throws {
         guard !isDirty else {
             let range: String
             if let start = inFlightStartPosition, let end = inFlightEndPosition {
@@ -67,15 +72,15 @@ struct PrefillChunkCommitState: Sendable, Equatable {
     }
 }
 
-struct PrefillChunkSpan: Sendable, Equatable {
-    let tokenOffset: Int
-    let tokenCount: Int
-    let startPosition: Int
-    let completedCount: Int
+package struct PrefillChunkSpan: Sendable, Equatable {
+    package let tokenOffset: Int
+    package let tokenCount: Int
+    package let startPosition: Int
+    package let completedCount: Int
 }
 
-enum PrefillChunkPlanner {
-    static func spans(
+package enum PrefillChunkPlanner {
+    package static func spans(
         tokenCount: Int,
         startPosition: Int,
         config: PrefillRuntimeConfig
@@ -86,7 +91,7 @@ enum PrefillChunkPlanner {
             chunkTokens: config.chunkTokens)
     }
 
-    static func spans(
+    package static func spans(
         tokenCount: Int,
         startPosition: Int,
         chunkTokens: Int
@@ -126,6 +131,13 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     /// callers that retain a smaller setting.
     public static let maxChunkTokens = 4_096
 
+    /// The chunk sizes a production configuration may take. The canonical
+    /// copy lives here so the runtime's `RuntimeConfiguration` row and every
+    /// variant validate against one list instead of three that can drift.
+    public static let allowedProductionChunkTokens: [Int] = [
+        32, 64, 128, 256, 512, 1_024, 2_048, 4_096,
+    ]
+
     public let mode: Mode
     public let chunkTokens: Int
 
@@ -147,14 +159,14 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     /// A chunk size chosen by the KV tier rather than the CLI's allowed list.
     /// Host-KV streaming caps the chunk at `windowTokens / selectionWidth`, a
     /// value the user never types and the production factory would reject.
-    static func hostKVChunked(chunkTokens: Int) -> PrefillRuntimeConfig {
+    package static func hostKVChunked(chunkTokens: Int) -> PrefillRuntimeConfig {
         precondition(chunkTokens > 0 && chunkTokens <= maxChunkTokens)
         return PrefillRuntimeConfig(mode: .chunked, chunkTokens: chunkTokens)
     }
 
     public static func production(chunkTokens: Int) -> PrefillRuntimeConfig {
         precondition(
-            RuntimeConfiguration.allowedPrefillChunkTokens.contains(chunkTokens),
+            allowedProductionChunkTokens.contains(chunkTokens),
             "unsupported prefill chunk size")
         return PrefillRuntimeConfig(mode: .chunked, chunkTokens: chunkTokens)
     }

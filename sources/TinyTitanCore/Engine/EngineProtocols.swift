@@ -1,5 +1,16 @@
 import Metal
 
+/// The engine-facing half of the TT-097 contract: the producer protocols the
+/// shared session speaks, promoted from the 6.x runtime — whose shipped
+/// variant carried a byte-identical copy — so one nominal protocol family is
+/// what every engine conforms to.
+///
+/// Model-free by construction: the only non-Foundation type in the family is
+/// `MTLBuffer` (`import Metal`, a system framework), so `core-purity` holds.
+/// Signatures are copied verbatim from the promoted 6.x definitions, which
+/// now re-export these names via `typealias`, so existing conformances and
+/// call sites resolve unchanged.
+
 /// Produces next-token logits for the `Generator`. The production
 /// implementation is `RealForwardRunner`; tests use scripted logits so decode
 /// behavior stays independent of the kernel stack.
@@ -43,7 +54,7 @@ public protocol ContinuableLogitProducer: LogitProducer {
     func prepareForContinuation(expectedPosition: Int) throws
 }
 
-protocol ContextWindowReporting: Sendable {
+public protocol ContextWindowReporting: Sendable {
     var maxContext: Int { get }
 }
 
@@ -67,7 +78,7 @@ public struct PrefillResult: Sendable, Equatable {
     }
 }
 
-protocol ChunkedPrefillRunner: LogitProducer {
+public protocol ChunkedPrefillRunner: LogitProducer {
     /// Prefill a prompt slice using the chunked production runtime.
     func prefillChunked(
         tokens: ArraySlice<Int32>,
@@ -93,7 +104,7 @@ protocol ChunkedPrefillRunner: LogitProducer {
 }
 
 extension ChunkedPrefillRunner {
-    func prefillChunked(
+    public func prefillChunked(
         tokens: ArraySlice<Int32>,
         startPosition: Int,
         slot: Int,

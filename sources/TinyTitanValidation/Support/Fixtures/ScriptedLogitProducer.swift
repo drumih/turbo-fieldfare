@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import Synchronization
 import TinyTitan
+import TinyTitanCore
 
 /// Test `LogitProducer` that writes scripted logits, independent of the kernel
 /// stack. The `step` closure maps `(inputToken, callIndex)` to a logit spec, so
