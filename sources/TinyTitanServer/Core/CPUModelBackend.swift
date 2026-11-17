@@ -22,7 +22,7 @@ import TinyTitanCore
 /// these models are dense. No MTP.
 public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
 
-    private let model: CPUQwen35
+    private let model: any CPUEngineRunner
     private let tokenizer: GFTokenizer
     /// Where the tokenizer came from, and the reasoning it was rendered at.
     ///
@@ -90,6 +90,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// it; that is `resolvedTokenizer(for:)`.
     public init(
         snapshotDirectory: URL,
+        factory: CPUEngineFactory? = nil,
         maximumContext: Int = CPUModelBackend.contextCeiling,
         resident: Bool = true,
         thinkingMode: ModelThinkingMode = .off
@@ -114,7 +115,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // `theServedEngineKeepsTheWidthItsLoadChose`. The coordinator's
         // `generating` is not the signal to reach for here, because it is
         // raised by a CPU client generation too.
-        let engine = try CPUQwen35(snapshot: snapshot)
+        let engine = try (factory ?? .legacy(snapshot: snapshot)).build()
         threads = engine.threads
         model = engine
         // A snapshot keeps its tokenizer at the directory root; a `.ssdai`

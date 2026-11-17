@@ -138,6 +138,17 @@ import Testing
         return bytes
     }
 
+    private final class StubCPUEngine: CPUEngineRunner {
+        private let engine: CPUQwen35
+        var configuration: CPUEngineConfiguration { engine.configuration }
+        var threads: Int { 77 }
+
+        init(_ engine: CPUQwen35) { self.engine = engine }
+        func reset() { engine.reset() }
+        func prefill(tokens: [Int]) throws -> [Float] { try engine.prefill(tokens: tokens) }
+        func step(token: Int) throws -> [Float] { try engine.step(token: token) }
+    }
+
     /// unchecked-invariant: every access is under `lock`.
     private final class Sink: @unchecked Sendable {
         private let lock = NSLock()
@@ -185,9 +196,10 @@ import Testing
 
     /// The scripted backend, without running a generation: the tests that ask
     /// the backend about itself need the object, not an answer.
-    private func scriptedBackend(thinking: ModelThinkingMode) async throws
-        -> (backend: CPUModelBackend, directory: URL, spoken: [Int32])
-    {
+    private func scriptedBackend(
+        thinking: ModelThinkingMode,
+        factory: ((URL) -> CPUEngineFactory)? = nil
+    ) async throws -> (backend: CPUModelBackend, directory: URL, spoken: [Int32]) {
         let fixture = try TokenizerFixture.folder()
         let tok = try await GFTokenizer.load(from: fixture, thinkingMode: thinking)
         let prompt = tok.encode(try tok.applyChatTemplate(request().messages), addBOS: false)
@@ -205,7 +217,7 @@ import Testing
 
         let directory = try writeScriptedModel(chain: chain, tokenizer: fixture)
         let backend = try await CPUModelBackend(
-            snapshotDirectory: directory, resident: false,
+            snapshotDirectory: directory, factory: factory?(directory), resident: false,
             thinkingMode: thinking)
         return (backend, directory, spoken)
     }
@@ -220,6 +232,20 @@ import Testing
         #expect(
             ServerLog.promptCacheField(for: backend) == " prompt_cache=off",
             "the field the residency line prints comes from this backend")
+    }
+
+    @Test func theBackendBuildsFromAnInjectedCPUEngineFactory() async throws {
+        let factory: (URL) -> CPUEngineFactory = { directory in
+            CPUEngineFactory {
+                StubCPUEngine(try CPUQwen35(snapshot: AffineSnapshot(directory: directory)))
+            }
+        }
+        let (backend, directory, _) = try await scriptedBackend(
+            thinking: .off, factory: factory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        #expect(backend.threads == 77)
+        #expect(await backend.threadWidthInUse == 77)
     }
 
     /// The served engine keeps the width its load chose, token after token.
