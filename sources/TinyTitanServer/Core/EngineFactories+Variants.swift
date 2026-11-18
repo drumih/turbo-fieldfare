@@ -55,6 +55,14 @@ extension EngineFactories {
     /// and dispatches through the selection table: the shipped variant
     /// engines for their installs, the 6.x engine for everything else —
     /// which keeps serving every model without a shipped variant (TT-087).
+    public static func gpuFactory(directoryURL: URL) throws -> EngineFactory {
+        let identity = try TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
+        return gpuFactory(
+            family: identity.family,
+            manifestModelID: identity.modelID,
+            routedExpertWeightBits: identity.weightBits)
+    }
+
     public static func gpuFactory(
         family: TinyTitan.ModelFamily,
         manifestModelID: String,

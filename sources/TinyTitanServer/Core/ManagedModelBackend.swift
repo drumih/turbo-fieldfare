@@ -73,7 +73,8 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
         idleTimeout: Duration?,
         loader: @escaping Loader = { plan, context in
             try await plan.makeSession(
-                reusingContext: context, factory: EngineFactories.sixXGPU())
+                reusingContext: context,
+                factory: EngineFactories.gpuFactory(directoryURL: plan.modelDirectory))
         }
     ) {
         self.facts = facts

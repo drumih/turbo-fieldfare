@@ -114,14 +114,9 @@ extension ModelRouter {
                 // manifest read the plan's reasoning profile performs, and
                 // every identity without a shipped variant stays on the 6.x
                 // engine (TT-087).
-                let identity = try ManifestReader.peekIdentity(
-                    directoryURL: entry.path)
                 return try await plan.makeSession(
                     reusingContext: try await metal.context(),
-                    factory: EngineFactories.gpuFactory(
-                        family: identity.family,
-                        manifestModelID: identity.modelID,
-                        routedExpertWeightBits: identity.weightBits))
+                    factory: EngineFactories.gpuFactory(directoryURL: entry.path))
             case .cpu:
                 // `entry.quant` is the routed-expert width the catalog read
                 // from the install — the fact the variant CPU selection needs

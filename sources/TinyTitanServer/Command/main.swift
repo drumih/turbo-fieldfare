@@ -256,7 +256,8 @@ do {
         // Reads manifest.json only; a bad --model still fails here at launch
         // rather than on the first request.
         facts = try plan.previewFacts(
-            modelIDOverride: arguments.modelIDOverride, factory: EngineFactories.sixXGPU())
+            modelIDOverride: arguments.modelIDOverride,
+            factory: EngineFactories.gpuFactory(directoryURL: modelURL))
         let residency = ManagedModelBackend(
             plan: plan,
             facts: facts,
@@ -266,7 +267,8 @@ do {
         backend = residency
     } else {
         let plan = makePlan()
-        let session = try await plan.makeSession(factory: EngineFactories.sixXGPU())
+        let session = try await plan.makeSession(
+            factory: EngineFactories.gpuFactory(directoryURL: modelURL))
         backend = session
         facts = ModelSessionFacts(
             modelID: arguments.modelIDOverride ?? session.defaultModelID,
@@ -296,7 +298,8 @@ do {
         maxConcurrentSequences: concurrency,
         backend: servingBackend,
         reasoningProfile: try reasoningProfile
-            ?? makePlan().reasoningProfile(factory: EngineFactories.sixXGPU()),
+            ?? makePlan().reasoningProfile(
+                factory: EngineFactories.gpuFactory(directoryURL: modelURL)),
         router: router,
         coordinator: coordinator)
     _ = try await server.start(port: arguments.port)

@@ -147,6 +147,46 @@ import TinyTitanCore
                 routedExpertWeightBits: 8) == .qwen35DenseGPU)
     }
 
+    @Test("the single-model directory dispatch reads the install identity")
+    func directoryDispatchSelectsPerIdentity() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("variant-selection-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let arch: [String: Any] = [
+            "hiddenSize": 64, "ffnIntermediate": 128, "moeIntermediateSize": 128,
+            "numHeads": 4, "numKVHeads": 2, "numFullKVHeads": 2, "headDim": 32,
+            "fullHeadDim": 32, "vocabSize": 1024, "slidingWindow": 1024,
+            "finalLogitSoftcap": 0.0, "ropeTheta": 10_000_000.0,
+            "fullRopeTheta": 10_000_000.0, "partialRotaryFactor": 0.25,
+            "numLayers": 4, "numExperts": 8, "topKExperts": 8,
+            "tieWordEmbeddings": false, "attentionKEqV": false,
+            "hiddenActivation": "silu", "fullAttentionLayerMask": [2, 1, 2, 1],
+            "family": "qwen36",
+        ]
+        let slot: [String: Any] = [
+            "weightBits": 4, "scheme": "affine", "scaleType": "bf16",
+            "biasType": "bf16", "groupSize": 64,
+        ]
+        try JSONSerialization.data(withJSONObject: [
+            "magic": "SSDAI", "versionMajor": 1, "versionMinor": 0,
+            "flags": ["streamingPresent": true], "modelID": "ornith-1.5-35b-a3b",
+            "arch": arch, "files": [:], "expertsPerLayer": 8, "numLayers": 4,
+            "expertStride": 16384,
+            "quant": [
+                "embedding": slot, "attention": slot, "router": slot,
+                "sharedExpert": slot, "routedExpert": slot,
+            ],
+        ]).write(to: directory.appendingPathComponent("manifest.json"))
+        let factory = try EngineFactories.gpuFactory(directoryURL: directory)
+        do {
+            _ = try factory.buildModel(directory, ArchConfig.qwen36_35B_A3B, nil)
+            Issue.record("the variant requires a Metal context")
+        } catch {
+            #expect("\(error)".contains("ornith variant"))
+        }
+    }
+
     @Test("the dense CPU variant is selected per install size and width")
     func denseCPUFactorySelection() throws {
         // Hidden size names the model (2B 2048 / 4B 2560 / 9B 4096); the
