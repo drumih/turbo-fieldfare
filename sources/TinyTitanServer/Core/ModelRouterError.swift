@@ -149,6 +149,20 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         self.counter = counter
     }
 
+    public nonisolated func servedModel(named name: String) -> ServedModel? {
+        if let exact = servedModels.first(where: { $0.id == name }) { return exact }
+        if let entry = entries[name], let choice = choices[name] {
+            return ServedModel(
+                id: entry.id, displayName: entry.name,
+                maximumContext: Self.context(for: entry, configured: maximumContext),
+                sampling: entry.sampling,
+                reasoningProfile: Self.profile(for: entry, choice: choice))
+        }
+        guard name.hasSuffix("-fast") else { return nil }
+        let base = String(name.dropLast("-fast".count))
+        return servedModels.first { $0.id == base }
+    }
+
     /// Mirrors `CPUModelBackend`'s own clamp, so validation bounds max_tokens
     /// by the context the CPU engine will actually give the request.
     static func context(for entry: ModelCatalog.Entry, configured: Int) -> Int {

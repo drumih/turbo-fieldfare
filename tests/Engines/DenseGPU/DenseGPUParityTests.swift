@@ -142,4 +142,37 @@ struct DenseGPUParityTests {
             "DenseGPU diverged from the 6.x GPU oracle: \(produced) vs \(expected)")
         #expect(!produced.isEmpty, "an empty greedy run asserts nothing")
     }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_DENSE_GPU_PARITY_MODEL"] != nil,
+            "requires a dense install; set TINYTITAN_DENSE_GPU_PARITY_MODEL"))
+    func denseGPUToolPromptParityAgainst6x() async throws {
+        let directory = try #require(Self.install())
+        let folder = try #require(GFTokenizer.tokenizerFolder(forModelDirectory: directory))
+        let tokenizer = try await GFTokenizer.load(from: folder, thinkingMode: .off)
+        let prompt = try tokenizer.encodeToolChat(
+            messages: [
+                GFTokenizer.Message(role: .user, content: "Use get_weather to check Berlin.")
+            ],
+            tools: [
+                .init(
+                    name: "get_weather", description: "Get weather",
+                    parameters: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "city": .object(["type": .string("string")])
+                        ]),
+                        "required": .array([.string("city")]),
+                    ]))
+            ])
+
+        let promptIDs = prompt.map(Int.init)
+        let expected = try await Self.referenceGreedy(
+            directory: directory, prompt: promptIDs, maxNew: 32)
+        let produced = try await Self.denseGreedy(
+            directory: directory, prompt: promptIDs, maxNew: 32)
+
+        #expect(produced == expected, "tool-prompt tokens diverged: \(produced) vs \(expected)")
+    }
 }

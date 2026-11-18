@@ -6,13 +6,34 @@ TT-072…TT-087 and issue #32, closed with the work tracked in the tracker).
 The task list lives in the tracker and the git log; this file carries the
 state a fresh session cannot discover from those quickly.
 
-## ACTIVE WORK: TT-097 — make the server run the 7.0 variant engines (in progress)
+## TT-097 COMPLETE — the server runs the shipped 7.0 variant engines
 
-The 7.0 *release* is closed at the variant-qualification bar (see "CLOSURE"
-below); **TT-097 reopens the deferred piece**: the server process still generates
-through 6.x, and the owner asked to make it run the 7.0 variant engines for all
-served scenarios (Ornith GPU + dense CPU + dense GPU). The design is approved and
-the plan is written — this is execution-in-progress, resuming at Phase 1.
+Completed 2026-11-18. Ornith 1.5 35B-A3B 4-bit and all six dense Qwen 3.5
+installs route to their shipped variant engines on CPU and GPU through eager,
+managed and catalogue launches. The engine contracts and factory boundary live
+in Core; `TinyTitanLib` no longer owns concrete engine construction. Other
+supported models retain their qualified 6.x path, so **6.x is not deleted**:
+TT-087 remains Won't Do, with its prerequisite now reachable rather than done.
+
+DenseGPU is token-identical to the 6.x GPU oracle on all six installs, and the
+weather-tool prompt regression probe is also byte-identical on 2B 4/8-bit and
+4B 8-bit. The feature matrix passed streaming, explicit sampling overrides,
+reasoning separation and prompt-cache reuse on every installed identity. Ornith,
+4B 4-bit and both 9B widths also passed the tool-call probe; the three identities
+above inherit the reference model's repeated-`!` response and are not migration
+regressions. The 2B models remain unsuitable for instruction/tool validation.
+No benchmark was run on the busy host; the paired variant-vs-6.x performance
+comparison remains deferred to a quiet host, so the specification's performance
+acceptance criterion is not closed.
+
+Final golden checks passed for Ornith server agreement and dense 4B 4-bit plus
+both 9B widths. The 2B widths and 4B 8-bit mismatch their older fluent raw-
+completion baselines by producing repeated `!`. This is not a variant routing
+regression: DenseGPU and 6.x GPU are token-identical, the 2B 4-bit CPU variant
+matches 6.x CPU, and the independent `TinyTitanBench cpu35gen` 6.x CPU path also
+produces 96 `!` tokens on the current 2B 4-bit install. Forcing the real-logits
+head did not change the result. The stored baselines are unchanged; recapture is
+not justified by this evidence.
 
 **The four authoritative artifacts (read in this order):**
 1. `AGENTS.md` — the working rules (toolchain, gates, model-run discipline, rule 2
@@ -74,13 +95,14 @@ new **shared config-driven** variant engine (`sources/Engines/DenseGPU/`, the
   byte-identical. Golden `ornith-8` was **not checked** (no install; none
   fetched).
 
-**Resume exactly here — Phase 3 Task 9 (each = a green gated commit):**
-- Select variant factories by catalog identity in the server, then route Ornith
-  and dense engines through the protocol-typed sessions. Every routing flip is
-  model-gated for byte-identical output; 6.x remains available as the regression
-  engine throughout.
-- Then Phases 3–4 per the plan (Phase 3 builds `DenseGPU` + model-gated routing
-  flips; Phase 4 is the full acceptance matrix + paired benchmarks + records).
+**Remaining acceptance work:**
+- Run the paired variant-vs-6.x performance comparison on a quiet host; the busy-
+  host deferral is explicit and is not evidence of no regression.
+- Preserve the three dense raw-golden mismatches above as open baseline findings,
+  not as failures of the migrated engines. Do not recapture them without evidence
+  of a deliberate numerics or checkpoint change.
+- Optional follow-up: compose unlisted `@cpu`/`@gpu` aliases with the `-fast`
+  suffix in HTTP validation; direct engine aliases and listed `-fast` IDs work.
 
 **Invariants this work must never break:** zero numerics change until a model is
 routed to a variant (then golden/parity byte-identical or it is a finding, not a

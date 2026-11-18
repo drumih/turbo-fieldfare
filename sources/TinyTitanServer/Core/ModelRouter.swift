@@ -34,6 +34,8 @@ public struct ServedModel: Sendable, Equatable {
 public protocol ModelRouting: Sendable {
     /// Every model a request may name, in listing order.
     var servedModels: [ServedModel] { get }
+    /// Includes addressable engine aliases that are deliberately not listed.
+    func servedModel(named name: String) -> ServedModel?
 }
 
 extension ModelRouting {

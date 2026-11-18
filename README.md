@@ -74,7 +74,11 @@ about 2.3 GB), then run a prompt:
 ```
 
 Start the server with `tools/server_launcher.sh`; it prints the base URL and
-writes the client configuration. The full walkthrough is
+writes the client configuration. The server runs the shipped 7.0 variant engines
+for Ornith 1.5 35B-A3B 4-bit and dense Qwen 3.5 on CPU and GPU; other supported
+installs retain their qualified 6.x path. For a dense install, `--engine cpu` or
+`--engine gpu` selects the launch path, and catalogue requests can use
+`<model-id>@cpu` or `<model-id>@gpu`. The full walkthrough is
 [Getting Started](https://github.com/Pummelchen/TinyTitan/wiki/Getting-Started).
 
 

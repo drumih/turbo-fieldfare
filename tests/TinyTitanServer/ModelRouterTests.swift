@@ -211,6 +211,10 @@ struct ModelRouterTests {
         let router = try Fixture.router(log: log)
         try await router.preload()
         #expect(await router.residentModelID == Fixture.alpha.id)
+        #expect(
+            router.servedModel(named: "\(Fixture.dense.id)@gpu")?.id == "\(Fixture.dense.id)@gpu")
+        #expect(
+            router.servedModel(named: "\(Fixture.dense.id)@cpu")?.id == "\(Fixture.dense.id)@cpu")
 
         let cpu = try await router.generate(Fixture.request("\(Fixture.dense.id)@cpu")) { _ in }
         #expect(cpu.content == "\(Fixture.dense.id)@cpu")
