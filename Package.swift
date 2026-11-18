@@ -395,7 +395,7 @@ let package = Package(
         .testTarget(
             name: "DenseGPUTests",
             dependencies: [
-                "DenseGPU", "TinyTitanCore",
+                "DenseGPU", "TinyTitanCore", "TinyTitan",
                 .product(name: "yyjson", package: "yyjson"),
             ],
             path: "tests/Engines/DenseGPU",
