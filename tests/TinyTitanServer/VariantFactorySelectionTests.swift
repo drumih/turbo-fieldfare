@@ -113,14 +113,68 @@ import TinyTitanCore
         #expect(
             engineStageError(legacy).contains("6.x"),
             "every other identity stays on the 6.x engine")
+
+        // The dense family routes to the shared dense-GPU engine, whose
+        // engine stage names itself (Task 13's flip).
+        let dense = EngineFactories.gpuFactory(
+            family: .qwen35Dense, manifestModelID: "qwen3.5-4b",
+            routedExpertWeightBits: 4)
+        #expect(
+            engineStageError(dense).contains("dense-GPU"),
+            "the dense identity must dispatch to the dense-GPU factory")
     }
 
-    @Test("the dense CPU variant factory is built per install width")
+    @Test("the selection table pins every dense identity to the dense-GPU engine")
+    func denseIdentitiesSelectTheDenseEngine() {
+        // Bare and width-suffixed dense installs, both quants — the three
+        // widths the registry ships rows for.
+        for (modelID, bits) in [
+            ("qwen3.5-2b", 4), ("qwen3.5-2b", 8),
+            ("qwen3.5-4b", 4), ("qwen3.5-4b", 8),
+            ("qwen3.5-9b", 4), ("qwen3.5-9b", 8),
+        ] {
+            #expect(
+                EngineFactories.gpuSelection(
+                    family: .qwen35Dense, manifestModelID: modelID,
+                    routedExpertWeightBits: bits) == .qwen35DenseGPU,
+                "\(modelID) at \(bits)-bit must select the dense-GPU engine")
+        }
+        // A dense install is dense whatever width the manifest declares —
+        // the selection is by family, not by width.
+        #expect(
+            EngineFactories.gpuSelection(
+                family: .qwen35Dense, manifestModelID: "qwen3.5-9b",
+                routedExpertWeightBits: 8) == .qwen35DenseGPU)
+    }
+
+    @Test("the dense CPU variant is selected per install size and width")
     func denseCPUFactorySelection() throws {
-        #expect(try EngineFactories.variantCPUEngineSelection(weightBits: 4) == .qwen35Dense4Bit)
-        #expect(try EngineFactories.variantCPUEngineSelection(weightBits: 8) == .qwen35Dense8Bit)
+        // Hidden size names the model (2B 2048 / 4B 2560 / 9B 4096); the
+        // width its quant twin. Each combination is its own dedicated target.
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 2_048, weightBits: 4)
+                == .qwen35Dense2B4Bit)
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 2_048, weightBits: 8)
+                == .qwen35Dense2B8Bit)
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 2_560, weightBits: 4)
+                == .qwen35Dense4B4Bit)
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 2_560, weightBits: 8)
+                == .qwen35Dense4B8Bit)
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 4_096, weightBits: 4)
+                == .qwen35Dense9B4Bit)
+        #expect(
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 4_096, weightBits: 8)
+                == .qwen35Dense9B8Bit)
+        // An unknown combination is refused by name, not served by a sibling.
         #expect(throws: (any Error).self) {
-            try EngineFactories.variantCPUEngineSelection(weightBits: 6)
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 2_560, weightBits: 6)
+        }
+        #expect(throws: (any Error).self) {
+            try EngineFactories.variantCPUEngineSelection(hiddenSize: 3_072, weightBits: 4)
         }
     }
 }

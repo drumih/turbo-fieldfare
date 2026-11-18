@@ -300,6 +300,7 @@ let package = Package(
                 // server). `EngineFactories+Variants.swift` is the only file
                 // that names them.
                 "Ornith35B4Bit",
+                "DenseGPU",
                 "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
                 "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
@@ -420,6 +421,14 @@ let package = Package(
                 // that an omitted field follows the served model's profile
                 // rather than a hardcoded house default.
                 "TinyTitan",
+                // The dense CPU variants TinyTitanServerCore now imports for
+                // the Task 13 width-selected CPU engines. Without the explicit
+                // declaration the test target's clang dependency scanner fails
+                // to resolve them (the same explicit-module trap the handover
+                // records for yyjson).
+                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
+                "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
+                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
                 .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
             path: "tests/TinyTitanServer",

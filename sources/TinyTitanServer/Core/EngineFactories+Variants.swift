@@ -1,5 +1,12 @@
 import Foundation
+import DenseGPU
 import Ornith35B4Bit
+import Qwen35Dense2B4Bit
+import Qwen35Dense2B8Bit
+import Qwen35Dense4B4Bit
+import Qwen35Dense4B8Bit
+import Qwen35Dense9B4Bit
+import Qwen35Dense9B8Bit
 import TinyTitan
 import TinyTitanCore
 import TinyTitanLegacyEngine
@@ -18,11 +25,14 @@ extension EngineFactories {
     public enum GPUVariantSelection: Equatable {
         case legacy
         case ornith35B4Bit
+        case qwen35DenseGPU
     }
 
     /// The selection for a GPU catalog identity, decided from the manifest
     /// identity the entry's directory carries: the shipped Ornith 1.5 35B-A3B
-    /// install at 4 bits is the one variant the registry ships today.
+    /// install at 4 bits routes to its variant, every dense Qwen 3.5 install
+    /// routes to the shared dense-GPU engine, and everything else stays on
+    /// the 6.x engine.
     public static func gpuSelection(
         family: TinyTitan.ModelFamily,
         manifestModelID: String,
@@ -33,6 +43,9 @@ extension EngineFactories {
             routedExpertWeightBits == 4
         {
             return .ornith35B4Bit
+        }
+        if family == TinyTitan.ModelFamily.qwen35Dense {
+            return .qwen35DenseGPU
         }
         return .legacy
     }
@@ -53,6 +66,7 @@ extension EngineFactories {
             routedExpertWeightBits: routedExpertWeightBits)
         {
         case .ornith35B4Bit: return variantGPUOrnith()
+        case .qwen35DenseGPU: return variantDenseGPU()
         case .legacy: return sixXGPU()
         }
     }
@@ -171,6 +185,110 @@ extension EngineFactories {
             })
     }
 
+    /// The shared dense-GPU engine as the server's engine: one factory for
+    /// every dense Qwen 3.5 install, geometry taken from each install's
+    /// manifest by the engine's own dense-only load path (`Model.load`
+    /// refuses non-dense families and resolves the width's architecture from
+    /// its manifest). The planner, metadata and preview stages are the
+    /// family-generic production ones shared with the 6.x factory; the model
+    /// and runner stages close over the DenseGPU target's own copies, and the
+    /// scratch/completion pair names the dense engine's own generation loop —
+    /// the same engine-generic-through-the-producer shape the ornith factory
+    /// uses.
+    public static func variantDenseGPU() -> EngineFactory {
+        let base = sixXGPU()
+        return EngineFactory(
+            prepare: base.prepare,
+            makeContext: base.makeContext,
+            prepareLoad: base.prepareLoad,
+            metadata: base.metadata,
+            validateReasoning: base.validateReasoning,
+            resolveArchitecture: base.resolveArchitecture,
+            preview: base.preview,
+            buildModel: { directory, _, context in
+                guard let context else {
+                    throw ServerInferenceError.unsupportedModel(
+                        "the dense-GPU engine requires Metal")
+                }
+                // Geometry comes from the install manifest (the engine's
+                // dense-only load path resolves it); no expert streaming is
+                // configured because a dense install has no routed experts.
+                return try DenseGPU.Model.load(
+                    directoryURL: directory,
+                    device: context.device)
+            },
+            buildRunner: { model, options in
+                guard let model = model as? DenseGPU.Model,
+                    let context = options.context
+                else {
+                    throw ServerInferenceError.unsupportedModel(
+                        "the dense-GPU runner requires its model and Metal context")
+                }
+                let runtime = try DenseGPU.RuntimeConfiguration(
+                    forceLogitsHead: true,
+                    kvCachePrecision: options.kvCachePrecision)
+                return try DenseGPU.RealForwardRunner(
+                    model: model,
+                    context: context,
+                    maxContext: options.maxContext,
+                    slots: options.slots,
+                    runtimeConfiguration: runtime)
+            },
+            makeScratch: { context, vocabulary, softcap in
+                RawCompletionScratch(
+                    payload: try DenseGPU.RawCompletionScratch(
+                        context: context, vocab: vocabulary, logitSoftcap: softcap))
+            },
+            runRawCompletion: { request in
+                guard
+                    let scratch = request.scratch.payload
+                        as? DenseGPU.RawCompletionScratch
+                else {
+                    throw ServerInferenceError.unsupportedModel(
+                        "the dense-GPU completion requires its scratch buffers")
+                }
+                let result = try await DenseGPU.runRawCompletion(
+                    producer: request.producer,
+                    tokenizer: request.tokenizer,
+                    promptIds: request.promptIDs,
+                    config: request.configuration,
+                    context: request.context,
+                    scratch: scratch,
+                    prefillConfig: request.prefillConfiguration,
+                    start: {
+                        switch request.start {
+                        case .reset: return .reset
+                        case .resume(let cached): return .resume(cachedPromptTokens: cached)
+                        }
+                    }(),
+                    slot: request.slot,
+                    checkpointPositions: request.checkpointPositions,
+                    onPrefillCheckpoint: request.onPrefillCheckpoint,
+                    shouldStop: request.shouldStop,
+                    onProgress: { progress in
+                        switch progress {
+                        case .prefill(let done, let total):
+                            request.onProgress(.prefill(done: done, total: total))
+                        case .token(let index, let id, let delta):
+                            request.onProgress(.token(index: index, id: id, delta: delta))
+                        case .tail(let text):
+                            request.onProgress(.tail(text))
+                        }
+                    })
+                return RawDecodeResult(
+                    prefillTokens: result.prefillTokens,
+                    cachedPromptTokens: result.cachedPromptTokens,
+                    computedPrefillTokens: result.computedPrefillTokens,
+                    prefillSeconds: result.prefillSeconds,
+                    newTokens: result.newTokens,
+                    decodeSeconds: result.decodeSeconds,
+                    reason: result.reason,
+                    kvPosition: result.kvPosition,
+                    kvBackedTokenIDs: result.kvBackedTokenIDs,
+                    uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs)
+            })
+    }
+
     // MARK: - the dense CPU variants
 
     /// Which dense variant target a CPU install's width selects. Each dense
@@ -178,19 +296,102 @@ extension EngineFactories {
     /// not a shared engine — decides the target. 6 bits is the withdrawn
     /// legacy format and is refused by name, like the registry does.
     public enum DenseCPUVariantSelection: Equatable {
-        case qwen35Dense4Bit
-        case qwen35Dense8Bit
+        case qwen35Dense2B4Bit
+        case qwen35Dense2B8Bit
+        case qwen35Dense4B4Bit
+        case qwen35Dense4B8Bit
+        case qwen35Dense9B4Bit
+        case qwen35Dense9B8Bit
     }
 
-    public static func variantCPUEngineSelection(weightBits: Int) throws
-        -> DenseCPUVariantSelection
-    {
-        switch weightBits {
-        case 4: return .qwen35Dense4Bit
-        case 8: return .qwen35Dense8Bit
+    /// The dense CPU target a served snapshot selects: hidden size names the
+    /// model, the width its quant twin. An unknown combination is refused by
+    /// name rather than run through a sibling's statics.
+    public static func variantCPUEngineSelection(
+        hiddenSize: Int,
+        weightBits: Int
+    ) throws -> DenseCPUVariantSelection {
+        switch (hiddenSize, weightBits) {
+        case (2_048, 4): return .qwen35Dense2B4Bit
+        case (2_048, 8): return .qwen35Dense2B8Bit
+        case (2_560, 4): return .qwen35Dense4B4Bit
+        case (2_560, 8): return .qwen35Dense4B8Bit
+        case (4_096, 4): return .qwen35Dense9B4Bit
+        case (4_096, 8): return .qwen35Dense9B8Bit
         default:
             throw ServerInferenceError.unsupportedModel(
-                "no dense CPU variant ships at \(weightBits) bits; supported: 4, 8")
+                "no dense CPU variant ships for hiddenSize \(hiddenSize) at "
+                    + "\(weightBits) bits; supported sizes: 2048, 2560, 4096 at 4 or 8 bits")
+        }
+    }
+
+    /// The dense CPU variant for a snapshot's size and width. Each dense
+    /// model owns its dedicated code path (the 7.0 directive): the hidden
+    /// size decides the model (2B 2048 / 4B 2560 / 9B 4096) and the width the
+    /// quant twin. The variant's engine consumes its own module's snapshot
+    /// type, so the closure builds it from the install directory — the 6.x
+    /// snapshot the backend holds is a different module's class and cannot
+    /// cross. An unknown size/width combination is refused by name.
+    public static func variantCPUEngine(
+        hiddenSize: Int,
+        weightBits: Int,
+        snapshotDirectory: URL,
+        isSSDAI: Bool
+    ) throws -> CPUEngineFactory {
+        func engine(_ build: @Sendable @escaping () throws -> any CPUEngineRunner)
+            -> CPUEngineFactory
+        {
+            CPUEngineFactory(build: build)
+        }
+        switch try variantCPUEngineSelection(hiddenSize: hiddenSize, weightBits: weightBits) {
+        case .qwen35Dense2B4Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense2B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense2B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense2B4Bit.CPUQwen35(snapshot: snapshot)
+            }
+        case .qwen35Dense2B8Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense2B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense2B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense2B8Bit.CPUQwen35(snapshot: snapshot)
+            }
+        case .qwen35Dense4B4Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense4B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense4B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense4B4Bit.CPUQwen35(snapshot: snapshot)
+            }
+        case .qwen35Dense4B8Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense4B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense4B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense4B8Bit.CPUQwen35(snapshot: snapshot)
+            }
+        case .qwen35Dense9B4Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense9B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense9B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense9B4Bit.CPUQwen35(snapshot: snapshot)
+            }
+        case .qwen35Dense9B8Bit:
+            return engine {
+                let snapshot =
+                    isSSDAI
+                    ? try Qwen35Dense9B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
+                    : try Qwen35Dense9B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                return try Qwen35Dense9B8Bit.CPUQwen35(snapshot: snapshot)
+            }
         }
     }
 }

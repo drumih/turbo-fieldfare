@@ -123,11 +123,15 @@ extension ModelRouter {
                         manifestModelID: identity.modelID,
                         routedExpertWeightBits: identity.weightBits))
             case .cpu:
+                // `entry.quant` is the routed-expert width the catalog read
+                // from the install — the fact the variant CPU selection needs
+                // beside the hidden size the backend reads from the snapshot.
                 return try await CPUModelBackend(
                     snapshotDirectory: entry.path,
                     maximumContext: arguments.maxContext,
                     resident: arguments.cpuResident,
-                    thinkingMode: reasoning.thinking)
+                    thinkingMode: reasoning.thinking,
+                    routedExpertWeightBits: entry.quant)
             }
         }
     }

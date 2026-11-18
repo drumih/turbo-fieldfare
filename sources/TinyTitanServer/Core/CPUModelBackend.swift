@@ -97,7 +97,8 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         factory: CPUEngineFactory? = nil,
         maximumContext: Int = CPUModelBackend.contextCeiling,
         resident: Bool = true,
-        thinkingMode: ModelThinkingMode = .off
+        thinkingMode: ModelThinkingMode = .off,
+        routedExpertWeightBits: Int? = nil
     ) async throws {
         // A `.ssdai` declares itself with a manifest; a snapshot does not.
         // `manifest.json` is also what the catalog keys on, so the two agree
@@ -119,7 +120,24 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // `theServedEngineKeepsTheWidthItsLoadChose`. The coordinator's
         // `generating` is not the signal to reach for here, because it is
         // raised by a CPU client generation too.
-        let engine = try (factory ?? .legacy(snapshot: snapshot)).build()
+        // TT-097 Task 13: the dense installs serve on their dedicated variant
+        // CPU engines by default — hidden size names the model, the width its
+        // quant twin (both facts this init already holds); an explicitly
+        // injected factory still wins, which is the test seam and a future
+        // engine's entry point. A caller that names no width gets the 6.x
+        // engine, the same fallback the selection table's legacy miss uses.
+        let engine = try
+            (factory
+            ?? {
+                guard let routedExpertWeightBits else {
+                    return CPUEngineFactory.legacy(snapshot: snapshot)
+                }
+                return CPUEngineFactory.widthSelected(
+                    snapshotDirectory: snapshotDirectory,
+                    isSSDAI: isSSDAI,
+                    hiddenSize: snapshot.configuration.hiddenSize,
+                    weightBits: routedExpertWeightBits)
+            }()).build()
         threads = engine.threads
         model = engine
         // A snapshot keeps its tokenizer at the directory root; a `.ssdai`
