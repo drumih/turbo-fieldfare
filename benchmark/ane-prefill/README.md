@@ -292,10 +292,16 @@ made to fix it and neither moved the live numbers:
 A whole-program `compute_precision=FLOAT32` probe was run as well: 59 of 173
 operations stayed on the ANE (fp16: 74), predict took 382 ms against 244 ms per
 layer, and the real-input error was 4.248% — the graph changed by at most
-0.00415 in output while the error stayed where it was. Intermediate precision
-in the core is therefore not the lever; the difference is consistent with the
-graph's fp16 output boundary or a semantic difference that only shows at the
-real input's output scale, and that is not established.
+0.00415 in output while the error stayed where it was. Intermediate precision in the core is therefore not the lever, and the
+probes now explain the number. `k_new`/`v_new` match the reference at 0.059%,
+rounding q/k/v/gate to fp16 after rms+rope moves the block by 0.052%, and the
+block's **absolute** error is ~5e-4 on both inputs (0.0934 x 0.555% = 5.2e-4
+synthetic, 0.0101 x 4.245% = 4.3e-4 real) — the 7.6x larger *relative* error on
+the real input is mostly its smaller output scale, not an amplitude-dependent
+defect. The live ANE-vs-GPU difference is the full-layer 0.34-0.6% per attention
+layer, which compounds over ten layers to 5.55% logits and flips the greedy
+first token. This is numerical non-equivalence, not a wiring, input or KV
+bug.
 
 This is a **regression from the v4.5 qualification**, not an inherent limit of
 the block: at v4.5 the same Ornith 1.5 35B-A3B 4-bit measured **2.31x** at a
