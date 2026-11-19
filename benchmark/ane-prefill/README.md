@@ -443,3 +443,11 @@ With no `ane_prefill/` present, Ornith 1.5 35B-A3B serves prefill on the GPU
 degrading. `tools/ane_sidecars.sh` continues to refuse new Ornith 35B
 sidecars; the fp32 variants (`*-fp32softmax`, `*-fp32core` records) were
 inert and are reverted history.
+
+**Owner decision (2026-11-19): quality over speed.** Of the three measured
+paths — GPU 0.075%, ANE-split 0.619% block / 4.34% logits, ANE-fused 4.245% —
+the GPU serves. The rejection is final for this hardware: the residual error
+lives in the ANE's fp16 matmul accumulation, every widening attempt was
+canonicalized or inert (see above), and the only complete fix — computing the
+core on a wider accumulator — removes the ANE benefit. The preserved sidecars
+document the work; the decision does not depend on them.
