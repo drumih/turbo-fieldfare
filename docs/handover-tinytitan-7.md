@@ -644,9 +644,13 @@ pre-fix failure exactly, and the fp32 core made the graph slower:
   `S` where the GPU answers, and ANE prefill is 148.03 s against 93.56 s;
 - probe with `compute_precision=FLOAT32`: 59/173 ops on the ANE (fp16 74),
   382 ms against 244 ms per layer, real error 4.248%, output changed by at most
-  0.00415. Intermediate precision is not the lever; the remaining hypothesis is
-  the graph's fp16 output boundary or a semantic difference at the real input's
-  output scale, and it is not established.
+  0.00415. The probes explain the number: k_new/v_new match at 0.059%, fp16
+  rounding of q/k/v/gate after rms+rope moves the block by 0.052%, and the
+  block's absolute error is ~5e-4 on both inputs (0.0934 x 0.555% synthetic,
+  0.0101 x 4.245% real) — the larger relative error on the real input is
+  mostly its smaller output scale. The live ANE-vs-GPU difference is 0.34-0.6%
+  per layer, compounding to 5.55% logits over ten layers and flipping the
+  greedy first token: numerical non-equivalence, not a wiring/input/KV bug.
 
 Decision: `d750fa2c` (softmax-only) and `ba76b292` (fp32 core) are reverted —
 both were numerically inert on the live model and the core cost 1.56x per
