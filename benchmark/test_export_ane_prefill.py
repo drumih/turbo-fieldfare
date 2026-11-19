@@ -69,87 +69,59 @@ ENTRIES = {f"{PREFIX}3.self_attn.q_proj.weight": {}}
 
 
 @unittest.skipIf(exporter is None, f"exporter needs coremltools: {IMPORT_ERROR}")
-class SoftmaxPrecisionTests(unittest.TestCase):
-    """The softmax inside the sidecar's fp16 program accumulates in fp32.
+class AttentionCoreTests(unittest.TestCase):
+    """The attention core (scores -> softmax -> probs -> V) stays fp32.
 
-    The GPU reference runs a flash-style fp32 online softmax; the fp16 softmax
-    compounded to 5.55% logits divergence over the 35B's depth and flipped the
-    greedy argmax at token 1 (diagnosis 2026-11-19). The graph now casts the
-    scores to fp32 across the softmax and back, which the ANE executes.
+    Replaces the 2026-11-19 fp32_softmax wrapper contract: gate 2 measured the
+    live divergence UNCHANGED (5.55% logits, identical to the fp16-softmax
+    baseline), and the decisive probe put the graph-vs-fp32-reference error at
+    4.245% on a REAL captured normed vs 0.555% on the verify's N(0,1) input —
+    the graph's fp16 scores/probs materialization is amplitude-dependent and
+    the softmax alone was never the dominant term. The core therefore casts
+    q/k/v up and keeps scores, softmax and probabilities in fp32 end to end;
+    the ANE executes it (compile probe, CPU_AND_NE).
     """
 
-    def _ops(self):
+    def _build(self, H, T):
         import coremltools as ct
         from coremltools.converters.mil.mil import Builder as mb
 
-        fp16 = ct.converters.mil.mil.types.fp16
-        specs = [mb.TensorSpec(shape=(2, 2, 4, 4), dtype=fp16)]
-
-        @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
-        def prog(scores):
-            return exporter.fp32_softmax(scores)
-
-        # The built block: walk the ops of the single function.
-        function = next(iter(prog.functions.values()))
-        return [op.op_type for op in function.operations]
-
-    def test_the_softmax_is_wrapped_in_fp32_casts(self):
-        ops = self._ops()
-        self.assertEqual(ops.count("cast"), 2, f"ops={ops}")
-        self.assertIn("softmax", ops)
-        # cast -> softmax -> cast, in that order.
-        self.assertLess(ops.index("cast"), ops.index("softmax"))
-        last_cast = max(i for i, op in enumerate(ops) if op == "cast")
-        self.assertGreater(last_cast, ops.index("softmax"))
-
-    def test_the_wrapped_softmax_compiles_and_runs(self):
-        import numpy as np
-        import coremltools as ct
-        from coremltools.converters.mil.mil import Builder as mb
-
-        H, T = 2, 8
         fp16 = ct.converters.mil.mil.types.fp16
         specs = [
-            mb.TensorSpec(shape=(1, H, T, T), dtype=fp16),
-            mb.TensorSpec(shape=(1, H, T, 16), dtype=fp16),
+            mb.TensorSpec(shape=(1, H, T, 256), dtype=fp16),
+            mb.TensorSpec(shape=(1, H, T, 256), dtype=fp16),
+            mb.TensorSpec(shape=(1, H, T, 256), dtype=fp16),
+            mb.TensorSpec(shape=(1, 1, T, T), dtype=fp16),
         ]
 
         @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
-        def prog(scores, v):
-            return mb.matmul(x=exporter.fp32_softmax(scores), y=v)
+        def prog(q4, k_g, v_g, mask):
+            return exporter.attention_core(q4, k_g, v_g, mask, 0.0625)
 
-        model = ct.convert(
-            prog,
-            convert_to="mlprogram",
-            minimum_deployment_target=ct.target.iOS18,
-            compute_precision=ct.precision.FLOAT16,
-            compute_units=ct.ComputeUnit.CPU_AND_NE,
-        )
-        rng = np.random.default_rng(3)
-        out = model.predict(
-            {
-                "scores": rng.standard_normal((1, H, T, T)).astype(np.float16),
-                "v": rng.standard_normal((1, H, T, 16)).astype(np.float16),
-            }
-        )
-        raw = next(iter(out.values())) if isinstance(out, dict) else out
-        got = np.asarray(raw, dtype=np.float32)
-        self.assertTrue(np.isfinite(got).all())
+        return prog
 
-    def test_a_masked_row_stays_exact_under_the_fp32_softmax(self):
-        # The additive -30000 mask must survive the cast pair: masked scores
-        # softmax to ~0, not to NaN or a uniform row.
+    def test_the_core_is_wrapped_in_fp32_casts(self):
+        prog = self._build(2, 16)
+        function = next(iter(prog.functions.values()))
+        ops = [op.op_type for op in function.operations]
+        self.assertIn("matmul", ops)
+        self.assertIn("softmax", ops)
+        # The first matmul's input is cast up, and the result is cast back
+        # down after the V matmul: no fp16 scores or probabilities exist.
+        self.assertGreater(ops.count("cast"), 2, f"ops={ops}")
+        self.assertLess(ops.index("cast"), ops.index("matmul"))
+        last_cast = max(i for i, op in enumerate(ops) if op == "cast")
+        self.assertGreater(last_cast, ops.index("softmax"))
+
+    def test_the_core_stays_exact_at_real_activation_scale(self):
+        # Scores at real magnitude (10-60): fp16 materialization perturbs the
+        # softmax at percent level (measured 4.245% on real normed); the fp32
+        # core must sit within 1% of an fp32 numpy reference.
         import numpy as np
         import coremltools as ct
-        from coremltools.converters.mil.mil import Builder as mb
 
-        fp16 = ct.converters.mil.mil.types.fp16
-        specs = [mb.TensorSpec(shape=(1, 1, 1, 3), dtype=fp16)]
-
-        @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
-        def prog(s):
-            return exporter.fp32_softmax(s)
-
+        H, T = 2, 64
+        prog = self._build(H, T)
         model = ct.convert(
             prog,
             convert_to="mlprogram",
@@ -157,12 +129,49 @@ class SoftmaxPrecisionTests(unittest.TestCase):
             compute_precision=ct.precision.FLOAT16,
             compute_units=ct.ComputeUnit.CPU_AND_NE,
         )
-        scores = np.array([[[[1.0, -30000.0, -30000.0]]]], dtype=np.float16)
-        raw = model.predict({"s": scores})
-        raw = next(iter(raw.values())) if isinstance(raw, dict) else raw
-        got = np.asarray(raw, dtype=np.float32)
+        rng = np.random.default_rng(5)
+        q = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        k = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        v = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        mask = np.zeros((1, 1, T, T), dtype=np.float16)
+        raw = model.predict({"q4": q, "k_g": k, "v_g": v, "mask": mask})
+        got = np.asarray(
+            next(iter(raw.values())) if isinstance(raw, dict) else raw, dtype=np.float32
+        )
+        q32, k32, v32 = q.astype(np.float32), k.astype(np.float32), v.astype(np.float32)
+        scores = (q32 @ k32.transpose(0, 1, 3, 2)) * np.float32(0.0625)
+        probs = np.exp(scores - scores.max(-1, keepdims=True))
+        probs /= probs.sum(-1, keepdims=True)
+        expected = probs @ v32
+        rel = np.abs(got - expected).mean() / np.abs(expected).mean() * 100
+        self.assertLess(rel, 1.0, f"relative {rel:.3f}% at real score scale")
+
+    def test_a_masked_row_stays_exact_through_the_core(self):
+        import numpy as np
+        import coremltools as ct
+
+        H, T = 1, 4
+        prog = self._build(H, T)
+        model = ct.convert(
+            prog,
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.iOS18,
+            compute_precision=ct.precision.FLOAT16,
+            compute_units=ct.ComputeUnit.CPU_AND_NE,
+        )
+        rng = np.random.default_rng(2)
+        q = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        k = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        v = (rng.standard_normal((1, H, T, 256)) * 3).astype(np.float16)
+        mask = np.zeros((1, 1, T, T), dtype=np.float16)
+        mask[0, 0, 0, 1:] = exporter.NEG  # row 0 sees only key 0
+        raw = model.predict({"q4": q, "k_g": k, "v_g": v, "mask": mask})
+        got = np.asarray(
+            next(iter(raw.values())) if isinstance(raw, dict) else raw, dtype=np.float32
+        )
         self.assertTrue(np.isfinite(got).all())
-        np.testing.assert_allclose(got.reshape(3), [1.0, 0.0, 0.0], atol=1e-6)
+        # Row 0 attends only to key 0, so its output is exactly v[..., 0, :].
+        np.testing.assert_allclose(got[0, 0, 0, :], v.astype(np.float32)[0, 0, 0, :], atol=1e-2)
 
 
 @unittest.skipIf(exporter is None, f"exporter needs coremltools: {IMPORT_ERROR}")
