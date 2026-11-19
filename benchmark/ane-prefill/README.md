@@ -352,7 +352,8 @@ The fix is the **tail split**: the exporter now returns the attention core
 | verify, real captured normed | **0.619%** (fused: 4.245%) |
 | live logits, `on` | **4.34%** (fused: 5.55%) |
 | identical greedy | false, but **coherent** and common prefix **35** (fused: 0, repeated `S`) |
-| prefill, 4,333 tokens (single run) | ANE **78.14 s** vs GPU **101.34 s** |
+| prefill, 4,333 tokens (single run, default budget) | ANE **78.14 s** vs GPU **101.34 s** |
+| paired prefill @ `--ram-budget 10G`, 2 runs/arm | GPU **140.10 s**, ANE **118.00 s**, **1.19×** (22.10 s saved) |
 
 The residual 4.34% comes from the attention core’s own 0.62% block error, so
 the identical-greedy bar is still open; the answer is valid text rather than
