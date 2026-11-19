@@ -307,8 +307,17 @@ def main() -> int:
     model_ml = ct.models.MLModel(
         str(package), compute_units=ct.ComputeUnit.CPU_AND_NE, function_name="h0"
     )
-    got = model_ml.predict({"normed": normed, "mask": mask.astype(np.float16)})["out"]
-    got = np.asarray(got, dtype=np.float32).reshape(expected.shape)
+
+    def graph_output(raw):
+        """`out` for a fused sidecar; attn+gate -> fp32 gate+wo for a split one."""
+        if "attn" in raw:
+            attn = np.asarray(raw["attn"], dtype=np.float32).reshape(t, geom.q_dim)
+            gate = np.asarray(raw["gate"], dtype=np.float32).reshape(t, geom.q_dim)
+            gated = attn * (1.0 / (1.0 + np.exp(-gate)))
+            return gated @ weights["wo"].astype(np.float32).T
+        return np.asarray(raw["out"], dtype=np.float32).reshape(expected.shape)
+
+    got = graph_output(model_ml.predict({"normed": normed, "mask": mask.astype(np.float16)}))
 
     passed, stats = compare_outputs(got, expected, args.max_relative_error)
     print(
@@ -326,8 +335,7 @@ def main() -> int:
     if args.activation_dump is not None:
         real = load_activation_dump(args.activation_dump, t, geom.hidden)
         expected_real = reference(real, weights, geom, mask, t)
-        got_real = model_ml.predict({"normed": real, "mask": mask.astype(np.float16)})["out"]
-        got_real = np.asarray(got_real, dtype=np.float32).reshape(expected_real.shape)
+        got_real = graph_output(model_ml.predict({"normed": real, "mask": mask.astype(np.float16)}))
         passed_real, stats_real = compare_outputs(got_real, expected_real, args.max_relative_error)
         print(f"  real captured normed ({args.activation_dump.name}):")
         print(f"    mean |expected| {stats_real['mean_expected']:.4f}")

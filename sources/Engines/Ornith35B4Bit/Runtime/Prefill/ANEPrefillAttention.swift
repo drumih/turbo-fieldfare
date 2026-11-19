@@ -128,11 +128,18 @@ final class ANEPrefillAttention: @unchecked Sendable {
     /// cache from the same memory, and the shadow append memcpys from it.
     let stagingNormed: MTLBuffer
     let stagingOut: MTLBuffer
+    let stagingGate: MTLBuffer
     let stagingK: MTLBuffer
     let stagingV: MTLBuffer
 
     let hiddenSize: Int
     let kvDim: Int
+    /// `numHeads * headDim`: the width of the attention core's output when the
+    /// graph's tail is split (see `tailSplit`).
+    let qDim: Int
+    /// The sidecar returns `attn`/`gate` and the runtime applies gate + wo on
+    /// the GPU; false for a historical fused sidecar that returns `out`.
+    let tailSplit: Bool
     let packageDir: URL
     let compiledDir: URL
     /// At most one loaded model at a time. Each loaded function pins an
@@ -319,6 +326,8 @@ final class ANEPrefillAttention: @unchecked Sendable {
         self.exactVisibleKeys = exactVisibleKeys
         self.hiddenSize = hiddenSize
         self.kvDim = kvDim
+        self.qDim = meta.geometry.map { $0.numHeads * $0.headDim } ?? hiddenSize
+        self.tailSplit = meta.tail == "split"
         self.packageDir = dir
         self.compiledDir = dir.appendingPathComponent("compiled-v\(meta.version)")
         try FileManager.default.createDirectory(
@@ -340,8 +349,11 @@ final class ANEPrefillAttention: @unchecked Sendable {
             meta.chunkTokens * hiddenSize,
             "ane.staging.normed")
         self.stagingOut = try staging(
-            meta.chunkTokens * hiddenSize,
+            meta.chunkTokens * max(hiddenSize, self.qDim),
             "ane.staging.out")
+        self.stagingGate = try staging(
+            meta.chunkTokens * self.qDim,
+            "ane.staging.gate")
         self.stagingK = try staging(meta.chunkTokens * kvDim, "ane.staging.k")
         self.stagingV = try staging(meta.chunkTokens * kvDim, "ane.staging.v")
     }

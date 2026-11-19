@@ -341,6 +341,24 @@ post-rope K/V in token-major layout to **0.059%** (a standalone probe, not the
 verifier, which checks only `out`). What changed between v4.5 and this
 install/runtime is the open question for TT-099.
 
+The fix is the **tail split**: the exporter now returns the attention core
+(`attn`) and the pre-sigmoid gate (`gate`), and the runtime applies
+`sigmoid`/`wo` on the GPU in fp32. Measured on the re-exported split sidecar
+(2026-11-19, M3 24 GB, chunk 4,096):
+
+| Gate | Split sidecar |
+| --- | --- |
+| verify, synthetic | **0.147%** |
+| verify, real captured normed | **0.619%** (fused: 4.245%) |
+| live logits, `on` | **4.34%** (fused: 5.55%) |
+| identical greedy | false, but **coherent** and common prefix **35** (fused: 0, repeated `S`) |
+| prefill, 4,333 tokens (single run) | ANE **78.14 s** vs GPU **101.34 s** |
+
+The residual 4.34% comes from the attention core’s own 0.62% block error, so
+the identical-greedy bar is still open; the answer is valid text rather than
+the fused graph’s degenerate loop. A sidecar records `"tail": "split"`; a
+sidecar without the field keeps the historical fused path.
+
 Decision: the fp32 changes were reverted (they were numerically inert and the
 core was 1.56x slower per layer), the local sidecar is renamed
 `ane_prefill-rejected`, and `tools/ane_sidecars.sh` refuses to export one for

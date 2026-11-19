@@ -678,3 +678,6 @@ model at 6,103 tokens with token-for-token greedy agreement (`docs/v4.5-ane-pref
 token-major layout to 0.059% on the fp32-core sidecar (probe, not the verifier —
 which checks only `out`). Do not ship a sidecar for
 this install until identical-greedy passes.
+
+The tail split, its measurements and the remaining acceptance decision are in
+`docs/handover-ane-ornith.md` (2026-11-19, evening).

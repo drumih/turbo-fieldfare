@@ -644,13 +644,13 @@ def build_variant(history: int, weights: dict[str, np.ndarray], geom: Geometry):
         probs = mb.softmax(x=scores, axis=-1)
         attn = mb.matmul(x=probs, y=v_g)
 
-        gated = mb.mul(
-            x=mb.transpose(x=attn, perm=[0, 2, 1, 3]),
-            y=mb.sigmoid(x=mb.reshape(x=gate, shape=[1, t, N_Q_HEADS, HEAD_DIM])),
-        )
-        merged = mb.reshape(x=gated, shape=[t, Q_DIM])
-        out = mb.matmul(x=merged, y=weights["wo"].T)
-        return out, k_new, v_new
+        # Return the attention core and the pre-sigmoid gate; the runtime
+        # applies sigmoid + wo on the GPU. The ANE's fp16 accumulation loses
+        # that tail (measured 1.74% / 3.96% / 4.25% for gate / wo / both, against
+        # 0.64% for the core alone; benchmark/ane-prefill/README.md).
+        attn_flat = mb.reshape(x=mb.transpose(x=attn, perm=[0, 2, 1, 3]), shape=[t, Q_DIM])
+        gate_flat = mb.reshape(x=gate, shape=[t, Q_DIM])
+        return attn_flat, gate_flat, k_new, v_new
 
     if history > 0:
 
@@ -673,7 +673,9 @@ def build_variant(history: int, weights: dict[str, np.ndarray], geom: Geometry):
     # Stable I/O names for the Swift runtime.
     spec = model.get_spec()
     rename = {}
-    for out_obj, want in zip(spec.description.output, ("out", "k_new", "v_new"), strict=False):
+    for out_obj, want in zip(
+        spec.description.output, ("attn", "gate", "k_new", "v_new"), strict=False
+    ):
         rename[out_obj.name] = want
     for old, new in rename.items():
         ct.utils.rename_feature(spec, old, new)
@@ -949,6 +951,10 @@ def main() -> int:
             # The runtime requires this flag. A sidecar that predates it (or
             # was written by a failing export) is refused, so the ~38x
             # CPU-fallback prefill of issue #7 cannot happen.
+            # The graph returns the attention core and the pre-sigmoid gate;
+            # the runtime applies gate + wo on the GPU, where the fp32
+            # accumulation keeps the result (the ANE's fp16 tail loses it).
+            "tail": "split",
             "aneCompileVerified": True,
             # True for a family whose full-attention layers select keys with a
             # sparse indexer: the runtime refuses such a model's sidecar unless

@@ -32,10 +32,12 @@ extension RealForwardRunner {
         cb: inout MTLCommandBuffer,
         layer L: Int,
         scratch: PrefillChunkScratchBuffers,
+        views: LayerPrefillQKVViews,
         tokenCount t: Int,
         hiddenSize D: Int,
         startPosition: Int,
         kvDim: Int,
+        useTwoRowProjection: Bool,
         selection: QSASelection?
     ) async throws {
         let halfBytes = MemoryLayout<Float16>.stride
@@ -79,13 +81,53 @@ extension RealForwardRunner {
                 valueSource: ane.stagingV,
                 bytesPerToken: kvDim * halfBytes)
         }
-        guard let out = cb.makeBlitCommandEncoder() else {
-            throw ModelError.residentBufferWrapFailed
+        if ane.tailSplit {
+            // The sidecar returned the attention core and the pre-sigmoid
+            // gate; the fp16 ANE loses the gate/wo result (4.25% against the
+            // fp32 reference), so the tail runs here with the GPU's fp32
+            // accumulation.
+            let qDim = ane.qDim
+            guard let blit = cb.makeBlitCommandEncoder() else {
+                throw ModelError.residentBufferWrapFailed
+            }
+            blit.copy(
+                from: ane.stagingOut, sourceOffset: 0,
+                to: scratch.attentionOutput, destinationOffset: 0,
+                size: t * qDim * halfBytes)
+            blit.copy(
+                from: ane.stagingGate, sourceOffset: 0,
+                to: scratch.attnGate, destinationOffset: 0,
+                size: t * qDim * halfBytes)
+            blit.endEncoding()
+            if cfg.attnOutputGate {
+                try requireElementwise().encodeSigmoidGateMul(
+                    commandBuffer: cb,
+                    out: scratch.attentionOutput,
+                    gate: scratch.attnGate,
+                    count: t * qDim)
+            }
+            try encodeAffineProjection(
+                commandBuffer: cb,
+                family: .o,
+                weightBits: model.qoProjectionWeightBits,
+                weights: try views.require(views.o, "o"),
+                x: scratch.attentionOutput,
+                y: scratch.h1,
+                rows: D,
+                columns: qDim,
+                tokenCount: t,
+                xStrideElements: qDim,
+                yStrideElements: D,
+                useTwoRowProjection: useTwoRowProjection)
+        } else {
+            guard let out = cb.makeBlitCommandEncoder() else {
+                throw ModelError.residentBufferWrapFailed
+            }
+            out.copy(
+                from: ane.stagingOut, sourceOffset: 0,
+                to: scratch.h1, destinationOffset: 0,
+                size: t * D * halfBytes)
+            out.endEncoding()
         }
-        out.copy(
-            from: ane.stagingOut, sourceOffset: 0,
-            to: scratch.h1, destinationOffset: 0,
-            size: t * D * halfBytes)
-        out.endEncoding()
     }
 }

@@ -208,6 +208,32 @@ private func makeSelection(
         #expect(try ANEPrefillAttention.loadSidecarMetadata(at: metaURL).version == 1)
     }
 
+    /// The graph's contract changed when the tail split landed: a sidecar that
+    /// records `tail: "split"` returns `attn`/`gate` and the runtime applies
+    /// gate + wo on the GPU, while an older sidecar (no field) returns `out`.
+    /// The runtime has to tell them apart before it names an output.
+    @Test func aSplitTailIsRecordedAndAbsentMeansFused() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ane-tail-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let metaURL = dir.appendingPathComponent("ane_prefill.json")
+
+        func write(tail: String?) throws {
+            var meta: [String: Any] = [
+                "version": 1, "family": "qwen36", "chunkTokens": 4096,
+                "histories": [0], "layers": [3], "aneCompileVerified": true,
+            ]
+            if let tail { meta["tail"] = tail }
+            try JSONSerialization.data(withJSONObject: meta).write(to: metaURL)
+        }
+
+        try write(tail: "split")
+        #expect(try ANEPrefillAttention.loadSidecarMetadata(at: metaURL).tail == "split")
+        try write(tail: nil)
+        #expect(try ANEPrefillAttention.loadSidecarMetadata(at: metaURL).tail == nil)
+    }
+
     @Test func sidecarExportedFromDifferentWeightsIsRejected() throws {
         let ctx = try MetalContext()
         let dir = FileManager.default.temporaryDirectory

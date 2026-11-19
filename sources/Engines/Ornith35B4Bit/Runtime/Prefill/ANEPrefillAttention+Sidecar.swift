@@ -45,6 +45,10 @@ extension ANEPrefillAttention {
         /// sidecar for a dense family; the runtime refuses to load a
         /// sparse-indexed model's sidecar that does not record it.
         let selectionFolded: Bool?
+        /// "split" when the graph returns the attention core ("attn") and the
+        /// pre-sigmoid gate ("gate") and the runtime applies gate + wo on the
+        /// GPU. Absent means the historical fused graph ("out" after wo).
+        let tail: String?
     }
 
     static let expectedVersion = 1

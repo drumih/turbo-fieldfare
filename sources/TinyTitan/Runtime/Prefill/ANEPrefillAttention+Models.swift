@@ -397,18 +397,36 @@ extension ANEPrefillAttention {
         let provider = try MLDictionaryFeatureProvider(
             dictionary: features.mapValues { MLFeatureValue(multiArray: $0) })
         let options = MLPredictionOptions()
-        options.outputBackings = [
-            "out": try wrap(stagingOut, rows: chunkTokens, columns: hiddenSize),
+        var backings: [String: MLMultiArray] = [
             "k_new": try wrap(stagingK, rows: chunkTokens, columns: kvDim),
             "v_new": try wrap(stagingV, rows: chunkTokens, columns: kvDim),
         ]
+        if tailSplit {
+            backings["attn"] = try wrap(
+                stagingOut, rows: chunkTokens, columns: qDim)
+            backings["gate"] = try wrap(
+                stagingGate, rows: chunkTokens, columns: qDim)
+        } else {
+            backings["out"] = try wrap(
+                stagingOut, rows: chunkTokens, columns: hiddenSize)
+        }
+        options.outputBackings = backings
         let model = try await model(layer: layer, history: history)
         let result = try await model.prediction(from: provider, options: options)
         // Output backings are best-effort; copy back any output Core ML chose
         // to allocate elsewhere.
-        try copyIfNotBacked(
-            result, name: "out", buffer: stagingOut,
-            elements: chunkTokens * hiddenSize)
+        if tailSplit {
+            try copyIfNotBacked(
+                result, name: "attn", buffer: stagingOut,
+                elements: chunkTokens * qDim)
+            try copyIfNotBacked(
+                result, name: "gate", buffer: stagingGate,
+                elements: chunkTokens * qDim)
+        } else {
+            try copyIfNotBacked(
+                result, name: "out", buffer: stagingOut,
+                elements: chunkTokens * hiddenSize)
+        }
         try copyIfNotBacked(
             result, name: "k_new", buffer: stagingK,
             elements: chunkTokens * kvDim)

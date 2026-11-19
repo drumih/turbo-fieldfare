@@ -377,8 +377,9 @@ extension RealForwardRunner {
             // choice, or it attends to keys the model drops.
             try await runANEFullAttentionPrefill(
                 ane: ane, cb: &cb, layer: L, scratch: scratch,
-                tokenCount: t, hiddenSize: D,
+                views: views, tokenCount: t, hiddenSize: D,
                 startPosition: startPosition, kvDim: kvDim,
+                useTwoRowProjection: useTwoRowProjection,
                 selection: qsaSelection)
         } else {
             try encodeFullAttentionPrefill(

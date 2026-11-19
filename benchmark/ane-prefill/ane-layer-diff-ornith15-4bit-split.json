@@ -1,0 +1,321 @@
+{
+  "recorded_at": "2026-11-19T14:57:58+00:00",
+  "prompt_characters": 23000,
+  "prefill_chunk": 4096,
+  "attention_layers": [
+    3
+  ],
+  "results": [
+    {
+      "model": "ornith-1.5_35B_A3B_4Bit",
+      "arms": {
+        "off": {
+          "arm": "off",
+          "exit": 0,
+          "used_ane": true,
+          "causal_warning": false,
+          "prefill_seconds": 94.22,
+          "prefill_tokens": 4333
+        },
+        "on": {
+          "arm": "on",
+          "exit": 0,
+          "used_ane": true,
+          "causal_warning": false,
+          "prefill_seconds": 147.34,
+          "prefill_tokens": 4333
+        }
+      },
+      "comparisons": {
+        "on": {
+          "pos0/L0_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L0_rows_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L10_rows_after": {
+            "mean_relative_percent": 0.1726195365190506,
+            "max_absolute": 0.03125
+          },
+          "pos0/L11_rows_after": {
+            "mean_relative_percent": 0.4095008671283722,
+            "max_absolute": 0.03125
+          },
+          "pos0/L12_rows_after": {
+            "mean_relative_percent": 0.3961297571659088,
+            "max_absolute": 0.03125
+          },
+          "pos0/L13_rows_after": {
+            "mean_relative_percent": 0.3943325877189636,
+            "max_absolute": 0.03125
+          },
+          "pos0/L14_rows_after": {
+            "mean_relative_percent": 0.3877340853214264,
+            "max_absolute": 0.03125
+          },
+          "pos0/L15_rows_after": {
+            "mean_relative_percent": 0.5251148343086243,
+            "max_absolute": 0.03125
+          },
+          "pos0/L16_rows_after": {
+            "mean_relative_percent": 0.5234835147857666,
+            "max_absolute": 0.03125
+          },
+          "pos0/L17_rows_after": {
+            "mean_relative_percent": 0.5220955610275269,
+            "max_absolute": 0.03125
+          },
+          "pos0/L18_rows_after": {
+            "mean_relative_percent": 0.5164443254470825,
+            "max_absolute": 0.03125
+          },
+          "pos0/L19_rows_after": {
+            "mean_relative_percent": 0.5445284843444824,
+            "max_absolute": 0.03125
+          },
+          "pos0/L1_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L1_rows_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L20_rows_after": {
+            "mean_relative_percent": 0.5423875451087952,
+            "max_absolute": 0.03125
+          },
+          "pos0/L21_rows_after": {
+            "mean_relative_percent": 0.54118412733078,
+            "max_absolute": 0.03125
+          },
+          "pos0/L22_rows_after": {
+            "mean_relative_percent": 0.5146598219871521,
+            "max_absolute": 0.03125
+          },
+          "pos0/L23_rows_after": {
+            "mean_relative_percent": 0.5375527739524841,
+            "max_absolute": 0.03125
+          },
+          "pos0/L24_rows_after": {
+            "mean_relative_percent": 0.5363358855247498,
+            "max_absolute": 0.03125
+          },
+          "pos0/L25_rows_after": {
+            "mean_relative_percent": 0.5363125801086426,
+            "max_absolute": 0.03125
+          },
+          "pos0/L26_rows_after": {
+            "mean_relative_percent": 0.5330873727798462,
+            "max_absolute": 0.03125
+          },
+          "pos0/L27_rows_after": {
+            "mean_relative_percent": 0.5722810626029968,
+            "max_absolute": 0.03125
+          },
+          "pos0/L28_rows_after": {
+            "mean_relative_percent": 0.5736047625541687,
+            "max_absolute": 0.03125
+          },
+          "pos0/L29_rows_after": {
+            "mean_relative_percent": 0.5735015869140625,
+            "max_absolute": 0.03125
+          },
+          "pos0/L2_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L2_rows_after": {
+            "mean_relative_percent": 0.0,
+            "max_absolute": 0.0
+          },
+          "pos0/L30_rows_after": {
+            "mean_relative_percent": 0.5702264308929443,
+            "max_absolute": 0.03125
+          },
+          "pos0/L31_rows_after": {
+            "mean_relative_percent": 1.4355660676956177,
+            "max_absolute": 0.033203125
+          },
+          "pos0/L32_rows_after": {
+            "mean_relative_percent": 1.4271801710128784,
+            "max_absolute": 0.029296875
+          },
+          "pos0/L33_rows_after": {
+            "mean_relative_percent": 1.4155352115631104,
+            "max_absolute": 0.033203125
+          },
+          "pos0/L34_rows_after": {
+            "mean_relative_percent": 1.4121878147125244,
+            "max_absolute": 0.0615234375
+          },
+          "pos0/L35_rows_after": {
+            "mean_relative_percent": 1.370741367340088,
+            "max_absolute": 0.025390625
+          },
+          "pos0/L36_rows_after": {
+            "mean_relative_percent": 1.4006881713867188,
+            "max_absolute": 0.0234375
+          },
+          "pos0/L37_rows_after": {
+            "mean_relative_percent": 1.4296236038208008,
+            "max_absolute": 0.01953125
+          },
+          "pos0/L38_rows_after": {
+            "mean_relative_percent": 1.3515572547912598,
+            "max_absolute": 0.01953125
+          },
+          "pos0/L39_rows_after": {
+            "mean_relative_percent": 1.4921698570251465,
+            "max_absolute": 0.019775390625
+          },
+          "pos0/L3_after": {
+            "mean_relative_percent": 0.6022184491157532,
+            "max_absolute": 0.00634765625
+          },
+          "pos0/L3_rows_after": {
+            "mean_relative_percent": 0.1303141862154007,
+            "max_absolute": 0.000732421875
+          },
+          "pos0/L4_rows_after": {
+            "mean_relative_percent": 0.12325219810009003,
+            "max_absolute": 0.00048828125
+          },
+          "pos0/L5_rows_after": {
+            "mean_relative_percent": 0.12135236710309982,
+            "max_absolute": 0.00048828125
+          },
+          "pos0/L6_rows_after": {
+            "mean_relative_percent": 0.08525452762842178,
+            "max_absolute": 0.00390625
+          },
+          "pos0/L7_rows_after": {
+            "mean_relative_percent": 0.5503200888633728,
+            "max_absolute": 0.005859375
+          },
+          "pos0/L8_rows_after": {
+            "mean_relative_percent": 0.559622585773468,
+            "max_absolute": 0.00390625
+          },
+          "pos0/L9_rows_after": {
+            "mean_relative_percent": 0.5238638520240784,
+            "max_absolute": 0.00390625
+          },
+          "pos0/final_normed": {
+            "mean_relative_percent": 6.069438457489014,
+            "max_absolute": 0.23388671875
+          },
+          "pos0/prefill_logits": {
+            "mean_relative_percent": 4.340003490447998,
+            "max_absolute": 1.0439453125
+          }
+        }
+      },
+      "dump_activations": {
+        "off": [
+          "pos0/L0_after",
+          "pos0/L0_rows_after",
+          "pos0/L10_rows_after",
+          "pos0/L11_rows_after",
+          "pos0/L12_rows_after",
+          "pos0/L13_rows_after",
+          "pos0/L14_rows_after",
+          "pos0/L15_rows_after",
+          "pos0/L16_rows_after",
+          "pos0/L17_rows_after",
+          "pos0/L18_rows_after",
+          "pos0/L19_rows_after",
+          "pos0/L1_after",
+          "pos0/L1_rows_after",
+          "pos0/L20_rows_after",
+          "pos0/L21_rows_after",
+          "pos0/L22_rows_after",
+          "pos0/L23_rows_after",
+          "pos0/L24_rows_after",
+          "pos0/L25_rows_after",
+          "pos0/L26_rows_after",
+          "pos0/L27_rows_after",
+          "pos0/L28_rows_after",
+          "pos0/L29_rows_after",
+          "pos0/L2_after",
+          "pos0/L2_rows_after",
+          "pos0/L30_rows_after",
+          "pos0/L31_rows_after",
+          "pos0/L32_rows_after",
+          "pos0/L33_rows_after",
+          "pos0/L34_rows_after",
+          "pos0/L35_rows_after",
+          "pos0/L36_rows_after",
+          "pos0/L37_rows_after",
+          "pos0/L38_rows_after",
+          "pos0/L39_rows_after",
+          "pos0/L3_after",
+          "pos0/L3_in",
+          "pos0/L3_kraw",
+          "pos0/L3_qpacked",
+          "pos0/L3_rows_after",
+          "pos0/L3_vraw",
+          "pos0/L4_rows_after",
+          "pos0/L5_rows_after",
+          "pos0/L6_rows_after",
+          "pos0/L7_rows_after",
+          "pos0/L8_rows_after",
+          "pos0/L9_rows_after",
+          "pos0/final_normed",
+          "pos0/prefill_logits"
+        ],
+        "on": [
+          "pos0/L0_after",
+          "pos0/L0_rows_after",
+          "pos0/L10_rows_after",
+          "pos0/L11_rows_after",
+          "pos0/L12_rows_after",
+          "pos0/L13_rows_after",
+          "pos0/L14_rows_after",
+          "pos0/L15_rows_after",
+          "pos0/L16_rows_after",
+          "pos0/L17_rows_after",
+          "pos0/L18_rows_after",
+          "pos0/L19_rows_after",
+          "pos0/L1_after",
+          "pos0/L1_rows_after",
+          "pos0/L20_rows_after",
+          "pos0/L21_rows_after",
+          "pos0/L22_rows_after",
+          "pos0/L23_rows_after",
+          "pos0/L24_rows_after",
+          "pos0/L25_rows_after",
+          "pos0/L26_rows_after",
+          "pos0/L27_rows_after",
+          "pos0/L28_rows_after",
+          "pos0/L29_rows_after",
+          "pos0/L2_after",
+          "pos0/L2_rows_after",
+          "pos0/L30_rows_after",
+          "pos0/L31_rows_after",
+          "pos0/L32_rows_after",
+          "pos0/L33_rows_after",
+          "pos0/L34_rows_after",
+          "pos0/L35_rows_after",
+          "pos0/L36_rows_after",
+          "pos0/L37_rows_after",
+          "pos0/L38_rows_after",
+          "pos0/L39_rows_after",
+          "pos0/L3_after",
+          "pos0/L3_rows_after",
+          "pos0/L4_rows_after",
+          "pos0/L5_rows_after",
+          "pos0/L6_rows_after",
+          "pos0/L7_rows_after",
+          "pos0/L8_rows_after",
+          "pos0/L9_rows_after",
+          "pos0/final_normed",
+          "pos0/prefill_logits"
+        ]
+      }
+    }
+  ]
+}

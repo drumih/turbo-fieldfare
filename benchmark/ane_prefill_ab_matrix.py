@@ -37,6 +37,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 MODELS_DIR = ROOT / "models"
 CLI = ROOT / ".build/release/TinyTitanCLI"
 RESULTS = ROOT / "benchmark/ane-prefill"
+EXTRA_ARGS: list[str] = []
 
 PREFILL_CHUNK = 4096
 FALLBACK_MARKER = "ane-prefill fallback"
@@ -105,6 +106,7 @@ def run_arm(model: str, ane: bool, characters: int, chunk: int, timeout: int = 3
         "0",
         "--prefill-chunk",
         str(chunk),
+        *EXTRA_ARGS,
     ]
     proc = subprocess.run(
         command, capture_output=True, text=True, env=env, cwd=ROOT, timeout=timeout, check=False
@@ -304,6 +306,12 @@ def main() -> int:
     )
     parser.add_argument("--label", default=None)
     parser.add_argument(
+        "--ram-budget",
+        default=None,
+        help="passed through to the CLI as --ram-budget (e.g. 10G), so a "
+        "budgeted install is measured at the budget it runs at",
+    )
+    parser.add_argument(
         "--record",
         action="store_true",
         help="write benchmark/ane-prefill/<label>.json, after "
@@ -316,6 +324,9 @@ def main() -> int:
         "the record (this is how a held run resumes)",
     )
     args = parser.parse_args()
+
+    global EXTRA_ARGS
+    EXTRA_ARGS = ["--ram-budget", args.ram_budget] if args.ram_budget else []
 
     chunk_floor = int(args.prefill_chunk * CHARACTERS_PER_TOKEN)
     if args.prompt_characters < chunk_floor:

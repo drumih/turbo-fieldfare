@@ -1,0 +1,62 @@
+{
+  "recorded_at": "2026-11-19T15:01:13+00:00",
+  "prompt_characters": 23000,
+  "prefill_chunk": 4096,
+  "max_new_tokens": 32,
+  "results": [
+    {
+      "model": "ornith-1.5_35B_A3B_4Bit",
+      "max_new_tokens": 32,
+      "measured": {
+        "off": {
+          "decode_tokens": 32,
+          "prefill_seconds": 101.34,
+          "finish": "maxTokens"
+        },
+        "on": {
+          "decode_tokens": 32,
+          "prefill_seconds": 78.14,
+          "finish": "maxTokens"
+        }
+      },
+      "comparisons": {
+        "on": {
+          "identical": false,
+          "common_prefix_characters": 35,
+          "characters": 146,
+          "first_divergence": {
+            "at_character": 35,
+            "off": "ft vs C++: A Fair Comparison\n\nLet me address the elephant in",
+            "arm": "ft vs C++: A Fair Comparison\n\nBefore judging, let me name th"
+          }
+        }
+      },
+      "arms": {
+        "off": {
+          "arm": "off",
+          "exit": 0,
+          "prefill_tokens": 4333,
+          "prefill_seconds": 101.34,
+          "decode_tokens": 32,
+          "finish": "maxTokens",
+          "used_ane": true,
+          "causal_warning": false
+        },
+        "on": {
+          "arm": "on",
+          "exit": 0,
+          "prefill_tokens": 4333,
+          "prefill_seconds": 78.14,
+          "decode_tokens": 32,
+          "finish": "maxTokens",
+          "used_ane": true,
+          "causal_warning": false
+        }
+      },
+      "responses": {
+        "off": "# Swift vs C++: A Fair Comparison\n\nLet me address the elephant in the room first: your prompt contains the same sentence repeated dozens of times.",
+        "on": "# Swift vs C++: A Fair Comparison\n\nBefore judging, let me name the axes. Swift and C++ are not the same kind of tool,"
+      }
+    }
+  ]
+}
