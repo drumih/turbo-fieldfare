@@ -650,7 +650,11 @@ pre-fix failure exactly, and the fp32 core made the graph slower:
   0.0101 x 4.245% real) — the larger relative error on the real input is
   mostly its smaller output scale. The live ANE-vs-GPU difference is 0.34-0.6%
   per layer, compounding to 5.55% logits over ten layers and flipping the
-  greedy first token: numerical non-equivalence, not a wiring/input/KV bug.
+  greedy first token. Decisive: the same package scores **4.245% on CPU+ANE,
+  2.419% on CPU only and 0.075% on CPU+GPU** against the fp32 reference — the
+  graph is right and the ANE's fp16 accumulation is the limit (manual fp16
+  and fp32 softmax compile to the same result; FLOAT32 precision leaves it at
+  4.248%). Not a wiring/input/KV bug, and not fixable by a cast.
 
 Decision: `d750fa2c` (softmax-only) and `ba76b292` (fp32 core) are reverted —
 both were numerically inert on the live model and the core cost 1.56x per

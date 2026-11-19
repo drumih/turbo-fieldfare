@@ -301,7 +301,21 @@ the real input is mostly its smaller output scale, not an amplitude-dependent
 defect. The live ANE-vs-GPU difference is the full-layer 0.34-0.6% per attention
 layer, which compounds over ten layers to 5.55% logits and flips the greedy
 first token. This is numerical non-equivalence, not a wiring, input or KV
-bug.
+bug. The decisive comparison runs the **same package** on three compute units
+and scores each against the fp32 reference on the real input:
+
+| Compute unit | Relative error | Peak |
+| --- | ---: | ---: |
+| CPU + Neural Engine | **4.245%** | 56.4% |
+| CPU only | **2.419%** | 96.9% |
+| CPU + GPU | **0.075%** | 6.4% |
+
+The graph is right — the GPU executes it to 0.075%. The ANE (and the CPU)
+lose precision in the fp16 matmul/softmax accumulation at these activation
+magnitudes; the same package on the GPU accumulates in fp32. That is a
+device-precision limit, not something a cast or a different softmax can
+repair: manual fp16 and manual fp32 softmax compile to the same result as the
+fused op, and `compute_precision=FLOAT32` leaves the error at 4.248%.
 
 This is a **regression from the v4.5 qualification**, not an inherent limit of
 the block: at v4.5 the same Ornith 1.5 35B-A3B 4-bit measured **2.31x** at a
