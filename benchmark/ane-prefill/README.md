@@ -407,3 +407,39 @@ causal-only control agreed with the GPU for all 32 tokens too. The per-arm
 activation comparison (the `ane-layer-diff-*.json` record, likewise removed)
 is what separates them, via
 `prefill_logits`.
+## Ornith 1.5 35B-A3B — the tail split and its rejection (TT-099, 2026-11-19)
+
+The Ornith 35B sidecar failed the identical-greedy bar. The error was isolated
+to the block tail's fp16 accumulation (attention core 0.64%, gate 1.74%,
+`wo` 3.96%, gate+`wo` 4.25% vs 0.075% for the same package on the GPU) and
+fixed by the tail split (`8a858510`): the exporter returns `attn`/`gate`
+(`"tail": "split"`) and the runtime applies sigmoid/`wo` on the GPU in fp32.
+Measured on the split sidecar: verify 0.147% synthetic / 0.619% real (was
+4.245%), live logits 4.34% (was 5.55%), greedy output coherent with a
+35-character common prefix (was 0 / repeated `S`).
+
+Paired prefill benchmark at `--ram-budget 10G` (`v7-ornith-ane-ram10.json`,
+4,333 tokens, chunk 4096, warm-up + 2 measured runs per arm, median):
+GPU **140.095 s**, ANE **117.995 s**, **1.187×** (22.1 s saved). Host during
+the run was a GUI Mac (load 10.51; Chrome 79%, WindowServer 41%) — the ratio
+is the paired reading, absolute numbers are inflated. At the default budget
+the single-run gate-3 times were ANE 78.14 s vs GPU 101.34 s (1.30×).
+
+**Rejected on the identical-greedy bar (2026-11-19):** the split sidecar's
+greedy output is coherent but not token-identical to the GPU arm (live logits
+4.34%), and the project's quality rule does not ship a text-changing sidecar
+behind the documented install step. The sidecars are preserved as evidence and
+both are **out of the auto-selected location**:
+
+- `ane_prefill-rejected/` — the fused sidecar (original 4.245% error); the
+  proof of the tail diagnosis.
+- `ane_prefill-rejected-split/` — the split sidecar (0.619% verify, coherent,
+  1.187× @10G); the candidate. Reviving it is a rename to `ane_prefill/` plus
+  the owner's sign-off on the coherent bar — nothing else is needed.
+
+With no `ane_prefill/` present, Ornith 1.5 35B-A3B serves prefill on the GPU
+(identical-greedy text), and `TINYTITAN_PREFILL_ANE=on` refuses by name
+("sidecar missing; run tools/export_ane_prefill.py …") instead of silently
+degrading. `tools/ane_sidecars.sh` continues to refuse new Ornith 35B
+sidecars; the fp32 variants (`*-fp32softmax`, `*-fp32core` records) were
+inert and are reverted history.
