@@ -15,8 +15,7 @@
 > — GPU 140.10 s, ANE 118.00 s, 1.19×, 2 runs/arm, `used_ane` true. Nothing is
 > running.
 >
-> **Do next, in order:** (1) collect or re-run the 10G benchmark and present the
-> ANE/GPU medians with the machine state; (2) decide with the owner whether
+> **Do next, in order:** (1) review the completed 10G table above with the machine state; (2) decide with the owner whether
 > "coherent + 35-char agreement" is the bar or identical text is mandatory;
 > (3) if accepted, update the README/wiki/Tracker and close TT-099; if not,
 > rename `models/ornith-1.5_35B_A3B_4Bit/ane_prefill` to
@@ -64,7 +63,7 @@ change nothing; `compute_precision=FLOAT32` leaves 4.248%.
 | 4 paired @10G | GPU **140.10 s**, ANE **118.00 s**, **1.19×** (22.10 s saved), 2 runs/arm, `used_ane` true; host load 6.0 at record time |
 
 `benchmark/ane-prefill/ane-correctness-ane-correctness-ornith15-4bit-split.json`
-and `ane-layer-diff-ornith15-4bit-split.json` are committed. The older
+`ane-layer-diff-ornith15-4bit-split.json` and `v7-ornith-ane-ram10.json` are committed. The older
 `*-baseline`, `*-fp32softmax`, `*-fp32core` records are the failing history and
 must not be overwritten.
 
