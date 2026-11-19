@@ -660,5 +660,8 @@ baseline). Evidence records are committed under `benchmark/ane-prefill/`; the
 plan/spec are committed under `docs/superpowers/`.
 
 Open for TT-099: name the semantic or fp16-boundary difference with a real-input
-probe before another export, then re-run gates 1-4. Do not ship a sidecar for
+probe before another export, then re-run gates 1-4. Two facts bound the search. This is a regression, not an inherent limit: v4.5 measured 2.31x on the same
+model at 6,103 tokens with token-for-token greedy agreement (`docs/v4.5-ane-prefill.md`). And the cache hand-off is not it: `k_new`/`v_new` match the reference in
+token-major layout to 0.059% on the fp32-core sidecar (probe, not the verifier —
+which checks only `out`). Do not ship a sidecar for
 this install until identical-greedy passes.

@@ -297,6 +297,15 @@ in the core is therefore not the lever; the difference is consistent with the
 graph's fp16 output boundary or a semantic difference that only shows at the
 real input's output scale, and that is not established.
 
+This is a **regression from the v4.5 qualification**, not an inherent limit of
+the block: at v4.5 the same Ornith 1.5 35B-A3B 4-bit measured **2.31x** at a
+6,103-token prompt (132.90 s to 57.52 s) and its greedy smoke output matched the
+GPU path token-for-token (`docs/v4.5-ane-prefill.md`). The cache hand-off is not
+the regression: on the fp32-core sidecar, `k_new`/`v_new` match the reference's
+post-rope K/V in token-major layout to **0.059%** (a standalone probe, not the
+verifier, which checks only `out`). What changed between v4.5 and this
+install/runtime is the open question for TT-099.
+
 Decision: the fp32 changes were reverted (they were numerically inert and the
 core was 1.56x slower per layer), the local sidecar is renamed
 `ane_prefill-rejected`, and `tools/ane_sidecars.sh` refuses to export one for
