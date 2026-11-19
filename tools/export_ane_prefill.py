@@ -60,6 +60,19 @@ import numpy as np
 import coremltools as ct
 from coremltools.converters.mil import Builder as mb
 
+
+def fp32_softmax(scores):
+    """Softmax accumulated in fp32 inside the otherwise-fp16 program.
+
+    The GPU reference runs a flash-style fp32 online softmax; the plain fp16
+    softmax compounded to 5.55% logits divergence across the 35B's ten ANE
+    layers and flipped the greedy argmax at token 1 (2026-11-19 diagnosis).
+    The cast pair compiles and runs on the ANE (coremltools 9, CPU_AND_NE).
+    """
+    probs32 = mb.softmax(x=mb.cast(x=scores, dtype="fp32"), axis=-1)
+    return mb.cast(x=probs32, dtype="fp16")
+
+
 try:
     from coremltools.models.compute_plan import MLComputePlan
 except Exception:  # noqa: BLE001 — optional
@@ -641,7 +654,7 @@ def build_variant(history: int, weights: dict[str, np.ndarray], geom: Geometry):
         scores = mb.matmul(x=q4, y=k_g, transpose_y=True)
         scores = mb.mul(x=scores, y=np.float16(SCALE))
         scores = mb.add(x=scores, y=mask)
-        probs = mb.softmax(x=scores, axis=-1)
+        probs = fp32_softmax(scores)
         attn = mb.matmul(x=probs, y=v_g)
 
         gated = mb.mul(

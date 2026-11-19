@@ -69,6 +69,103 @@ ENTRIES = {f"{PREFIX}3.self_attn.q_proj.weight": {}}
 
 
 @unittest.skipIf(exporter is None, f"exporter needs coremltools: {IMPORT_ERROR}")
+class SoftmaxPrecisionTests(unittest.TestCase):
+    """The softmax inside the sidecar's fp16 program accumulates in fp32.
+
+    The GPU reference runs a flash-style fp32 online softmax; the fp16 softmax
+    compounded to 5.55% logits divergence over the 35B's depth and flipped the
+    greedy argmax at token 1 (diagnosis 2026-11-19). The graph now casts the
+    scores to fp32 across the softmax and back, which the ANE executes.
+    """
+
+    def _ops(self):
+        import coremltools as ct
+        from coremltools.converters.mil.mil import Builder as mb
+
+        fp16 = ct.converters.mil.mil.types.fp16
+        specs = [mb.TensorSpec(shape=(2, 2, 4, 4), dtype=fp16)]
+
+        @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
+        def prog(scores):
+            return exporter.fp32_softmax(scores)
+
+        # The built block: walk the ops of the single function.
+        function = next(iter(prog.functions.values()))
+        return [op.op_type for op in function.operations]
+
+    def test_the_softmax_is_wrapped_in_fp32_casts(self):
+        ops = self._ops()
+        self.assertEqual(ops.count("cast"), 2, f"ops={ops}")
+        self.assertIn("softmax", ops)
+        # cast -> softmax -> cast, in that order.
+        self.assertLess(ops.index("cast"), ops.index("softmax"))
+        last_cast = max(i for i, op in enumerate(ops) if op == "cast")
+        self.assertGreater(last_cast, ops.index("softmax"))
+
+    def test_the_wrapped_softmax_compiles_and_runs(self):
+        import numpy as np
+        import coremltools as ct
+        from coremltools.converters.mil.mil import Builder as mb
+
+        H, T = 2, 8
+        fp16 = ct.converters.mil.mil.types.fp16
+        specs = [
+            mb.TensorSpec(shape=(1, H, T, T), dtype=fp16),
+            mb.TensorSpec(shape=(1, H, T, 16), dtype=fp16),
+        ]
+
+        @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
+        def prog(scores, v):
+            return mb.matmul(x=exporter.fp32_softmax(scores), y=v)
+
+        model = ct.convert(
+            prog,
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.iOS18,
+            compute_precision=ct.precision.FLOAT16,
+            compute_units=ct.ComputeUnit.CPU_AND_NE,
+        )
+        rng = np.random.default_rng(3)
+        out = model.predict(
+            {
+                "scores": rng.standard_normal((1, H, T, T)).astype(np.float16),
+                "v": rng.standard_normal((1, H, T, 16)).astype(np.float16),
+            }
+        )
+        raw = next(iter(out.values())) if isinstance(out, dict) else out
+        got = np.asarray(raw, dtype=np.float32)
+        self.assertTrue(np.isfinite(got).all())
+
+    def test_a_masked_row_stays_exact_under_the_fp32_softmax(self):
+        # The additive -30000 mask must survive the cast pair: masked scores
+        # softmax to ~0, not to NaN or a uniform row.
+        import numpy as np
+        import coremltools as ct
+        from coremltools.converters.mil.mil import Builder as mb
+
+        fp16 = ct.converters.mil.mil.types.fp16
+        specs = [mb.TensorSpec(shape=(1, 1, 1, 3), dtype=fp16)]
+
+        @mb.program(input_specs=specs, opset_version=ct.target.iOS18)
+        def prog(s):
+            return exporter.fp32_softmax(s)
+
+        model = ct.convert(
+            prog,
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.iOS18,
+            compute_precision=ct.precision.FLOAT16,
+            compute_units=ct.ComputeUnit.CPU_AND_NE,
+        )
+        scores = np.array([[[[1.0, -30000.0, -30000.0]]]], dtype=np.float16)
+        raw = model.predict({"s": scores})
+        raw = next(iter(raw.values())) if isinstance(raw, dict) else raw
+        got = np.asarray(raw, dtype=np.float32)
+        self.assertTrue(np.isfinite(got).all())
+        np.testing.assert_allclose(got.reshape(3), [1.0, 0.0, 0.0], atol=1e-6)
+
+
+@unittest.skipIf(exporter is None, f"exporter needs coremltools: {IMPORT_ERROR}")
 class GeometryTests(unittest.TestCase):
     def test_reads_the_geometry_and_the_full_attention_layers(self):
         geom = exporter.geometry_for(arch(), ENTRIES)
