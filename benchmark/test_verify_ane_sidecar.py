@@ -35,6 +35,49 @@ except Exception as exc:  # coremltools or numpy absent
 
 
 @unittest.skipIf(verify is None, f"verifier needs coremltools: {IMPORT_ERROR}")
+class ActivationDumpTests(unittest.TestCase):
+    """`--activation-dump` runs the verdict on a REAL captured normed.
+
+    The synthetic N(0,1) input lands the score dot-products near 1 where the
+    fp16 ulp is ~0.001, and structurally cannot reproduce the live input's
+    correlated rows: on ornith-1.5_35B_A3B_4Bit the same graph-vs-reference
+    comparison measured 0.555% synthetic but 4.245% real (2026-11-19) — which
+    is how an fp16 score materialization shipped blessed. An earlier attempt
+    gated a x8 scaled Gaussian instead; it PASSED on the defective graph
+    (0.162%) because the relative metric divides by a much larger attention
+    output, so it was removed rather than shipped as a gate that does not
+    gate.
+    """
+
+    def test_loads_a_matching_dump(self):
+        import numpy as np
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".f16", delete=False) as handle:
+            np.arange(64, dtype=np.float16).tofile(handle)
+            path = pathlib.Path(handle.name)
+        try:
+            got = verify.load_activation_dump(path, 8, 8)
+            self.assertEqual(got.shape, (8, 8))
+            self.assertEqual(int(got.ravel()[0]), 0)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_refuses_a_dump_of_the_wrong_size(self):
+        import numpy as np
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".f16", delete=False) as handle:
+            np.arange(63, dtype=np.float16).tofile(handle)
+            path = pathlib.Path(handle.name)
+        try:
+            with self.assertRaises(SystemExit):
+                verify.load_activation_dump(path, 8, 8)
+        finally:
+            path.unlink(missing_ok=True)
+
+
+@unittest.skipIf(verify is None, f"verifier needs coremltools: {IMPORT_ERROR}")
 class VerdictTests(unittest.TestCase):
     """The accept/refuse verdict on a graph-vs-reference comparison.
 

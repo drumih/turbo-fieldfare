@@ -163,6 +163,25 @@ def selection_mask(t: int, budget: int, compress_ratio: int, seed: int):
     return mask, kept
 
 
+def load_activation_dump(path: pathlib.Path, t: int, hidden: int) -> np.ndarray:
+    """Load a REAL captured normed — a `TINYTITAN_ACT_DUMP` `L*_in.f16`.
+
+    The synthetic N(0,1) input below lands the score dot-products near 1, where
+    the fp16 ulp is ~0.001, and structurally cannot reproduce the live input's
+    correlated rows: on ornith-1.5_35B_A3B_4Bit the same graph-vs-reference
+    comparison measured 0.555% synthetic but 4.245% on a real captured normed
+    (2026-11-19), which is how an fp16 score materialization shipped blessed.
+    Refuses a dump whose size does not match the chunk geometry.
+    """
+    raw = np.fromfile(path, dtype=np.float16)
+    if raw.size != t * hidden:
+        raise SystemExit(
+            f"{path}: {raw.size} elements, expected {t}*{hidden} = {t * hidden} "
+            "for this sidecar's chunk; wrong dump or wrong --chunk"
+        )
+    return raw.reshape(t, hidden)
+
+
 def compare_outputs(
     got: np.ndarray, expected: np.ndarray, max_relative_error: float
 ) -> tuple[bool, dict]:
@@ -232,6 +251,16 @@ def main() -> int:
         "automatically where it does)",
     )
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--activation-dump",
+        type=pathlib.Path,
+        default=None,
+        help="run one extra comparison on a REAL captured normed "
+        "(a TINYTITAN_ACT_DUMP `L*_in.f16`, [chunk*hidden] fp16). The "
+        "synthetic input cannot see amplitude- and structure-dependent fp16 "
+        "rounding: on ornith-1.5_35B_A3B_4Bit it measured 0.555%% while the "
+        "real captured normed measured 4.245%% (2026-11-19).",
+    )
     args = parser.parse_args()
 
     import coremltools as ct
@@ -290,6 +319,26 @@ def main() -> int:
     if not passed:
         print(f"FAIL: {stats['reason']}", file=sys.stderr)
         return 1
+
+    # The optional real-input check: the synthetic case above cannot see
+    # amplitude- and structure-dependent fp16 rounding (see
+    # load_activation_dump). Run it when a captured dump exists.
+    if args.activation_dump is not None:
+        real = load_activation_dump(args.activation_dump, t, geom.hidden)
+        expected_real = reference(real, weights, geom, mask, t)
+        got_real = model_ml.predict({"normed": real, "mask": mask.astype(np.float16)})["out"]
+        got_real = np.asarray(got_real, dtype=np.float32).reshape(expected_real.shape)
+        passed_real, stats_real = compare_outputs(got_real, expected_real, args.max_relative_error)
+        print(f"  real captured normed ({args.activation_dump.name}):")
+        print(f"    mean |expected| {stats_real['mean_expected']:.4f}")
+        if "relative" in stats_real:
+            print(
+                f"    relative error {stats_real['relative']:.3f} %"
+                f" (peak {stats_real['peak']:.3f} %)"
+            )
+        if not passed_real:
+            print(f"FAIL: {stats_real['reason']} (real captured input)", file=sys.stderr)
+            return 1
 
     # A sparse-indexed family's graph is only correct because the runtime folds
     # the indexer's selection into the mask. Measure that: the same graph under
