@@ -25,11 +25,66 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 try:
     import verify_ane_sidecar as verify
+    import numpy as np
 
     IMPORT_ERROR = ""
 except Exception as exc:  # coremltools or numpy absent
     verify = None
+    np = None
     IMPORT_ERROR = str(exc)
+
+
+@unittest.skipIf(verify is None, f"verifier needs coremltools: {IMPORT_ERROR}")
+class VerdictTests(unittest.TestCase):
+    """The accept/refuse verdict on a graph-vs-reference comparison.
+
+    `nan > threshold` is False in Python, so a 0/0 = nan error used to pass
+    the gate — which is how the zeroed 2B sidecar (0/0 both sides) was
+    blessed as "ok" (AUD, 2026-11-19). These tests pin the refusal.
+    """
+
+    def test_a_finite_error_inside_the_gate_passes(self):
+        got = np.full((4, 4), 1.0, dtype=np.float32)
+        expected = got + 0.001  # ~0.1 % relative
+        passed, stats = verify.compare_outputs(got, expected, max_relative_error=2.0)
+        self.assertTrue(passed, f"stats={stats}")
+        self.assertLess(stats["relative"], 2.0)
+
+    def test_an_error_above_the_gate_fails(self):
+        got = np.full((4, 4), 9.0, dtype=np.float32)
+        expected = np.full((4, 4), 1.0, dtype=np.float32)
+        passed, _ = verify.compare_outputs(got, expected, max_relative_error=2.0)
+        self.assertFalse(passed)
+
+    def test_a_nan_error_fails_instead_of_passing(self):
+        # All-zero expected: mean |expected| = 0, so relative = 0/0 = nan.
+        # `nan > 2.0` is False; the verdict must refuse, not pass.
+        got = np.zeros((4, 4), dtype=np.float32)
+        expected = np.zeros((4, 4), dtype=np.float32)
+        passed, stats = verify.compare_outputs(got, expected, max_relative_error=2.0)
+        self.assertFalse(passed, f"stats={stats}")
+
+    def test_a_nan_graph_output_fails_instead_of_passing(self):
+        expected = np.full((4, 4), 1.0, dtype=np.float32)
+        got = np.full((4, 4), np.nan, dtype=np.float32)
+        passed, stats = verify.compare_outputs(got, expected, max_relative_error=2.0)
+        self.assertFalse(passed, f"stats={stats}")
+
+    def test_an_inf_graph_output_fails_instead_of_passing(self):
+        expected = np.full((4, 4), 1.0, dtype=np.float32)
+        got = np.full((4, 4), np.inf, dtype=np.float32)
+        passed, stats = verify.compare_outputs(got, expected, max_relative_error=2.0)
+        self.assertFalse(passed, f"stats={stats}")
+
+    def test_an_all_zero_graph_output_over_real_weights_fails(self):
+        # The zeroed-2B shape: real reference, graph that computes nothing.
+        # |diff| == |expected| so relative is 100 % — but the explicit
+        # all-zero refusal names the vacuous-graph cause rather than
+        # reporting a mysterious 100 %.
+        expected = np.full((4, 4), 1.0, dtype=np.float32)
+        got = np.zeros((4, 4), dtype=np.float32)
+        passed, stats = verify.compare_outputs(got, expected, max_relative_error=200.0)
+        self.assertFalse(passed, f"stats={stats}")
 
 
 @unittest.skipIf(verify is None, f"verifier needs coremltools: {IMPORT_ERROR}")

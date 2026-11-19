@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 import pathlib
 import sys
 
@@ -162,6 +163,41 @@ def selection_mask(t: int, budget: int, compress_ratio: int, seed: int):
     return mask, kept
 
 
+def compare_outputs(
+    got: np.ndarray, expected: np.ndarray, max_relative_error: float
+) -> tuple[bool, dict]:
+    """The accept/refuse verdict on a graph-vs-reference comparison.
+
+    The old gate was `relative > max_relative_error` — but `nan > x` is
+    False in Python, so a 0/0 = nan error (both sides all zero, or NaN/Inf in
+    either output) passed. The zeroed 2B install shipped exactly that way.
+    Non-finite comparisons and a vacuous all-zero side are refusals with a
+    named reason, never a silent pass.
+    """
+    mean_expected = float(np.abs(expected).mean())
+    stats: dict = {"mean_expected": mean_expected}
+    if mean_expected == 0.0 or not math.isfinite(mean_expected):
+        stats["reason"] = "the reference is all zero or non-finite — a vacuous comparison"
+        return False, stats
+    relative = float(np.abs(got - expected).mean() / mean_expected * 100.0)
+    peak = float(np.abs(got - expected).max() / mean_expected * 100.0)
+    stats["relative"] = relative
+    stats["peak"] = peak
+    if not (math.isfinite(relative) and math.isfinite(peak)):
+        stats["reason"] = "the comparison is not finite (NaN/Inf in one side's output)"
+        return False, stats
+    if not np.isfinite(np.asarray(got, dtype=np.float64)).all():
+        stats["reason"] = "the graph output contains NaN/Inf"
+        return False, stats
+    if float(np.abs(got).max()) == 0.0:
+        stats["reason"] = "the graph output is all zero — the graph computes nothing"
+        return False, stats
+    if relative > max_relative_error:
+        stats["reason"] = f"above --max-relative-error {max_relative_error} %"
+        return False, stats
+    return True, stats
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="path to an installed .ssdai directory")
@@ -245,15 +281,14 @@ def main() -> int:
     got = model_ml.predict({"normed": normed, "mask": mask.astype(np.float16)})["out"]
     got = np.asarray(got, dtype=np.float32).reshape(expected.shape)
 
-    mean_expected = float(np.abs(expected).mean())
-    relative = float(np.abs(got - expected).mean() / mean_expected * 100.0)
-    peak = float(np.abs(got - expected).max() / np.abs(expected).max() * 100.0)
+    passed, stats = compare_outputs(got, expected, args.max_relative_error)
     print(
-        f"  mean |expected| {mean_expected:.4f} | mean |diff| {np.abs(got - expected).mean():.5f}"
+        f"  mean |expected| {stats['mean_expected']:.4f} | mean |diff| {np.abs(got - expected).mean():.5f}"
     )
-    print(f"  relative error {relative:.3f} % (peak {peak:.3f} %)")
-    if relative > args.max_relative_error:
-        print(f"FAIL: above --max-relative-error {args.max_relative_error} %", file=sys.stderr)
+    if "relative" in stats:
+        print(f"  relative error {stats['relative']:.3f} % (peak {stats['peak']:.3f} %)")
+    if not passed:
+        print(f"FAIL: {stats['reason']}", file=sys.stderr)
         return 1
 
     # A sparse-indexed family's graph is only correct because the runtime folds
@@ -279,8 +314,8 @@ def main() -> int:
         # How much the selection changes the attention at all, and what an ANE
         # run that forgot to fold would have produced against the causal
         # reference: the two should agree, and both must be visible.
-        effect = float(np.abs(expected_folded - expected).mean() / mean_expected * 100.0)
-        causal_error = float(np.abs(got_folded - expected).mean() / mean_expected * 100.0)
+        effect = float(np.abs(expected_folded - expected).mean() / stats["mean_expected"] * 100.0)
+        causal_error = float(np.abs(got_folded - expected).mean() / stats["mean_expected"] * 100.0)
         print(
             f"  folded mask: {kept.mean():.0f} of {t} keys kept on average "
             f"({kept.min()}–{kept.max()})"
