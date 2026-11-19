@@ -590,3 +590,43 @@ GFDetokenizer.@usableFromInline members, byteLevelScalarToByte) — doable but b
 The server-level CPU/GPU choice already works today via the 6.x engines (catalog `<id>` GPU
 default + `<id>@cpu`; launcher `--engine cpu|gpu` + interactive menu) — verified on 2B/4B/9B
 both engines. The 7.0 goal is to move that choice into the dedicated variant code paths.
+
+## 2026-11-19 — ANE-for-Ornith diagnosis surfaced a severe install defect (TT-098)
+
+While diagnosing why the new Ornith ANE prefill sidecar fails the live identical-greedy
+gate (`benchmark/ane_prefill_correctness.py`: `on` vs `off` identical=False,
+common_prefix=0; logits 5.55% vs the 2.0% bar; per-layer `max_absolute` exactly 0.0625
+= the fp16 lattice step), two root causes were separated:
+
+1. **Ornith (the actual ANE goal): the sidecar's whole CoreML program is
+   `compute_precision=FLOAT16` — fp16 softmax, additive −30000 mask, no online
+   rescale — against the GPU reference's fp32 flash-style online softmax.** The
+   error is numeric-precision accumulation (~0.5–0.7%/layer → 5.55% logits → greedy
+   argmax flip at token 1), not a wiring bug (pre-ANE layers are exactly 0.0; the
+   bridge is a zero-conversion fp16 pass-through). Also on record: `tools/verify_ane_sidecar.py`
+   computes its fp32 reference "from the graph's own definition" and derives scale/mask
+   from the exporter's own constants, so Task-1's "0.555% NumPy PASS" can never detect
+   GPU-parity divergence. And the recorded Sept-2026 "2B ANE 1.3–1.4×" baselines are
+   **speed-only by the project's own README** — one greedy token, empty-string digests.
+2. **Both dense 2B installs are dead (tracker TT-098, P1): the payload is 0.52%
+   nonzero** (4B/9B/Ornith ~97.5%), manifest hash == receipt hash == sha256 of the
+   zeros — the converter wrote them and receipt/parity/golden all self-consistently
+   passed on a dead model. The 2B has never worked since the 2026-11-16 installer run;
+   the AGENTS.md "2B fails instruction-following" lore is very likely this defect
+   (zeroed weights → constant logits → repeated `!`). The planned "2B as ANE control"
+   experiment is moot until both widths are re-installed (operator decision; the
+   converter's zero-write root cause is a separate investigation — 4B/9B went through
+   the same path healthy).
+
+Fix landed: the sidecar verifier refuses vacuous comparisons (`nan > 2.0` is False in
+Python — the old gate passed 0/0=nan): `compare_outputs` in
+`tools/verify_ane_sidecar.py`, six `VerdictTests` first (RED on AttributeError), the
+zeroed 2B now exits 1 with a named refusal, healthy Ornith still exits 0 at 0.555%.
+Commit `b2cc6b5f`; tracker TT-098 + TT-097 root-cause note published on the wiki.
+
+Next for the ANE goal: mixed-precision softmax inside the fp16 graph (cast scores →
+fp32 `mb.softmax` → cast back) in `tools/export_ane_prefill.py` (currently hardcoded
+`compute_precision=FLOAT16`, line ~670, coremltools 9.0), iterated with
+`ane_prefill_layer_diff` per-layer error on Ornith (~34 min export per iteration), then
+the identical-greedy + ≤2%-logits gate + paired benchmark. Owner's direction: ANE
+worked for the Qwen 3.8 family prefill and is wanted for Ornith at the same quality bar.
