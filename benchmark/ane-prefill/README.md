@@ -274,6 +274,36 @@ non-attention prefill (which the ANE never touches) grows.
 None of this is a switch. `TINYTITAN_PREFILL_ANE` is on by default for every
 GPU-path model; what varies is whether there is a sidecar the chunk can match.
 
+## Ornith 1.5 35B-A3B: the fp32 attempts were inert, and the sidecar is rejected (2026-11-19)
+
+Chunk 4,096, 4,333-token prompt, M3 24 GB, release CLI. The pre-fix fp16
+sidecar already failed the identical-greedy gate; two exporter changes were
+made to fix it and neither moved the live numbers:
+
+| Gate | fp16 baseline | fp32 softmax (`d750fa2c`) | fp32 attention core (`ba76b292`) |
+| --- | ---: | ---: | ---: |
+| verify, synthetic N(0,1) | 0.555% | 0.555% | 0.555% |
+| verify, real captured normed | 4.245% | — | 4.245% |
+| live logits, `on` | 5.55% | 5.55% | 5.55% |
+| identical greedy | false (prefix 0) | — | false (prefix 0) |
+| ANE prefill, 4,333 tokens | 162.66 s | 160.42 s | 148.03 s |
+| GPU prefill, same prompt | 105.85 s | 95.14 s | 93.56 s |
+
+A whole-program `compute_precision=FLOAT32` probe was run as well: 59 of 173
+operations stayed on the ANE (fp16: 74), predict took 382 ms against 244 ms per
+layer, and the real-input error was 4.248% — the graph changed by at most
+0.00415 in output while the error stayed where it was. Intermediate precision
+in the core is therefore not the lever; the difference is consistent with the
+graph's fp16 output boundary or a semantic difference that only shows at the
+real input's output scale, and that is not established.
+
+Decision: the fp32 changes were reverted (they were numerically inert and the
+core was 1.56x slower per layer), the local sidecar is renamed
+`ane_prefill-rejected`, and `tools/ane_sidecars.sh` refuses to export one for
+this install until tracker TT-099 is resolved. The records are
+`ane-correctness-ane-correctness-ornith15-4bit-{baseline,fp32core}.json` and
+`ane-layer-diff-ornith15-4bit-{baseline,fp32softmax,fp32core}.json`.
+
 ## Which families can carry a sidecar
 
 `tools/export_ane_prefill.py` reads the attention geometry from the model's own
@@ -281,7 +311,8 @@ manifest, so support is a property of the graph, not a list:
 
 | Family | Installs | Sidecar | Why |
 | --- | --- | --- | --- |
-| `qwen36` | AgentWorld 35B-A3B | yes | the geometry the graph was written for |
+| `qwen36` | AgentWorld 35B-A3B, Qwen 3.6 35B | yes | the geometry the graph was written for |
+| `qwen36` | Ornith 1.5 35B-A3B | **no** | identical-greedy gate fails and the ANE is slower (above; TT-099) |
 | `qwen3_5_dense` | Qwen 3.5 2B / 4B / 9B | yes | same attention block, read from the manifest |
 | `qwen38flash` | Qwen 3.8 125B-A6B | exportable, **not installed** | the block and the fold are right, but the ANE loses on this model (above) |
 | `qwen38flash_mtp` | Qwen 3.8's one-layer MTP draft | **no** | verified, not prefilled, on the ANE |
@@ -306,9 +337,8 @@ true. Compare a run only against another run of the same model and prompt.
 
 A differing digest is therefore not evidence of a bug, and a matching one is not
 evidence of correctness. Whether the two arms generate the *same text* is the
-separate measurement above (the `ane-correctness-*.json` record, removed in
-the 2026-11-13 cleanup with its per-run data; the run that produced it is in
-git history), and even *that* is not
+separate measurement above (the `ane-correctness-*.json` records; the Ornith ones are
+committed here), and even *that* is not
 enough on a prompt whose continuation is nearly deterministic: on 3.8 the
 causal-only control agreed with the GPU for all 32 tokens too. The per-arm
 activation comparison (the `ane-layer-diff-*.json` record, likewise removed)

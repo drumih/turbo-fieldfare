@@ -630,3 +630,35 @@ fp32 `mb.softmax` → cast back) in `tools/export_ane_prefill.py` (currently har
 `ane_prefill_layer_diff` per-layer error on Ornith (~34 min export per iteration), then
 the identical-greedy + ≤2%-logits gate + paired benchmark. Owner's direction: ANE
 worked for the Qwen 3.8 family prefill and is wanted for Ornith at the same quality bar.
+
+## 2026-11-19 (later) — Ornith ANE rejected; the fp32 exporter changes were inert and are reverted
+
+The staged gates ran on a full fp32-core re-export (32m14s, 10 layers, all
+histories, `aneCompileVerified: true`, same weights SHA). They reproduced the
+pre-fix failure exactly, and the fp32 core made the graph slower:
+
+- verify: synthetic 0.555%, real captured normed 4.245% (both unchanged), exit 1;
+- live layer diff: `on` logits 5.55%, linear control 0.000% — identical to the
+  fp16 baseline;
+- identical greedy: `on.identical` false, common prefix 0; the ANE arm repeats
+  `S` where the GPU answers, and ANE prefill is 148.03 s against 93.56 s;
+- probe with `compute_precision=FLOAT32`: 59/173 ops on the ANE (fp16 74),
+  382 ms against 244 ms per layer, real error 4.248%, output changed by at most
+  0.00415. Intermediate precision is not the lever; the remaining hypothesis is
+  the graph's fp16 output boundary or a semantic difference at the real input's
+  output scale, and it is not established.
+
+Decision: `d750fa2c` (softmax-only) and `ba76b292` (fp32 core) are reverted —
+both were numerically inert on the live model and the core cost 1.56x per
+layer. The local sidecar is `models/ornith-1.5_35B_A3B_4Bit/ane_prefill-rejected/`
+(the 10-layer 4,096-token export, 541 MB); `ane_prefill` is gone, so the runtime
+cannot select it. `tools/ane_sidecars.sh` now refuses to export one for
+`ornith-1.5_35B_A3B_{4,8}Bit` with the measured reason (TT-099), because a sidecar
+already on disk is still selected and a new install would otherwise recreate it.
+Golden `ornith-4` passes with the sidecar absent (GPU path, output identical to
+baseline). Evidence records are committed under `benchmark/ane-prefill/`; the
+plan/spec are committed under `docs/superpowers/`.
+
+Open for TT-099: name the semantic or fp16-boundary difference with a real-input
+probe before another export, then re-run gates 1-4. Do not ship a sidecar for
+this install until identical-greedy passes.

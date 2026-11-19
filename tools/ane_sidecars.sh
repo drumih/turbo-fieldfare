@@ -123,7 +123,7 @@ print(json.load(open('$model/manifest.json'))['arch']['family'])")" || {
     failed+=("$name: manifest unreadable"); continue
   }
 
-  # Two kinds of install are reported rather than exported.
+  # Three kinds of install are reported rather than exported.
   #
   # `qwen38flash` is measured *not to pay*: the fold is wired and verified, and
   # the ANE still loses (0.72x on the 4-bit install at 4,333 tokens). Its GPU
@@ -134,6 +134,21 @@ print(json.load(open('$model/manifest.json'))['arch']['family'])")" || {
   #
   # The MTP draft is one the runtime never routes: it is verified rather than
   # prefilled on the ANE, so a sidecar for it would never be loaded.
+  #
+  # Ornith 1.5 35B-A3B is the third: its sidecar fails the identical-greedy
+  # quality gate. Measured 2026-11-19 at chunk 4,096 on a 4,333-token prompt:
+  # the ANE arm diverges at the first character (repeated `S` against a coherent
+  # GPU answer) and prefills slower (148.03 s against 93.56 s). The fp32-core and
+  # fp32-softmax exporter attempts changed nothing (5.55% logits, 4.245% on the
+  # real captured normed) and the fp32 core cost 1.56x per layer, so both were
+  # reverted. A sidecar already on disk is still selected by the runtime, so it
+  # must be renamed `ane_prefill-rejected`; this skip stops new installs from
+  # writing one. See tracker TT-099 and benchmark/ane-prefill/README.md.
+  case "$name" in
+    ornith-1.5_35B_A3B_4Bit|ornith-1.5_35B_A3B_8Bit)
+       echo "== $name: the ANE sidecar fails the identical-greedy quality gate (TT-099); skipping (rename any existing ane_prefill-rejected and re-measure before exporting)"
+       skipped+=("$name (ANE quality gate fails)"); continue ;;
+  esac
   case "$family" in
     qwen36|qwen3_5_dense) ;;
     qwen38flash|qwen4flash)

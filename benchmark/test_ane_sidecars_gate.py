@@ -231,6 +231,28 @@ class VerdictsThatWereAlreadyRight(unittest.TestCase):
         self.assertIn("measured slower", proc.stdout)
         self.assertIn("skipped :", proc.stdout)
 
+    def test_ornith_sidecar_is_refused_with_the_measured_reason(self):
+        """TT-099: the sidecar fails the identical-greedy gate and prefills slower."""
+        models = temp_root() / "models"
+        made = install(models, "ornith-1.5_35B_A3B_4Bit", "qwen36")
+        proc = run(models, shim=make_shim(models.parent))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("verified: 0", proc.stdout)
+        self.assertIn("skipped :", proc.stdout)
+        self.assertIn("TT-099", proc.stdout)
+        self.assertIn("quality gate", proc.stdout)
+        self.assertFalse((made / "ane_prefill").exists())
+
+    def test_the_ornith_skip_does_not_reach_another_qwen36_install(self):
+        """The guard is scoped to the measured install name, not to `qwen36`."""
+        models = temp_root() / "models"
+        made = install(models, "qwen3.6_35B_A3B_4Bit", "qwen36")
+        proc = run(models, shim=make_shim(models.parent))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("verified: 1", proc.stdout)
+        self.assertIn("exported: qwen3.6_35B_A3B_4Bit", proc.stdout)
+        self.assertTrue((made / "ane_prefill" / "ane_prefill.json").is_file())
+
     def test_a_verification_failure_answers_one_and_says_which(self):
         models = temp_root() / "models"
         install(models, "qwen3.5_4B_4Bit", "qwen3_5_dense", sidecar="ane_prefill")

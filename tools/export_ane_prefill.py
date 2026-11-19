@@ -60,29 +60,6 @@ import numpy as np
 import coremltools as ct
 from coremltools.converters.mil import Builder as mb
 
-
-def attention_core(q4, k_g, v_g, mask, scale):
-    """The attention core — scores, softmax, probabilities — in fp32 end to end.
-
-    The graph's fp16 materialization of scores and probabilities is
-    amplitude-dependent: at the verify's synthetic N(0,1) input the error is
-    0.555%, but on a REAL captured normed (scores landing in the 10-60 range,
-    where the fp16 ulp is 0.008-0.06) the same comparison measures 4.245% —
-    which is the live divergence (gate 2: 5.55% at logits, unchanged by the
-    2026-11-19 fp32-softmax-only fix). The GPU keeps scores and probabilities
-    fp32 through its flash-style online softmax; this casts q/k/v up and does
-    the same, rounding to fp16 once at the attention output. The ANE executes
-    the fp32 core (compile + predict probe, coremltools 9, CPU_AND_NE).
-    """
-    q32 = mb.cast(x=q4, dtype="fp32")
-    k32 = mb.cast(x=k_g, dtype="fp32")
-    scores = mb.mul(x=mb.matmul(x=q32, y=k32, transpose_y=True), y=np.float32(scale))
-    scores = mb.add(x=scores, y=mb.cast(x=mask, dtype="fp32"))
-    probs = mb.softmax(x=scores, axis=-1)
-    attn = mb.matmul(x=probs, y=mb.cast(x=v_g, dtype="fp32"))
-    return mb.cast(x=attn, dtype="fp16")
-
-
 try:
     from coremltools.models.compute_plan import MLComputePlan
 except Exception:  # noqa: BLE001 — optional
@@ -661,7 +638,11 @@ def build_variant(history: int, weights: dict[str, np.ndarray], geom: Geometry):
         v_g = gqa_expand(v_all)
 
         q4 = mb.reshape(x=q, shape=[1, N_Q_HEADS, t, HEAD_DIM])
-        attn = attention_core(q4, k_g, v_g, mask, SCALE)
+        scores = mb.matmul(x=q4, y=k_g, transpose_y=True)
+        scores = mb.mul(x=scores, y=np.float16(SCALE))
+        scores = mb.add(x=scores, y=mask)
+        probs = mb.softmax(x=scores, axis=-1)
+        attn = mb.matmul(x=probs, y=v_g)
 
         gated = mb.mul(
             x=mb.transpose(x=attn, perm=[0, 2, 1, 3]),
