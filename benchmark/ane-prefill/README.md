@@ -310,12 +310,27 @@ and scores each against the fp32 reference on the real input:
 | CPU only | **2.419%** | 96.9% |
 | CPU + GPU | **0.075%** | 6.4% |
 
-The graph is right — the GPU executes it to 0.075%. The ANE (and the CPU)
-lose precision in the fp16 matmul/softmax accumulation at these activation
-magnitudes; the same package on the GPU accumulates in fp32. That is a
-device-precision limit, not something a cast or a different softmax can
-repair: manual fp16 and manual fp32 softmax compile to the same result as the
-fused op, and `compute_precision=FLOAT32` leaves the error at 4.248%.
+The graph is right — the GPU executes it to 0.075%. The error is not in the
+attention core: a standalone core fed the same q/k/v scores **0.64%**. It is
+in the block's last two stages, measured separately on the same package:
+
+| Stage (ANE) | Relative error |
+| --- | ---: |
+| attention core (scores/softmax/probs·v) | 0.64% |
+| output gate (`sigmoid(gate) * attn`) | 1.74% |
+| `wo` projection | 3.96% |
+| gate + `wo` | 4.25% |
+
+Both are fp16 **accumulation/cancellation** losses: `gated` has mean 0.008
+while the `wo` partial products are ~0.1-0.7 and cancel to a 0.0101 output,
+so 10-bit partial sums lose the result. Splitting `wo` into 4 or 16 fp32
+partials changes nothing (4.252% / 4.259%) — CoreML fuses the decomposition
+back, and each partial still cancels internally. A cast or a different softmax
+cannot repair it (`compute_precision=FLOAT32` leaves 4.248%).
+
+The actionable split is therefore structural: let the sidecar return the
+attention core plus the pre-sigmoid gate, and do `sigmoid`/`wo` on the GPU
+where the accumulation is fp32 — the core alone is 0.64%.
 
 This is a **regression from the v4.5 qualification**, not an inherent limit of
 the block: at v4.5 the same Ornith 1.5 35B-A3B 4-bit measured **2.31x** at a

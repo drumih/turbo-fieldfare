@@ -654,7 +654,12 @@ pre-fix failure exactly, and the fp32 core made the graph slower:
   2.419% on CPU only and 0.075% on CPU+GPU** against the fp32 reference — the
   graph is right and the ANE's fp16 accumulation is the limit (manual fp16
   and fp32 softmax compile to the same result; FLOAT32 precision leaves it at
-  4.248%). Not a wiring/input/KV bug, and not fixable by a cast.
+  4.248%). Stage split on the same package: attention core 0.64%, output gate
+  1.74%, wo projection 3.96%, gate+wo 4.25% — fp16 accumulation/cancellation
+  (gated mean 0.008 against 0.1-0.7 partial products cancelling to 0.0101).
+  Splitting wo into 4/16 fp32 partials is fused back (4.25%). The fix is
+  structural: sidecar returns the core plus the pre-sigmoid gate, GPU does
+  sigmoid/wo in fp32; core alone is 0.64%. Not a wiring/input/KV bug.
 
 Decision: `d750fa2c` (softmax-only) and `ba76b292` (fp32 core) are reverted —
 both were numerically inert on the live model and the core cost 1.56x per
