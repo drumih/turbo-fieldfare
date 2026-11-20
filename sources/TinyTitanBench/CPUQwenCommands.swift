@@ -192,13 +192,7 @@ extension TinyTitanBench {
     /// outside the vocabulary, which cannot happen for a token the same
     /// tokenizer produced but is not worth a crash if it ever does.
     static func negativeLogLikelihood(_ logits: [Float], target: Int) -> Double {
-        guard logits.indices.contains(target) else { return .infinity }
-        var peak = -Float.infinity
-        for value in logits where value > peak { peak = value }
-        guard peak.isFinite else { return .infinity }
-        var total = 0.0
-        for value in logits { total += Double(expf(value - peak)) }
-        return Double(peak) + log(total) - Double(logits[target])
+        StableLogSoftmax.negativeLogLikelihood(logits, target: target)
     }
 
     /// The side-engine answering in text, which is what everything above was
