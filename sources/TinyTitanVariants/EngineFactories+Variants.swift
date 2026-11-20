@@ -145,21 +145,14 @@ extension EngineFactories {
             resolveArchitecture: base.resolveArchitecture,
             preview: base.preview,
             buildModel: { directory, arch, context in
-                guard let context else {
-                    throw ServerInferenceError.unsupportedModel(
-                        "the ornith variant engine requires Metal")
-                }
-                // The variant's own streaming default; the env override the
-                // 6.x planner honours is read here too so an operator tuning
-                // residency gets the same knob.
-                let slots =
-                    ProcessInfo.processInfo.environment["TINYTITAN_EXPERT_CACHE_SLOTS"]
-                    .flatMap(Int.init) ?? Ornith35B4BitModelDefaults.streamingSlots
-                return try Ornith35B4Bit.Model.load(
-                    directoryURL: directory,
-                    device: context.device,
-                    expecting: arch,
-                    streamingMode: .pread(slotCount: slots))
+                try loadOrnithModel(directory, arch, context, slots: nil)
+            },
+            // The variant owns its streaming slots; the session's resolved
+            // slot count (profile default, --ram-budget or
+            // --expert-cache-slots) reaches the model here. The env override
+            // stays the operator's last word.
+            buildModelWithSlots: { directory, arch, context, slots in
+                try loadOrnithModel(directory, arch, context, slots: slots)
             },
             buildRunner: { model, options in
                 guard let model = model as? Ornith35B4Bit.Model,
@@ -449,6 +442,32 @@ extension EngineFactories {
             }
         }
     }
+}
+
+/// Load the Ornith variant model with the resolved slot count.
+///
+/// A nil `slots` is the legacy `buildModel` path: the env override, then the
+/// variant's own 32-slot default. The session's resolved count (profile,
+/// `--ram-budget`, `--expert-cache-slots`) arrives through
+/// `buildModelWithSlots`. The env stays the operator's last word.
+private func loadOrnithModel(
+    _ directory: URL,
+    _ arch: ArchConfig,
+    _ context: MetalContext?,
+    slots: Int?
+) throws -> any EngineModel {
+    guard let context else {
+        throw ServerInferenceError.unsupportedModel(
+            "the ornith variant engine requires Metal")
+    }
+    let requested =
+        ProcessInfo.processInfo.environment["TINYTITAN_EXPERT_CACHE_SLOTS"]
+        .flatMap(Int.init) ?? slots ?? Ornith35B4BitModelDefaults.streamingSlots
+    return try Ornith35B4Bit.Model.load(
+        directoryURL: directory,
+        device: context.device,
+        expecting: arch,
+        streamingMode: .pread(slotCount: requested))
 }
 
 /// The variant engine's own defaults, kept beside the factory that uses them.

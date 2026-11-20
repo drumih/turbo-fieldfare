@@ -1,59 +1,59 @@
-# Ornith 1.5 35B-A3B 4-bit — decode tok/s against the RAM budget (2026-11-20)
+# Ornith 1.5 35B-A3B 4-bit — decode vs the RAM budget (2026-11-20, corrected)
 
-A same-session sweep of the shipped Ornith 4-bit install at six resident-memory
-targets. It answers whether a larger expert cache buys decode throughput on
-this model, and it is a measurement only: no code or runtime default changed.
+**This file was corrected after its first version.** The first sweep ran through
+the 7.0 `Ornith35B4Bit` variant, whose factory hard-coded 32 expert-cache slots
+and ignored the session's resolved slot count; `--ram-budget` and
+`--expert-cache-slots` therefore had no effect, and the six cells measured the
+same 32-slot configuration at ~7.2 tok/s. The variant now receives the resolved
+slot count (`EngineFactory.buildModelWithSlots`, used by
+`ServerModelSession.load`), with the env override still winning; the numbers
+below are the re-run with that fix. The old table is withdrawn.
 
 ## Method
 
-- Machine: Apple M3 MacBook Pro, 24 GB, macOS 27.2.1; commit `5dffa771`.
-- Binary: `.build/release/TinyTitanCLI`, release build.
-- Model: `models/ornith-1.5_35B_A3B_4Bit` (the shipped 4-bit install; no 8-bit
-  install is present on this host).
+- Machine: Apple M3 MacBook Pro, 24 GB, macOS 27.2.1.
+- Ornith 1.5 35B-A3B 4-bit install; release CLI.
 - Prompt: three paragraphs of a technical description plus "continue for at
-  least 700 more words" via `--messages-file`, so the 192-token cap binds rather
-  than the model stopping early.
-- Generation: `--max-new 192 --temperature 0`; each run is a fresh process, so
-  load and first-token costs are outside the footer's decode window.
+  least 700 more words" via `--messages-file`, so `--max-new 192` binds rather
+  than the model stopping.
+- Generation: 192 tokens, `--temperature 0`; a fresh process per run, so load
+  and first-token costs are outside the footer's decode window.
 - Budgets: `--ram-budget 8G`, `10G`, `12G`, `14G`, `16G`, and **max** = no
-  `--ram-budget` at all (the install's own profile). The flag is a
-  whole-process target; the routed-expert cache gets what remains after the
-  resident weights and the runtime reserve.
-- Three rounds, interleaved across the six budgets (8G,10G,…,max, repeat), so
-  thermal or background drift lands on every budget rather than on whichever
-  ran last.
-- Decode tok/s is the CLI's own footer value (`decode=` seconds and `new=`
-  tokens), not a wall-clock estimate around the process.
-
-All 18 runs generated **192 tokens** and stopped on `maxTokens`; no run stopped
-early, so the windows are comparable.
+  `--ram-budget` at all (the install's profile, 10 GiB / 160 slots for this
+  pair). Three interleaved rounds across all six budgets.
+- Decode tok/s is the CLI footer's own value (`new=`/`decode=`), not a
+  wall-clock estimate around the process.
+- Every one of the 18 runs generated 192 tokens and stopped on `maxTokens`.
 
 ## Results
 
 | RAM budget | Mean tok/s | Range (3 runs) | Runs |
 | --- | ---: | ---: | --- |
-| 8G | **7.25** | 6.91–7.55 | 6.912, 7.284, 7.552 |
-| 10G | **7.20** | 6.76–7.52 | 7.337, 6.760, 7.517 |
-| 12G | **7.30** | 6.81–7.63 | 7.477, 6.806, 7.627 |
-| 14G | **7.59** | 7.38–7.89 | 7.377, 7.507, 7.888 |
-| 16G | **7.53** | 7.37–7.67 | 7.669, 7.369, 7.549 |
-| max (no flag) | **7.58** | 7.44–7.71 | 7.444, 7.705, 7.600 |
+| 8G | **16.41** | 15.08–17.31 | 15.080, 16.832, 17.310 |
+| 10G | **19.02** | 17.39–20.20 | 17.386, 19.488, 20.199 |
+| 12G | **20.10** | 18.78–20.81 | 18.782, 20.707, 20.813 |
+| 14G | **21.33** | 21.07–21.52 | 21.406, 21.069, 21.517 |
+| 16G | **20.96** | 20.62–21.60 | 20.621, 20.657, 21.601 |
+| max (no flag) | **21.35** | 20.81–21.64 | 20.807, 21.614, 21.641 |
 
-## Reading
+## Why 6.x reported 10–20 tok/s
 
-- 8G–12G sit together at 7.20–7.30 tok/s. 14G–16G and max sit at 7.53–7.59:
-  about **+0.3 tok/s (~4–5%)** in the means.
-- That difference is at the edge of the run-to-run spread (the 8G runs include
-  7.55, the 14G runs include 7.38), so this is not a clean monotonic scaling
-  claim. The only defensible statement is that **14G and above cluster slightly
-  above 8–12G on this host**, and **max is not faster than 14–16G**.
-- The floor at 8G is still usable: the model runs and decodes at ~7.2 tok/s.
-  The 4-bit install's resident footprint plus runtime leaves enough room for
-  the cache at that target.
-- Do not quote these as the model's ceiling. This is a single 24 GB M3, three
-  runs per cell, one prompt; the absolute rate is lower than the Ornith
-  production figures measured on a quieter host/other prompt (the wiki's
-  Ornith 7.0 table stands separately).
+The 6.x profile for this pair (`ModelProfile.swift`) is a **10 GiB expert-cache
+budget**, resolved to the 128/160-slot rungs and measured at 20.4–21.0 tok/s in
+its own 2026-09-05 sample; the README's 21.7 tok/s is the warm-up-pass figure.
+The 7.0 variant's first factory defaulted to **32 slots**, deliberately kept
+small for its parity runs, and did not read the session's resolved budget. That
+is the entire gap: 32 slots ~7 tok/s, the 6.x profile ~21 tok/s.
 
-The raw rows are in `.build/ornith-ram-sweep.json` (gitignored); the table above
-carries every value.
+The fix is not a new kernel. It passes the already-computed
+`EngineEngineLoadPlan.expertCacheSlots` into the variant's model load; the
+env override remains the operator's last word. The corrected sweep lands where
+the 6.x profile does: 8G 16.4, 10G 19.0, 12G 20.1, 14G–max 21.0–21.4 tok/s.
+
+The registry's Ornith qualification (`decodeTokS: 11.55`) was measured on the
+old 32-slot configuration; a re-qualification at the new default is tracked
+separately. This file is a performance measurement only: no generation output
+changed (the `ornith-4` golden is byte-identical).
+
+The raw rows are in `.build/ornith-ram-sweep-fixed.json` (gitignored); the table
+above carries every value.

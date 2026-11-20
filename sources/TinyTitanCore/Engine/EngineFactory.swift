@@ -23,6 +23,11 @@ public struct EngineFactory: Sendable {
     public let preview: @Sendable (URL, Int?) throws -> EngineSessionPreview
     public let readManifest: @Sendable (URL, ArchConfig) throws -> Manifest
     public let buildModel: @Sendable (URL, ArchConfig, MetalContext?) throws -> any EngineModel
+    /// The same load with the session's resolved expert-cache slot count, for a
+    /// variant whose model owns its streaming configuration. `nil` keeps the
+    /// old closure for engines whose profile is read inside the model.
+    public let buildModelWithSlots:
+        (@Sendable (URL, ArchConfig, MetalContext?, Int) throws -> any EngineModel)?
     public let buildRunner:
         @Sendable (any EngineModel, SessionBuildOptions) throws -> any EngineRunner
     public let mtpDecoder: @Sendable () -> (any EngineMTPDecoder)?
@@ -58,6 +63,8 @@ public struct EngineFactory: Sendable {
             try SSDAIManifestReader.read(directoryURL: directory)
         },
         buildModel: @escaping @Sendable (URL, ArchConfig, MetalContext?) throws -> any EngineModel,
+        buildModelWithSlots:
+            (@Sendable (URL, ArchConfig, MetalContext?, Int) throws -> any EngineModel)? = nil,
         buildRunner:
             @escaping @Sendable (any EngineModel, SessionBuildOptions) throws -> any EngineRunner,
         mtpDecoder: @escaping @Sendable () -> (any EngineMTPDecoder)? = { nil },
@@ -86,6 +93,7 @@ public struct EngineFactory: Sendable {
         self.preview = preview
         self.readManifest = readManifest
         self.buildModel = buildModel
+        self.buildModelWithSlots = buildModelWithSlots
         self.buildRunner = buildRunner
         self.mtpDecoder = mtpDecoder
         self.makeScratch = makeScratch

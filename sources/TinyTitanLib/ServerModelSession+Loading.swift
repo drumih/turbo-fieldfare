@@ -135,7 +135,12 @@ extension ServerModelSession {
         let expectedArch = loadPlan.architecture
         let loadSlots = loadPlan.expertCacheSlots
         let tunedBudget = loadPlan.tunedExpertCacheBudgetBytes
-        let model = try factory.buildModel(modelDirectory, expectedArch, context)
+        let model: any EngineModel
+        if let buildWithSlots = factory.buildModelWithSlots {
+            model = try buildWithSlots(modelDirectory, expectedArch, context, loadSlots)
+        } else {
+            model = try factory.buildModel(modelDirectory, expectedArch, context)
+        }
         // MTP owns the target's runner and is single-sequence, so it cannot
         // batch. Otherwise the requested width is capped by what the worst-case
         // per-slot stores can hold beside the wired expert cache: the whole

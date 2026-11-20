@@ -55,12 +55,65 @@ import Testing
         #expect(await session.model is StubEngineModel)
         #expect(await session.runner is StubEngineRunner)
     }
+
+    @Test func buildModelWithSlotsReceivesTheResolvedSlotCount() async throws {
+        let directory = try QwenToySynthetic.write(weightBits: 4, qsa: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tokenizer = directory.appendingPathComponent("tokenizer", isDirectory: true)
+        try FileManager.default.copyItem(
+            at: ChatMLTemplateTests.fixtureFolder(), to: tokenizer)
+        let sixX = EngineFactories.sixXGPU()
+        let factory = EngineFactory(
+            prepare: sixX.prepare,
+            makeContext: sixX.makeContext,
+            prepareLoad: sixX.prepareLoad,
+            metadata: sixX.metadata,
+            validateReasoning: sixX.validateReasoning,
+            resolveArchitecture: sixX.resolveArchitecture,
+            preview: sixX.preview,
+            buildModel: { _, _, _ in
+                throw EngineFactoryError.unsupported("the slot-aware load must be used")
+            },
+            buildModelWithSlots: { directory, arch, context, slots in
+                StubEngineModel(
+                    try Model.load(
+                        directoryURL: directory,
+                        device: try #require(context).device,
+                        expecting: arch),
+                    slots: slots)
+            },
+            buildRunner: { model, options in
+                let concrete = try #require((model as? StubEngineModel)?.model)
+                return StubEngineRunner(
+                    try RealForwardRunner(
+                        model: concrete,
+                        context: try #require(options.context),
+                        maxContext: options.maxContext,
+                        slots: options.slots,
+                        runtimeConfiguration: RuntimeConfiguration()))
+            })
+
+        let session = try await ServerModelSession.load(
+            modelDirectory: directory,
+            factory: factory,
+            maxContext: 64,
+            expertCacheSlots: 64,
+            warmExperts: false)
+
+        let loaded = await session.model
+        let model = try #require(loaded as? StubEngineModel)
+        #expect(model.slots == 64)
+    }
 }
 
 private struct StubEngineModel: EngineModel {
     let model: Model
+    let slots: Int?
 
-    init(_ model: Model) { self.model = model }
+    init(_ model: Model, slots: Int? = nil) {
+        self.model = model
+        self.slots = slots
+    }
     var config: ArchConfig { model.config }
     var modelID: String { model.modelID }
     var sourceSnapshotHash: String? { model.sourceSnapshotHash }
