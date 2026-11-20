@@ -127,7 +127,10 @@ examples below.
 
 That is the **portable** build and what `tools/release.sh` ships: the target is
 `arm64-apple-macos26.0` with no CPU flag, so the codegen baseline is clang's
-default for the triple — **apple-m1** — and an M3's BF16/I8MM go unused.
+default for the triple — **apple-m1** — and an M3's BF16/I8MM go unused. Both
+release builders assert it: `assert_generic_arm64_build` refuses a
+`-target-cpu`/`-mcpu` flag in `Package.swift` or in either builder, so a local
+native build cannot leak into a shipped artifact.
 
 The C kernels are built `-O2`: `Package.swift` sets it for `TinyTitanKernelsC`
 with `.unsafeFlags`, because SwiftPM's `swiftbuild` system otherwise compiles C

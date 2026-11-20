@@ -28,7 +28,10 @@ than adopting a release process they cannot use.
    is how a universal binary gets made, and there is no x86_64 build.
 2. **Assert it, do not assume it.** After building, check the artifact:
    `lipo -archs <binary>` must be exactly `arm64`. A build that silently produced
-   a fat binary is a release defect, not a build option. The check has to run
+   a fat binary is a release defect, not a build option. The shipped build is
+   **generic**: no `-target-cpu`/`-mcpu` flag. `tools/release.sh` and
+   `tools/build_library.sh` assert this before they build, so a local M3 build
+   cannot be published. The check has to run
    inside the release path rather than in someone's hands: an assertion nobody
    executes is a habit, and a habit does not notice the day the toolchain starts
    emitting something else.

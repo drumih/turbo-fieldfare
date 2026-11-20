@@ -32,6 +32,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$(dirname "$0")/assert-arch.sh"
 # shellcheck source=assert-build-log.sh
 . "$(dirname "$0")/assert-build-log.sh"
+
+# The shipped library runs on every Apple Silicon Mac, not just this one.
+assert_generic_arm64_build "$ROOT"
 PRODUCT="TinyTitanLib"
 DYNAMIC_PRODUCT="TinyTitanLibDynamic"
 INSTALL_NAME="@rpath/lib$PRODUCT.dylib"

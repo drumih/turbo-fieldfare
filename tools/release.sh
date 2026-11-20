@@ -115,6 +115,9 @@ git_tag_pushed_verdict() {
 # shellcheck source=assert-build-log.sh
 . "$SCRIPT_DIR/assert-build-log.sh"
 
+# The shipped artifact runs on every Apple Silicon Mac, not just this one.
+assert_generic_arm64_build "$ROOT"
+
 TAG="${1:-}"
 [ -n "$TAG" ] || die "usage: tools/release.sh <tag> [--publish] [--notes <file>]"
 shift

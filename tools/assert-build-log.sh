@@ -68,6 +68,27 @@ assert_clean_build_log() {  # <logfile> <label>
   echo "  $label: build log read, $lines line(s), no compiler warnings"
 }
 
+# --- generic Apple Silicon ---------------------------------------------------
+# The shipped artifacts are one arm64 build for every Apple Silicon Mac, so the
+# release path must never opt into a CPU-specific codegen. `tools/build_m3.sh`
+# is the deliberate local exception and is not referenced here. Both release
+# builders call this before they build: the manifest and the two build commands
+# are the places a `-target-cpu`/`-mcpu` flag could enter, and a release that
+# carries one would hand an M1/M2 a binary it may not run.
+assert_generic_arm64_build() {  # <root>
+  local root="${1:-}" hits
+  if [ -z "$root" ] || [ ! -d "$root" ]; then
+    bl_die "usage: assert_generic_arm64_build <root>"
+  fi
+  hits="$(grep -nE -- '(-target-cpu|-mcpu)' "$root/Package.swift" 2>/dev/null || true)"
+  [ -z "$hits" ] \
+    || bl_die "Package.swift opts into CPU-specific codegen; the shipped build must stay generic: $hits"
+  hits="$(grep -nE -- '(-target-cpu|-mcpu)' "$root/tools/release.sh" "$root/tools/build_library.sh" 2>/dev/null || true)"
+  [ -z "$hits" ] \
+    || bl_die "a release builder opts into CPU-specific codegen; the shipped build must stay generic: $hits"
+  echo "  portable arm64: no CPU-specific codegen in Package.swift or the release builders"
+}
+
 # A library: sourced, never run. Direct invocation says so rather than doing nothing
 # and exiting 0, which is the shape this file exists to remove.
 case "$0" in
