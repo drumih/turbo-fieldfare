@@ -138,8 +138,11 @@ quieter run), and the internal-speeds re-record confirms it costs nothing else
 
 Naming this Mac's CPU as well (`-target-cpu apple-mN` for Swift, `-mcpu` for C)
 measured about 1%, inside the noise, because the kernel is float-based rather than
-an integer dot product — so there is **no native-build script**; the flags are
-here for anyone who wants them on a machine they will not ship from:
+an integer dot product. There is a local-only builder,
+`tools/build_m3.sh`, which applies those flags to every product, verifies them in
+the compiler log and in the binaries, and is never wired into `tools/release.sh`
+or `tools/build_library.sh` — its output can use instructions an M1/M2 does not
+have, so it must not be handed to another Mac. The flags are:
 
 ```bash
 swift build -c release -Xswiftc -target-cpu -Xswiftc apple-m3 -Xcc -mcpu=apple-m3
