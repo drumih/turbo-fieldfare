@@ -18,8 +18,8 @@ quiet-host interleaved rerun replaces this file.
   `max_tokens=96`, one discarded 8-token warm-up.
 - Decode tok/s is computed from the streaming reply: `(completion_tokens - 1) /
   (last content chunk - first content chunk)`. Prefill and load are excluded.
-- The raw JSON and the driver live in the gitignored
-  `.superpowers/sdd/2026-11-18-ornith-ane-prefill/bench-decode/`.
+- The raw JSON and the driver live in the gitignored `.build/bench/`
+  (`matrix.json`, `matrix-loaded.json`, `measure.py`).
 
 ## Results
 
@@ -31,6 +31,19 @@ quiet-host interleaved rerun replaces this file.
 
 GPU/CPU ratio: 2B 2.6× / 1.9×, 4B 3.8× / 1.8×, 9B 3.1× / 2.2×
 (4-bit / 8-bit in that order).
+
+## Load sensitivity (same build, same method)
+
+Two later repeats on the same machine, both with two measured runs per cell,
+show what the host moves:
+
+| Load | 2B4 | 2B8 | 4B4 | 4B8 | 9B4 | 9B8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 12.8 (GPU / CPU) | 29.3 / 11.3 | 21.2 / 10.3 | 12.9 / 4.3 | 6.6 / 3.9 | 6.0 / 1.9 | 3.6 / 1.2 |
+| 10.3, Xcode+Roblox (GPU / CPU) | 12.5 / 2.5 | 11.8 / 3.3 | 6.0 / 1.4 | 5.3 / 2.6 | 5.9 / 1.3 | 4.1 / 1.8 |
+
+The ordering is stable in every sample; the absolute figures are not. The
+table above is the quietest sample, not a guaranteed rate.
 
 ## Reading it
 
