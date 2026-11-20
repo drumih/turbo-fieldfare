@@ -153,7 +153,11 @@ above it: `TinyTitanLib` is a **product**, and the runtime is not — see
   CLI and an embedder both construct an engine through
   `EngineFactories.routingFactory(directoryURL:)`, which reads the install's
   manifest and returns the 7.0 variant where one ships, the 6.x factory
-  otherwise. The server's router uses the same table.
+  otherwise. The server's router uses the same table for the GPU path. The
+  dense CPU engines are *not* reachable this way: `variantCPUEngine` builds a
+  `CPUEngineFactory` over `CPUEngineRunner` for the server's `CPUModelBackend`,
+  while `Engine` consumes the Metal-shaped `EngineModel`/`EngineRunner`; adding
+  a CPU session to the library is tracker task TT-102.
 - **`TinyTitanLib` is additive and thin.** It does not re-export engine internals;
   it names the handful of types a consumer may depend on. Everything else stays
   internal or `package`. This is what makes a versioning policy possible at all.

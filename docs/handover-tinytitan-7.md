@@ -693,5 +693,7 @@ single-model entry point, and `sources/TinyTitanCLI/Run.swift` plus
 `CalibrationMeasurement` now call it instead of `sixXGPU()`. Goldens
 `ornith-4` and `qwen35-2b-4` remain byte-identical through the routed CLI,
 which is the acceptance evidence; the serial suite and the embedded-dependency
-check are green. `TinyTitanServerCore` and the `TinyTitanServer` executable now
+check are green. **The CPU dense path is still server-only** (the library
+`Engine` has no CPU session; `variantCPUEngine` is a server `CPUEngineFactory`),
+so a CLI `--engine cpu` waits on TT-102. `TinyTitanServerCore` and the `TinyTitanServer` executable now
 import the new target instead of naming the eight variant modules.
