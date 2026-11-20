@@ -188,7 +188,7 @@ jobs:
             -r benchmark/requirements.txt
           cd benchmark
           /tmp/tt-converter/bin/python -m unittest test_prepare_qwen38 test_qwen38_resume_e2e \
-            test_prepare_agentworld test_tinytitan_quant_fidelity \
+            test_prepare_qwen35 test_prepare_agentworld test_tinytitan_quant_fidelity \
             test_reconcile_snapshot_verdict test_two_bit_pack test_requantize_qwen38_rest
       - name: Installer and launcher gates (model-menu and launcher choices)
         # These tests pin the installer's and launcher's choice handling: a

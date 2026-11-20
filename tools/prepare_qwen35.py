@@ -677,12 +677,53 @@ def remote_header(shard: str) -> tuple[dict, int]:
 _download: subprocess.Popen | None = None
 
 
+SAMPLE_BYTES = 8192
+
+
+def content_probe(path: Path, shard: str, expected_size: int | None = None) -> None:
+    """Refuse a size-correct shard whose bytes are empty or garbage.
+
+    curl's exit status and the byte count were the only checks a download used
+    to make, and a filesystem hole or a zeroed write passes both. The
+    2026-11-16 2B installs shipped zeroed payloads through exactly that gap
+    (TT-098), so the file is sampled before it is trusted: the safetensors
+    header must name a plausible JSON length and at least 1% of the payload
+    samples must be nonzero.
+    """
+    size = path.stat().st_size
+    if expected_size is not None and size != expected_size:
+        raise RuntimeError(f"download content check: {shard} is {size} bytes, expected {expected_size}")
+    if size < 8:
+        raise RuntimeError(f"download content check: {shard} is {size} bytes")
+    with open(path, "rb") as handle:
+        header = handle.read(8)
+        header_bytes = int.from_bytes(header, "little")
+        if not 0 < header_bytes < min(size - 8, 100_000_000):
+            raise RuntimeError(
+                f"download content check: {shard} has no safetensors header "
+                f"({header_bytes} bytes named)")
+        step = max(1, (size - 8) // SAMPLE_BYTES)
+        total = nonzero = 0
+        handle.seek(8)
+        for offset in range(8, size, step):
+            handle.seek(offset)
+            byte = handle.read(1)
+            total += 1
+            if byte not in (b"\x00", b""):
+                nonzero += 1
+    if total == 0 or nonzero * 100 < total:
+        raise RuntimeError(
+            f"download content check: {shard} is {nonzero}/{total} nonzero — "
+            "a zeroed or hole-y download was refused")
+
+
 def download(shard: str, work: Path, size: int) -> Path:
     """Fetched under a `.part` name and renamed when whole, so an interrupted
     run never leaves a truncated shard that the next one would trust."""
     global _download
     target = work / shard
     if target.exists() and target.stat().st_size == size:
+        content_probe(target, shard, size)
         print(f"  have {shard}", flush=True)
         return target
     partial = work / (shard + ".part")
@@ -692,6 +733,11 @@ def download(shard: str, work: Path, size: int) -> Path:
     if _download.wait() != 0 or partial.stat().st_size != size:
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"download failed: {shard}")
+    try:
+        content_probe(partial, shard, size)
+    except RuntimeError:
+        partial.unlink(missing_ok=True)
+        raise
     _download = None
     partial.rename(target)
     print(f"    {size / 1e9:.2f} GB in {time.time() - started:.0f}s", flush=True)
