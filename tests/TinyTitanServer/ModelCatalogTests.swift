@@ -240,6 +240,25 @@ struct ModelCatalogTests {
         #expect(catalog.entry(idOrPath: "nothing") == nil)
     }
 
+    /// The launcher starts the server with `--model <id>@cpu`; that spelling
+    /// must resolve at startup, not only as a request field.
+    @Test func theModelFlagFindsAnEngineAlias() {
+        let dense = ModelCatalog.Entry(
+            id: "dense_4-Bit", name: "Dense", kind: .gpu(.qwen35Dense), quant: 4,
+            path: URL(fileURLWithPath: "/models/dense_4Bit"),
+            sampling: .house, engines: [.gpu, .cpu])
+        let catalog = ModelCatalog(
+            directory: URL(fileURLWithPath: "/models"), entries: [dense])
+        #expect(catalog.entry(idOrPath: "dense_4-Bit@cpu")?.id == "dense_4-Bit@cpu")
+        #expect(catalog.entry(idOrPath: "dense_4-Bit@cpu")?.kind == .cpu(.qwen35Dense))
+        // The engine it already defaults to is the install itself, whose id the
+        // router's initial lookup holds.
+        #expect(catalog.entry(idOrPath: "dense_4-Bit@gpu")?.id == "dense_4-Bit")
+        #expect(catalog.entry(idOrPath: "dense_4-Bit@gpu")?.kind == .gpu(.qwen35Dense))
+        #expect(catalog.entry(idOrPath: "dense_4-Bit@tpu") == nil)
+        #expect(catalog.entry(idOrPath: "dense_4-Bit")?.kind == .gpu(.qwen35Dense))
+    }
+
     /// The exact document a launcher script parses, field for field.
     @Test func theCatalogJSONIsTheLaunchersShape() throws {
         let catalog = ModelCatalog(
