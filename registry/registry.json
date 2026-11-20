@@ -19,7 +19,16 @@
           "shipped": false,
           "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "9c517eba3381202637d802f275460c2839ec4e7ece3dcf3f8007d01ff84da592",
+            "decodeTokS": 19.64,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-2b-8bit",
@@ -29,7 +38,16 @@
           "shipped": false,
           "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "fb567ac133cfdef93badb2a0d63dfc6f3bd0f9d3d4519f2bc51e809d4d34d0ad",
+            "decodeTokS": 19.13,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-2b-4bit-gpu",
@@ -39,7 +57,16 @@
           "shipped": false,
           "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "45891120c417c2b60b286ec4d830054d9e628e012d3a467cd01dde3e4572af85",
+            "decodeTokS": 54.1,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-2b-8bit-gpu",
@@ -49,7 +76,16 @@
           "shipped": false,
           "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "fb567ac133cfdef93badb2a0d63dfc6f3bd0f9d3d4519f2bc51e809d4d34d0ad",
+            "decodeTokS": 35.71,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         }
       ]
     },
@@ -70,7 +106,16 @@
           "shipped": false,
           "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "5a364a4466f219369e30b7f31e8000ed2b419e6415e31af8e5248bddbba9e49d",
+            "decodeTokS": 8.28,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-4b-8bit",
@@ -80,7 +125,16 @@
           "shipped": false,
           "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "2e104a8fdc957a2e48fcdf0c2aeae50644322c7e38aba8a3da0a977eadf9fc61",
+            "decodeTokS": 9.11,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-4b-4bit-gpu",
@@ -90,7 +144,16 @@
           "shipped": false,
           "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "793dabd7bdd36b4e2a79ad9c25bc10b2ff6ecfde8716f542cc7d209495c9e1a1",
+            "decodeTokS": 27.68,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-4b-8bit-gpu",
@@ -100,7 +163,16 @@
           "shipped": false,
           "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "2e104a8fdc957a2e48fcdf0c2aeae50644322c7e38aba8a3da0a977eadf9fc61",
+            "decodeTokS": 17.23,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         }
       ]
     },
@@ -121,7 +193,16 @@
           "shipped": false,
           "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "a7966fb9eb701f62581835389326f07073cbac1ea4f33978e3ec763cfcee81f3",
+            "decodeTokS": 4.44,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-9b-8bit",
@@ -131,7 +212,16 @@
           "shipped": false,
           "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "1a81fc67315d81677ef7cdb7319f24a1644f98b147edfd5fbe73c6fa0bb82bd2",
+            "decodeTokS": 5.19,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-9b-4bit-gpu",
@@ -141,7 +231,16 @@
           "shipped": false,
           "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "23bfc1083ed036b741aef08c4057f264578031fa0e338eae93de6c42aa5f26ba",
+            "decodeTokS": 15.92,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         },
         {
           "id": "qwen35-9b-8bit-gpu",
@@ -151,7 +250,16 @@
           "shipped": false,
           "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
-          "qualification": null
+          "qualification": {
+            "goldenSHA256": "1a81fc67315d81677ef7cdb7319f24a1644f98b147edfd5fbe73c6fa0bb82bd2",
+            "decodeTokS": 9.38,
+            "prefillTokS": null,
+            "ttftS": null,
+            "memoryCeilingBytes": null,
+            "terminalBench": null,
+            "hardware": "Apple M3 MacBook Pro 24 GB",
+            "date": "2026-11-20"
+          }
         }
       ]
     },

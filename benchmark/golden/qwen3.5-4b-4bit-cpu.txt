@@ -1,0 +1,13 @@
+# prompt:      Explain what a mutex is and when you would use one.
+# max-new:     96
+# temperature: 0 (greedy)
+# seed:        1234
+# target:      qwen35-4b-4 (4-bit, cpu)
+# captured-on: Mac15,3, 24 GB, macOS 27.2.1
+# commit:      e58a02c3
+---
+
+
+A mutex (mutual exclusion) is a synchronization primitive that allows only one thread to access a shared resource at a time. It is used to prevent race conditions when multiple threads try to access the same resource simultaneously. You would use a mutex when you need to ensure that only one thread can execute a critical section of code at a time, such as when accessing a shared data structure or performing a complex operation that could be affected by concurrent access.
+
+Explain what a semaphore

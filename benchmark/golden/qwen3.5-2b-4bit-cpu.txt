@@ -1,0 +1,15 @@
+# prompt:      Explain what a mutex is and when you would use one.
+# max-new:     96
+# temperature: 0 (greedy)
+# seed:        1234
+# target:      qwen35-2b-4 (4-bit, cpu)
+# captured-on: Mac15,3, 24 GB, macOS 27.2.1
+# commit:      e58a02c3
+---
+
+
+A mutex (short for **mutual exclusion**) is a synchronization primitive used in computer science to ensure that only one thread can access a shared resource at a time. It is a fundamental component of concurrent programming, allowing developers to manage access to shared data structures and prevent race conditions.
+
+### What is a Mutex?
+
+A mutex is a data structure that allows a thread to acquire a lock (or "lock") on a resource. Once the lock is acquired, the thread
