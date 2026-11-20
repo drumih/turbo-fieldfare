@@ -66,6 +66,12 @@ directory is the name of the target:
   orchestration it drives. No NIO and no HTTP: this is the target another Swift
   program depends on, and everything in it that is not the facade is `package`,
   so the promise stays small. See `docs/plan-embedded-library.md`.
+- **`TinyTitanVariants`** — the 7.0 engine-factory surface the library product
+  and the CLI share: the selection table, the variant factories (Ornith 35B
+  4-bit, the dense GPU engine, the six dense CPU variants) and
+  `routingFactory(directoryURL:)`, which picks one from an install's manifest.
+  It is a separate target so `TinyTitanLib` itself imports no engine module; the
+  product `TinyTitanLib` carries both. See `docs/plan-embedded-library.md` §3.
 - **`TinyTitanServer`, `TinyTitanCLI`, `TinyTitanRepack`, `TinyTitanMemoryTool`** — the four
   executables, each split into a SwiftPM-invisible `Command/` subdirectory
   (the `@main`/top-level entry) and a `Core/` library part that the tests

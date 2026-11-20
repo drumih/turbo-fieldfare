@@ -75,7 +75,8 @@ format types and C kernels. `sources/TinyTitanRepack/`, `sources/TinyTitanCLI/` 
 `sources/TinyTitanServer/` hold the installer, CLI and loopback server; each of
 those three is a thin executable over a `*Core` library target
 (`TinyTitanRepackCore`, `TinyTitanCLICore`, `TinyTitanServerCore`).
-`sources/TinyTitanMemory/` and `sources/ContinuityCore/` are persistent
+`sources/TinyTitanVariants/` is the engine-factory surface shared by the
+library product and the CLI. `sources/TinyTitanMemory/` and `sources/ContinuityCore/` are persistent
 agent memory, `sources/TinyTitanMemoryTool/` inspects it (executable
 `tinytitan-memory`), `sources/ContinuityDemo/` is the memory demo executable,
 `sources/TinyTitanBench/` plus `sources/TinyTitanValidation/` are the benchmark
@@ -187,6 +188,16 @@ Rules that follow, and that need a decision recorded in
    keeps the facade small enough to promise anything about.
 4. **Both products ship from one tag.** The library's version is the release
    tag; there is no second version to keep in step.
+
+**The product carries the factory surface.** `TinyTitanLib` the *product* names
+three targets: `TinyTitanLib`, `TinyTitanLegacyEngine` and `TinyTitanVariants`.
+The last is the 7.0 engine-factory surface — the selection table, the variant
+factories and the dense CPU selection — and it is a separate target precisely so
+that `TinyTitanLib` itself still imports no engine module while the CLI and an
+embedder can construct a variant engine. A single-model front end calls
+`EngineFactories.routingFactory(directoryURL:)`; the server's router uses the
+same table. Do not move variant construction back into `TinyTitanServerCore`, and
+do not let the facade re-export it.
 
 ## Models
 

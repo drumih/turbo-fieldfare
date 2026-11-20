@@ -133,8 +133,10 @@ and `Model` is not formally `Sendable` — several call sites use
 ```
 TinyTitanLib          the supported facade (public) + the orchestrator it drives (package)
    └── TinyTitan        the runtime: TinyTitanFormat + TinyTitanKernelsC + the forward runner
+TinyTitanVariants     the 7.0 factory surface: selection table, variant factories,
+                      dense CPU selection; shared by the CLI and the server
 TinyTitanServerCore   HTTP + OpenAI/Anthropic translation, rebuilt ON TinyTitanLib
-TinyTitanCLICore      the CLI, rebuilt ON TinyTitanLib
+TinyTitanCLICore      the CLI, rebuilt ON TinyTitanLib (routes through TinyTitanVariants)
 TinyTitanC (optional) the C ABI: tinytitan.h over an opaque handle
 ```
 
@@ -144,6 +146,14 @@ behavioural gain, and §9.5 is still open on naming). What matters is the layer
 above it: `TinyTitanLib` is a **product**, and the runtime is not — see
 `docs/repository-layout.md`.
 
+- **Variant construction is a target, not a server detail.**
+  `TinyTitanVariants` holds the selection table and the variant factories, and
+  the `TinyTitanLib` *product* carries it beside `TinyTitanLib` and
+  `TinyTitanLegacyEngine`. The facade target still imports no engine module; the
+  CLI and an embedder both construct an engine through
+  `EngineFactories.routingFactory(directoryURL:)`, which reads the install's
+  manifest and returns the 7.0 variant where one ships, the 6.x factory
+  otherwise. The server's router uses the same table.
 - **`TinyTitanLib` is additive and thin.** It does not re-export engine internals;
   it names the handful of types a consumer may depend on. Everything else stays
   internal or `package`. This is what makes a versioning policy possible at all.

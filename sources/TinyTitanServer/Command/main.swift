@@ -9,6 +9,7 @@ import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanMemory
 import TinyTitanServerCore
+import TinyTitanVariants
 
 let arguments: ServerArguments
 do {

@@ -2,6 +2,7 @@ import Foundation
 import TinyTitan
 import TinyTitanCore
 import TinyTitanLegacyEngine
+import TinyTitanVariants
 
 extension CPUEngineFactory {
     static func legacy(snapshot: AffineSnapshot) -> CPUEngineFactory {

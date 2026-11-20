@@ -41,10 +41,17 @@ let package = Package(
         // both (`tools/build_library.sh` links it with an install name of
         // `@rpath/libTinyTitanLib.dylib` so the published file can carry the
         // plain name).
-        .library(name: "TinyTitanLib", targets: ["TinyTitanLib", "TinyTitanLegacyEngine"]),
+        // `TinyTitanVariants` is the engine-factory surface: it selects the
+        // 7.0 variant for an install (or the 6.x engine where none ships) and
+        // is in the product so an embedder and the CLI can both construct an
+        // engine without importing the server. `TinyTitanLib` itself still
+        // imports no engine module; the product is the bundle.
+        .library(
+            name: "TinyTitanLib",
+            targets: ["TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants"]),
         .library(
             name: "TinyTitanLibDynamic", type: .dynamic,
-            targets: ["TinyTitanLib", "TinyTitanLegacyEngine"]),
+            targets: ["TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants"]),
         // Product 2 of 2: the engine, embedding the library above.
         .executable(name: "TinyTitanRepack", targets: ["TinyTitanRepack"]),
         .executable(name: "TinyTitanCLI", targets: ["TinyTitanCLI"]),
@@ -217,6 +224,23 @@ let package = Package(
             path: "sources/TinyTitanLegacyEngine",
             swiftSettings: tinytitanLanguageStandard
         ),
+        // The factory surface a single-model front end and an embedder use:
+        // the 7.0 variant selection table plus the CPU dense selection. It
+        // lives outside `TinyTitanServerCore` because both the CLI and the
+        // library product need it, and the server must not be the only way to
+        // reach a variant engine.
+        .target(
+            name: "TinyTitanVariants",
+            dependencies: [
+                "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
+                "Ornith35B4Bit", "DenseGPU",
+                "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
+                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
+                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
+            ],
+            path: "sources/TinyTitanVariants",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "TinyTitanRepackCore",
             dependencies: ["TinyTitanCore", "TinyTitanFormat"],
@@ -234,7 +258,10 @@ let package = Package(
             // The CLI is a front end of the library (phase A2 of
             // `docs/plan-embedded-library.md`), so it depends on the facade it
             // drives. `TinyTitan` stays for the few value types `Args` parses.
-            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine"],
+            dependencies: [
+                "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
+                "TinyTitanVariants",
+            ],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
             swiftSettings: tinytitanLanguageStandard
@@ -294,16 +321,12 @@ let package = Package(
                 "TinyTitan",
                 "TinyTitanLegacyEngine",
                 "TinyTitanMemory",
-                // The shipped variants the server may select as engines
-                // (TT-097 Phase 3; server→variant import is allowed by the
-                // variant-isolation rule — only a variant may not import the
-                // server). `EngineFactories+Variants.swift` is the only file
-                // that names them.
-                "Ornith35B4Bit",
-                "DenseGPU",
-                "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
-                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
-                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
+                // The variant selection table lives in `TinyTitanVariants`
+                // now, so the server, the CLI and the library product share
+                // one factory surface. Server→variant imports are allowed by
+                // the variant-isolation rule; only a variant may not import
+                // the server.
+                "TinyTitanVariants",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
@@ -313,7 +336,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanServer",
-            dependencies: ["TinyTitanServerCore"],
+            dependencies: ["TinyTitanServerCore", "TinyTitanVariants"],
             path: "sources/TinyTitanServer/Command",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -421,14 +444,10 @@ let package = Package(
                 // that an omitted field follows the served model's profile
                 // rather than a hardcoded house default.
                 "TinyTitan",
-                // The dense CPU variants TinyTitanServerCore now imports for
-                // the Task 13 width-selected CPU engines. Without the explicit
-                // declaration the test target's clang dependency scanner fails
-                // to resolve them (the same explicit-module trap the handover
-                // records for yyjson).
-                "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
-                "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
-                "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
+                // The factory surface the selection tests pin; its own
+                // target names the variant modules, so the tests import one
+                // module instead of eight.
+                "TinyTitanVariants",
                 .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
             path: "tests/TinyTitanServer",

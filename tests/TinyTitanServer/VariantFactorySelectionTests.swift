@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import TinyTitanCore
+import TinyTitanVariants
 
 @testable import TinyTitan
 @testable import TinyTitanLegacyEngine
@@ -182,6 +183,16 @@ import TinyTitanCore
         do {
             _ = try factory.buildModel(directory, ArchConfig.qwen36_35B_A3B, nil)
             Issue.record("the variant requires a Metal context")
+        } catch {
+            #expect("\(error)".contains("ornith variant"))
+        }
+        // The CLI and an embedder call `routingFactory`, which must take the
+        // same table: a directory naming the Ornith install gets the variant,
+        // not the 6.x fallback.
+        let routed = EngineFactories.routingFactory(directoryURL: directory)
+        do {
+            _ = try routed.buildModel(directory, ArchConfig.qwen36_35B_A3B, nil)
+            Issue.record("the routed factory must be the variant too")
         } catch {
             #expect("\(error)".contains("ornith variant"))
         }

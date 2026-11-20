@@ -681,3 +681,17 @@ this install until identical-greedy passes.
 
 The tail split, its measurements and the remaining acceptance decision are in
 `docs/handover-ane-ornith.md` (2026-11-19, evening).
+
+## 2026-11-20 — the factory surface moved out of the server; the CLI routes variants
+
+`TinyTitanVariants` is a new target holding the 7.0 selection table and the
+variant factories (`EngineFactories+Variants.swift` moved out of
+`TinyTitanServerCore`). It is part of the `TinyTitanLib` product, so the CLI and
+an embedder can construct a variant engine; `TinyTitanLib` itself still imports
+no engine module. `EngineFactories.routingFactory(directoryURL:)` is the
+single-model entry point, and `sources/TinyTitanCLI/Run.swift` plus
+`CalibrationMeasurement` now call it instead of `sixXGPU()`. Goldens
+`ornith-4` and `qwen35-2b-4` remain byte-identical through the routed CLI,
+which is the acceptance evidence; the serial suite and the embedded-dependency
+check are green. `TinyTitanServerCore` and the `TinyTitanServer` executable now
+import the new target instead of naming the eight variant modules.

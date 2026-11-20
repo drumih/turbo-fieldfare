@@ -63,6 +63,20 @@ extension EngineFactories {
             routedExpertWeightBits: identity.weightBits)
     }
 
+    /// The GPU factory a single-model front end (the CLI) and an embedder
+    /// use: the same selection table the server's router uses, keyed on the
+    /// install's manifest identity. A directory without a readable manifest
+    /// (an affine snapshot, a GGUF directory) falls back to the 6.x factory,
+    /// which is what those paths used before this surface existed.
+    public static func routingFactory(directoryURL: URL) -> EngineFactory {
+        guard let identity = try? TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
+        else { return sixXGPU() }
+        return gpuFactory(
+            family: identity.family,
+            manifestModelID: identity.modelID,
+            routedExpertWeightBits: identity.weightBits)
+    }
+
     public static func gpuFactory(
         family: TinyTitan.ModelFamily,
         manifestModelID: String,

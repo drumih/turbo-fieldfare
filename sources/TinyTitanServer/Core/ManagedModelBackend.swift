@@ -3,6 +3,7 @@ import TinyTitan
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
+import TinyTitanVariants
 
 /// Manages when the model is resident: loads it on the first inference request
 /// rather than at startup, and optionally releases it again after an idle

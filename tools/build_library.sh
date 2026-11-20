@@ -193,6 +193,9 @@ Contents
   libTinyTitanLib.dylib      the same library, dynamically linked
   TinyTitanLib.swiftmodule   the Swift module — plus every module it imports,
                              because a binary module does not stand alone
+  TinyTitanVariants.swiftmodule
+                             the 7.0 engine-factory surface (variant selection,
+                             variant factories, dense CPU selection)
   *.modulemap                the generated module maps for the C targets in the
                              graph (the kernels, yyjson, NIO's shims, ...),
                              which SwiftPM normally passes one by one

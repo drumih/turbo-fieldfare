@@ -12,6 +12,7 @@ import TinyTitan
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
+import TinyTitanVariants
 
 private struct MessageJSON: Decodable {
     let role: String
@@ -90,7 +91,8 @@ public func run(
         // pure greedy. Anything the caller named on the command line wins;
         // this only fills what they left alone.
         let declared = SamplingDefaults.forInstall(
-            at: modelURL, thinkingMode: thinkingMode, factory: EngineFactories.sixXGPU())
+            at: modelURL, thinkingMode: thinkingMode,
+            factory: EngineFactories.routingFactory(directoryURL: modelURL))
         let options = GenerationOptions(
             maxTokens: min(args.maxNew, args.maxContext),
             temperature: args.temperatureWasSet
@@ -160,7 +162,8 @@ public func run(
         }
         let engine = try await Engine(
             directory: modelURL, device: device,
-            factory: EngineFactories.sixXGPU(), configuration: configuration)
+            factory: EngineFactories.routingFactory(directoryURL: modelURL),
+            configuration: configuration)
         // The one request would arrive before any layer is warm and stop the
         // warm-up at once, so the CLI lets it finish (it logs its own line;
         // TINYTITAN_WARM_EXPERTS=0 skips it).
