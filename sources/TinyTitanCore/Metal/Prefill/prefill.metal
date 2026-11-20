@@ -716,6 +716,41 @@ kernel void prefill_rope_yarn_neox_subdim_block(
     row[half_rotary + pair] = half(x0 * sine + x1 * cosine);
 }
 
+// Thresholded YaRN for prefill: below the threshold the native helper runs
+// unchanged; at and above it the extended table and attention magnitude apply.
+kernel void prefill_rope_yarn_threshold_neox_subdim_block(
+    device half* data [[buffer(0)]],
+    device const float* inverse_frequencies [[buffer(1)]],
+    constant uint& start_position [[buffer(2)]],
+    constant uint& head_dim [[buffer(3)]],
+    constant uint& num_heads [[buffer(4)]],
+    constant uint& token_stride_elems [[buffer(5)]],
+    constant uint& rotary_dim [[buffer(6)]],
+    constant float& attention_factor [[buffer(7)]],
+    constant uint& threshold [[buffer(8)]],
+    constant float& theta_base [[buffer(9)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    const uint pair = gid.x;
+    const uint head = gid.y;
+    const uint token = gid.z;
+    const uint half_rotary = rotary_dim / 2u;
+    if (pair >= half_rotary || head >= num_heads) return;
+    device half* row = data + token * token_stride_elems + head * head_dim;
+    const float p = float(start_position + token);
+    if (p < float(threshold)) {
+        prefill_rope_apply_neox_pair(row, pair, half_rotary, rotary_dim, p, theta_base);
+        return;
+    }
+    const float angle = p * inverse_frequencies[pair];
+    const float cosine = cos(angle) * attention_factor;
+    const float sine = sin(angle) * attention_factor;
+    const float x0 = float(row[pair]);
+    const float x1 = float(row[half_rotary + pair]);
+    row[pair] = half(x0 * cosine - x1 * sine);
+    row[half_rotary + pair] = half(x0 * sine + x1 * cosine);
+}
+
 struct PrefillAttentionParams {
     uint startPosition;
     uint queryCount;

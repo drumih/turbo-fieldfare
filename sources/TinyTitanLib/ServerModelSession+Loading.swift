@@ -76,6 +76,23 @@ extension ServerModelSession {
         reusingContext: MetalContext? = nil,
         warmExperts: Bool = true
     ) async throws -> ServerModelSession {
+        // A dense GPU install without an explicit context choice gets the
+        // factory's default (1M) and YaRN; the thresholded kernel keeps every
+        // position below the native 262,144 on the native path, so a short
+        // answer is unchanged. The cap is capacity, not the rope function.
+        let nativeContextWindow = 262_144
+        let resolvedMaxContext: Int
+        let resolvedRopeScalingMode: RuntimeRoPEScalingMode
+        if maxContext == nativeContextWindow,
+            ropeScalingMode == .none,
+            let factoryDefault = factory.defaultMaxContextTokens
+        {
+            resolvedMaxContext = factoryDefault
+            resolvedRopeScalingMode = .yarn
+        } else {
+            resolvedMaxContext = maxContext
+            resolvedRopeScalingMode = ropeScalingMode
+        }
         _ = try GFTokenizer.requireModelDirectory(modelDirectory)
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
@@ -112,7 +129,7 @@ extension ServerModelSession {
         let baseOptions = SessionBuildOptions(
             modelDirectory: modelDirectory,
             context: context,
-            maxContext: maxContext,
+            maxContext: resolvedMaxContext,
             slots: slots,
             promptCacheMaximumEntries: promptCacheMaximumEntries,
             promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
@@ -121,7 +138,7 @@ extension ServerModelSession {
             prefillChunkTokens: requestedPrefillChunkTokens,
             kvCachePrecision: kvCachePrecision,
             hostKVWindowTokens: hostKVWindowTokens,
-            ropeScalingMode: ropeScalingMode,
+            ropeScalingMode: resolvedRopeScalingMode,
             thinkingMode: thinkingMode,
             reasoningEffort: reasoningEffort,
             expertCacheSlots: requestedExpertCacheSlots,
@@ -182,7 +199,7 @@ extension ServerModelSession {
         let options = SessionBuildOptions(
             modelDirectory: modelDirectory,
             context: context,
-            maxContext: maxContext,
+            maxContext: resolvedMaxContext,
             slots: effectiveSlots,
             promptCacheMaximumEntries: promptCacheMaximumEntries,
             promptCacheMemoryLimitBytes: promptCacheMemoryLimitBytes,
@@ -191,7 +208,7 @@ extension ServerModelSession {
             prefillChunkTokens: requestedPrefillChunkTokens,
             kvCachePrecision: kvCachePrecision,
             hostKVWindowTokens: hostKVWindowTokens,
-            ropeScalingMode: ropeScalingMode,
+            ropeScalingMode: resolvedRopeScalingMode,
             thinkingMode: thinkingMode,
             reasoningEffort: reasoningEffort,
             expertCacheSlots: requestedExpertCacheSlots,
@@ -230,7 +247,7 @@ extension ServerModelSession {
             modelID: model.modelID,
             sourceSnapshotHash: model.sourceSnapshotHash,
             runtimeProfileHash: runtimeDigest,
-            maximumContext: maxContext,
+            maximumContext: resolvedMaxContext,
             kvStorage: kvCachePrecision.label,
             fp16RingEnabled: loadPlan.fp16RingEnabled,
             templateSHA256: templateDigest)
@@ -317,7 +334,7 @@ extension ServerModelSession {
             prefillConfig: loadPlan.prefillConfiguration,
             expertCacheSlots: loadSlots,
             slots: effectiveSlots,
-            maxContext: maxContext,
+            maxContext: resolvedMaxContext,
             promptCacheMode: effectivePromptCacheMode,
             promptCacheDomain: promptCacheDomain,
             promptCache: promptCache,

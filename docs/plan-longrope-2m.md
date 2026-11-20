@@ -46,22 +46,16 @@ fit in 24 GB at either precision. The engine's YaRN rungs now include
 (`RuntimeConfiguration.supportedYaRNContextTokens`; `1 048 576` remains the
 default), and even the 1M rung is marginal here at 4-bit KV.
 
-### Dense Qwen 3.5: 1M is the standard rung, not the default
+### Dense Qwen 3.5: 1M is the default, with a threshold
 
-For the three dense installs the standard long-context invocation is
-
-```bash
-tiny ... --rope-scaling yarn --max-context 1048576
-```
-
-It is deliberately **opt-in**, not the no-flag default: YaRN rescales the
-frequencies at every position, and on the 2B golden prompt the 1M run produces
-different text from the native 262K run (the same prompt, greedy, 96 tokens).
-Changing the default would therefore change every short dense answer and fail
-the stored golden rather than merely raise the context limit. The larger rungs
-(`2M/4M/8M/16M`) are for hosts whose KV budget can carry them; quality above 2M
-is unmeasured. The dense **CPU** engine has no YaRN path, so 1M there would need
-new kernels, not a flag.
+The dense GPU path now defaults to a **1M cap** and a fixed **1M extension
+profile**. The thresholded kernel keeps every position below the native 262,144
+on the native frequencies and attention magnitude, so short answers are
+byte-identical to the old native default; only positions past 262,144 use the
+extension. The cap is capacity: `--max-context 4M/8M/16M` selects a larger KV
+budget, not a different rope function. The larger rungs are for hosts that can
+carry the KV; quality above 2M is unmeasured. The dense **CPU** engine has no
+YaRN path and stays at 262K.
 
 ### Which YaRN this is
 

@@ -6,16 +6,19 @@ final class PrefillRoPE {
     private let psoDefaultNeox: MTLComputePipelineState
     private let psoProportionalNeox: MTLComputePipelineState
     private let psoNeoxSubdim: MTLComputePipelineState
-    private let psoYaRNNeoxSubdim: MTLComputePipelineState
+    private let psoYaRNThresholdNeoxSubdim: MTLComputePipelineState
     private let yarnInverseFrequencies: MTLBuffer?
     private let yarnAttentionFactor: Float
+    private let yarnThreshold: Int
 
     init(context: MetalContext, yarn: YaRNRoPEParameters? = nil) throws {
         self.psoDefaultNeox = try context.pipeline("prefill_rope_default_neox_block")
         self.psoProportionalNeox = try context.pipeline("prefill_rope_proportional_neox_block")
         self.psoNeoxSubdim = try context.pipeline("prefill_rope_neox_subdim_block")
-        self.psoYaRNNeoxSubdim = try context.pipeline("prefill_rope_yarn_neox_subdim_block")
+        self.psoYaRNThresholdNeoxSubdim = try context.pipeline(
+            "prefill_rope_yarn_threshold_neox_subdim_block")
         self.yarnAttentionFactor = yarn?.attentionFactor ?? 1
+        self.yarnThreshold = yarn?.threshold ?? Int.max
         if let yarn {
             guard
                 let buffer = yarn.inverseFrequencies.withUnsafeBytes({ bytes -> MTLBuffer? in
@@ -62,7 +65,7 @@ final class PrefillRoPE {
                 queryCount: queryCount, headDim: headDim,
                 numHeads: numHeads, rotaryDim: rotaryDim,
                 tokenStrideElements: tokenStrideElements,
-                frequencies: frequencies)
+                frequencies: frequencies, theta: theta)
             return
         }
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
@@ -103,12 +106,13 @@ final class PrefillRoPE {
         numHeads: UInt32,
         rotaryDim: UInt32,
         tokenStrideElements: UInt32,
-        frequencies: MTLBuffer
+        frequencies: MTLBuffer,
+        theta: Float
     ) throws {
         guard let enc = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        enc.setComputePipelineState(psoYaRNNeoxSubdim)
+        enc.setComputePipelineState(psoYaRNThresholdNeoxSubdim)
         enc.setBuffer(data, offset: dataOffset, index: 0)
         enc.setBuffer(frequencies, offset: 0, index: 1)
         var start = startPosition
@@ -117,17 +121,21 @@ final class PrefillRoPE {
         var stride = tokenStrideElements
         var rotary = rotaryDim
         var magnitude = yarnAttentionFactor
+        var threshold = UInt32(yarnThreshold)
+        var thetaValue = theta
         enc.setBytes(&start, length: MemoryLayout<UInt32>.size, index: 2)
         enc.setBytes(&hd, length: MemoryLayout<UInt32>.size, index: 3)
         enc.setBytes(&heads, length: MemoryLayout<UInt32>.size, index: 4)
         enc.setBytes(&stride, length: MemoryLayout<UInt32>.size, index: 5)
         enc.setBytes(&rotary, length: MemoryLayout<UInt32>.size, index: 6)
         enc.setBytes(&magnitude, length: MemoryLayout<Float>.size, index: 7)
+        enc.setBytes(&threshold, length: MemoryLayout<UInt32>.size, index: 8)
+        enc.setBytes(&thetaValue, length: MemoryLayout<Float>.size, index: 9)
         let pairs = Int(rotaryDim) / 2
         enc.dispatchThreads(
             MTLSize(width: pairs, height: Int(numHeads), depth: Int(queryCount)),
             threadsPerThreadgroup: MTLSize(
-                width: min(pairs, psoYaRNNeoxSubdim.maxTotalThreadsPerThreadgroup),
+                width: min(pairs, psoYaRNThresholdNeoxSubdim.maxTotalThreadsPerThreadgroup),
                 height: 1, depth: 1))
         enc.endEncoding()
     }

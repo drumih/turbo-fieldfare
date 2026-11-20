@@ -162,6 +162,46 @@ kernel void rope_yarn_neox_subdim(
     head[upper] = half(x0 * sine + x1 * cosine);
 }
 
+// Thresholded YaRN: below `threshold` this is the native NeoX rotation
+// (same helper, same expression); at and above it the extended inverse
+// frequencies and the YaRN attention magnitude apply. This is what makes the
+// context cap capacity-only: a short sequence never sees the extension.
+kernel void rope_yarn_threshold_neox_subdim(
+    device half* data [[buffer(0)]],
+    device const float* inverse_frequencies [[buffer(1)]],
+    constant uint& position [[buffer(2)]],
+    constant uint& head_dim [[buffer(3)]],
+    constant uint& num_heads [[buffer(4)]],
+    constant uint& rotary_dim [[buffer(5)]],
+    constant float& attention_factor [[buffer(6)]],
+    constant uint& threshold [[buffer(7)]],
+    constant float& theta [[buffer(8)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    const uint pair = gid.x;
+    const uint head_index = gid.y;
+    const uint token_index = gid.z;
+    const uint half_rotary = rotary_dim / 2u;
+    if (pair >= half_rotary || head_index >= num_heads) return;
+    device half* head = data
+        + token_index * num_heads * head_dim
+        + head_index * head_dim;
+    const float p = float(position + token_index);
+    if (p < float(threshold)) {
+        apply_neox_pair(head, pair, half_rotary, rotary_dim, p, theta);
+        return;
+    }
+    const float angle = p * inverse_frequencies[pair];
+    const float cosine = cos(angle) * attention_factor;
+    const float sine = sin(angle) * attention_factor;
+    const uint lower = pair;
+    const uint upper = half_rotary + pair;
+    const float x0 = float(head[lower]);
+    const float x1 = float(head[upper]);
+    head[lower] = half(x0 * cosine - x1 * sine);
+    head[upper] = half(x0 * sine + x1 * cosine);
+}
+
 kernel void rope_proportional_neox(
     device half* data [[buffer(0)]],
     constant uint& position [[buffer(1)]],

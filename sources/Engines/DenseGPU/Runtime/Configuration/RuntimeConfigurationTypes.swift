@@ -139,6 +139,7 @@ public enum RuntimeConfigurationError: Error, CustomStringConvertible, Equatable
     case invalidYaRNContextTokens(Int)
     case contextRequiresYaRN(Int)
     case yaRNContextMismatch(maxContext: Int, configured: Int)
+    case contextExceedsMaximum(Int)
     case yaRNUnsupportedArchitecture
     case invalidDecodeExpertExecution(String)
     case invalidExpertIOSynchronization(String)
@@ -158,6 +159,9 @@ public enum RuntimeConfigurationError: Error, CustomStringConvertible, Equatable
         case .invalidYaRNContextTokens(let value):
             return
                 "unsupported YaRN context \(value); allowed: \(RuntimeConfiguration.supportedYaRNContextTokens)"
+        case .contextExceedsMaximum(let value):
+            return
+                "context \(value) exceeds the \(RuntimeConfiguration.maximumContextTokens)-token maximum"
         case .contextRequiresYaRN(let value):
             return
                 "context \(value) exceeds the native \(RuntimeConfiguration.nativeMaximumContextTokens)-token limit; enable YaRN"

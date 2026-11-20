@@ -1,7 +1,12 @@
 # Context-size invariance: a cap that cannot change the answer
 
-**Status: proposal (2026-11-20). Not implemented.** This is the design for making
-`--max-context` a capacity decision rather than a numerics decision.
+**Status (2026-11-20): implemented for the dense GPU path; the dense CPU path is
+still native-only.** The design makes `--max-context` a capacity decision rather
+than a numerics decision. Short dense answers are byte-identical at the native
+262K window, the 1M default and explicit 1M/4M/16M caps; the kernel threshold is
+pinned below and above the boundary. A real >262K end-to-end prefill was not run
+on this host (the 370k-word attempt stalled in swap); the prefill kernel test
+crosses the threshold at a reduced 4K boundary instead.
 
 ## The problem
 
@@ -58,11 +63,29 @@ stays native and refuses beyond it.
 
 - Golden/greedy output for every dense install is byte-identical at native and at
   every cap ≥ text length, including 262K vs 1M vs 16M on a short prompt.
+  **Verified:** all six dense GPU goldens (2B/4B/9B × 4/8-bit) at the 1M default;
+  2B outputs identical at default/4M/16M.
 - One long text produces the same output at caps 1M, 2M, 4M, 8M and 16M.
-- KV memory tracks the actual sequence, not the cap.
+  **Verified at kernel level** (`DenseGPURoPETests`: threshold 4K, scalar and
+  prefill cross it; 4M/16M configs validate against the fixed 1M profile).
+  A real >262K end-to-end run is still the remaining performance test.
+- KV memory tracks the actual sequence, not the cap. A short prompt at the 1M
+  default peaked at 1.99 GB, so the cap did not eagerly allocate the window.
 - Long-context quality (needle/retrieval and the project's checked prompts) is
   measured; the extension profile is rejected if it degrades below the accepted
-  floor.
+  floor. **Not done**; the fixed 1M profile is not a quality claim above 262K.
+
+## Implementation
+
+- `YaRNRoPEParameters.threshold = n̂ = 262,144`; the thresholded prefill and
+  decode kernels use the native helper below it and the extended table plus
+  attention magnitude at or above it.
+- The dense factory fixes the extension profile at 1M and sets
+  `EngineFactory.defaultMaxContextTokens = 1M`; `ServerModelSession.load` applies
+  it only when the caller left the native 262K default and did not request
+  scaling. **The cap is not the profile.**
+- Dense CPU: unchanged (native 262K); it needs its own thresholded kernel before
+  it can join.
 
 ## Why not just “use native always”
 

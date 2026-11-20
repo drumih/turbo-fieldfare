@@ -253,6 +253,7 @@ extension EngineFactories {
             validateReasoning: base.validateReasoning,
             resolveArchitecture: base.resolveArchitecture,
             preview: base.preview,
+            defaultMaxContextTokens: 1_048_576,
             buildModel: { directory, _, context in
                 guard let context else {
                     throw ServerInferenceError.unsupportedModel(
@@ -272,17 +273,16 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         "the dense-GPU runner requires its model and Metal context")
                 }
-                // The dense GPU engine owns the YaRN kernels; pass the
-                // session's rope mode through, and use its max context as the
-                // configured rung when YaRN is on. With YaRN off the rung is
-                // unused, but the initializer still validates it.
+                // The dense GPU engine owns the thresholded YaRN kernels. The
+                // extension profile is fixed at 1M independent of the cap, so
+                // --max-context 4M/8M/16M only changes capacity, not the rope
+                // function. With YaRN off the profile is unused.
                 let runtime = try DenseGPU.RuntimeConfiguration(
                     forceLogitsHead: true,
                     kvCachePrecision: options.kvCachePrecision,
                     ropeScalingMode: options.ropeScalingMode,
-                    yarnContextTokens: options.ropeScalingMode == .yarn
-                        ? options.maxContext
-                        : DenseGPU.RuntimeConfiguration.defaultYaRNContextTokens)
+                    yarnContextTokens: DenseGPU.RuntimeConfiguration
+                        .defaultYaRNContextTokens)
                 return try DenseGPU.RealForwardRunner(
                     model: model,
                     context: context,

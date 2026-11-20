@@ -6,6 +6,9 @@ import Foundation
 struct YaRNRoPEParameters: Sendable, Equatable {
     let factor: Float
     let attentionFactor: Float
+    /// Positions below this use the model's native frequencies and no
+    /// attention-magnitude scale; positions at or above it use the table above.
+    let threshold: Int
     let inverseFrequencies: [Float]
 
     init(
@@ -14,6 +17,7 @@ struct YaRNRoPEParameters: Sendable, Equatable {
         theta: Double,
         targetContextTokens: Int,
         originalContextTokens: Int = RuntimeConfiguration.nativeMaximumContextTokens,
+        threshold: Int? = nil,
         betaFast: Double = 32,
         betaSlow: Double = 1
     ) {
@@ -26,6 +30,7 @@ struct YaRNRoPEParameters: Sendable, Equatable {
         let factor = Double(targetContextTokens) / Double(originalContextTokens)
         self.factor = Float(factor)
         self.attentionFactor = Float(0.1 * log(factor) + 1.0)
+        self.threshold = threshold ?? originalContextTokens
 
         func correctionDimension(_ rotations: Double) -> Double {
             Double(dimension)

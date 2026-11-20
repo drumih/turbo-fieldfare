@@ -23,6 +23,11 @@ public struct EngineFactory: Sendable {
     public let preview: @Sendable (URL, Int?) throws -> EngineSessionPreview
     public let readManifest: @Sendable (URL, ArchConfig) throws -> Manifest
     public let buildModel: @Sendable (URL, ArchConfig, MetalContext?) throws -> any EngineModel
+    /// Context a factory wants when the caller left the native default in place
+    /// and did not ask for scaling. The dense GPU factory uses 1M so a public
+    /// install does not run out of context; thresholded RoPE keeps short text on
+    /// the native path, so this is capacity, not a numerics change.
+    public let defaultMaxContextTokens: Int?
     /// The same load with the session's resolved expert-cache slot count, for a
     /// variant whose model owns its streaming configuration. `nil` keeps the
     /// old closure for engines whose profile is read inside the model.
@@ -62,6 +67,7 @@ public struct EngineFactory: Sendable {
         readManifest: @escaping @Sendable (URL, ArchConfig) throws -> Manifest = { directory, _ in
             try SSDAIManifestReader.read(directoryURL: directory)
         },
+        defaultMaxContextTokens: Int? = nil,
         buildModel: @escaping @Sendable (URL, ArchConfig, MetalContext?) throws -> any EngineModel,
         buildModelWithSlots:
             (@Sendable (URL, ArchConfig, MetalContext?, Int) throws -> any EngineModel)? = nil,
@@ -93,6 +99,7 @@ public struct EngineFactory: Sendable {
         self.preview = preview
         self.readManifest = readManifest
         self.buildModel = buildModel
+        self.defaultMaxContextTokens = defaultMaxContextTokens
         self.buildModelWithSlots = buildModelWithSlots
         self.buildRunner = buildRunner
         self.mtpDecoder = mtpDecoder

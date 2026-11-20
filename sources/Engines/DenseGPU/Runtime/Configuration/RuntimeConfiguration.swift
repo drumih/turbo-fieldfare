@@ -454,9 +454,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
                 throw RuntimeConfigurationError.contextRequiresYaRN(maxContext)
             }
         case .yarn:
-            guard maxContext == yarnContextTokens else {
-                throw RuntimeConfigurationError.yaRNContextMismatch(
-                    maxContext: maxContext, configured: yarnContextTokens)
+            // The cap and the fixed extension profile are independent.
+            guard maxContext <= Self.maximumContextTokens else {
+                throw RuntimeConfigurationError.contextExceedsMaximum(maxContext)
             }
         }
     }

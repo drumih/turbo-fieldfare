@@ -11,9 +11,10 @@ final class RoPE {
     private let defaultNeoxSWAK: MTLComputePipelineState
     private let proportionalNeoxFullQ: MTLComputePipelineState
     private let proportionalNeoxFullK: MTLComputePipelineState
-    private let yarnNeoxSubdim: MTLComputePipelineState
+    private let yarnThresholdNeoxSubdim: MTLComputePipelineState
     private let yarnInverseFrequencies: MTLBuffer?
     private let yarnAttentionFactor: Float
+    private let yarnThreshold: Int
 
     init(context: MetalContext, yarn: YaRNRoPEParameters? = nil) throws {
         self.defaultNeox = try context.pipeline("rope_default_neox")
@@ -30,8 +31,10 @@ final class RoPE {
         self.proportionalNeoxFullK = try Self.specializedPipeline(
             context, "rope_proportional_neox",
             headDim: 512, numHeads: 2, rotatedPairs: 64)
-        self.yarnNeoxSubdim = try context.pipeline("rope_yarn_neox_subdim")
+        self.yarnThresholdNeoxSubdim = try context.pipeline(
+            "rope_yarn_threshold_neox_subdim")
         self.yarnAttentionFactor = yarn?.attentionFactor ?? 1
+        self.yarnThreshold = yarn?.threshold ?? Int.max
         if let yarn {
             guard
                 let buffer = yarn.inverseFrequencies.withUnsafeBytes({ bytes -> MTLBuffer? in
@@ -116,7 +119,7 @@ final class RoPE {
                 dataOffset: dataOffset, position: position,
                 headDim: headDim, numHeads: numHeads,
                 rotaryDim: rotaryDim, numTokens: numTokens,
-                frequencies: frequencies)
+                frequencies: frequencies, theta: theta)
             return
         }
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
@@ -152,12 +155,13 @@ final class RoPE {
         numHeads: UInt32,
         rotaryDim: UInt32,
         numTokens: UInt32,
-        frequencies: MTLBuffer
+        frequencies: MTLBuffer,
+        theta: Float
     ) throws {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalError.commandEncoderFailed
         }
-        encoder.setComputePipelineState(yarnNeoxSubdim)
+        encoder.setComputePipelineState(yarnThresholdNeoxSubdim)
         encoder.setBuffer(data, offset: dataOffset, index: 0)
         encoder.setBuffer(frequencies, offset: 0, index: 1)
         var pos = position
@@ -165,13 +169,17 @@ final class RoPE {
         var heads = numHeads
         var rotary = rotaryDim
         var magnitude = yarnAttentionFactor
+        var threshold = UInt32(yarnThreshold)
+        var thetaValue = theta
         encoder.setBytes(&pos, length: MemoryLayout<UInt32>.size, index: 2)
         encoder.setBytes(&dim, length: MemoryLayout<UInt32>.size, index: 3)
         encoder.setBytes(&heads, length: MemoryLayout<UInt32>.size, index: 4)
         encoder.setBytes(&rotary, length: MemoryLayout<UInt32>.size, index: 5)
         encoder.setBytes(&magnitude, length: MemoryLayout<Float>.size, index: 6)
+        encoder.setBytes(&threshold, length: MemoryLayout<UInt32>.size, index: 7)
+        encoder.setBytes(&thetaValue, length: MemoryLayout<Float>.size, index: 8)
         dispatch(
-            encoder: encoder, pipeline: yarnNeoxSubdim,
+            encoder: encoder, pipeline: yarnThresholdNeoxSubdim,
             pairs: Int(rotaryDim) / 2, heads: Int(numHeads),
             tokens: Int(numTokens))
         encoder.endEncoding()
