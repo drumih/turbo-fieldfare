@@ -20,7 +20,7 @@ import TinyTitanCore
 /// rebuilt per request, because a CPU engine's prefill is cheap relative to
 /// its decode and the cache's complexity buys little. No expert streaming:
 /// these models are dense. No MTP.
-public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
+package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
 
     private let model: any CPUEngineRunner
     private let tokenizer: GFTokenizer
@@ -42,14 +42,14 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     private let context: Int
     private let defaults: GenerationDefaults.Sampling
 
-    public nonisolated let residentBytes: Int
+    package nonisolated let residentBytes: Int
     /// What the CPU engine loaded, in the facade's vocabulary. Used by
     /// `CPUEngine` so a caller reads the same `ModelDescriptor` shape the GPU
     /// engine publishes.
     package nonisolated let descriptor: ModelDescriptor
     /// The thread width in force, so the startup banner can report what the
     /// engine will actually use without importing the kernel.
-    public nonisolated let threads: Int
+    package nonisolated let threads: Int
     /// The width the *next* token will really use, which is the live
     /// counterpart to the load-time `threads` above.
     ///
@@ -57,8 +57,8 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// signal, and nothing does on this path; `SideEngineModel.threads` is the
     /// same diagnostic on the side engine, which does narrow.
     package var threadWidthInUse: Int { model.threads }
-    public nonisolated var maximumContext: Int { context }
-    public nonisolated var samplingDefaults: SamplingProfile {
+    package nonisolated var maximumContext: Int { context }
+    package nonisolated var samplingDefaults: SamplingProfile {
         SamplingProfile(
             temperature: defaults.temperature, topK: defaults.topK, topP: defaults.topP,
             minP: defaults.minP, presencePenalty: defaults.presencePenalty)
@@ -83,7 +83,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// at 262k the key/value cache alone is over three gigabytes, and every
     /// token would walk all of it. A ceiling that is quietly enforced beats
     /// a promise that is quietly broken.
-    public static let contextCeiling = 32_768
+    package static let contextCeiling = 32_768
 
     /// Accepts either shape the CPU engine can serve: an affine safetensors
     /// snapshot, which the dense converter writes, or a `.ssdai` install,
@@ -96,7 +96,7 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// is on the GPU path: the template renders the thinking switch, so it is
     /// a load-time setting, not a per-request one. A request can still switch
     /// it; that is `resolvedTokenizer(for:)`.
-    public init(
+    package init(
         snapshotDirectory: URL,
         factory: CPUEngineFactory? = nil,
         maximumContext: Int = CPUModelBackend.contextCeiling,
@@ -182,11 +182,11 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             expertCacheBytes: 0)
     }
 
-    public enum CPUBackendError: Error, CustomStringConvertible {
+    package enum CPUBackendError: Error, CustomStringConvertible {
         case unsupported(String)
         case promptTooLong(Int, Int)
 
-        public var description: String {
+        package var description: String {
             switch self {
             case .unsupported(let detail): detail
             case .promptTooLong(let count, let limit):

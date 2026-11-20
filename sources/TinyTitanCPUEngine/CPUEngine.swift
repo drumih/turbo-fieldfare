@@ -11,6 +11,10 @@ import TinyTitanLib
 /// Metal), so there is no `Engine`-style device or Metal context here; the
 /// caller chooses this type, not a flag inside `Engine`.
 public actor CPUEngine {
+    /// The context ceiling the CPU backend enforces, public so a caller can
+    /// name the same default without reaching into the backend type.
+    public static let contextCeiling = 32_768
+
     /// What was loaded. Fixed at init and readable without awaiting.
     public nonisolated let descriptor: ModelDescriptor
     /// The sampling row the install declares, resolved for the thinking mode
@@ -26,7 +30,7 @@ public actor CPUEngine {
     public init(
         snapshotDirectory: URL,
         factory: CPUEngineFactory? = nil,
-        maximumContext: Int = CPUModelBackend.contextCeiling,
+        maximumContext: Int = CPUEngine.contextCeiling,
         thinkingMode: ModelThinkingMode = .off,
         routedExpertWeightBits: Int? = nil
     ) async throws {

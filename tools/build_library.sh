@@ -250,7 +250,7 @@ TXT
 # Both shipping forms are checked before the directory is declared staged: the
 # static archive and the dynamic library are the files a consumer links, and
 # `lipo -archs` reads an `!<arch>` container (measured: `arm64`), so the `.a` is
-# not a hole in the assertion. The 29 `.swiftmodule` files beside them are Swift
+# not a hole in the assertion. The `.swiftmodule` files beside them are Swift
 # bitcode and are excluded by magic rather than by name.
 assert_arm64_dir "$OUT" "library dist"
 

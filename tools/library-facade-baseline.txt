@@ -1,3 +1,11 @@
+sources/TinyTitanCPUEngine/CPUEngine.swift:actor:CPUEngine
+sources/TinyTitanCPUEngine/CPUEngine.swift:func:awaitExpertWarmup
+sources/TinyTitanCPUEngine/CPUEngine.swift:func:session
+sources/TinyTitanCPUEngine/CPUEngine.swift:func:unload
+sources/TinyTitanCPUEngine/CPUEngine.swift:init:init
+sources/TinyTitanCPUEngine/CPUEngine.swift:let:contextCeiling
+sources/TinyTitanCPUEngine/CPUEngine.swift:let:descriptor
+sources/TinyTitanCPUEngine/CPUEngine.swift:let:samplingDefaults
 sources/TinyTitanLib/CalibrationProfile.swift:enum:CalibrationProfileError
 sources/TinyTitanLib/CalibrationProfile.swift:func:application
 sources/TinyTitanLib/CalibrationProfile.swift:func:currentMachine

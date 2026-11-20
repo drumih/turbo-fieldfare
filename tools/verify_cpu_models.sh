@@ -60,8 +60,10 @@ for model in "${targets[@]+"${targets[@]}"}"; do
     echo "no $MODELS/$model (an installed .ssdai)"; exit 1; }
 done
 
-swift build -c release --product TinyTitanBench || exit 1
-BENCH="$(swift build -c release --show-bin-path)/TinyTitanBench"
+swift build -c release --product TinyTitanBench --product TinyTitanCLI || exit 1
+BIN="$(swift build -c release --show-bin-path)"
+BENCH="$BIN/TinyTitanBench"
+CLI="$BIN/TinyTitanCLI"
 
 status=0
 for model in "${targets[@]+"${targets[@]}"}"; do
@@ -72,6 +74,19 @@ for model in "${targets[@]+"${targets[@]}"}"; do
   echo "$out" | grep -vE '^ +[0-9]+ +[a-z]' || true
   echo "$out" | grep 'maximum resident set size' || true
   grep -q "all continuations correct" <<<"$out" || status=1
+
+  # The shipped CPU path is the library's `CPUEngine`, not `TinyTitanBench`'s
+  # own 6.x runner: exercise the CLI's `--engine cpu` as well, one short
+  # deterministic generation, and require a real timing footer.
+  echo "   CLI --engine cpu"
+  cli_out="$("$CLI" --model "$MODELS/$model" --prompt "The capital of France is" \
+    --temperature 0 --max-new 4 --engine cpu 2>&1)"
+  cli_rc=$?
+  echo "$cli_out" | tail -1
+  if [ "$cli_rc" -ne 0 ] || ! grep -q 'tok/s=' <<<"$cli_out"; then
+    echo "   FAILED: CLI --engine cpu on $model"
+    status=1
+  fi
 done
 
 if [ "$status" -eq 0 ]; then

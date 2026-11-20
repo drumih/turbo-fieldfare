@@ -314,9 +314,11 @@ linters:
 - `arch-path` — no hardcoded SwiftPM target triple in a build path, which points
   at nothing on a newer toolchain or at a stale binary on this one.
 - `stdout-clean` — no `print`, `debugPrint` or `standardOutput` write anywhere in
-  the target closure `Package.swift` gives `TinyTitanLib`, resolved from the
-  manifest rather than listed, so a dependency enters the gate on the commit it
-  enters the library. `library-facade` already holds rule 1 over the
+  the target closure `Package.swift` gives the `TinyTitanLib` **product** — the
+  facade plus `TinyTitanLegacyEngine`, `TinyTitanVariants` and
+  `TinyTitanCPUEngine` — resolved from the manifest rather than listed, so a
+  target added to the product enters the gate on the commit it enters the
+  library. `library-facade` already holds rule 1 over the
   `TinyTitanLib` directory alone; the closure is where the rule actually bites,
   because an embedder links through it. Measured before the fix: the engine's two
   opt-in traces (`TINYTITAN_LAYER_TRACE`, `TURBO_FIELDFARE_PHASES`) wrote 6 lines
@@ -339,11 +341,13 @@ linters:
   assert what the name promises, gate it with `.enabled(if:)`, or delete it. Like
   `test-skip` it fails when its own counter measured no bodies rather than
   reporting ok over a scan that ran on nothing.
-- `library-facade` — every `public` declaration in `TinyTitanLib` is on the
-  measured allowlist (`tools/library-facade-baseline.txt`). `public` there is a
-  promise to an embedder, so a new one is a deliberate act: `FACADE_UPDATE=1`
-  re-measures the list, and a decision belongs in `docs/plan-embedded-library.md`
-  before it is used to silence the gate.
+- `library-facade` — every `public` declaration in `TinyTitanLib` **and the
+  `CPUEngine` facade target** is on the measured allowlist
+  (`tools/library-facade-baseline.txt`). `public` there is a promise to an
+  embedder, so a new one is a deliberate act: `FACADE_UPDATE=1` re-measures the
+  list, and a decision belongs in `docs/plan-embedded-library.md` before it is
+  used to silence the gate. The CPU backend behind `CPUEngine` is `package`, so
+  it does not enter the promise by accident.
 - `docs` — a documented count, name, sha or table must match the repository, via
   `tools/docs-facts.py`. This is what catches the class the audit kept finding:
   a gate name in `AGENTS.md` that `tools/lint.sh` does not accept, and a restated

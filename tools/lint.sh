@@ -13,10 +13,10 @@
 #   unchecked-sendable  new `@unchecked Sendable` must document its invariant
 #   converter           routed experts must land at their own index
 #   arch-path           no hardcoded SwiftPM triple in a build path (see below)
-#   stdout-clean        no stdout write anywhere in the library's target closure
+#   stdout-clean        no stdout write anywhere in the library product's target closure
 #   silent-test-skip    no env/capability-shaped early return in tests/ (see below)
 #   test-hollow         no @Test body that cannot fail (see below)
-#   library-facade      TinyTitanLib public surface allowlisted; no NIO import,
+#   library-facade      TinyTitanLib + CPUEngine public surface allowlisted; no NIO import,
 #                       no stdout write (AGENTS.md "Two products" rules 1 and 3)
 #   docs                a documented count, mode name, tag->commit sha, ledger
 #                       commit reference or table shape must match what the
@@ -693,12 +693,13 @@ PY
 # to stdout from `TinyTitan`, which every library call runs through. An
 # embedder that turned one on got trace lines interleaved with its own answers.
 #
-# The scope is therefore the closure the manifest gives the library, not the
-# library directory: `library-facade-rules.py` already enforces rule 1 over
-# `sources/TinyTitanLib/` alone, and nothing reached past it. The closure is read
-# from `Package.swift` rather than listed here, so a new dependency enters the
-# gate on the same commit it enters the library -- and a gate that walked no
-# target reports a failure instead of a pass.
+# The scope is therefore the closure the manifest gives the `TinyTitanLib`
+# *product*, not the facade directory: `library-facade-rules.py` already
+# enforces rule 1 over `sources/TinyTitanLib/` alone, and nothing reached past
+# it. The product's targets are read from `Package.swift` rather than listed
+# here, so a target added to the product enters the gate on the same commit it
+# enters the library -- and a gate that walked no target reports a failure
+# instead of a pass.
 # Front ends keep their own stdout: measured on the tree as it stands, 91
 # `print`/`debugPrint`/`standardOutput` lines in 14 files, every one in an
 # executable outside the closure (the CLI and server `Command`/main entries, the
@@ -707,7 +708,7 @@ PY
 # no stdout write today, measured by the same grep (`printf`/`fputs`/`stdout`
 # across `sources/TinyTitanKernelsC` finds nothing).
 check_library_stdout() {
-  echo "== stdout-clean: no stdout write in the library's target closure =="
+  echo "== stdout-clean: no stdout write in the library product's target closure =="
   local out rc
   out="$(cd "$ROOT" && python3 - <<'PY'
 import pathlib
@@ -743,12 +744,25 @@ for index, (kind, start) in enumerate(spans):
         deps += re.findall(r'\.target\(name:\s*"([^"]+)"', text)
     targets[name.group(1)] = (kind, path.group(1), deps)
 
+# The roots are the TinyTitanLib *product* targets, not the facade target:
+# the product now carries the legacy engine, the variant factories and the CPU
+# engine, all of which an embedder links, so a stdout write in any of them is a
+# stdout write in the library. The product is read from the manifest so a
+# target added to it enters this gate on the same commit.
 ROOT_TARGET = "TinyTitanLib"
-if ROOT_TARGET not in targets:
-    print("FAIL: %s is not declared in Package.swift; the gate read nothing" % ROOT_TARGET)
+product = re.search(
+    r'\.library\(\s*name:\s*"TinyTitanLib",\s*targets:\s*\[(.*?)\]',
+    manifest, re.S)
+if product:
+    roots = re.findall(r'"([^"]+)"', product.group(1))
+else:
+    roots = [ROOT_TARGET]
+missing = [name for name in roots if name not in targets]
+if missing:
+    print("FAIL: the TinyTitanLib product names %s, which Package.swift does not declare" % ", ".join(missing))
     sys.exit(1)
 
-closure, queue = {ROOT_TARGET}, [ROOT_TARGET]
+closure, queue = set(roots), list(roots)
 while queue:
     for dep in targets.get(queue.pop(), (None, None, []))[2]:
         if dep in targets and dep not in closure:
@@ -780,11 +794,11 @@ if not scanned:
     print("FAIL: stdout-clean walked no Swift file; a scan that read nothing is not a pass")
     sys.exit(1)
 if bad:
-    print("FAIL: the library's closure writes stdout; diagnostics go to stderr")
+    print("FAIL: the library closure writes stdout; diagnostics go to stderr")
     for entry in bad:
         print("  " + entry)
     sys.exit(1)
-print("ok (%d targets in %s's closure, %d Swift files, no stdout write)" % (
+print("ok (%d targets in the closure of %s, %d Swift files, no stdout write)" % (
     len(closure), ROOT_TARGET, scanned))
 PY
 )"
@@ -1463,7 +1477,8 @@ check_javascript() {
 
 # --- library facade ----------------------------------------------------------
 # `AGENTS.md`'s "Two products, one repository" makes three promises about
-# `sources/TinyTitanLib/`, the surface an embedder depends on: `public` there is
+# `sources/TinyTitanLib/` (and the `CPUEngine` facade), the surface an embedder
+# depends on: `public` there is
 # deliberate ("nothing becomes `public` by accident", rule 3), the library
 # "imports no NIO" and keeps stdout clean (rule 1). Measured 2026-10-06 all
 # three held and none of them was enforced anywhere: `tools/lint.sh` had
@@ -1493,7 +1508,10 @@ measure_library_facade() {
 import os, re, sys
 
 root = os.environ["ROOT"]
-lib = os.path.join(root, "sources", "TinyTitanLib")
+libs = [
+    os.path.join(root, "sources", "TinyTitanLib"),
+    os.path.join(root, "sources", "TinyTitanCPUEngine"),
+]
 DECL = re.compile(
     r"\b(func|let|var|init|struct|class|enum|actor|protocol|typealias|"
     r"extension|subscript)\b[ \t]*([A-Za-z_][A-Za-z0-9_]*)?")
@@ -1506,38 +1524,40 @@ ACCESS = re.compile(r"^(public|open)\b[ \t]*(.*)$", re.S)
 ATTR = re.compile(r"^@[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?[ \t]*")
 COMMENT = ("//", "/*", "*", "*/")
 
-if not os.path.isdir(lib):
-    print("SCANNED:0")
-    print("UNRESOLVED:%s is not a directory" % lib)
-    sys.exit(0)
+for lib in libs:
+    if not os.path.isdir(lib):
+        print("SCANNED:0")
+        print("UNRESOLVED:%s is not a directory" % lib)
+        sys.exit(0)
 
 rows, unresolved, scanned = [], [], 0
-for dirpath, _dirs, names in os.walk(lib):
-    for name in sorted(names):
-        if not name.endswith(".swift"):
-            continue
-        path = os.path.join(dirpath, name)
-        scanned += 1
-        rel = os.path.relpath(path, root)
-        with open(path, encoding="utf-8") as handle:
-            for number, line in enumerate(handle, 1):
-                text = line.strip()
-                if text.startswith(COMMENT):
-                    continue
-                while True:
-                    prefix = ATTR.match(text)
-                    if not prefix:
-                        break
-                    text = text[prefix.end():]
-                access = ACCESS.match(text)
-                if not access:
-                    continue
-                match = DECL.search(access.group(2))
-                if not match:
-                    unresolved.append("%s:%d:%s" % (rel, number, line.strip()[:70]))
-                    continue
-                kind = match.group(1)
-                rows.append("%s:%s:%s" % (rel, kind, match.group(2) or kind))
+for lib in libs:
+    for dirpath, _dirs, names in os.walk(lib):
+        for name in sorted(names):
+            if not name.endswith(".swift"):
+                continue
+            path = os.path.join(dirpath, name)
+            scanned += 1
+            rel = os.path.relpath(path, root)
+            with open(path, encoding="utf-8") as handle:
+                for number, line in enumerate(handle, 1):
+                    text = line.strip()
+                    if text.startswith(COMMENT):
+                        continue
+                    while True:
+                        prefix = ATTR.match(text)
+                        if not prefix:
+                            break
+                        text = text[prefix.end():]
+                    access = ACCESS.match(text)
+                    if not access:
+                        continue
+                    match = DECL.search(access.group(2))
+                    if not match:
+                        unresolved.append("%s:%d:%s" % (rel, number, line.strip()[:70]))
+                        continue
+                    kind = match.group(1)
+                    rows.append("%s:%s:%s" % (rel, kind, match.group(2) or kind))
 
 print("SCANNED:%d" % scanned)
 for item in unresolved:
@@ -1548,7 +1568,7 @@ PY
 }
 
 check_library_facade() {
-  echo "== library-facade: the TinyTitanLib surface must be chosen, not inherited =="
+  echo "== library-facade: the TinyTitanLib + CPUEngine surface must be chosen, not inherited =="
   local raw rc scanned current unresolved
   raw="$(measure_library_facade)"
   rc=$?
@@ -1559,8 +1579,8 @@ check_library_facade() {
   fi
   scanned="$(echo "$raw" | sed -n 's/^SCANNED://p' | tail -1)"
   if [ -z "$scanned" ] || [ "$scanned" -eq 0 ] 2>/dev/null; then
-    echo "  FAIL: no Swift files were scanned under sources/TinyTitanLib."
-    echo "        Expected ~30; check ROOT and the target's location."
+    echo "  FAIL: no Swift files were scanned under the facade targets."
+    echo "        Expected ~30 in TinyTitanLib and ~3 in CPUEngine; check ROOT."
     status=1
     return
   fi
@@ -1593,7 +1613,7 @@ check_library_facade() {
     new="$(comm -13 <(echo "$baseline") <(echo "$current"))"
     if [ -n "$new" ]; then
       echo "$new" | sed 's/^/  NEW: /'
-      echo "  FAIL: these are public in TinyTitanLib and not in the allowlist."
+      echo "  FAIL: these are public in TinyTitanLib/CPUEngine and not in the allowlist."
       echo "        Make them package, or add them to ${FACADE_BASELINE#$ROOT/}"
       echo "        in the same PR that argues for them."
       status=1
