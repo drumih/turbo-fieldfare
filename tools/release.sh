@@ -316,7 +316,12 @@ check_golden() {  # <install dir> <golden target>
       GOLDEN_SKIPPED="$GOLDEN_SKIPPED $2"
       return 0 ;;
   esac
-  "$SCRIPT_DIR/golden-baseline.sh" --check "$2" || die "golden baseline mismatch ($2)"
+  if [ "${2%-cpu}" != "$2" ]; then
+    "$SCRIPT_DIR/golden-baseline.sh" --engine cpu --check "${2%-cpu}" \
+      || die "golden baseline mismatch ($2)"
+  else
+    "$SCRIPT_DIR/golden-baseline.sh" --check "$2" || die "golden baseline mismatch ($2)"
+  fi
   GOLDENS_CHECKED=$((GOLDENS_CHECKED + 1))
 }
 # The canonical target names, not the bare `4`/`8` aliases golden-baseline.sh
@@ -349,6 +354,14 @@ check_golden qwen3.5_4B_4Bit qwen35-4b-4
 check_golden qwen3.5_4B_8Bit qwen35-4b-8
 check_golden qwen3.5_9B_4Bit qwen35-9b-4
 check_golden qwen3.5_9B_8Bit qwen35-9b-8
+# The CPU twins share the install but have their own `-cpu` baselines; the
+# registry ships them as separate variants, so the release checks both.
+check_golden qwen3.5_2B_4Bit qwen35-2b-4-cpu
+check_golden qwen3.5_2B_8Bit qwen35-2b-8-cpu
+check_golden qwen3.5_4B_4Bit qwen35-4b-4-cpu
+check_golden qwen3.5_4B_8Bit qwen35-4b-8-cpu
+check_golden qwen3.5_9B_4Bit qwen35-9b-4-cpu
+check_golden qwen3.5_9B_8Bit qwen35-9b-8-cpu
 # Ornith 1.5 122B, the wider member of the Ornith family: hidden 3072 over 48
 # layers in the same qwen36 graph. Declared before this machine had the
 # installs, so the first release that ships them cannot skip the check.

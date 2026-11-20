@@ -16,7 +16,7 @@
           "target": "Qwen35Dense2B4Bit",
           "bits": 4,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
           "qualification": {
@@ -35,7 +35,7 @@
           "target": "Qwen35Dense2B8Bit",
           "bits": 8,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
           "qualification": {
@@ -54,7 +54,7 @@
           "target": "DenseGPU",
           "bits": 4,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
           "qualification": {
@@ -73,7 +73,7 @@
           "target": "DenseGPU",
           "bits": 8,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
           "qualification": {
@@ -103,7 +103,7 @@
           "target": "Qwen35Dense4B4Bit",
           "bits": 4,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
           "qualification": {
@@ -122,7 +122,7 @@
           "target": "Qwen35Dense4B8Bit",
           "bits": 8,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
           "qualification": {
@@ -141,7 +141,7 @@
           "target": "DenseGPU",
           "bits": 4,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
           "qualification": {
@@ -160,7 +160,7 @@
           "target": "DenseGPU",
           "bits": 8,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
           "qualification": {
@@ -190,7 +190,7 @@
           "target": "Qwen35Dense9B4Bit",
           "bits": 4,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
           "qualification": {
@@ -209,7 +209,7 @@
           "target": "Qwen35Dense9B8Bit",
           "bits": 8,
           "engine": "cpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
           "qualification": {
@@ -228,7 +228,7 @@
           "target": "DenseGPU",
           "bits": 4,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
           "qualification": {
@@ -247,7 +247,7 @@
           "target": "DenseGPU",
           "bits": 8,
           "engine": "gpu",
-          "shipped": false,
+          "shipped": true,
           "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
           "qualification": {
