@@ -692,7 +692,9 @@ def content_probe(path: Path, shard: str, expected_size: int | None = None) -> N
     """
     size = path.stat().st_size
     if expected_size is not None and size != expected_size:
-        raise RuntimeError(f"download content check: {shard} is {size} bytes, expected {expected_size}")
+        raise RuntimeError(
+            f"download content check: {shard} is {size} bytes, expected {expected_size}"
+        )
     if size < 8:
         raise RuntimeError(f"download content check: {shard} is {size} bytes")
     with open(path, "rb") as handle:
@@ -701,7 +703,8 @@ def content_probe(path: Path, shard: str, expected_size: int | None = None) -> N
         if not 0 < header_bytes < min(size - 8, 100_000_000):
             raise RuntimeError(
                 f"download content check: {shard} has no safetensors header "
-                f"({header_bytes} bytes named)")
+                f"({header_bytes} bytes named)"
+            )
         step = max(1, (size - 8) // SAMPLE_BYTES)
         total = nonzero = 0
         handle.seek(8)
@@ -714,7 +717,8 @@ def content_probe(path: Path, shard: str, expected_size: int | None = None) -> N
     if total == 0 or nonzero * 100 < total:
         raise RuntimeError(
             f"download content check: {shard} is {nonzero}/{total} nonzero — "
-            "a zeroed or hole-y download was refused")
+            "a zeroed or hole-y download was refused"
+        )
 
 
 def download(shard: str, work: Path, size: int) -> Path:
