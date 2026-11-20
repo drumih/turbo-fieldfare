@@ -101,6 +101,21 @@ export function isDirectHuman(message) {
  * @param options - the harness context, the resolved plugin config, and a logger.
  * @returns a status object; `installed: false` carries the reason.
  */
+/**
+ * Whether a live agent is a subagent, across the 0.2.2 shapes.
+ *
+ * @param agent - the live agent from the inserted-message event.
+ * @returns true for a child session, false for a root.
+ */
+function isSubagent(agent) {
+  if (!agent) return true;
+  if (agent.parentAgent !== undefined) return true;
+  const session = agent.session;
+  if (session?.parentSession !== undefined) return true;
+  if ((session?.delegationDepth ?? 0) > 0) return true;
+  return false;
+}
+
 export function installAutoGoal({ ctx, resolved, log = () => {} } = {}) {
   if (resolved?.autoGoal !== true) return { installed: false, reason: "disabled" };
   if (typeof ctx?.on !== "function") return { installed: false, reason: "no-context" };
@@ -120,8 +135,11 @@ export function installAutoGoal({ ctx, resolved, log = () => {} } = {}) {
     const onInserted = ({ agent, message } = {}) => {
       try {
         // Subagents carry a live parent; only a session a person is driving
-        // should turn a prompt into a persistent objective.
-        if (!agent || agent.parentAgent !== undefined) return;
+        // should turn a prompt into a persistent objective. 0.2.2-rc.5 removed
+        // the `parentAgent` creation option and property; a child now carries
+        // `parentSession`/`delegationDepth` on its session metadata, so both
+        // shapes are checked (the older one is still present in some profiles).
+        if (!agent || isSubagent(agent)) return;
         if (!isDirectHuman(message)) return;
         const current = goals.get(agent);
         if (current !== undefined && current.phase !== "complete") return;

@@ -134,7 +134,9 @@ test("a goal round never feeds the switch, and neither does a subagent", () => {
   installAutoGoal({ ctx, resolved: { autoGoal: true }, log: () => {} });
   insert(ctx, {}, { id: "r1", content: "keep going", source: { kind: "goal", round: 1 } });
   insert(ctx, { parentAgent: { id: "parent" } }, human("delegate this", "m2"));
-  insert(ctx, {}, { id: "m3", content: [], source: { kind: "user" } });
+  insert(ctx, { session: { parentSession: "parent" } }, human("delegate that", "m3"));
+  insert(ctx, { session: { delegationDepth: 1 } }, human("delegate more", "m4"));
+  insert(ctx, {}, { id: "m5", content: [], source: { kind: "user" } });
   assert.equal(goals.created.length, 0);
 });
 
