@@ -196,6 +196,9 @@ Contents
   TinyTitanVariants.swiftmodule
                              the 7.0 engine-factory surface (variant selection,
                              variant factories, dense CPU selection)
+  TinyTitanCPUEngine.swiftmodule
+                             the dense CPU backend and its public CPUEngine
+                             facade
   *.modulemap                the generated module maps for the C targets in the
                              graph (the kernels, yyjson, NIO's shims, ...),
                              which SwiftPM normally passes one by one

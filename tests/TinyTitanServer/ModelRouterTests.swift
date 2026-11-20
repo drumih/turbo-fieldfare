@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TinyTitanCPUEngine
 
 @testable import TinyTitan
 @testable import TinyTitanLib

@@ -1,5 +1,6 @@
 import Testing
 import TinyTitan
+import TinyTitanVariants
 
 @testable import TinyTitanCLICore
 @testable import TinyTitanCore
@@ -23,6 +24,24 @@ import TinyTitan
         #expect(arguments.kvCachePrecision == .int8)
         #expect(arguments.ropeScalingMode == .none)
         #expect(arguments.thinkingMode == .off)
+    }
+
+    @Test func engineFlagParsesBothEnginesAndRejectsOthers() throws {
+        let cpu = try Args.parse([
+            "--model", "m.ssdai", "--prompt", "hi", "--engine", "cpu",
+        ])
+        #expect(cpu.engine == .cpu)
+        let gpu = try Args.parse([
+            "--model", "m.ssdai", "--prompt", "hi", "--engine", "gpu",
+        ])
+        #expect(gpu.engine == .gpu)
+        let unset = try Args.parse(["--model", "m.ssdai", "--prompt", "hi"])
+        #expect(unset.engine == nil)
+        #expect(throws: ArgsError.invalidValue(flag: "--engine", value: "tpu")) {
+            _ = try Args.parse([
+                "--model", "m.ssdai", "--prompt", "hi", "--engine", "tpu",
+            ])
+        }
     }
 
     @Test func kvPrecisionAndYaRNOptionsParse() throws {
@@ -195,6 +214,7 @@ import TinyTitan
             "--presence-penalty",
             "--seed", "--stop", "--quiet", "--help",
             "--rdadvise", "--expert-cache-slots", "--ram-budget", "--prefill-chunk",
+            "--engine",
             "--concise",
             "--kv-bits", "--rope-scaling", "--thinking", "--reasoning-effort",
             "--calibration-profile", "--check", "--out",

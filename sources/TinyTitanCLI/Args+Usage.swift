@@ -85,6 +85,10 @@ extension Args {
                                     flag wins (explicit flags always win).
                                     Unsupported profile knobs are logged, not
                                     applied.
+          --engine <cpu|gpu>        Which engine serves a dense Qwen 3.5 install
+                                    (both implement it). Default: automatic —
+                                    the 7.0 variant's GPU engine. Other
+                                    families are GPU-only and refuse cpu.
           --prefill-chunk <n|auto>  Prefill chunk tokens. Larger chunks reduce
                                     routed-expert file sweeps but use more GPU
                                     scratch. Allowed: 32, 64, 128, 256, 512,

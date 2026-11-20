@@ -36,6 +36,9 @@ public actor Engine {
     public nonisolated let samplingDefaults: SamplingDefaults
 
     private var modelSession: ServerModelSession?
+    /// The same engine as `modelSession`, boxed for `Session`'s existential
+    /// weak reference. Nil after `unload()`.
+    private var backendBox: BackendBox?
     private let reasoningProfile: ServerReasoningProfile
 
     /// Loads `directory` on `device`.
@@ -130,6 +133,7 @@ public actor Engine {
             loaded.samplingDefaults.effective(
                 thinking: loaded.loadedReasoning.thinkingMode.isEnabled))
         self.modelSession = loaded
+        self.backendBox = BackendBox(loaded)
     }
 
     /// A new conversation over the loaded model, with an optional system
@@ -141,7 +145,7 @@ public actor Engine {
     public func session(system: String? = nil) -> Session {
         Session(
             system: system,
-            modelSession: modelSession,
+            box: backendBox,
             descriptor: descriptor,
             reasoningProfile: reasoningProfile)
     }
@@ -153,6 +157,7 @@ public actor Engine {
     /// any session still alive then reports `engineShutDown`.
     public func unload() async {
         modelSession = nil
+        backendBox = nil
     }
 
     /// Wait for the startup expert warm-up to finish instead of letting the

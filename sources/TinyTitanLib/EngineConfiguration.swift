@@ -225,7 +225,7 @@ public struct SamplingDefaults: Sendable, Equatable {
         self.presencePenalty = presencePenalty
     }
 
-    init(_ sampling: SamplingProfile) {
+    package init(_ sampling: SamplingProfile) {
         self.init(
             temperature: Double(sampling.temperature),
             topK: sampling.topK,

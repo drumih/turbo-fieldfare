@@ -134,9 +134,26 @@ package protocol ServerInferenceBackend: Sendable {
         _ request: ValidatedChatRequest,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerCompletion
+    /// The engine's own tokenizer, for a raw completion the facade drives
+    /// without the chat template. Both backends render the request's
+    /// `renderedPromptIDs` verbatim in `generate`, so this is the only
+    /// engine-specific step of a raw prompt. The default refuses: a wrapper
+    /// with no tokenizer must not silently serve an empty prompt.
+    func tokenizeRawPrompt(_ text: String) async throws -> [Int32]
+}
+
+/// A backend that cannot tokenize a raw prompt (a wrapper with no engine of
+/// its own). The facade surfaces this rather than generating from no tokens.
+package struct RawPromptUnsupported: Error, CustomStringConvertible {
+    package var description: String {
+        "this backend does not support raw completions"
+    }
 }
 
 extension ServerInferenceBackend {
+    package func tokenizeRawPrompt(_ text: String) async throws -> [Int32] {
+        throw RawPromptUnsupported()
+    }
     package var maximumContext: Int {
         262_144
     }

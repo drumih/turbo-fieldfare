@@ -20,4 +20,20 @@ public struct ModelDescriptor: Sendable, Equatable {
     public let weightBytes: UInt64
     /// Bytes the resident routed-expert cache holds for this load.
     public let expertCacheBytes: UInt64
+
+    /// Package-visible so the CPU engine target can describe its load without
+    /// an engine type crossing the facade.
+    package init(
+        id: String,
+        family: String,
+        contextWindow: Int,
+        weightBytes: UInt64,
+        expertCacheBytes: UInt64
+    ) {
+        self.id = id
+        self.family = family
+        self.contextWindow = contextWindow
+        self.weightBytes = weightBytes
+        self.expertCacheBytes = expertCacheBytes
+    }
 }

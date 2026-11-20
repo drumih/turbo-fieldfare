@@ -72,6 +72,11 @@ directory is the name of the target:
   `routingFactory(directoryURL:)`, which picks one from an install's manifest.
   It is a separate target so `TinyTitanLib` itself imports no engine module; the
   product `TinyTitanLib` carries both. See `docs/plan-embedded-library.md` §3.
+- **`TinyTitanCPUEngine`** — the dense CPU backend the server serves plus its
+  public `CPUEngine` facade: the same `Session`, `ChatMessage` and
+  `GenerationOptions` surface as the GPU `Engine`, over `CPUModelBackend` and
+  `CPUEngineRunner`. It is in the library product so the CLI and an embedder can
+  choose CPU without the server; `--engine cpu` is the CLI's selection.
 - **`TinyTitanServer`, `TinyTitanCLI`, `TinyTitanRepack`, `TinyTitanMemoryTool`** — the four
   executables, each split into a SwiftPM-invisible `Command/` subdirectory
   (the `@main`/top-level entry) and a `Core/` library part that the tests

@@ -3,6 +3,7 @@ import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
 import TinyTitanLegacyEngine
+import TinyTitanCPUEngine
 
 /// Every model a models directory holds that this server can actually serve,
 /// GPU installs and CPU snapshots alike.

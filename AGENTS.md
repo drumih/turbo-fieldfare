@@ -76,7 +76,8 @@ format types and C kernels. `sources/TinyTitanRepack/`, `sources/TinyTitanCLI/` 
 those three is a thin executable over a `*Core` library target
 (`TinyTitanRepackCore`, `TinyTitanCLICore`, `TinyTitanServerCore`).
 `sources/TinyTitanVariants/` is the engine-factory surface shared by the
-library product and the CLI. `sources/TinyTitanMemory/` and `sources/ContinuityCore/` are persistent
+library product and the CLI, and `sources/TinyTitanCPUEngine/` is the dense CPU
+backend plus its public `CPUEngine` facade. `sources/TinyTitanMemory/` and `sources/ContinuityCore/` are persistent
 agent memory, `sources/TinyTitanMemoryTool/` inspects it (executable
 `tinytitan-memory`), `sources/ContinuityDemo/` is the memory demo executable,
 `sources/TinyTitanBench/` plus `sources/TinyTitanValidation/` are the benchmark
@@ -162,9 +163,9 @@ The tree ships two products on one branch, `main` — one tree, one release tag,
 one CI, and separate surfaces:
 
 - **The library — `TinyTitanLib` (`sources/TinyTitanLib/`).** The supported
-  surface an embedder depends on: `Engine`, `Session`, `EngineConfiguration`,
-  `CachePrecision`, `ChatMessage`, `GenerationOptions`, the event/summary types
-  and `TinyTitanError`. Every other declaration in that target is `package` on
+  surface an embedder depends on: `Engine`, `Session`, `CPUEngine` (the dense
+  CPU facade), `EngineConfiguration`, `CachePrecision`, `ChatMessage`,
+  `GenerationOptions`, the event/summary types and `TinyTitanError`. Every other declaration in that target is `package` on
   purpose: `public` there is a promise, so nothing becomes `public` by accident.
 - **The engine — the executables** (`TinyTitanCLI`, `TinyTitanServer`,
   `TinyTitanRepack`, `TinyTitanBench` and the memory tool).
@@ -190,14 +191,16 @@ Rules that follow, and that need a decision recorded in
    tag; there is no second version to keep in step.
 
 **The product carries the factory surface.** `TinyTitanLib` the *product* names
-three targets: `TinyTitanLib`, `TinyTitanLegacyEngine` and `TinyTitanVariants`.
-The last is the 7.0 engine-factory surface — the selection table, the variant
-factories and the dense CPU selection — and it is a separate target precisely so
-that `TinyTitanLib` itself still imports no engine module while the CLI and an
-embedder can construct a variant engine. A single-model front end calls
+four targets: `TinyTitanLib`, `TinyTitanLegacyEngine`, `TinyTitanVariants` and
+`TinyTitanCPUEngine`. `TinyTitanVariants` is the 7.0 engine-factory surface —
+the selection table, the variant factories and the dense CPU selection — and it
+is a separate target precisely so that `TinyTitanLib` itself still imports no
+engine module while the CLI and an embedder can construct a variant engine. A single-model front end calls
 `EngineFactories.routingFactory(directoryURL:)`; the server's router uses the
-same table. Do not move variant construction back into `TinyTitanServerCore`, and
-do not let the facade re-export it.
+same table. The dense CPU engine is the CPU target's `CPUEngine` over the
+`CPUModelBackend` the server also serves, through the same `Session`; the CLI
+selects it with `--engine cpu`. Do not move variant construction back into
+`TinyTitanServerCore`, and do not let the facade re-export it.
 
 ## Models
 

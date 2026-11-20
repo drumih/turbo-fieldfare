@@ -2,6 +2,7 @@ import TinyTitanCore
 import Foundation
 import TinyTitan
 import TinyTitanLib
+import TinyTitanVariants
 
 public enum PrefillChunkChoice: Equatable, Sendable {
     case fixed(Int)
@@ -46,6 +47,9 @@ public struct Args: Equatable, Sendable {
     public var ramBudgetBytes: Int?
     public var rdadvise: String
     public var prefillChunk: PrefillChunkChoice?
+    /// An explicitly requested engine. Nil keeps the automatic routing: the
+    /// 7.0 variant where one ships, the 6.x factory otherwise.
+    public var engine: EngineChoice?
     public var kvCachePrecision: KVCachePrecision
     public var ropeScalingMode: RuntimeRoPEScalingMode
     /// A measured calibration profile to apply where no explicit flag wins.
@@ -78,6 +82,7 @@ public struct Args: Equatable, Sendable {
         ramBudgetBytes: Int? = nil,
         rdadvise: String = "default",
         prefillChunk: PrefillChunkChoice? = nil,
+        engine: EngineChoice? = nil,
         kvCachePrecision: KVCachePrecision = .int8,
         ropeScalingMode: RuntimeRoPEScalingMode = .none,
         calibrationProfile: String? = nil,
@@ -101,6 +106,7 @@ public struct Args: Equatable, Sendable {
         self.ramBudgetBytes = ramBudgetBytes
         self.rdadvise = rdadvise
         self.prefillChunk = prefillChunk
+        self.engine = engine
         self.kvCachePrecision = kvCachePrecision
         self.ropeScalingMode = ropeScalingMode
         self.calibrationProfile = calibrationProfile
@@ -169,6 +175,7 @@ extension Args {
         var ramBudgetBytes: Int?
         var rdadvise = "default"
         var prefillChunk: PrefillChunkChoice?
+        var engine: EngineChoice?
         var kvCachePrecision: KVCachePrecision = .int8
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
         var calibrationProfile: String?
@@ -312,6 +319,12 @@ extension Args {
                 } else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
+            case "--engine":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = EngineChoice(rawValue: value.lowercased()) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                engine = parsed
             case "--kv-bits":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let bits = Int(value),
@@ -414,6 +427,7 @@ extension Args {
             ramBudgetBytes: ramBudgetBytes,
             rdadvise: rdadvise,
             prefillChunk: prefillChunk,
+            engine: engine,
             kvCachePrecision: kvCachePrecision,
             ropeScalingMode: ropeScalingMode,
             calibrationProfile: calibrationProfile,

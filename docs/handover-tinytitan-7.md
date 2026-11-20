@@ -693,7 +693,11 @@ single-model entry point, and `sources/TinyTitanCLI/Run.swift` plus
 `CalibrationMeasurement` now call it instead of `sixXGPU()`. Goldens
 `ornith-4` and `qwen35-2b-4` remain byte-identical through the routed CLI,
 which is the acceptance evidence; the serial suite and the embedded-dependency
-check are green. **The CPU dense path is still server-only** (the library
-`Engine` has no CPU session; `variantCPUEngine` is a server `CPUEngineFactory`),
-so a CLI `--engine cpu` waits on TT-102. `TinyTitanServerCore` and the `TinyTitanServer` executable now
+check are green. The CPU dense path followed in the same session: `CPUModelBackend` moved to
+`TinyTitanCPUEngine`, `Session` now runs over any `ServerInferenceBackend`, and
+the new public `CPUEngine` publishes the same facade. `TinyTitanCLI --engine
+cpu` serves the dense Qwen 3.5 installs; `--engine gpu` (or no flag) keeps the
+7.0 GPU routing. Greedy CPU and GPU starts agree for the first tokens and then
+diverge, as the two engines' numerics differ; CPU text is not held to the GPU
+golden. `TinyTitanServerCore` and the `TinyTitanServer` executable now
 import the new target instead of naming the eight variant modules.

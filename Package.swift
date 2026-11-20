@@ -48,10 +48,14 @@ let package = Package(
         // imports no engine module; the product is the bundle.
         .library(
             name: "TinyTitanLib",
-            targets: ["TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants"]),
+            targets: [
+                "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
+            ]),
         .library(
             name: "TinyTitanLibDynamic", type: .dynamic,
-            targets: ["TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants"]),
+            targets: [
+                "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
+            ]),
         // Product 2 of 2: the engine, embedding the library above.
         .executable(name: "TinyTitanRepack", targets: ["TinyTitanRepack"]),
         .executable(name: "TinyTitanCLI", targets: ["TinyTitanCLI"]),
@@ -241,6 +245,19 @@ let package = Package(
             path: "sources/TinyTitanVariants",
             swiftSettings: tinytitanLanguageStandard
         ),
+        // The CPU dense backend, shared by the server and the library's CPU
+        // facade. It needs the 6.x tokenizer, so it is its own target rather
+        // than a dependency of `TinyTitanLib`; the library reaches it through
+        // an injected backend, never an import.
+        .target(
+            name: "TinyTitanCPUEngine",
+            dependencies: [
+                "TinyTitanCore", "TinyTitanLib", "TinyTitan",
+                "TinyTitanLegacyEngine", "TinyTitanVariants",
+            ],
+            path: "sources/TinyTitanCPUEngine",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "TinyTitanRepackCore",
             dependencies: ["TinyTitanCore", "TinyTitanFormat"],
@@ -261,6 +278,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
                 "TinyTitanVariants",
+                "TinyTitanCPUEngine",
             ],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
@@ -327,6 +345,7 @@ let package = Package(
                 // the variant-isolation rule; only a variant may not import
                 // the server.
                 "TinyTitanVariants",
+                "TinyTitanCPUEngine",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
@@ -336,7 +355,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanServer",
-            dependencies: ["TinyTitanServerCore", "TinyTitanVariants"],
+            dependencies: ["TinyTitanServerCore", "TinyTitanVariants", "TinyTitanCPUEngine"],
             path: "sources/TinyTitanServer/Command",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -355,6 +374,7 @@ let package = Package(
         .testTarget(
             name: "TinyTitanTests",
             dependencies: [
+                "TinyTitanVariants",
                 .product(name: "yyjson", package: "yyjson"),
                 "Qwen35Dense2B4Bit",
                 "Qwen35Dense2B8Bit",
@@ -448,6 +468,7 @@ let package = Package(
                 // target names the variant modules, so the tests import one
                 // module instead of eight.
                 "TinyTitanVariants",
+                "TinyTitanCPUEngine",
                 .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
             path: "tests/TinyTitanServer",

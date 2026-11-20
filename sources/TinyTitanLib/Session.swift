@@ -17,23 +17,34 @@
 import Foundation
 import TinyTitanCore
 
+/// The strong half of the session→engine link. `Engine`/`CPUEngine` own the
+/// box; `Session` holds it weakly, so `unload()` really releases the engine and
+/// the session then reports `engineShutDown`.
+package final class BackendBox: Sendable {
+    package let backend: any ServerInferenceBackend
+
+    package init(_ backend: any ServerInferenceBackend) {
+        self.backend = backend
+    }
+}
+
 public actor Session {
     private let system: String?
     /// Weak on purpose: `Engine` owns the model, so `unload()` really releases
     /// it and this session then reports `engineShutDown`.
-    private weak var modelSession: ServerModelSession?
+    private weak var box: BackendBox?
     private let descriptor: ModelDescriptor
     private let reasoningProfile: ServerReasoningProfile
     private var currentTask: Task<GenerationSummary, any Error>?
 
-    init(
+    package init(
         system: String?,
-        modelSession: ServerModelSession?,
+        box: BackendBox?,
         descriptor: ModelDescriptor,
         reasoningProfile: ServerReasoningProfile
     ) {
         self.system = system
-        self.modelSession = modelSession
+        self.box = box
         self.descriptor = descriptor
         self.reasoningProfile = reasoningProfile
     }
@@ -120,12 +131,12 @@ public actor Session {
         options: GenerationOptions,
         onEvent: @escaping @Sendable (GenerationEvent) -> Void
     ) async throws -> GenerationSummary {
-        guard let modelSession else { throw TinyTitanError.engineShutDown }
+        guard let backend = box?.backend else { throw TinyTitanError.engineShutDown }
         let validated = try validate(
-            messages: messages, tools: tools, options: options, modelSession: modelSession)
+            messages: messages, tools: tools, options: options, backend: backend)
         let completion: ServerCompletion
         do {
-            completion = try await modelSession.generate(validated) { event in
+            completion = try await backend.generate(validated) { event in
                 if let mapped = Session.facadeEvent(event) { onEvent(mapped) }
             }
         } catch let error as GeneratorError {
@@ -138,7 +149,7 @@ public actor Session {
             }
         } catch let error as ServerRequestError {
             throw Self.mapContextOverflow(
-                error, window: modelSession.maximumContext)
+                error, window: backend.maximumContext)
         } catch is CancellationError {
             throw TinyTitanError.cancelled
         }
@@ -155,13 +166,13 @@ public actor Session {
         options: GenerationOptions,
         onEvent: @escaping @Sendable (GenerationEvent) -> Void
     ) async throws -> GenerationSummary {
-        guard let modelSession else { throw TinyTitanError.engineShutDown }
-        let promptIDs = await modelSession.tokenizeRawPrompt(text)
+        guard let backend = box?.backend else { throw TinyTitanError.engineShutDown }
+        let promptIDs = try await backend.tokenizeRawPrompt(text)
         // The pre-facade CLI refused an over-long prompt before loading the
         // model; the count is known here, so it keeps that exact answer.
-        guard promptIDs.count < modelSession.maximumContext else {
+        guard promptIDs.count < backend.maximumContext else {
             throw TinyTitanError.contextWindowExceeded(
-                prompt: promptIDs.count, window: modelSession.maximumContext)
+                prompt: promptIDs.count, window: backend.maximumContext)
         }
         let config = GenerationConfig(
             maxNewTokens: options.maxTokens,
@@ -186,7 +197,7 @@ public actor Session {
             renderedPromptIDs: promptIDs)
         let completion: ServerCompletion
         do {
-            completion = try await modelSession.generate(request) { event in
+            completion = try await backend.generate(request) { event in
                 // A raw completion has no decoder, so reasoning and tool calls
                 // are never produced for it; the mapper drops them anyway.
                 if let mapped = Session.facadeEvent(event) { onEvent(mapped) }
@@ -201,7 +212,7 @@ public actor Session {
             }
         } catch let error as ServerRequestError {
             throw Self.mapContextOverflow(
-                error, window: modelSession.maximumContext)
+                error, window: backend.maximumContext)
         } catch is CancellationError {
             throw TinyTitanError.cancelled
         }
@@ -255,7 +266,7 @@ public actor Session {
         messages: [ChatMessage],
         tools: [ToolDefinition],
         options: GenerationOptions,
-        modelSession: ServerModelSession
+        backend: any ServerInferenceBackend
     ) throws -> ValidatedChatRequest {
         let request = OpenAIChatRequest(
             model: descriptor.id,
@@ -275,9 +286,9 @@ public actor Session {
         var validated = try OpenAIRequestValidator.validate(
             request,
             modelID: descriptor.id,
-            maxContext: modelSession.maximumContext,
+            maxContext: backend.maximumContext,
             reasoningProfile: reasoningProfile,
-            sampling: modelSession.samplingDefaults,
+            sampling: backend.samplingDefaults,
             // The wire's caps are for a third party's request; this caller is
             // inside the process and was never held to them before the CLI
             // moved onto the facade.

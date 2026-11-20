@@ -496,7 +496,8 @@ LIB_ARCHIVE="$STAGE_ROOT/tinytitan-lib-$VERSION-macos-arm64.tar.gz"
 # Assert on the *archive*, not the staging directory: a dylib that failed to
 # stage is invisible until somebody links against the download.
 for member in libTinyTitanLib.a libTinyTitanLib.dylib TinyTitanLib.swiftmodule/ \
-  TinyTitanVariants.swiftmodule/ TinyTitanKernelsC.modulemap TinyTitan_TinyTitanCore.bundle/Contents/Resources/Metal/ \
+  TinyTitanVariants.swiftmodule/ TinyTitanCPUEngine.swiftmodule/ \
+  TinyTitanKernelsC.modulemap TinyTitan_TinyTitanCore.bundle/Contents/Resources/Metal/ \
   demo/main.swift demo/build-dynamic.sh; do
   tar tzf "$LIB_ARCHIVE" | grep -q "$member" \
     || die "the library archive carries no $member"

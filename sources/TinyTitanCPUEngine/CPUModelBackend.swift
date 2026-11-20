@@ -43,6 +43,10 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     private let defaults: GenerationDefaults.Sampling
 
     public nonisolated let residentBytes: Int
+    /// What the CPU engine loaded, in the facade's vocabulary. Used by
+    /// `CPUEngine` so a caller reads the same `ModelDescriptor` shape the GPU
+    /// engine publishes.
+    package nonisolated let descriptor: ModelDescriptor
     /// The thread width in force, so the startup banner can report what the
     /// engine will actually use without importing the kernel.
     public nonisolated let threads: Int
@@ -168,6 +172,14 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // The family's own, which is what the catalog advertises for it, so
         // a launcher showing the defaults shows what a request will get.
         defaults = family.samplingDefaults
+        let identity = try? ManifestReader.peekIdentity(directoryURL: snapshotDirectory)
+        descriptor = ModelDescriptor(
+            id: identity?.modelID ?? snapshot.modelType
+                ?? snapshotDirectory.lastPathComponent,
+            family: identity?.family.rawValue ?? snapshot.modelType ?? "unknown",
+            contextWindow: context,
+            weightBytes: 0,
+            expertCacheBytes: 0)
     }
 
     public enum CPUBackendError: Error, CustomStringConvertible {
@@ -214,8 +226,16 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // tokenizer carries the think-block and stop token IDs for its own
         // mode, so decode follows the switch as well as the render.
         let renderTokenizer = try await resolvedTokenizer(for: request.reasoning)
-        let rendered = try renderTokenizer.applyChatTemplate(request.messages)
-        let promptIDs = renderTokenizer.encode(rendered, addBOS: false)
+        let promptIDs: [Int32]
+        if let renderedPromptIDs = request.renderedPromptIDs {
+            // A raw completion: the facade tokenized the caller's text with
+            // BOS and the chat template is not applied (the GPU session's
+            // contract for `renderedPromptIDs`).
+            promptIDs = renderedPromptIDs
+        } else {
+            let rendered = try renderTokenizer.applyChatTemplate(request.messages)
+            promptIDs = renderTokenizer.encode(rendered, addBOS: false)
+        }
         let prompt = promptIDs.map(Int.init)
         guard prompt.count < context else {
             throw CPUBackendError.promptTooLong(prompt.count, context)
@@ -241,10 +261,13 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         let generator = sampler.makeGenerator()
 
         model.reset()
+        let prefillStart = Date()
         var logits = try model.prefill(tokens: prompt)
+        let prefillSeconds = Date().timeIntervalSince(prefillStart)
         // What the penalties are measured against: the prompt is already in the
         // model's context, so a token the prompt used is a token the history
         // contains. The GPU sampler gets the same thing from its caller.
+        let decodeStart = Date()
         var history = promptIDs
 
         // The same decoder the GPU path runs, so a thought is split the same
@@ -307,7 +330,9 @@ public actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             // Same rule as the GPU path: the render decided the switch, so a
             // thought that arrived with thinking off is reported as one.
             unrequestedReasoning: renderTokenizer.thinkingMode.isEnabled
-                ? 0 : output.reasoning.count)
+                ? 0 : output.reasoning.count,
+            prefillSeconds: prefillSeconds,
+            decodeSeconds: Date().timeIntervalSince(decodeStart))
     }
 
     /// One sampled token as decoder events.
@@ -354,7 +379,13 @@ extension CPUModelBackend: PromptTokenCounting {
 
     /// The count from a tokenizer alone, which is how the router answers for
     /// a CPU model that is not the one loaded.
-    static func promptTokenCount(
+    /// The raw-completion tokenizer: BOS added, no chat template — the same
+    /// rule the GPU session's `tokenizeRawPrompt` applies.
+    package func tokenizeRawPrompt(_ text: String) -> [Int32] {
+        tokenizer.encode(text, addBOS: true)
+    }
+
+    package static func promptTokenCount(
         _ request: ValidatedChatRequest,
         tokenizer: GFTokenizer
     ) throws -> Int {

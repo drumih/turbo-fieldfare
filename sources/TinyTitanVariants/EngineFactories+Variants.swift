@@ -12,6 +12,12 @@ import TinyTitanCore
 import TinyTitanLegacyEngine
 import TinyTitanLib
 
+/// The engine a caller asks for explicitly.
+public enum EngineChoice: String, Sendable, CaseIterable, Equatable {
+    case cpu
+    case gpu
+}
+
 extension EngineFactories {
 
     // MARK: - TT-097 Phase 3 Task 10: the shipped variants as server engines
@@ -61,6 +67,33 @@ extension EngineFactories {
             family: identity.family,
             manifestModelID: identity.modelID,
             routedExpertWeightBits: identity.weightBits)
+    }
+
+    /// The CPU factory for a dense Qwen 3.5 install: the per-width variant
+    /// engine the server serves, built from the install's own hidden size and
+    /// quant width. A family the CPU engine does not implement is refused by
+    /// name, before the model loads.
+    public static func routingCPUFactory(directoryURL: URL) throws -> CPUEngineFactory {
+        guard
+            let identity = try? TinyTitan.ManifestReader.peekIdentity(
+                directoryURL: directoryURL)
+        else {
+            throw EngineFactoryError.unsupported(
+                "--engine cpu needs an .ssdai install with a readable manifest; "
+                    + "\(directoryURL.path) has none")
+        }
+        guard identity.family == .qwen35Dense else {
+            throw EngineFactoryError.unsupported(
+                "\(identity.modelID) declares family \(identity.family.rawValue); "
+                    + "the CPU engine implements the dense Qwen 3.5 family only, so "
+                    + "this install is GPU-only")
+        }
+        let arch = try sixXGPU().resolveArchitecture(directoryURL)
+        return try variantCPUEngine(
+            hiddenSize: arch.hiddenSize,
+            weightBits: identity.weightBits,
+            snapshotDirectory: directoryURL,
+            isSSDAI: true)
     }
 
     /// The GPU factory a single-model front end (the CLI) and an embedder

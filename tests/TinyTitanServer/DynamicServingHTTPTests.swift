@@ -1,6 +1,7 @@
 import Foundation
 import NIOCore
 import Testing
+import TinyTitanCPUEngine
 
 @testable import TinyTitan
 @testable import TinyTitanLib

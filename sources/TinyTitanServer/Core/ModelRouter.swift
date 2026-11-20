@@ -4,6 +4,7 @@ import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
 import TinyTitanVariants
+import TinyTitanCPUEngine
 
 /// What the HTTP layer needs to validate a request for one model before that
 /// model is resident: the omitted-sampling defaults, the max_tokens bound and
