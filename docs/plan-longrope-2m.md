@@ -42,8 +42,26 @@ Qwen3.8-Flash-Next's geometry, from the installed manifest: 48 layers, of which
 The model's own resident estimate is **15.6 GB**, and the expert cache and OS sit
 on top of that. So 2M needs **28–40 GB before any expert cache** — it does not
 fit in 24 GB at either precision. The engine's YaRN rungs now include
-`2 097 152` (`RuntimeConfiguration.supportedYaRNContextTokens`; `1 048 576`
-remains the default), and even the 1M rung is marginal here at 4-bit KV.
+`2 097 152` and now `4 194 304`, `8 388 608` and `16 777 216`
+(`RuntimeConfiguration.supportedYaRNContextTokens`; `1 048 576` remains the
+default), and even the 1M rung is marginal here at 4-bit KV.
+
+### Dense Qwen 3.5: 1M is the standard rung, not the default
+
+For the three dense installs the standard long-context invocation is
+
+```bash
+tiny ... --rope-scaling yarn --max-context 1048576
+```
+
+It is deliberately **opt-in**, not the no-flag default: YaRN rescales the
+frequencies at every position, and on the 2B golden prompt the 1M run produces
+different text from the native 262K run (the same prompt, greedy, 96 tokens).
+Changing the default would therefore change every short dense answer and fail
+the stored golden rather than merely raise the context limit. The larger rungs
+(`2M/4M/8M/16M`) are for hosts whose KV budget can carry them; quality above 2M
+is unmeasured. The dense **CPU** engine has no YaRN path, so 1M there would need
+new kernels, not a flag.
 
 ### Which YaRN this is
 

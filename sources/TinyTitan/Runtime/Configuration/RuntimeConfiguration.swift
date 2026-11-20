@@ -20,9 +20,9 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     /// it was built on — the KV cost at 2M (12 KB/token on this family, 24.6 GB
     /// at 8-bit) is the operator's to weigh, and the memory guard refuses rather
     /// than silently clamping. `docs/plan-longrope-2m.md` carries the arithmetic.
-    public static let supportedYaRNContextTokens = [524_288, 1_048_576, 2_097_152]
+    public static let supportedYaRNContextTokens = (9...14).map { 1 << ($0 + 10) }
     public static let defaultYaRNContextTokens = 1_048_576
-    public static let maximumContextTokens = 2_097_152
+    public static let maximumContextTokens = 16_777_216
     // 112 exists because the useful range ends between 96 and 128 on a 24 GiB
     // machine: 96 measured an 85.4% hit rate, 128 reaches 89.8% but needs
     // ~17 GB of cache and swaps, costing 68%. Without a value in between
