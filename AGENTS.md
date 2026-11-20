@@ -248,9 +248,12 @@ thing that checks two engines on one device, cancellation and `unload()`.
 otherwise.** That means any run that exercises a code path against a live model —
 a feature check, a live end-to-end, a hand-driven probe:
 `models/qwen3.5_4B_4Bit` or `models/qwen3.5_9B_4Bit`, the 4B first when only one
-is needed. The 2B loads in seconds and is the wrong instrument: it fails
-instruction-following, arithmetic and summarisation in ways that read as defects
-in the code under test, and a session spent chasing one is a session wasted. Reach
+is needed. The 2B loads in seconds and is still the wrong instrument for a
+code-under-test run: it echoes the prompt, needs `--thinking off` for a direct
+answer, and its summaries are thin, so a real defect and a 2B limitation look
+alike. Its 2026-11-16 install was also dead — zeroed weights returned repeated
+`!` until both widths were rebuilt on 2026-11-20 (TT-098) — which is why older
+notes read as if the 2B itself failed arithmetic. Reach
 for it only when the small model *is* the subject — its own limits, its own
 behaviour — and say in the report that it was deliberate. This does not change the
 golden-baseline targets below, which are what they are.
@@ -378,11 +381,10 @@ Ornith 1.5 4-bit. It counts as a model run: apply the preconditions above first.
 baseline is valid for one (machine, build, model) triple; re-capture only for a
 deliberate numerics change, never to make a mismatch go away.
 
-The converter's gate is three python suites, run together — the same three CI
-runs:
+The converter's core python suites, run together — the same runs CI makes:
 
     cd benchmark && python3 -m unittest test_prepare_qwen38 test_qwen38_resume_e2e \
-      test_prepare_agentworld
+      test_prepare_qwen35 test_prepare_agentworld
 
 `test_prepare_qwen38` pins the pieces (shard validation, the constants gate, the
 retry loop) in a second. `test_qwen38_resume_e2e` runs `main()` end to end against a

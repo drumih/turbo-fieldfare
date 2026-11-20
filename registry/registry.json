@@ -17,7 +17,7 @@
           "bits": 4,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 2470440960,
+          "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -27,7 +27,7 @@
           "bits": 8,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 2363888640,
+          "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -37,7 +37,7 @@
           "bits": 4,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 2470440960,
+          "installedSizeBytes": 1334511394,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -47,7 +47,7 @@
           "bits": 8,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 2363888640,
+          "installedSizeBytes": 2013987438,
           "sourceSizeBytes": null,
           "qualification": null
         }
