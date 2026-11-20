@@ -18,7 +18,7 @@ release notes are `docs/release-notes-vX.Y.md`.
 | Memory | `memory_pressure -Q` | The golden baselines load real models |
 | **No model process** | `pgrep -fl 'TinyTitanServer\|TinyTitanCLI\|TinyTitanPackageTests\|swiftpm-testing-helper\|mlx_lm\|mlx-lm'` | The golden gate refuses to run beside one; see §5 |
 | `gh` authenticated | `gh auth status` | Publishing uses it; it must be the repo owner's account |
-| CI green on the commit to be tagged | `tools/ci-green.sh Pummelchen/TinyTitan "$(git rev-parse vX.Y^{commit})"` | `release.sh` refuses without it; the gates in §4 are this machine's view, and only CI sees a clean clone on the pinned toolchains — see §3 |
+| Compile/test CI green on the commit to be tagged (CodeQL advisory) | `tools/ci-green.sh Pummelchen/TinyTitan "$(git rev-parse vX.Y^{commit})"` | `release.sh` refuses without it; the gates in §4 are this machine's view, and only CI sees a clean clone on the pinned toolchains — see §3 |
 | A release build exists | `ls .build/release/TinyTitanCLI` | The golden gate drives that binary and runs *before* the clean scratch build; `release.sh` refuses to start without it |
 | The installs to verify | `ls models/*/verified-install.json` | The gate verifies only what is installed, and never fetches a model; see §5 |
 | Clean tree, HEAD on the tag | `git status --porcelain` | `release.sh` enforces both |
@@ -141,12 +141,14 @@ Push the wiki's Changelog too (`git -C .qwen/wiki commit && git -C .qwen/wiki pu
 `release.sh` requires HEAD to *be* the tag and the tag to be *pushed*; a tag
 that exists only locally fails the precondition with a clear message.
 
-### CI has to be green on the commit the tag names
+### The compile/test CI has to be green on the commit the tag names
 
-`release.sh` refuses to continue until every GitHub Actions run on the tagged
-commit is `completed` with a conclusion of `success` or `skipped`. The rule lives in
-`tools/ci-green.sh <repo> <full-commit-sha>`, which is runnable on its own and is
-tested by `python3 -m unittest test_release_ci_green`. This is not a formality: the
+`release.sh` refuses to continue until the **compile/test CI** on the tagged
+commit is `completed` with a conclusion of `success` or `skipped`. **CodeQL is
+advisory:** its run may still be in flight, or red, without blocking a patch
+release; `ci-green.sh` prints its state so a finding is handled as a follow-up.
+The rule lives in `tools/ci-green.sh <repo> <full-commit-sha>`, which is runnable
+on its own and is tested by `python3 -m unittest test_release_ci_green`. This is not a formality: the
 gates in §4 are one machine's view of the tree, and only CI runs against a clean
 clone on the runner's pinned toolchains. v5.18 was published an hour after its own
 tag commit came back `CI | completed | failure` (run 37270213543, the Installer
@@ -164,7 +166,9 @@ Three answers are refusals, and each says which it is:
   `timed_out` and `action_required`, each of which means CI did not check this
   commit and report it fine.
 
-Going over a red CI has to be deliberate, so it takes both the flag and a reason, and
+The test job can take hours; that is expected and the release waits for it. The
+security scan does not: it is reported, not required. Going over a red compile/test
+CI has to be deliberate, so it takes both the flag and a reason, and
 `--publish` then refuses unless the failing run's URL is quoted in the release notes —
 the same bargain as a skipped golden baseline (§5): it is a documented skip, not an
 invisible one.
@@ -482,8 +486,8 @@ machine it was measured on, and leave previous releases' tables alone.
       `LIBRARY_BYTES_PENDING`, `TOOLS_SHA256_PENDING` and `TOOLS_BYTES_PENDING` —
       never a size copied out of a dry run
 - [ ] Tree clean, `git tag -a vX.Y`, tag pushed, `release.sh` preconditions pass,
-      and **CI is green on the commit the tag names** (`release.sh` asks
-      `tools/ci-green.sh`; see §3)
+      and the **compile/test CI is green on the commit the tag names** (`release.sh`
+      asks `tools/ci-green.sh`; CodeQL is advisory; see §3)
 - [ ] If CI was red and the release went over it anyway: both
       `TINYTITAN_RELEASE_ALLOW_RED_CI` and `..._REASON` were set, and the failing
       run's URL is quoted in the notes (`release.sh --publish` enforces the quote)

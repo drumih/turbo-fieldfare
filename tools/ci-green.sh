@@ -17,6 +17,12 @@
 #   * a conclusion that is not success or skipped, including cancelled, timed
 #     out and action-required, each of which means CI did not pass.
 #
+# **CodeQL is advisory, not a release gate.** The release rule is that the
+# compile+test workflow is green; the security analysis may still be running (it
+# can take hours) or report a finding, and neither holds a patch back. Its state
+# is printed so a failure is still visible and handled as a follow-up. This is
+# the 2026-11-20 rule: shipping a patch waits for the tests, not for CodeQL.
+#
 # `--allow-red "<reason>"` lets a deliberate release continue. It is the same
 # bargain as the skipped golden baselines: the reason is mandatory, printed, and
 # the caller requires the failing run's URL in the release notes so the choice
@@ -69,8 +75,18 @@ TOTAL=0
 PENDING=""
 RED=""
 RED_URL=""
+ADVISORY=""
 while IFS=$'\t' read -r name status conclusion url; do
   [ -n "$name" ] || continue
+  # CodeQL is deliberately outside the gate: the release waits for compile+test,
+  # not for the security scan. A pending or red scan is reported, never fatal.
+  if [ "$name" = "CodeQL" ]; then
+    case "$status/$conclusion" in
+      completed/success|completed/skipped) ;;
+      *) ADVISORY="$ADVISORY CodeQL ($status/$conclusion)" ;;
+    esac
+    continue
+  fi
   TOTAL=$((TOTAL + 1))
   if [ "$status" != "completed" ]; then
     PENDING="$PENDING $name ($status)"
@@ -96,6 +112,9 @@ if [ -n "$PENDING" ]; then
   echo "       Wait for it. An in-flight run is not what --allow-red is for." >&2
   exit 1
 fi
+if [ -n "$ADVISORY" ]; then
+  echo "  advisory (does not gate a release):$ADVISORY"
+fi
 if [ -n "$RED" ]; then
   if [ -z "$ALLOW_REASON" ]; then
     echo "error: CI is red on $SHA:$RED" >&2
@@ -109,5 +128,5 @@ if [ -n "$RED" ]; then
   printf 'result\toverridden\t%s\n' "$RED_URL"
   exit 0
 fi
-echo "  CI green on $SHA ($TOTAL run(s))"
+echo "  CI green on $SHA ($TOTAL gating run(s))"
 printf 'result\tgreen\t-\n'

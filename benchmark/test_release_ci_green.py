@@ -4,7 +4,8 @@ The row this pins (AUD-105) is a real one: v5.18 was published an hour after its
 own tag commit came back `CI | completed | failure`. Nothing asked CI before
 publishing, and `docs/release-process.md` said "a green main" in prose while no
 check read it. So the arithmetic here is the whole defence, and every branch of
-it is tested against a stub `gh` -- green, red, still running, and the two shapes
+it is tested against a stub `gh` -- green, red, still running, CodeQL advisory,
+and the two shapes
 that would let a vacuous pass through: a commit CI never saw, and a short sha the
 API matches against nothing.
 
@@ -86,6 +87,33 @@ class CiGreenTests(unittest.TestCase):
             fixture="CI\tcompleted\tsuccess\thttps://x/1\nDocs\tcompleted\tskipped\thttps://x/2\n",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_pending_codeql_does_not_block_the_release(self) -> None:
+        # The 2026-11-20 rule: shipping waits for compile+test, not for the
+        # security scan. A CodeQL run that is still going is reported, not fatal.
+        result = run(
+            REPO,
+            FULL_SHA,
+            fixture="CI\tcompleted\tsuccess\thttps://x/1\nCodeQL\tin_progress\t-\thttps://x/2\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("advisory (does not gate a release): CodeQL (in_progress/-)", result.stdout)
+        self.assertEqual(result.stdout.splitlines()[-1], "result\tgreen\t-")
+
+    def test_a_red_codeql_is_advisory_not_a_release_blocker(self) -> None:
+        result = run(
+            REPO,
+            FULL_SHA,
+            fixture="CI\tcompleted\tsuccess\thttps://x/1\nCodeQL\tcompleted\tfailure\thttps://x/2\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CodeQL (completed/failure)", result.stdout)
+        self.assertNotIn("CI is red", result.stderr)
+
+    def test_codeql_alone_is_not_a_ci_run(self) -> None:
+        result = run(REPO, FULL_SHA, fixture="CodeQL\tcompleted\tsuccess\thttps://x/2\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no workflow run", result.stderr)
 
     def test_a_failed_run_is_refused_and_names_the_run(self) -> None:
         result = run(

@@ -157,13 +157,14 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || die "tag $TAG does not 
 git_tag_pushed_verdict "$TAG"
 release_exists_verdict "$REPO" "$TAG"
 
-# --- CI green on the commit being tagged ------------------------------------
+# --- compile/test CI green on the commit being tagged ----------------------
 # tools/ci-green.sh holds the rule and the reasons -- that CI is the only run
 # which sees a clean clone on the pinned toolchains, that a short sha queries
 # nothing, and that "no runs" and "still running" are refusals rather than
-# warnings. What belongs here is where the answer is demanded: before the gates,
-# the build and the golden baselines, and with a recorded reason for going over
-# it that then has to survive into the published notes.
+# warnings. CodeQL is advisory: it may still run or fail without holding the
+# patch back. What belongs here is where the answer is demanded: before the
+# gates, the build and the golden baselines, and with a recorded reason for
+# going over a red compile/test CI that then has to survive into the notes.
 TAG_SHA="$(git rev-parse "$TAG^{commit}")"
 CI_ALLOW_RED="${TINYTITAN_RELEASE_ALLOW_RED_CI:-}"
 CI_ALLOW_RED_REASON="${TINYTITAN_RELEASE_ALLOW_RED_CI_REASON:-}"
@@ -175,7 +176,7 @@ if [ -n "$CI_ALLOW_RED_REASON" ]; then
   CI_ARGS=(--allow-red "$CI_ALLOW_RED_REASON")
 fi
 if ! CI_REPORT="$("$SCRIPT_DIR/ci-green.sh" "$REPO" "$TAG_SHA" ${CI_ARGS[@]+"${CI_ARGS[@]}"})"; then
-  die "CI does not pass on $TAG_SHA: $CI_REPORT"
+  die "compile/test CI does not pass on $TAG_SHA: $CI_REPORT"
 fi
 # The helper's last line is `result<TAB>green|overridden<TAB><first red run URL>`,
 # which is how a green run stays quiet and an overridden one learns which URL the
