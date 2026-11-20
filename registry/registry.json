@@ -68,7 +68,7 @@
           "bits": 4,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 3973342208,
+          "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -78,7 +78,7 @@
           "bits": 8,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 5691643904,
+          "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -88,7 +88,7 @@
           "bits": 4,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 3973342208,
+          "installedSizeBytes": 2724551030,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -98,7 +98,7 @@
           "bits": 8,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 5691643904,
+          "installedSizeBytes": 4486157130,
           "sourceSizeBytes": null,
           "qualification": null
         }
@@ -119,7 +119,7 @@
           "bits": 4,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 8053063680,
+          "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -129,7 +129,7 @@
           "bits": 8,
           "engine": "cpu",
           "shipped": false,
-          "installedSizeBytes": 11811160064,
+          "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -139,7 +139,7 @@
           "bits": 4,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 8053063680,
+          "installedSizeBytes": 6110717544,
           "sourceSizeBytes": null,
           "qualification": null
         },
@@ -149,7 +149,7 @@
           "bits": 8,
           "engine": "gpu",
           "shipped": false,
-          "installedSizeBytes": 11811160064,
+          "installedSizeBytes": 9533267959,
           "sourceSizeBytes": null,
           "qualification": null
         }
