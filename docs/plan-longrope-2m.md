@@ -1,7 +1,7 @@
 # A 2M context window (LongRoPE): what shipped, what did not
 
-**Status (2026-10-18): the 2M rung is implemented and tested; the LongRoPE
-non-uniform rescale search is not.** The engine now accepts
+**Status (2026-10-18; corrected 2026-11-20): the 2M rung is implemented and
+tested; the LongRoPE non-uniform rescale search is not.** The engine now accepts
 `--rope-scaling yarn --max-context 2097152` on any host. 256K stays the native
 default and `1 048 576` stays the YaRN default, because the engine serves
 machines other than the one it is built on and choosing the window is the
@@ -41,9 +41,16 @@ Qwen3.8-Flash-Next's geometry, from the installed manifest: 48 layers, of which
 
 The model's own resident estimate is **15.6 GB**, and the expert cache and OS sit
 on top of that. So 2M needs **28–40 GB before any expert cache** — it does not
-fit in 24 GB at either precision. The engine's YaRN rungs stop at
-`1 048 576` (`RuntimeConfiguration.supportedYaRNContextTokens`), and even that rung
-is marginal here at 4-bit KV.
+fit in 24 GB at either precision. The engine's YaRN rungs now include
+`2 097 152` (`RuntimeConfiguration.supportedYaRNContextTokens`; `1 048 576`
+remains the default), and even the 1M rung is marginal here at 4-bit KV.
+
+### Which YaRN this is
+
+The 2M rung is generic factor-8 YaRN (`factor = 8`, `betaFast = 32`,
+`betaSlow = 1`), not the paper's per-dimension `λ` table and not a per-model
+tuned set. A 6.4 build that used different tuned parameters is not represented
+by those values; porting them would need the actual table.
 
 ## The engine gap
 
