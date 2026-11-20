@@ -37,16 +37,6 @@ extension RealForwardRunner {
         try requireBuffer(onesPerExpertScale, "expert per-expert scale buffer")
     }
 
-    @available(
-        *, deprecated,
-        message: """
-            No caller (TT-050): the one site uses requireBuffer(sharedScalarGateBuf, …) directly.
-            """
-    )
-    func requireSharedScalarGateBuffer() throws -> MTLBuffer {
-        try requireBuffer(sharedScalarGateBuf, "shared-expert gate buffer")
-    }
-
     func requireBF16ScalarGate() throws -> BF16GEMV {
         guard let bf16ScalarGate else {
             throw ModelError.internalInconsistency(

@@ -38,8 +38,7 @@ cost is CPU-side time between layer passes — not I/O, not kernels. The kernel
 gaps name it: `prefill_moe_reduce -> prefill_gdn_router` totals **663.7 s** over
 the 143 layer-chunk boundaries (4.64 s each, against 7.9 s in total for
 chunk-major). That is the cost of building a layer's cache outside any overlap:
-`releaseLayerStreamer(layer - 1)` drops the previous layer, then the next is
-opened — 512 slots allocated, size-checked, SHA-256 verified and wired — in front
+the previous layer's streamer was dropped (the helper was removed in TT-050), then the next is opened — 512 slots allocated, size-checked, SHA-256 verified and wired — in front
 of a GPU with nothing else to run. Chunk-major never pays it because its
 per-layer caches open once, during the first chunk, where the open overlaps GPU
 work; its only cost is then 74 ms per boundary.
