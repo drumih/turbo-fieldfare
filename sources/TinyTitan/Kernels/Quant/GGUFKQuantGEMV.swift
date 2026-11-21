@@ -5,6 +5,8 @@ import TinyTitanCore
 /// Fused Q2_K / Q4_K GEMV. Reads GGUF blocks in place; used by the Inkling2
 /// GGUF path and microbenchmarked independently of the decoder.
 final class GGUFKQuantGEMV {
+    /// Weights, activation and output buffers allocated once, so a call or a
+    /// benchmark measures the kernel rather than an upload.
     struct Prepared {
         let weights: MTLBuffer
         let x: MTLBuffer
@@ -14,25 +16,73 @@ final class GGUFKQuantGEMV {
         let type: GGUFType
     }
 
-    private let q2k: MTLComputePipelineState
-    private let q4k: MTLComputePipelineState
+    /// The kernel geometries under measurement (see the `.metal` files).
+    enum Kernel: CaseIterable, Sendable {
+        /// One SIMD group per row, eight rows per threadgroup
+        /// (`gguf_q2k_q4k_gemv.metal`).
+        case rowPerSIMDGroup
+        /// Eight lanes per row, four rows per SIMD group
+        /// (`gguf_q2k_q4k_multi.metal`).
+        case eightLanesPerRow
+        /// llama.cpp's geometry: all 32 lanes on a tile of rows, activations
+        /// reused across the tile (`gguf_q2k_q4k_tiled.metal`).
+        case rowTiled
+    }
+
+    private struct Launch {
+        let pipeline: MTLComputePipelineState
+        let rowsPerThreadgroup: Int
+        let threadsPerThreadgroup: Int
+    }
+
     private let context: MetalContext
+    private let pipelines: [String: MTLComputePipelineState]
 
     init(context: MetalContext) throws {
         self.context = context
-        self.q2k = try context.pipeline("q2k_gemv")
-        self.q4k = try context.pipeline("q4k_gemv")
+        var pipelines: [String: MTLComputePipelineState] = [:]
+        for name in [
+            "q2k_gemv", "q4k_gemv", "q2k_gemv_multi", "q4k_gemv_multi",
+            "q2k_gemv_tiled", "q4k_gemv_tiled",
+        ] {
+            pipelines[name] = try context.pipeline(name)
+        }
+        self.pipelines = pipelines
+    }
+
+    private static func expectedBytes(rows: Int, columns: Int, type: GGUFType) throws -> Int {
+        switch type {
+        case .q2K: return rows * (columns / 256) * 84
+        case .q4K: return rows * (columns / 256) * 144
+        default: throw GGUFDequantError.unsupportedType(type.name)
+        }
+    }
+
+    private func launch(_ kernel: Kernel, type: GGUFType) throws -> Launch {
+        let prefix = type == .q2K ? "q2k" : "q4k"
+        let name: String
+        let rows: Int
+        let threads: Int
+        switch kernel {
+        case .rowPerSIMDGroup:
+            (name, rows, threads) = ("\(prefix)_gemv", 8, 256)
+        case .eightLanesPerRow:
+            (name, rows, threads) = ("\(prefix)_gemv_multi", 32, 256)
+        case .rowTiled:
+            // KQ_TILE_SIMDGROUPS (2) x KQ_TILE_ROWS_Q2K (4) / _Q4K (2).
+            (name, rows, threads) = ("\(prefix)_gemv_tiled", type == .q2K ? 8 : 4, 64)
+        }
+        guard let pipeline = pipelines[name] else {
+            throw MetalError.missingFunction(name)
+        }
+        return Launch(
+            pipeline: pipeline, rowsPerThreadgroup: rows, threadsPerThreadgroup: threads)
     }
 
     func prepare(
         weights: [UInt8], rows: Int, columns: Int, type: GGUFType
     ) throws -> Prepared {
-        let expected: Int
-        switch type {
-        case .q2K: expected = rows * (columns / 256) * 84
-        case .q4K: expected = rows * (columns / 256) * 144
-        default: throw GGUFDequantError.unsupportedType(type.name)
-        }
+        let expected = try Self.expectedBytes(rows: rows, columns: columns, type: type)
         guard columns > 0, columns % 256 == 0, rows > 0, weights.count == expected,
             let weightBuffer = context.device.makeBuffer(
                 bytes: weights, length: weights.count, options: .storageModeShared),
@@ -49,7 +99,31 @@ final class GGUFKQuantGEMV {
             rows: rows, columns: columns, type: type)
     }
 
-    func gemv(prepared: Prepared, x: [Float]) throws -> [Float] {
+    /// Encodes one GEMV of `prepared` into `encoder` without committing, so a
+    /// caller can batch many projections into one command buffer.
+    func encode(
+        prepared: Prepared, kernel: Kernel, encoder: MTLComputeCommandEncoder
+    ) throws {
+        let launch = try launch(kernel, type: prepared.type)
+        encoder.setComputePipelineState(launch.pipeline)
+        encoder.setBuffer(prepared.weights, offset: 0, index: 0)
+        encoder.setBuffer(prepared.x, offset: 0, index: 1)
+        encoder.setBuffer(prepared.y, offset: 0, index: 2)
+        var rowCount = UInt32(prepared.rows)
+        var columnCount = UInt32(prepared.columns)
+        encoder.setBytes(&rowCount, length: 4, index: 3)
+        encoder.setBytes(&columnCount, length: 4, index: 4)
+        let groups =
+            (prepared.rows + launch.rowsPerThreadgroup - 1) / launch.rowsPerThreadgroup
+        encoder.dispatchThreadgroups(
+            MTLSize(width: groups, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(
+                width: launch.threadsPerThreadgroup, height: 1, depth: 1))
+    }
+
+    func gemv(
+        prepared: Prepared, x: [Float], kernel: Kernel = .rowPerSIMDGroup
+    ) throws -> [Float] {
         guard x.count == prepared.columns else {
             throw GGUFDequantError.byteCountNotABlockMultiple(
                 type: prepared.type.name, bytes: x.count, blockBytes: prepared.columns)
@@ -63,17 +137,7 @@ final class GGUFKQuantGEMV {
         guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else { throw MetalError.commandEncoderFailed }
-        encoder.setComputePipelineState(prepared.type == .q2K ? q2k : q4k)
-        encoder.setBuffer(prepared.weights, offset: 0, index: 0)
-        encoder.setBuffer(prepared.x, offset: 0, index: 1)
-        encoder.setBuffer(prepared.y, offset: 0, index: 2)
-        var rowCount = UInt32(prepared.rows)
-        var columnCount = UInt32(prepared.columns)
-        encoder.setBytes(&rowCount, length: 4, index: 3)
-        encoder.setBytes(&columnCount, length: 4, index: 4)
-        encoder.dispatchThreadgroups(
-            MTLSize(width: (prepared.rows + 7) / 8, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        try encode(prepared: prepared, kernel: kernel, encoder: encoder)
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
@@ -82,48 +146,37 @@ final class GGUFKQuantGEMV {
         return Array(UnsafeBufferPointer(start: pointer, count: prepared.rows))
     }
 
-    func gemv(
-        weights: [UInt8], x: [Float], rows: Int, columns: Int, type: GGUFType
-    ) throws -> [Float] {
-        guard columns > 0, columns % 256 == 0, rows > 0, x.count == columns else {
-            throw GGUFDequantError.byteCountNotABlockMultiple(
-                type: type.name, bytes: weights.count, blockBytes: Int(type.blockBytes))
-        }
-        let expected: Int
-        switch type {
-        case .q2K: expected = rows * (columns / 256) * 84
-        case .q4K: expected = rows * (columns / 256) * 144
-        default: throw GGUFDequantError.unsupportedType(type.name)
-        }
-        guard weights.count == expected else {
-            throw GGUFDequantError.byteCountNotABlockMultiple(
-                type: type.name, bytes: weights.count, blockBytes: Int(type.blockBytes))
-        }
-        guard
-            let weightBuffer = context.device.makeBuffer(
-                bytes: weights, length: weights.count, options: .storageModeShared),
-            let xBuffer = context.device.makeBuffer(
-                bytes: x, length: x.count * 4, options: .storageModeShared),
-            let yBuffer = context.device.makeBuffer(
-                length: rows * 4, options: .storageModeShared),
-            let commandBuffer = context.queue.makeCommandBuffer(),
+    /// GPU time of `dispatches` back-to-back GEMVs in one command buffer,
+    /// divided by `dispatches`. This is the per-projection cost a batched
+    /// executor pays; it excludes commit/wait latency, which a one-projection
+    /// wall-clock measurement is dominated by at these sizes.
+    func gpuSecondsPerDispatch(
+        prepared: Prepared, kernel: Kernel, dispatches: Int
+    ) throws -> Double {
+        guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
-        else { throw MetalError.bufferAllocationFailed("K-quant GEMV") }
-        encoder.setComputePipelineState(type == .q2K ? q2k : q4k)
-        encoder.setBuffer(weightBuffer, offset: 0, index: 0)
-        encoder.setBuffer(xBuffer, offset: 0, index: 1)
-        encoder.setBuffer(yBuffer, offset: 0, index: 2)
-        var rowCount = UInt32(rows)
-        var columnCount = UInt32(columns)
-        encoder.setBytes(&rowCount, length: 4, index: 3)
-        encoder.setBytes(&columnCount, length: 4, index: 4)
-        encoder.dispatchThreadgroups(
-            MTLSize(width: (rows + 15) / 16, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        else { throw MetalError.commandEncoderFailed }
+        for _ in 0..<dispatches {
+            try encode(prepared: prepared, kernel: kernel, encoder: encoder)
+        }
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        let pointer = yBuffer.contents().bindMemory(to: Float.self, capacity: rows)
-        return Array(UnsafeBufferPointer(start: pointer, count: rows))
+        if let error = commandBuffer.error { throw error }
+        return (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) / Double(dispatches)
+    }
+
+    /// Convenience path that uploads `weights` on every call. Use `prepare`
+    /// for anything measured.
+    func gemv(
+        weights: [UInt8], x: [Float], rows: Int, columns: Int, type: GGUFType,
+        kernel: Kernel = .rowPerSIMDGroup
+    ) throws -> [Float] {
+        guard x.count == columns else {
+            throw GGUFDequantError.byteCountNotABlockMultiple(
+                type: type.name, bytes: x.count, blockBytes: columns)
+        }
+        let prepared = try prepare(weights: weights, rows: rows, columns: columns, type: type)
+        return try gemv(prepared: prepared, x: x, kernel: kernel)
     }
 }
