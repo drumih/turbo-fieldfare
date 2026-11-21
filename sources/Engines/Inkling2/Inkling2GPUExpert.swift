@@ -14,6 +14,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private let bf16Float: MTLComputePipelineState
     private let bf16FloatX: MTLComputePipelineState
     private let relativeAttention: MTLComputePipelineState
+    private let shortConv: MTLComputePipelineState
 
     public init() throws {
         self.context = try MetalContext()
@@ -22,6 +23,62 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         self.bf16Float = try context.pipeline("bf16_gemv_float_simd")
         self.bf16FloatX = try context.pipeline("bf16_gemv_floatx")
         self.relativeAttention = try context.pipeline("relative_attention")
+        self.shortConv = try context.pipeline("short_conv4")
+    }
+
+    public func shortConvolution(
+        x: [Float], channels: Int, kernel: [Float], kernelSize: Int,
+        tokens: Int, state: [Float]?
+    ) throws -> (values: [Float], state: [Float]) {
+        func buffer(_ values: [Float], _ label: String) throws -> MTLBuffer {
+            guard
+                let buffer = context.device.makeBuffer(
+                    bytes: values, length: values.count * 4,
+                    options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed(label) }
+            return buffer
+        }
+        let xBuffer = try buffer(x, "conv x")
+        let weightBuffer = try buffer(kernel, "conv weights")
+        let stateBuffer = try buffer(
+            state ?? [Float](repeating: 0, count: channels * (kernelSize - 1)), "conv state")
+        guard
+            let outBuffer = context.device.makeBuffer(
+                length: x.count * 4, options: .storageModeShared),
+            let nextBuffer = context.device.makeBuffer(
+                length: channels * (kernelSize - 1) * 4, options: .storageModeShared),
+            let commandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else { throw MetalError.bufferAllocationFailed("conv output") }
+        encoder.setComputePipelineState(shortConv)
+        encoder.setBuffer(xBuffer, offset: 0, index: 0)
+        encoder.setBuffer(weightBuffer, offset: 0, index: 1)
+        encoder.setBuffer(stateBuffer, offset: 0, index: 2)
+        encoder.setBuffer(outBuffer, offset: 0, index: 3)
+        encoder.setBuffer(nextBuffer, offset: 0, index: 4)
+        var tokensValue = UInt32(tokens)
+        var channelsValue = UInt32(channels)
+        var kernelValue = UInt32(kernelSize)
+        encoder.setBytes(&tokensValue, length: 4, index: 5)
+        encoder.setBytes(&channelsValue, length: 4, index: 6)
+        encoder.setBytes(&kernelValue, length: 4, index: 7)
+        let total = tokens * channels
+        encoder.dispatchThreads(
+            MTLSize(width: total, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(total, 256), height: 1, depth: 1))
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let values = Array(
+            UnsafeBufferPointer(
+                start: outBuffer.contents().bindMemory(to: Float.self, capacity: total),
+                count: total))
+        let next = Array(
+            UnsafeBufferPointer(
+                start: nextBuffer.contents().bindMemory(
+                    to: Float.self, capacity: channels * (kernelSize - 1)),
+                count: channels * (kernelSize - 1)))
+        return (values, next)
     }
 
     public func attention(

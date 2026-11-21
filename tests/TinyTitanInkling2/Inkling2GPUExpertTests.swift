@@ -63,6 +63,28 @@ import Testing
         }
     }
 
+    @Test func gpuShortConvolutionMatchesCPU() throws {
+        let tokens = 4
+        let channels = 8
+        let kernelSize = 4
+        let x = (0..<(tokens * channels)).map { Float($0 % 11) * 0.1 }
+        let kernel = (0..<(channels * kernelSize)).map { Float($0 % 7) * 0.05 }
+        let gpu = try Inkling2GPUExpert()
+        let result = try gpu.shortConvolution(
+            x: x, channels: channels, kernel: kernel, kernelSize: kernelSize,
+            tokens: tokens, state: nil)
+        let cpu = Inkling2AttentionMath.shortConvolution(
+            x, length: tokens, channels: channels, kernel: kernel,
+            kernelSize: kernelSize, state: nil)
+        #expect(result.values.count == cpu.values.count)
+        for index in 0..<result.values.count {
+            #expect(abs(result.values[index] - cpu.values[index]) < 1e-5)
+        }
+        for index in 0..<result.state.count {
+            #expect(abs(result.state[index] - cpu.state[index]) < 1e-5)
+        }
+    }
+
     @Test(
         .enabled(
             if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
