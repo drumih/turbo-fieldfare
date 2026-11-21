@@ -45,7 +45,7 @@ extension Inkling2GPUExpert {
             encoder.setBytes(&columnsValue, length: 4, index: 5)
         }
         encoder.dispatchThreadgroups(
-            MTLSize(width: rows, height: 1, depth: 1),
+            MTLSize(width: (rows + 7) / 8, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         encoder.endEncoding()
         commandBuffer.commit()
@@ -96,7 +96,7 @@ extension Inkling2GPUExpert {
                 encoder.setBytes(&columnsValue, length: 4, index: 5)
             }
             encoder.dispatchThreadgroups(
-                MTLSize(width: rows, height: 1, depth: 1),
+                MTLSize(width: (rows + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
             encoder.endEncoding()
             outputs.append((xBuffer, yBuffer))

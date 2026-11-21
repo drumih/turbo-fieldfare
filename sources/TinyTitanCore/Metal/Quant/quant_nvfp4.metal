@@ -21,9 +21,10 @@ static inline float e2m1_value(uchar nibble) {
     return (nibble & 0x08) ? -magnitude : magnitude;
 }
 
-// One threadgroup per output row: coalesced column reads, then a threadgroup
-// reduction. The earlier one-thread-per-row version read a strided row per
-// thread and ran at memory-latency speed.
+// Eight rows per threadgroup, one simdgroup per row: the same launch geometry
+// as the bf16 GEMV. The earlier one-threadgroup-per-row version created eight
+// times as many threadgroups and ran the dequant loop with 256 threads on one
+// row, which measured slower than the memory it read.
 kernel void nvfp4_gemv(
     device const uchar* packed [[buffer(0)]],
     device const uchar* scales [[buffer(1)]],
@@ -32,29 +33,29 @@ kernel void nvfp4_gemv(
     device float* y [[buffer(4)]],
     constant uint& rows [[buffer(5)]],
     constant uint& columns [[buffer(6)]],
-    uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint tsize [[threads_per_threadgroup]])
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
 {
+    const uint row = tg * 8u + sg;
     if (row >= rows) return;
-    threadgroup float partial[256];
     const uint blocks = columns / 16u;
     const float scale0 = outer[0];
     float sum = 0.0f;
-    for (uint i = tid; i < columns; i += tsize) {
+    for (uint base = 0; base < columns; base += 64u) {
+        const uint i = base + lane * 2u;
         const uint block = i / 16u;
         const float scale = e4m3_value(scales[row * blocks + block]) * scale0;
-        const uchar byte = packed[row * (columns / 2u) + i / 2u];
-        const uchar nibble = (i & 1u) ? (byte >> 4) : (byte & 0x0Fu);
-        sum += e2m1_value(nibble) * scale * x[i];
+        const uint byteBase = row * (columns / 2u);
+        const uchar b0 = packed[byteBase + i / 2u];
+        const uchar b1 = packed[byteBase + (i + 1u) / 2u];
+        const uchar n0 = (i & 1u) ? (b0 >> 4) : (b0 & 0x0Fu);
+        const uchar n1 = ((i + 1u) & 1u) ? (b1 >> 4) : (b1 & 0x0Fu);
+        sum = fma(e2m1_value(n0) * scale, x[i], sum);
+        sum = fma(e2m1_value(n1) * scale, x[i + 1u], sum);
     }
-    partial[tid] = sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = tsize / 2u; stride > 0u; stride >>= 1u) {
-        if (tid < stride) partial[tid] += partial[tid + stride];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (tid == 0u) y[row] = partial[0];
+    sum = simd_sum(sum);
+    if (lane == 0u) y[row] = sum;
 }
 
 kernel void mxfp8_gemv(
@@ -64,27 +65,24 @@ kernel void mxfp8_gemv(
     device float* y [[buffer(3)]],
     constant uint& rows [[buffer(4)]],
     constant uint& columns [[buffer(5)]],
-    uint row [[threadgroup_position_in_grid]],
-    uint tid [[thread_position_in_threadgroup]],
-    uint tsize [[threads_per_threadgroup]])
+    uint tg [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
 {
+    const uint row = tg * 8u + sg;
     if (row >= rows) return;
-    threadgroup float partial[256];
     const uint blocks = columns / 32u;
     float sum = 0.0f;
-    for (uint i = tid; i < columns; i += tsize) {
+    for (uint base = 0; base < columns; base += 64u) {
+        const uint i = base + lane * 2u;
         const uint block = i / 32u;
         const float scale = exp2(float(scales[row * blocks + block]) - 127.0f);
-        const uchar bits = weights[row * columns + i];
-        sum += e4m3_value(bits) * scale * x[i];
+        const uint rowBase = row * columns;
+        sum = fma(e4m3_value(weights[rowBase + i]) * scale, x[i], sum);
+        sum = fma(e4m3_value(weights[rowBase + i + 1u]) * scale, x[i + 1u], sum);
     }
-    partial[tid] = sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint stride = tsize / 2u; stride > 0u; stride >>= 1u) {
-        if (tid < stride) partial[tid] += partial[tid + stride];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (tid == 0u) y[row] = partial[0];
+    sum = simd_sum(sum);
+    if (lane == 0u) y[row] = sum;
 }
 
 // Softcapped SwiGLU for one expert: input is interleaved [gate, up] rows.
