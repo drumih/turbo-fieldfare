@@ -109,6 +109,20 @@ import Testing
     @Test(
         .enabled(
             if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func loadsARealMXFP8Expert() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let store = try Inkling2ExpertStore(directory: URL(fileURLWithPath: path))
+        let expert = try store.load(layer: 20, expert: 0)
+        #expect(expert.w13.count == 2304 * 2304)
+        #expect(expert.w2.count == 2304 * 1152)
+        #expect(expert.w13.allSatisfy { $0.isFinite })
+        #expect(expert.w2.allSatisfy { $0.isFinite })
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
     func loadsARealExpert() throws {
         let path = try #require(
             ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
