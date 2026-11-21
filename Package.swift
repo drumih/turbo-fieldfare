@@ -394,6 +394,12 @@ let package = Package(
             ],
             swiftSettings: tinytitanLanguageStandard
         ),
+        .target(
+            name: "TinyTitanInkling2",
+            dependencies: ["TinyTitanCore"],
+            path: "sources/Engines/Inkling2",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .testTarget(
             name: "TinyTitanRepackTests",
             // `TinyTitanFormat` directly: the manifest and resident-index validation
@@ -404,6 +410,12 @@ let package = Package(
             ],
             path: "tests/TinyTitanRepack/Core",
             resources: [.copy("Support/qwen38_tensor_names.txt")],
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
+            name: "TinyTitanInkling2Tests",
+            dependencies: ["TinyTitanInkling2"],
+            path: "tests/TinyTitanInkling2",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
