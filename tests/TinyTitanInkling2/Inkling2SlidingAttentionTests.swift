@@ -29,6 +29,32 @@ import Testing
     @Test(
         .enabled(
             if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func gpuAttentionMatchesCPU() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let tensors = try Inkling2DenseTensors(
+            directory: URL(fileURLWithPath: path))
+        let cpu = try Inkling2SlidingAttention(
+            tensors: tensors, layer: 0, heads: 24, kvHeads: 8, headDim: 128,
+            relativeDim: 16, extent: 1024, sliding: 1024,
+            hidden: 2304, kernelSize: 4)
+        let gpu = try Inkling2SlidingAttention(
+            tensors: tensors, layer: 0, heads: 24, kvHeads: 8, headDim: 128,
+            relativeDim: 16, extent: 1024, sliding: 1024,
+            hidden: 2304, kernelSize: 4, gpu: try Inkling2GPUExpert())
+        let x = try tensors.embeddingRow(0)
+        let cpuOutput = try cpu.forward(x, tokenCount: 1).values
+        let gpuOutput = try gpu.forward(x, tokenCount: 1).values
+        var maxDifference: Float = 0
+        for index in 0..<cpuOutput.count {
+            maxDifference = max(maxDifference, abs(cpuOutput[index] - gpuOutput[index]))
+        }
+        #expect(maxDifference < 1e-3)
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
     func realLayerZeroRuns() throws {
         let path = try #require(
             ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])

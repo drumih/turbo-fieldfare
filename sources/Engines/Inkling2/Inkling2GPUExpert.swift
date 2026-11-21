@@ -13,6 +13,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private let mxfp8: MTLComputePipelineState
     private let bf16Float: MTLComputePipelineState
     private let bf16FloatX: MTLComputePipelineState
+    private let relativeAttention: MTLComputePipelineState
 
     public init() throws {
         self.context = try MetalContext()
@@ -20,6 +21,67 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         self.mxfp8 = try context.pipeline("mxfp8_gemv")
         self.bf16Float = try context.pipeline("bf16_gemv_float_simd")
         self.bf16FloatX = try context.pipeline("bf16_gemv_floatx")
+        self.relativeAttention = try context.pipeline("relative_attention")
+    }
+
+    public func attention(
+        q: [Float], k: [Float], v: [Float], r: [Float], gate: [Float],
+        sink: [Float], relative: [Float], tokens: Int, heads: Int, kvHeads: Int,
+        dim: Int, relativeDim: Int, extent: Int, sliding: Int
+    ) throws -> [Float] {
+        func buffer(_ values: [Float], _ label: String) throws -> MTLBuffer {
+            guard
+                let buffer = context.device.makeBuffer(
+                    bytes: values, length: values.count * 4,
+                    options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed(label) }
+            return buffer
+        }
+        let qBuffer = try buffer(q, "q")
+        let kBuffer = try buffer(k, "k")
+        let vBuffer = try buffer(v, "v")
+        let rBuffer = try buffer(r, "r")
+        let gateBuffer = try buffer(gate, "gate")
+        let sinkBuffer = try buffer(sink, "sink")
+        let relBuffer = try buffer(relative, "relative")
+        guard
+            let outBuffer = context.device.makeBuffer(
+                length: tokens * heads * dim * 4, options: .storageModeShared),
+            let commandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else { throw MetalError.bufferAllocationFailed("attention output") }
+        encoder.setComputePipelineState(relativeAttention)
+        for (index, buffer) in [
+            qBuffer, kBuffer, vBuffer, rBuffer, gateBuffer, sinkBuffer, relBuffer,
+        ].enumerated() {
+            encoder.setBuffer(buffer, offset: 0, index: index)
+        }
+        encoder.setBuffer(outBuffer, offset: 0, index: 7)
+        var tokensValue = UInt32(tokens)
+        var headsValue = UInt32(heads)
+        var kvHeadsValue = UInt32(kvHeads)
+        var dimValue = UInt32(dim)
+        var relativeValue = UInt32(relativeDim)
+        var extentValue = UInt32(extent)
+        var slidingValue = UInt32(sliding)
+        encoder.setBytes(&tokensValue, length: 4, index: 8)
+        encoder.setBytes(&headsValue, length: 4, index: 9)
+        encoder.setBytes(&kvHeadsValue, length: 4, index: 10)
+        encoder.setBytes(&dimValue, length: 4, index: 11)
+        encoder.setBytes(&relativeValue, length: 4, index: 12)
+        encoder.setBytes(&extentValue, length: 4, index: 13)
+        encoder.setBytes(&slidingValue, length: 4, index: 14)
+        let total = tokens * heads
+        encoder.dispatchThreads(
+            MTLSize(width: total, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: min(total, 32), height: 1, depth: 1))
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let pointer = outBuffer.contents().bindMemory(
+            to: Float.self, capacity: tokens * heads * dim)
+        return Array(
+            UnsafeBufferPointer(start: pointer, count: tokens * heads * dim))
     }
 
     public func gemvBF16(

@@ -187,6 +187,22 @@ public struct Inkling2GlobalAttention: Sendable {
             }
         }
         var output = [Float](repeating: 0, count: tokenCount * hidden)
+        if let gpu {
+            let headsOutput = try gpu.attention(
+                q: qAll, k: kAll, v: vAll, r: rAll, gate: gateAll, sink: sinkAll,
+                relative: relProjection, tokens: tokenCount, heads: heads,
+                kvHeads: kvHeads, dim: headDim, relativeDim: relativeDim,
+                extent: extent, sliding: sliding)
+            for query in 0..<tokenCount {
+                let headOutput = Array(
+                    headsOutput[(query * qWidth)..<((query + 1) * qWidth)])
+                let projected = try project(
+                    "attn.wo_ud.weight", out, rows: hidden, columns: qWidth, headOutput)
+                output.replaceSubrange(
+                    (query * hidden)..<((query + 1) * hidden), with: projected)
+            }
+            return (output, State(k: kConvResult.state, v: vConvResult.state))
+        }
         for query in 0..<tokenCount {
             var headOutput = [Float](repeating: 0, count: qWidth)
             for head in 0..<heads {
