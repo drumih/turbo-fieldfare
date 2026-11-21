@@ -40,8 +40,9 @@ state. The complete 20 GB checkpoint is downloaded and the real NVFP4 and
 MXFP8 expert paths are tested. A complete layer-0 decoder block (norm, sliding
 attention, routed MLP, both short convolutions and the block residual) now runs
 on one token, and a real layer-5 global block now exercises the three-input
-attention path. Attention-residual controllers, the loop and the LM head are
-next; no full forward pass exists yet.
+attention path, loads the checkpoint's real attention-residual queries, and has
+the loop message controllers. The loop graph and the LM head are next; no full
+forward pass exists yet.
 
 ## The checkpoint
 
