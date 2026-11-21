@@ -21,7 +21,9 @@ static inline float e2m1_value(uchar nibble) {
     return (nibble & 0x08) ? -magnitude : magnitude;
 }
 
-// One thread per output row: dequantize the packed row and dot it with x.
+// One threadgroup per output row: coalesced column reads, then a threadgroup
+// reduction. The earlier one-thread-per-row version read a strided row per
+// thread and ran at memory-latency speed.
 kernel void nvfp4_gemv(
     device const uchar* packed [[buffer(0)]],
     device const uchar* scales [[buffer(1)]],
@@ -30,22 +32,29 @@ kernel void nvfp4_gemv(
     device float* y [[buffer(4)]],
     constant uint& rows [[buffer(5)]],
     constant uint& columns [[buffer(6)]],
-    uint row [[thread_position_in_grid]])
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint tsize [[threads_per_threadgroup]])
 {
     if (row >= rows) return;
+    threadgroup float partial[256];
     const uint blocks = columns / 16u;
     const float scale0 = outer[0];
     float sum = 0.0f;
-    for (uint block = 0; block < blocks; ++block) {
+    for (uint i = tid; i < columns; i += tsize) {
+        const uint block = i / 16u;
         const float scale = e4m3_value(scales[row * blocks + block]) * scale0;
-        const uint byteBase = row * (columns / 2u) + block * 8u;
-        for (uint j = 0; j < 16u; ++j) {
-            const uchar byte = packed[byteBase + j / 2u];
-            const uchar nibble = (j & 1u) ? (byte >> 4) : (byte & 0x0Fu);
-            sum += e2m1_value(nibble) * scale * x[block * 16u + j];
-        }
+        const uchar byte = packed[row * (columns / 2u) + i / 2u];
+        const uchar nibble = (i & 1u) ? (byte >> 4) : (byte & 0x0Fu);
+        sum += e2m1_value(nibble) * scale * x[i];
     }
-    y[row] = sum;
+    partial[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = tsize / 2u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) partial[tid] += partial[tid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) y[row] = partial[0];
 }
 
 kernel void mxfp8_gemv(
@@ -55,18 +64,25 @@ kernel void mxfp8_gemv(
     device float* y [[buffer(3)]],
     constant uint& rows [[buffer(4)]],
     constant uint& columns [[buffer(5)]],
-    uint row [[thread_position_in_grid]])
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint tsize [[threads_per_threadgroup]])
 {
     if (row >= rows) return;
+    threadgroup float partial[256];
     const uint blocks = columns / 32u;
     float sum = 0.0f;
-    for (uint block = 0; block < blocks; ++block) {
-        const uchar scaleByte = scales[row * blocks + block];
-        const float scale = exp2(float(scaleByte) - 127.0f);
-        for (uint j = 0; j < 32u; ++j) {
-            const uchar bits = weights[row * columns + block * 32u + j];
-            sum += e4m3_value(bits) * scale * x[block * 32u + j];
-        }
+    for (uint i = tid; i < columns; i += tsize) {
+        const uint block = i / 32u;
+        const float scale = exp2(float(scales[row * blocks + block]) - 127.0f);
+        const uchar bits = weights[row * columns + i];
+        sum += e4m3_value(bits) * scale * x[i];
     }
-    y[row] = sum;
+    partial[tid] = sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint stride = tsize / 2u; stride > 0u; stride >>= 1u) {
+        if (tid < stride) partial[tid] += partial[tid + stride];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    if (tid == 0u) y[row] = partial[0];
 }

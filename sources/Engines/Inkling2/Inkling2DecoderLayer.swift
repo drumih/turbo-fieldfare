@@ -148,11 +148,14 @@ public struct Inkling2DecoderLayer: Sendable {
         let qNorm = try tensors.layerMatrix(layer, qNormName)
         let kNorm = try tensors.layerMatrix(layer, kNormName)
         let vNorm = try tensors.layerMatrix(layer, vNormName)
+        let attentionStart = Date()
         let attentionOutput = try attention.forward(
             query: Inkling2Ops.rmsNorm(qPart, weight: qNorm),
             key: Inkling2Ops.rmsNorm(kPart, weight: kNorm),
             value: Inkling2Ops.rmsNorm(vPart, weight: vNorm),
             state: &cache.attention)
+        Inkling2Profiler.record(
+            "attention", Date().timeIntervalSince(attentionStart))
         let attnResidual = Inkling2AttentionMath.shortConvolution(
             attentionOutput, length: 1, channels: hidden, kernel: attnConv,
             kernelSize: kernelSize, state: nil
@@ -174,7 +177,9 @@ public struct Inkling2DecoderLayer: Sendable {
         }
         let postNorm = try tensors.layerMatrix(layer, "mlp_norm.weight")
         let normalized = Inkling2Ops.rmsNorm(mlpInputValues, weight: postNorm)
+        let mlpStart = Date()
         let mlpOutput = try mlp.forward(normalized)
+        Inkling2Profiler.record("mlp", Date().timeIntervalSince(mlpStart))
         let convOutput = Inkling2AttentionMath.shortConvolution(
             mlpOutput, length: 1, channels: hidden, kernel: mlpConv,
             kernelSize: kernelSize, state: nil

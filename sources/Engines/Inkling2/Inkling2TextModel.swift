@@ -13,16 +13,19 @@ public struct Inkling2TextModel: Sendable {
     private let finalNorm: [Float]
     private let embeddingNorm: [Float]
     private let gpu: Inkling2GPUExpert?
+    private let unembedWeights: Data?
 
     public init(
         directory: URL, config: Inkling2Config, store: Inkling2ExpertStore,
         useGPU: Bool = true
     ) throws {
         let gpu = useGPU ? try Inkling2GPUExpert() : nil
-        self.gpu = gpu
-        self.config = config
         let tensors = try Inkling2DenseTensors(directory: directory)
+        self.gpu = gpu
         self.tensors = tensors
+        self.config = config
+        self.unembedWeights =
+            gpu == nil ? nil : try tensors.tensorBytes("model.llm.unembed.weight")
         self.embeddingNorm = try tensors.embeddingNorm()
         self.finalNorm = try tensors.finalNorm()
         var layers: [Inkling2DecoderLayer] = []
@@ -136,8 +139,11 @@ public struct Inkling2TextModel: Sendable {
     ) throws -> [Float] {
         precondition(caches.count == layerIndices.count)
         let hidden = config.text.hiddenSize
+        let embeddingStart = Date()
         var x = Inkling2Ops.rmsNorm(
             try tensors.embeddingRow(token), weight: embeddingNorm)
+        Inkling2Profiler.record(
+            "embedding", Date().timeIntervalSince(embeddingStart))
         var blocks: [[Float]] = []
         var bank: [[Float]]?
         var prelude = x
@@ -180,19 +186,28 @@ public struct Inkling2TextModel: Sendable {
                 messages = message
             }
             capture?(visit, x)
+            let layerStart = Date()
             x = try layers[index].forward(
                 x, blocks: &blocks, messages: messages, cache: &caches[visit])
+            Inkling2Profiler.record(
+                "layerTotal", Date().timeIntervalSince(layerStart))
         }
+        let finalStart = Date()
         let final = finalResidual.forward(blocks, partial: x)
         let normalized = Inkling2Ops.rmsNorm(final, weight: finalNorm)
-        if let gpu {
+        if let gpu, let weights = unembedWeights {
             let shape = try tensors.matrixShape("model.llm.unembed.weight")
-            let weights = try tensors.tensorBytes("model.llm.unembed.weight")
-            return finalize(
+            let result = finalize(
                 try gpu.logits(
                     weights: weights, hidden: normalized,
                     rows: shape[0], columns: shape[1]))
+            Inkling2Profiler.record(
+                "finalAndLogits", Date().timeIntervalSince(finalStart))
+            return result
         }
-        return finalize(try tensors.logits(normalized))
+        let result = finalize(try tensors.logits(normalized))
+        Inkling2Profiler.record(
+            "finalAndLogits", Date().timeIntervalSince(finalStart))
+        return result
     }
 }

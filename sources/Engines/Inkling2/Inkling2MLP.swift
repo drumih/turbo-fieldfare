@@ -21,22 +21,31 @@ public struct Inkling2MLP: Sendable {
     public func forward(_ x: [Float]) throws -> [Float] {
         let route = router.route(x)
         var output = [Float](repeating: 0, count: x.count)
-        for (index, weight) in zip(route.indices, route.weights) {
-            let result: [Float]
-            if let gpu {
-                let packed = try store.packed(layer: layer, expert: index)
-                let gateUp = try gpu.gemv(
-                    packed, x: x, rows: 2 * packed.w2Columns,
-                    columns: packed.w13Columns, w13: true)
-                let activated = Inkling2MoE.activate(
-                    gateUp, hidden: packed.rows, intermediate: packed.w2Columns)
-                result = try gpu.gemv(
-                    packed, x: activated, rows: packed.rows,
-                    columns: packed.w2Columns, w13: false)
-            } else {
-                let expert = try store.load(layer: layer, expert: index)
-                result = Inkling2MoE.expert(x, weights: expert)
+        if let gpu {
+            let packed = try route.indices.map {
+                try store.packed(layer: layer, expert: $0)
             }
+            let gateUps = try gpu.gemvBatch(
+                packed, xs: Array(repeating: x, count: packed.count),
+                rows: 2 * packed[0].w2Columns, columns: packed[0].w13Columns,
+                w13: true)
+            let activated = zip(gateUps, packed).map { gateUp, expert in
+                Inkling2MoE.activate(
+                    gateUp, hidden: expert.rows, intermediate: expert.w2Columns)
+            }
+            let results = try gpu.gemvBatch(
+                packed, xs: activated, rows: packed[0].rows,
+                columns: packed[0].w2Columns, w13: false)
+            for (result, weight) in zip(results, route.weights) {
+                for dimension in output.indices {
+                    output[dimension] += result[dimension] * weight
+                }
+            }
+            return output
+        }
+        for (index, weight) in zip(route.indices, route.weights) {
+            let expert = try store.load(layer: layer, expert: index)
+            let result = Inkling2MoE.expert(x, weights: expert)
             for dimension in output.indices {
                 output[dimension] += result[dimension] * weight
             }

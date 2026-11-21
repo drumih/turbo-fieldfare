@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// A range reader for the checkpoint's safetensors file.
@@ -6,7 +7,9 @@ import Foundation
 /// document after an 8-byte length; each tensor then names a byte range in the
 /// data section. This type validates those ranges and reads one tensor at a
 /// time, which is the foundation for preserving the NVFP4/MXFP8 payloads.
-public struct Inkling2Safetensors: Sendable {
+/// unchecked-invariant: `fd` is opened once in `init` and only read through
+/// `pread`; `deinit` closes it after the last reference is gone.
+public final class Inkling2Safetensors: @unchecked Sendable {
     public enum DType: String, Sendable, Equatable {
         case bf16 = "BF16"
         case f32 = "F32"
@@ -46,13 +49,16 @@ public struct Inkling2Safetensors: Sendable {
     }
 
     public let tensors: [String: Tensor]
-    private let fileURL: URL
     private let dataStart: Int
+    private let fd: Int32
 
     public init(url: URL) throws {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        let lengthData = try handle.read(upToCount: 8) ?? Data()
+        let descriptor = open(url.path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw Error.invalid("cannot open \(url.path)")
+        }
+        self.fd = descriptor
+        let lengthData = try Self.pread(descriptor, offset: 0, count: 8)
         guard lengthData.count == 8 else {
             throw Error.invalid("file shorter than the 8-byte header length")
         }
@@ -62,7 +68,8 @@ public struct Inkling2Safetensors: Sendable {
         guard headerLength > 0, headerLength <= 16 * 1024 * 1024 else {
             throw Error.invalid("implausible header length \(headerLength)")
         }
-        let headerData = try handle.read(upToCount: Int(headerLength)) ?? Data()
+        let headerData = try Self.pread(
+            descriptor, offset: 8, count: Int(headerLength))
         guard headerData.count == Int(headerLength) else {
             throw Error.invalid("short header read")
         }
@@ -97,20 +104,39 @@ public struct Inkling2Safetensors: Sendable {
         }
         guard !tensors.isEmpty else { throw Error.invalid("no tensors") }
         self.tensors = tensors
-        self.fileURL = url
         self.dataStart = 8 + Int(headerLength)
+    }
+
+    deinit { close(fd) }
+
+    private static func pread(_ fd: Int32, offset: Int, count: Int) throws -> Data {
+        var data = Data(count: count)
+        let read = data.withUnsafeMutableBytes { raw -> Int in
+            guard count > 0, let base = raw.baseAddress else { return 0 }
+            var done = 0
+            while done < count {
+                let result = Darwin.pread(
+                    fd, base.advanced(by: done), count - done,
+                    off_t(offset + done))
+                if result < 0 {
+                    if errno == EINTR { continue }
+                    return -1
+                }
+                if result == 0 { break }
+                done += result
+            }
+            return done
+        }
+        guard read == count else {
+            throw Error.shortRead("<range>", expected: count, got: max(read, 0))
+        }
+        return data
     }
 
     public func data(for name: String) throws -> Data {
         guard let tensor = tensors[name] else { throw Error.missing(name) }
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: UInt64(dataStart + tensor.offset))
-        let bytes = try handle.read(upToCount: tensor.byteCount) ?? Data()
-        guard bytes.count == tensor.byteCount else {
-            throw Error.shortRead(
-                name, expected: tensor.byteCount, got: bytes.count)
-        }
+        let bytes = try Self.pread(
+            fd, offset: dataStart + tensor.offset, count: tensor.byteCount)
         return bytes
     }
 
@@ -120,14 +146,8 @@ public struct Inkling2Safetensors: Sendable {
             throw Error.invalid(
                 "\(name) slice [\(offset), \(offset + count)) outside \(tensor.byteCount)")
         }
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        try handle.seek(toOffset: UInt64(dataStart + tensor.offset + offset))
-        let bytes = try handle.read(upToCount: count) ?? Data()
-        guard bytes.count == count else {
-            throw Error.shortRead(name, expected: count, got: bytes.count)
-        }
-        return bytes
+        return try Self.pread(
+            fd, offset: dataStart + tensor.offset + offset, count: count)
     }
 
     /// Reads a dense BF16/F32 tensor as floats. Expert tensors use the range

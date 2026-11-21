@@ -88,6 +88,66 @@ import Testing
     @Test(
         .enabled(
             if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func attentionProjectionMicrobenchmark() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let tensors = try Inkling2DenseTensors(
+            directory: URL(fileURLWithPath: path))
+        let weights = try tensors.tensorBytes(
+            "model.llm.layers.0.attn.wq_du.weight")
+        let x = (0..<2304).map { Float($0 % 7) * 0.01 }
+        let gpu = try Inkling2GPUExpert()
+        _ = try gpu.gemvBF16(weights: weights, x: x, rows: 3072, columns: 2304)
+        let iterations = 10
+        let start = Date()
+        for _ in 0..<iterations {
+            _ = try gpu.gemvBF16(
+                weights: weights, x: x, rows: 3072, columns: 2304)
+        }
+        let seconds = Date().timeIntervalSince(start)
+        print("q projection: \(seconds / Double(iterations) * 1000) ms/op")
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func expertLoadMicrobenchmark() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let store = try Inkling2ExpertStore(
+            directory: URL(fileURLWithPath: path))
+        let start = Date()
+        for expert in 0..<20 {
+            _ = try store.packed(layer: 0, expert: expert)
+        }
+        let seconds = Date().timeIntervalSince(start)
+        print("expert packed load: \(seconds / 20 * 1000) ms/op")
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func expertGEMVMicrobenchmark() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let store = try Inkling2ExpertStore(
+            directory: URL(fileURLWithPath: path))
+        let packed = try store.packed(layer: 0, expert: 0)
+        let x = (0..<2304).map { Float(($0 % 17) - 8) * 0.01 }
+        let gpu = try Inkling2GPUExpert()
+        _ = try gpu.gemv(packed, x: x, rows: 2304, columns: 2304, w13: true)
+        let iterations = 20
+        let start = Date()
+        for _ in 0..<iterations {
+            _ = try gpu.gemv(packed, x: x, rows: 2304, columns: 2304, w13: true)
+        }
+        let seconds = Date().timeIntervalSince(start)
+        print("expert w13: \(seconds / Double(iterations) * 1000) ms/op")
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
     func nvfp4ExpertMatchesCPU() throws {
         let path = try #require(
             ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
