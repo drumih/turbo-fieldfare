@@ -43,11 +43,12 @@ on one token, and a real layer-5 global block now exercises the three-input
 attention path, loads the checkpoint's real attention-residual queries, and has
 the loop message controllers, and a streamed LM head (all 201,024 logits are
 finite on a real hidden row). The full 24-layer prelude/loop/coda forward now
-runs on one token: 201,024 finite logits in 169 s after moving the routed-expert
+runs on one token: 201,024 finite logits in 25.5 s of forward time (145-185 s model load) after moving the routed-expert
 GEMV (NVFP4/MXFP8 Metal kernels), the LM head and the attention projections
 (BF16 GEMV with FP32 activation/output) to the GPU, with the loop repeating the
-whole 6..17 core. The attention score/softmax core, short convolutions and norms
-are still CPU. Sampling,
+whole 6..17 core. The relative-attention score/softmax/sink/gate core now runs
+on the GPU and matches the CPU path; short convolutions and norms are still CPU.
+The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
 
