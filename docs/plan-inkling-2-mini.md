@@ -72,8 +72,11 @@ coherent reasoning. This is a 6/6 short factual check, not a 100% quality
 verdict. The one-shot CLI now
 detects an Inkling directory and runs it directly:
 `TinyTitanCLI --model models/inkling-2-mini --prompt 'The capital of France is' --max-new 8`
-prints `The capital of France is Paris.<|end_message|>`. The loopback server,
-sampling controls and a broader quality suite are still absent.
+prints `The capital of France is Paris.<|end_message|>`. The loopback OpenAI server now serves it directly:
+`TinyTitanServer --model models/inkling-2-mini --port 18080`; a
+`/v1/chat/completions` request with 8 completion tokens returned
+`The capital of France is Paris.<|end_message|>` and usage 10+8. Sampling
+controls, a broader quality suite and 100% verification are still absent.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
