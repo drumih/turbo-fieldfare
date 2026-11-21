@@ -50,6 +50,13 @@ public struct Inkling2DenseTensors: Sendable {
         try file.floatValues("model.llm.layers.\(layer).\(suffix)")
     }
 
+    public func layerMatrixShape(_ layer: Int, _ suffix: String) throws -> [Int] {
+        guard let tensor = file.tensor("model.llm.layers.\(layer).\(suffix)") else {
+            throw Inkling2Safetensors.Error.missing("model.llm.layers.\(layer).\(suffix)")
+        }
+        return tensor.shape
+    }
+
     private static func floats(_ data: Data, dtype: Inkling2Safetensors.DType) -> [Float] {
         var values: [Float] = []
         values.reserveCapacity(data.count / dtype.byteWidth)
