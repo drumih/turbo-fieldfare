@@ -1,24 +1,26 @@
 # Inkling 2 Mini in TinyTitan 7.x — port plan and quality contract
 
-**Status: Phase 0 complete; Phase 1 blocked on operator inputs.** The Python and
+**Status: Phase 0 complete; text-only scope chosen; Phase 1 blocked on the
+reference host and checkpoint download.** The Python and
 Swift contract readers validate the real metadata (commit `5ffc1515`,
 `6e9c988e`), but the engine is not implemented. This is a new engine family, a
 new mixed-quantization runtime and a multimodal surface — not a model-profile
 entry. The phases below are ordered so the quantized weights are never
 requantized.
 
-### Blockers (2026-11-21)
+### Decisions and current blockers (2026-11-21)
 
-- **No checkpoint installed.** `models/` holds only the Ornith 4-bit and six
-  dense Qwen 3.5 installs. The ~20 GB Inkling download is an operator action
-  and has not been authorized; this is not something a gate may fetch.
-- **Scope undecided:** text-only vs full multimodal, and preserve
-  NVFP4/MXFP8 vs a BF16 port. Phase 1 differs in each case.
-- **Reference host absent:** full logits/token parity needs a PyTorch/vLLM run;
-  this Mac has no NVIDIA GPU.
-- **Host limit:** 24 GiB RAM vs the model card's 32 GB recommendation, and
-  42 GiB free disk before a 20 GB install. Text-only expert streaming may fit,
-  but 1M context/vision is not a 24 GiB target.
+Decided: **text-only**, **preserve NVFP4/MXFP8**, and the checkpoint install is
+**approved**. The ~20 GB download is in progress under `models/inkling-2-mini`
+(operator-approved; not a gate side effect).
+
+- **Reference host absent:** the vLLM installer is prepared at
+  `tools/reference_inkling_vllm.sh` / `docs/reference-inkling-vllm.md`, but this
+  Mac has no NVIDIA GPU. The recipe verifies GB200/B300/GB300/H100/H200/DGX
+  Spark; a remote NVIDIA host (or cloud GPU) is required to run the quality
+  oracle.
+- **Host limit:** 24 GiB RAM vs the model card's 32 GB recommendation. Text-only
+  expert streaming may fit; 1M context is a larger-host target.
 
 Phase 0's metadata reader is `benchmark/inkling2_quant_contract.py` (with
 `test_inkling2_quant_contract` in CI): it validates the real HF metadata and
