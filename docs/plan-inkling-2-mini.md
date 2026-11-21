@@ -57,9 +57,11 @@ The sampling loop and CLI/server are still absent. Two reference-parity fixes
 landed: the router correction bias now affects selection only (not the sigmoid
 scores), and the fused expert gate/up rows are read interleaved. Three more parity fixes landed: the loop now repeats the whole 6..17 block,
 GQA maps query head h to KV head h//3, and K/V normalization happens before the
-attention copy. A templated "The capital of France is" prompt now produces the
-coherent but repeating continuation "The capital of France"; it does not answer
-"Paris", so quality is still not acceptable and no 100% claim is made.
+attention copy. Using the checkpoint's exact chat template, a "The capital of France is" prompt
+now emits `<|message_model|><|content_thinking|>The user has given...` — a
+coherent, on-topic reasoning continuation. The earlier echo was caused by a
+wrong manual assistant prefix. Generation still stops after the test's fixed
+token budget, so there is no complete answer or quality verdict yet.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
