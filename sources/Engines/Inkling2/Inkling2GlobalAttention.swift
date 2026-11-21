@@ -32,12 +32,14 @@ public struct Inkling2GlobalAttention: Sendable {
     private let kProjection: [Float]
     private let vProjection: [Float]
     private let kernelSize: Int
+    private let gpu: Inkling2GPUExpert?
+    private let gpuWeights: [String: Data]
 
     public init(
         tensors: Inkling2DenseTensors, layer: Int,
         heads: Int, kvHeads: Int, headDim: Int,
         relativeDim: Int, extent: Int, sliding: Int,
-        hidden: Int, kernelSize: Int
+        hidden: Int, kernelSize: Int, gpu: Inkling2GPUExpert? = nil
     ) throws {
         let prefix = "model.llm.layers.\(layer).attn."
         self.heads = heads
@@ -48,6 +50,19 @@ public struct Inkling2GlobalAttention: Sendable {
         self.sliding = sliding
         self.hidden = hidden
         self.kernelSize = kernelSize
+        self.gpu = gpu
+        var gpuWeights: [String: Data] = [:]
+        if gpu != nil {
+            for tensor in [
+                "attn.wq_du.weight", "attn.wk_dv.weight", "attn.wv_dv.weight",
+                "attn.wr_du.weight", "attn.gate_attn.weight",
+                "attn.attn_sink_proj.weight", "attn.wo_ud.weight",
+            ] {
+                gpuWeights[tensor] = try tensors.tensorBytes(
+                    "model.llm.layers.\(layer).\(tensor)")
+            }
+        }
+        self.gpuWeights = gpuWeights
         self.q = try tensors.layerMatrix(layer, "attn.wq_du.weight")
         self.k = try tensors.layerMatrix(layer, "attn.wk_dv.weight")
         self.v = try tensors.layerMatrix(layer, "attn.wv_dv.weight")
@@ -95,12 +110,18 @@ public struct Inkling2GlobalAttention: Sendable {
             let queryInput = Array(query[(token * hidden)..<((token + 1) * hidden)])
             let keyInput = Array(key[(token * hidden)..<((token + 1) * hidden)])
             let valueInput = Array(value[(token * hidden)..<((token + 1) * hidden)])
-            let qToken = project(q, rows: qWidth, columns: hidden, queryInput)
-            let kToken = project(k, rows: kvWidth, columns: hidden, keyInput)
-            let vToken = project(v, rows: kvWidth, columns: hidden, valueInput)
-            let rToken = project(r, rows: rWidth, columns: hidden, queryInput)
-            let gateToken = project(gate, rows: qWidth, columns: hidden, queryInput)
-            let sinkToken = project(sink, rows: heads, columns: hidden, queryInput)
+            let qToken = try project(
+                "attn.wq_du.weight", q, rows: qWidth, columns: hidden, queryInput)
+            let kToken = try project(
+                "attn.wk_dv.weight", k, rows: kvWidth, columns: hidden, keyInput)
+            let vToken = try project(
+                "attn.wv_dv.weight", v, rows: kvWidth, columns: hidden, valueInput)
+            let rToken = try project(
+                "attn.wr_du.weight", r, rows: rWidth, columns: hidden, queryInput)
+            let gateToken = try project(
+                "attn.gate_attn.weight", gate, rows: qWidth, columns: hidden, queryInput)
+            let sinkToken = try project(
+                "attn.attn_sink_proj.weight", sink, rows: heads, columns: hidden, queryInput)
             for head in 0..<heads {
                 let qRange =
                     (token * qWidth + head * headDim)..<(token * qWidth + (head + 1) * headDim)
@@ -211,7 +232,8 @@ public struct Inkling2GlobalAttention: Sendable {
                     headOutput[head * headDim + dimension] = headResult[dimension] * g
                 }
             }
-            let projected = project(out, rows: hidden, columns: qWidth, headOutput)
+            let projected = try project(
+                "attn.wo_ud.weight", out, rows: hidden, columns: qWidth, headOutput)
             output.replaceSubrange(
                 (query * hidden)..<((query + 1) * hidden), with: projected)
         }
@@ -219,8 +241,12 @@ public struct Inkling2GlobalAttention: Sendable {
     }
 
     private func project(
-        _ weight: [Float], rows: Int, columns: Int, _ input: [Float]
-    ) -> [Float] {
+        _ name: String, _ weight: [Float], rows: Int, columns: Int, _ input: [Float]
+    ) throws -> [Float] {
+        if let gpu, let data = gpuWeights[name] {
+            return try gpu.gemvBF16(
+                weights: data, x: input, rows: rows, columns: columns)
+        }
         precondition(weight.count == rows * columns)
         precondition(input.count == columns)
         var result = [Float](repeating: 0, count: rows)

@@ -39,7 +39,7 @@ public struct Inkling2TextModel: Sendable {
                     extent: config.text.relativeExtent,
                     sliding: config.text.slidingWindow,
                     hidden: config.text.hiddenSize,
-                    kernelSize: config.text.convolutionKernel)
+                    kernelSize: config.text.convolutionKernel, gpu: gpu)
             } else {
                 attention = try Inkling2GlobalAttention(
                     tensors: tensors, layer: index,
@@ -50,7 +50,7 @@ public struct Inkling2TextModel: Sendable {
                     extent: config.text.relativeExtent,
                     sliding: 0,
                     hidden: config.text.hiddenSize,
-                    kernelSize: config.text.convolutionKernel)
+                    kernelSize: config.text.convolutionKernel, gpu: gpu)
             }
             layers.append(
                 try Inkling2DecoderLayer(
