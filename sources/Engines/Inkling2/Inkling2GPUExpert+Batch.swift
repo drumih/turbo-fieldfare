@@ -77,14 +77,17 @@ extension Inkling2GPUExpert {
             let pipeline = expert.format == .nvfp4 ? nvfp4 : mxfp8
             encoder.setComputePipelineState(pipeline)
             encoder.setBuffer(
-                w13 ? buffers.w13Packed : buffers.w2Packed, offset: 0, index: 0)
+                buffers.pool, offset: w13 ? buffers.w13Packed : buffers.w2Packed,
+                index: 0)
             encoder.setBuffer(
-                w13 ? buffers.w13Scales : buffers.w2Scales, offset: 0, index: 1)
+                buffers.pool, offset: w13 ? buffers.w13Scales : buffers.w2Scales,
+                index: 1)
             var rowsValue = UInt32(rows)
             var columnsValue = UInt32(columns)
             if expert.format == .nvfp4 {
                 encoder.setBuffer(
-                    w13 ? buffers.w13Outer : buffers.w2Outer, offset: 0, index: 2)
+                    buffers.pool, offset: w13 ? buffers.w13Outer : buffers.w2Outer,
+                    index: 2)
                 encoder.setBuffer(xBuffer, offset: 0, index: 3)
                 encoder.setBuffer(yBuffer, offset: 0, index: 4)
                 encoder.setBytes(&rowsValue, length: 4, index: 5)
@@ -111,4 +114,60 @@ extension Inkling2GPUExpert {
         }
     }
 
+    /// Six attention projections in one command buffer with their weight
+    /// buffers cached by layer/name.
+    public func gemvBF16BatchCached(
+        keys: [String], weights: [Data], xs: [[Float]], rows: [Int], columns: Int
+    ) throws -> [[Float]] {
+        precondition(keys.count == weights.count && keys.count == xs.count)
+        precondition(keys.count == rows.count)
+        guard let commandBuffer = context.queue.makeCommandBuffer() else {
+            throw MetalError.commandEncoderFailed
+        }
+        var outputs: [MTLBuffer] = []
+        for index in 0..<keys.count {
+            let weightsBuffer: MTLBuffer
+            if let cached = projectionCache[keys[index]] {
+                weightsBuffer = cached
+            } else {
+                guard
+                    let created = context.device.makeBuffer(
+                        bytes: [UInt8](weights[index]), length: weights[index].count,
+                        options: .storageModeShared)
+                else { throw MetalError.bufferAllocationFailed("projection batch") }
+                projectionCache[keys[index]] = created
+                weightsBuffer = created
+            }
+            guard
+                let xBuffer = context.device.makeBuffer(
+                    bytes: xs[index], length: xs[index].count * 4,
+                    options: .storageModeShared),
+                let yBuffer = context.device.makeBuffer(
+                    length: rows[index] * 4, options: .storageModeShared),
+                let encoder = commandBuffer.makeComputeCommandEncoder()
+            else { throw MetalError.bufferAllocationFailed("attention projection batch") }
+            encoder.setComputePipelineState(bf16FloatX)
+            encoder.setBuffer(weightsBuffer, offset: 0, index: 0)
+            encoder.setBuffer(xBuffer, offset: 0, index: 1)
+            encoder.setBuffer(yBuffer, offset: 0, index: 2)
+            var rowCount = UInt32(rows[index])
+            var columnCount = UInt32(columns)
+            encoder.setBytes(&rowCount, length: 4, index: 3)
+            encoder.setBytes(&columnCount, length: 4, index: 4)
+            encoder.dispatchThreadgroups(
+                MTLSize(width: (rows[index] + 7) / 8, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.endEncoding()
+            outputs.append(yBuffer)
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return outputs.map { buffer in
+            let count = buffer.length / 4
+            return Array(
+                UnsafeBufferPointer(
+                    start: buffer.contents().bindMemory(to: Float.self, capacity: count),
+                    count: count))
+        }
+    }
 }

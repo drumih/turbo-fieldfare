@@ -24,17 +24,24 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private var logitsYBytes = 0
     private var logitsWeightsLoaded = false
     struct GPUExpertBuffers {
-        let w13Packed: MTLBuffer
-        let w13Scales: MTLBuffer
-        let w13Outer: MTLBuffer?
-        let w2Packed: MTLBuffer
-        let w2Scales: MTLBuffer
-        let w2Outer: MTLBuffer?
-        let bytes: Int
+        let pool: MTLBuffer
+        let w13Packed: Int
+        let w13Scales: Int
+        let w13Outer: Int
+        let w2Packed: Int
+        let w2Scales: Int
+        let w2Outer: Int
+    }
+    private struct LayerPool {
+        let buffer: MTLBuffer
+        var next: Int
+        let capacity: Int
+        let slotBytes: Int
     }
     private var expertCache: [Int: [Int: GPUExpertBuffers]] = [:]
     private var expertOrder: [Int: [Int]] = [:]
-    private var expertCacheBytes = 0
+    private var layerPools: [Int: LayerPool] = [:]
+    var projectionCache: [String: MTLBuffer] = [:]
     private var expertX: MTLBuffer?
     private var expertXBytes = 0
     private var expertGateUp: MTLBuffer?
@@ -43,7 +50,6 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private var expertActivatedBytes = 0
     private var expertOut: MTLBuffer?
     private var expertOutBytes = 0
-    private let expertCacheLimit = 1_500_000_000
     private let expertSlotsPerLayer = 32
     var packedCache: MTLBuffer?
     var packedBytes = 0
@@ -317,47 +323,72 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
             return cached
         }
         Inkling2Profiler.record("expertMiss", 0)
-        guard
-            let w13Packed = context.device.makeBuffer(
-                bytes: [UInt8](expert.w13), length: expert.w13.count,
-                options: .storageModeShared),
-            let w13Scales = context.device.makeBuffer(
-                bytes: [UInt8](expert.w13Scales), length: expert.w13Scales.count,
-                options: .storageModeShared),
-            let w2Packed = context.device.makeBuffer(
-                bytes: [UInt8](expert.w2), length: expert.w2.count,
-                options: .storageModeShared),
-            let w2Scales = context.device.makeBuffer(
-                bytes: [UInt8](expert.w2Scales), length: expert.w2Scales.count,
-                options: .storageModeShared)
-        else { throw MetalError.bufferAllocationFailed("expert slot") }
-        var w13Outer: MTLBuffer?
-        var w2Outer: MTLBuffer?
-        if expert.format == .nvfp4 {
-            var outer = expert.w13Outer
-            w13Outer = context.device.makeBuffer(
-                bytes: &outer, length: 4, options: .storageModeShared)
-            outer = expert.w2Outer
-            w2Outer = context.device.makeBuffer(
-                bytes: &outer, length: 4, options: .storageModeShared)
+        let w13Bytes = expert.w13.count
+        let w13ScaleBytes = expert.w13Scales.count
+        let w2Bytes = expert.w2.count
+        let w2ScaleBytes = expert.w2Scales.count
+        let rawSlot = w13Bytes + w13ScaleBytes + w2Bytes + w2ScaleBytes + 8
+        let slotBytes = (rawSlot + 255) & ~255
+        if layerPools[layer]?.slotBytes != slotBytes {
+            let capacity = expertSlotsPerLayer
+            guard
+                let buffer = context.device.makeBuffer(
+                    length: slotBytes * capacity,
+                    options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed("expert layer pool") }
+            layerPools[layer] = LayerPool(
+                buffer: buffer, next: 0, capacity: capacity,
+                slotBytes: slotBytes)
+            expertCache[layer] = [:]
+            expertOrder[layer] = []
         }
-        let cost =
-            expert.w13.count + expert.w13Scales.count
-            + expert.w2.count + expert.w2Scales.count + 8
-        let value = GPUExpertBuffers(
-            w13Packed: w13Packed, w13Scales: w13Scales, w13Outer: w13Outer,
-            w2Packed: w2Packed, w2Scales: w2Scales, w2Outer: w2Outer, bytes: cost)
-        expertCache[layer, default: [:]][index] = value
+        guard var pool = layerPools[layer], let cache = expertCache[layer] else {
+            throw MetalError.bufferAllocationFailed("expert layer pool")
+        }
         var order = expertOrder[layer] ?? []
-        order.append(index)
-        expertOrder[layer] = order
-        expertCacheBytes += cost
-        while order.count > expertSlotsPerLayer, order.count > 1 {
-            let oldest = order.removeFirst()
-            if let evicted = expertCache[layer]?.removeValue(forKey: oldest) {
-                expertCacheBytes -= evicted.bytes
-            }
+        let slot: Int
+        if pool.next < pool.capacity {
+            slot = pool.next
+            pool.next += 1
+            layerPools[layer] = pool
+        } else {
+            guard let oldest = order.first,
+                let evicted = expertCache[layer]?.removeValue(forKey: oldest)
+            else { throw MetalError.invalidState("expert pool empty") }
+            order.removeFirst()
+            slot = evicted.w13Packed / slotBytes
         }
+        _ = cache
+        let base = slot * slotBytes
+        let w13Packed = base
+        let w13Scales = w13Packed + w13Bytes
+        let w2Packed = w13Scales + w13ScaleBytes
+        let w2Scales = w2Packed + w2Bytes
+        let w13Outer = w2Scales + w2ScaleBytes
+        let w2Outer = w13Outer + 4
+        let raw = pool.buffer.contents()
+        expert.w13.copyBytes(
+            to: raw.advanced(by: w13Packed).assumingMemoryBound(to: UInt8.self),
+            count: w13Bytes)
+        expert.w13Scales.copyBytes(
+            to: raw.advanced(by: w13Scales).assumingMemoryBound(to: UInt8.self),
+            count: w13ScaleBytes)
+        expert.w2.copyBytes(
+            to: raw.advanced(by: w2Packed).assumingMemoryBound(to: UInt8.self),
+            count: w2Bytes)
+        expert.w2Scales.copyBytes(
+            to: raw.advanced(by: w2Scales).assumingMemoryBound(to: UInt8.self),
+            count: w2ScaleBytes)
+        raw.advanced(by: w13Outer).assumingMemoryBound(to: Float.self).pointee =
+            expert.w13Outer
+        raw.advanced(by: w2Outer).assumingMemoryBound(to: Float.self).pointee =
+            expert.w2Outer
+        let value = GPUExpertBuffers(
+            pool: pool.buffer, w13Packed: w13Packed, w13Scales: w13Scales,
+            w13Outer: w13Outer, w2Packed: w2Packed, w2Scales: w2Scales,
+            w2Outer: w2Outer)
+        expertCache[layer, default: [:]][index] = value
+        order.append(index)
         expertOrder[layer] = order
         return value
     }
@@ -393,12 +424,12 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
             }
             let pipeline = expert.format == .nvfp4 ? nvfp4 : mxfp8
             encoder.setComputePipelineState(pipeline)
-            encoder.setBuffer(buffers.w13Packed, offset: 0, index: 0)
-            encoder.setBuffer(buffers.w13Scales, offset: 0, index: 1)
+            encoder.setBuffer(buffers.pool, offset: buffers.w13Packed, index: 0)
+            encoder.setBuffer(buffers.pool, offset: buffers.w13Scales, index: 1)
             var rows = UInt32(2 * intermediate)
             var columns = UInt32(hidden)
             if expert.format == .nvfp4 {
-                encoder.setBuffer(buffers.w13Outer, offset: 0, index: 2)
+                encoder.setBuffer(buffers.pool, offset: buffers.w13Outer, index: 2)
                 encoder.setBuffer(xBuffer, offset: 0, index: 3)
                 encoder.setBuffer(gateUp, offset: gateOffset, index: 4)
                 encoder.setBytes(&rows, length: 4, index: 5)
@@ -434,12 +465,12 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
                 throw MetalError.commandEncoderFailed
             }
             downEncoder.setComputePipelineState(pipeline)
-            downEncoder.setBuffer(buffers.w2Packed, offset: 0, index: 0)
-            downEncoder.setBuffer(buffers.w2Scales, offset: 0, index: 1)
+            downEncoder.setBuffer(buffers.pool, offset: buffers.w2Packed, index: 0)
+            downEncoder.setBuffer(buffers.pool, offset: buffers.w2Scales, index: 1)
             var downRows = UInt32(hidden)
             var downColumns = UInt32(intermediate)
             if expert.format == .nvfp4 {
-                downEncoder.setBuffer(buffers.w2Outer, offset: 0, index: 2)
+                downEncoder.setBuffer(buffers.pool, offset: buffers.w2Outer, index: 2)
                 downEncoder.setBuffer(activated, offset: activationOffset, index: 3)
                 downEncoder.setBuffer(out, offset: outOffset, index: 4)
                 downEncoder.setBytes(&downRows, length: 4, index: 5)
