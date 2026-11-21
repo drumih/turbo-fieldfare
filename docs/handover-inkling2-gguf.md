@@ -55,10 +55,11 @@
 3. **Kernel optimizations that survived measurement**:
    - Packed 64-bit quant loads (`ulong`) instead of 8 separate byte loads.
    - Q2_K two-accumulator block loop.
-   - Current kernel-only numbers for 2304 × 2304 (prepared buffers):
-     **Q2_K ~0.34 ms, Q4_K ~0.34 ms**, with a noisy range of roughly
-     0.31–0.52 ms depending on machine state. Treat this as a baseline, not a
-     precise constant.
+   - **Row-tiled geometry (llama.cpp's shape) added in
+     `gguf_q2k_q4k_tiled.metal`: median GPU time per 2304 × 2304 projection is
+     0.0307 ms for both Q2_K and Q4_K (paired, 200 dispatches per sample,
+     `TINYTITAN_KERNEL_BENCH=1`). One-row was 0.0447/0.0514 ms, eight-lanes
+     0.0431/0.0487 ms. The tiled kernel is the current kernel of record.
    - **Rejected by measurement:** two rows per SIMD group, threadgroup-shared
      `x`, vectorized `x` loads, `#pragma unroll 2`, and the original one-row
      kernel without packed loads.
@@ -82,9 +83,9 @@ model implementation.
 
 Still required:
 
-1. **Kernel parity/optimization to ~0.08 ms/projection.** The current
-   ~0.34 ms is roughly 4× too slow for the 17 tok/s target. Port llama.cpp's
-   exact arithmetic geometry from
+1. **Kernel parity/optimization is now at ~0.031 ms/projection**, inside the
+   0.08 ms budget for 17 tok/s; keep the paired benchmark green. The next work
+   is the model, not more kernel micro-tuning. Reference geometry from
    `~/.unsloth/llama.cpp/ggml/src/ggml-metal/kernels/mul_mv.metal`
    (`kernel_mul_mv_q2_K_f32_impl` around line 1246 and the Q4_K equivalent):
    multiple rows per SIMD group, packed 16-bit quant loads, integer/group
