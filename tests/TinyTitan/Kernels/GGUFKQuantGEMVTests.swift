@@ -67,13 +67,13 @@ import Testing
         let x = Self.input(columns)
         for type in [GGUFType.q2K, .q4K] {
             let bytes = Self.weights(type: type, rows: rows, columns: columns)
-            _ = try gemv.gemv(
-                weights: bytes, x: x, rows: rows, columns: columns, type: type)
+            let prepared = try gemv.prepare(
+                weights: bytes, rows: rows, columns: columns, type: type)
+            _ = try gemv.gemv(prepared: prepared, x: x)
             let iterations = 20
             let start = Date()
             for _ in 0..<iterations {
-                _ = try gemv.gemv(
-                    weights: bytes, x: x, rows: rows, columns: columns, type: type)
+                _ = try gemv.gemv(prepared: prepared, x: x)
             }
             let seconds = Date().timeIntervalSince(start)
             let bytesRead = rows * (columns / 256) * (type == .q2K ? 84 : 144)
