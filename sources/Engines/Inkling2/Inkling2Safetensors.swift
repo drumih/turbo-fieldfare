@@ -130,5 +130,33 @@ public struct Inkling2Safetensors: Sendable {
         return bytes
     }
 
+    /// Reads a dense BF16/F32 tensor as floats. Expert tensors use the range
+    /// reader instead; this is for the attention, norms, router and embedding.
+    public func floatValues(_ name: String) throws -> [Float] {
+        guard let tensor = tensors[name] else { throw Error.missing(name) }
+        guard tensor.dtype == .bf16 || tensor.dtype == .f32 else {
+            throw Error.invalid("\(name) is \(tensor.dtype.rawValue), not BF16/F32")
+        }
+        let bytes = try data(for: name)
+        let count = bytes.count / tensor.dtype.byteWidth
+        var values = [Float](repeating: 0, count: count)
+        bytes.withUnsafeBytes { raw in
+            if tensor.dtype == .f32 {
+                for index in 0..<count {
+                    values[index] = Float(
+                        bitPattern: raw.loadUnaligned(
+                            fromByteOffset: index * 4, as: UInt32.self))
+                }
+            } else {
+                for index in 0..<count {
+                    let bits = raw.loadUnaligned(
+                        fromByteOffset: index * 2, as: UInt16.self)
+                    values[index] = Float(bitPattern: UInt32(bits) << 16)
+                }
+            }
+        }
+        return values
+    }
+
     public func tensor(_ name: String) -> Tensor? { tensors[name] }
 }
