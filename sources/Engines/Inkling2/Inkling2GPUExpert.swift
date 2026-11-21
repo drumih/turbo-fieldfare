@@ -12,7 +12,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     let nvfp4: MTLComputePipelineState
     let mxfp8: MTLComputePipelineState
     private let bf16Float: MTLComputePipelineState
-    private let bf16FloatX: MTLComputePipelineState
+    let bf16FloatX: MTLComputePipelineState
     private let relativeAttention: MTLComputePipelineState
     private let shortConv: MTLComputePipelineState
     private let swiglu: MTLComputePipelineState
@@ -35,8 +35,16 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private var expertCache: [Int: [Int: GPUExpertBuffers]] = [:]
     private var expertOrder: [Int: [Int]] = [:]
     private var expertCacheBytes = 0
+    private var expertX: MTLBuffer?
+    private var expertXBytes = 0
+    private var expertGateUp: MTLBuffer?
+    private var expertGateUpBytes = 0
+    private var expertActivated: MTLBuffer?
+    private var expertActivatedBytes = 0
+    private var expertOut: MTLBuffer?
+    private var expertOutBytes = 0
     private let expertCacheLimit = 1_500_000_000
-    private let expertSlotsPerLayer = 24
+    private let expertSlotsPerLayer = 32
     var packedCache: MTLBuffer?
     var packedBytes = 0
     var scaleCache: MTLBuffer?
@@ -355,7 +363,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     }
 
     /// One command buffer for the whole routed MLP: every expert's w13 GEMV,
-    /// the GPU SwiGLU, and its w2 GEMV. No intermediate crosses to the CPU.
+    /// the GPU SwiGLU, and its w2 GEMV. Scratch is pooled across layers.
     public func expertForwardBatch(
         _ experts: [Inkling2PackedExpert], x: [Float], hidden: Int,
         intermediate: Int, gateCap: Float, upCap: Float
@@ -363,22 +371,23 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw MetalError.commandEncoderFailed
         }
-        guard
-            let xBuffer = context.device.makeBuffer(
-                bytes: x, length: x.count * 4, options: .storageModeShared)
-        else { throw MetalError.bufferAllocationFailed("expert forward x") }
-        var outputs: [MTLBuffer] = []
-        for expert in experts {
+        let gateUp = try output(
+            bytes: 8 * 2 * intermediate * 4, cache: &expertGateUp,
+            bytes: &expertGateUpBytes, label: "expert gateUp")
+        let activated = try output(
+            bytes: 8 * intermediate * 4, cache: &expertActivated,
+            bytes: &expertActivatedBytes, label: "expert activated")
+        let out = try output(
+            bytes: 8 * hidden * 4, cache: &expertOut,
+            bytes: &expertOutBytes, label: "expert out")
+        let xBuffer = try upload(
+            x, cache: &expertX, bytes: &expertXBytes, label: "expert x")
+        var outputOffsets: [Int] = []
+        for (expertIndex, expert) in experts.enumerated() {
             let buffers = try expertBuffers(expert)
-            guard
-                let gateUp = context.device.makeBuffer(
-                    length: 2 * intermediate * 4, options: .storageModeShared),
-                let activated = context.device.makeBuffer(
-                    length: intermediate * 4, options: .storageModeShared),
-                let out = context.device.makeBuffer(
-                    length: hidden * 4, options: .storageModeShared)
-            else { throw MetalError.bufferAllocationFailed("expert forward") }
-            // w13
+            let gateOffset = expertIndex * 2 * intermediate * 4
+            let activationOffset = expertIndex * intermediate * 4
+            let outOffset = expertIndex * hidden * 4
             guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
@@ -391,26 +400,25 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
             if expert.format == .nvfp4 {
                 encoder.setBuffer(buffers.w13Outer, offset: 0, index: 2)
                 encoder.setBuffer(xBuffer, offset: 0, index: 3)
-                encoder.setBuffer(gateUp, offset: 0, index: 4)
+                encoder.setBuffer(gateUp, offset: gateOffset, index: 4)
                 encoder.setBytes(&rows, length: 4, index: 5)
                 encoder.setBytes(&columns, length: 4, index: 6)
             } else {
                 encoder.setBuffer(xBuffer, offset: 0, index: 2)
-                encoder.setBuffer(gateUp, offset: 0, index: 3)
+                encoder.setBuffer(gateUp, offset: gateOffset, index: 3)
                 encoder.setBytes(&rows, length: 4, index: 4)
                 encoder.setBytes(&columns, length: 4, index: 5)
             }
             encoder.dispatchThreadgroups(
-                MTLSize(width: 2 * intermediate, height: 1, depth: 1),
+                MTLSize(width: (2 * intermediate + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
             encoder.endEncoding()
-            // SwiGLU
             guard let activationEncoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
             activationEncoder.setComputePipelineState(swiglu)
-            activationEncoder.setBuffer(gateUp, offset: 0, index: 0)
-            activationEncoder.setBuffer(activated, offset: 0, index: 1)
+            activationEncoder.setBuffer(gateUp, offset: gateOffset, index: 0)
+            activationEncoder.setBuffer(activated, offset: activationOffset, index: 1)
             var gate = gateCap
             var up = upCap
             var width = UInt32(intermediate)
@@ -422,7 +430,6 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
                 threadsPerThreadgroup: MTLSize(
                     width: min(intermediate, 256), height: 1, depth: 1))
             activationEncoder.endEncoding()
-            // w2
             guard let downEncoder = commandBuffer.makeComputeCommandEncoder() else {
                 throw MetalError.commandEncoderFailed
             }
@@ -433,29 +440,29 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
             var downColumns = UInt32(intermediate)
             if expert.format == .nvfp4 {
                 downEncoder.setBuffer(buffers.w2Outer, offset: 0, index: 2)
-                downEncoder.setBuffer(activated, offset: 0, index: 3)
-                downEncoder.setBuffer(out, offset: 0, index: 4)
+                downEncoder.setBuffer(activated, offset: activationOffset, index: 3)
+                downEncoder.setBuffer(out, offset: outOffset, index: 4)
                 downEncoder.setBytes(&downRows, length: 4, index: 5)
                 downEncoder.setBytes(&downColumns, length: 4, index: 6)
             } else {
-                downEncoder.setBuffer(activated, offset: 0, index: 2)
-                downEncoder.setBuffer(out, offset: 0, index: 3)
+                downEncoder.setBuffer(activated, offset: activationOffset, index: 2)
+                downEncoder.setBuffer(out, offset: outOffset, index: 3)
                 downEncoder.setBytes(&downRows, length: 4, index: 4)
                 downEncoder.setBytes(&downColumns, length: 4, index: 5)
             }
             downEncoder.dispatchThreadgroups(
-                MTLSize(width: hidden, height: 1, depth: 1),
+                MTLSize(width: (hidden + 7) / 8, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
             downEncoder.endEncoding()
-            outputs.append(out)
+            outputOffsets.append(outOffset)
         }
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        return outputs.map { buffer in
+        let pointer = out.contents().bindMemory(to: Float.self, capacity: 8 * hidden)
+        return outputOffsets.map { offset in
             Array(
                 UnsafeBufferPointer(
-                    start: buffer.contents().bindMemory(to: Float.self, capacity: hidden),
-                    count: hidden))
+                    start: pointer.advanced(by: offset / 4), count: hidden))
         }
     }
 
