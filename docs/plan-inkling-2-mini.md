@@ -1,7 +1,7 @@
 # Inkling 2 Mini in TinyTitan 7.x — port plan and quality contract
 
-**Status: Phase 0 complete; text-only scope chosen; Phase 1 blocked on the
-reference host and checkpoint download.** The Python and
+**Status: Phase 0 complete; text-only scope chosen; Swift engine work has
+started. The vLLM reference was dropped on 2026-11-21.** The Python and
 Swift contract readers validate the real metadata (commit `5ffc1515`,
 `6e9c988e`), but the engine is not implemented. This is a new engine family, a
 new mixed-quantization runtime and a multimodal surface — not a model-profile
@@ -14,11 +14,10 @@ Decided: **text-only**, **preserve NVFP4/MXFP8**, and the checkpoint install is
 **approved**. The ~20 GB download is in progress under `models/inkling-2-mini`
 (operator-approved; not a gate side effect).
 
-- **Reference host absent:** the vLLM installer is prepared at
-  `tools/reference_inkling_vllm.sh` / `docs/reference-inkling-vllm.md`, but this
-  Mac has no NVIDIA GPU. The recipe verifies GB200/B300/GB300/H100/H200/DGX
-  Spark; a remote NVIDIA host (or cloud GPU) is required to run the quality
-  oracle.
+- **No external reference:** the vLLM path was dropped on 2026-11-21. The
+  engine is being built in Swift; without an independent host there is no
+  logits oracle, so quality claims must come from the architecture and
+  deterministic tests until one is available.
 - **Host limit:** 24 GiB RAM vs the model card's 32 GB recommendation. Text-only
   expert streaming may fit; 1M context is a larger-host target.
 
