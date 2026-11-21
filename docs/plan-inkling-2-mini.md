@@ -1,7 +1,7 @@
 # Inkling 2 Mini in TinyTitan 7.x — port plan and quality contract
 
-**Status: Phase 0 complete; text-only scope chosen; Swift engine work has
-started. The vLLM reference was dropped on 2026-11-21.** The Python and
+**Status: Phase 0 complete; text-only scope chosen; Swift engine components are
+landing. The vLLM reference was dropped on 2026-11-21.** The Python and
 Swift contract readers validate the real metadata (commit `5ffc1515`,
 `6e9c988e`), but the engine is not implemented. This is a new engine family, a
 new mixed-quantization runtime and a multimodal surface — not a model-profile
@@ -24,6 +24,9 @@ Decided: **text-only**, **preserve NVFP4/MXFP8**, and the checkpoint install is
 Phase 0's metadata reader is `benchmark/inkling2_quant_contract.py` (with
 `test_inkling2_quant_contract` in CI): it validates the real HF metadata and
 proves the 20-layer NVFP4 / 4-layer MXFP8 split before any weight is loaded.
+The Swift `TinyTitanInkling2` target now carries the real tokenizer (validated
+against HF IDs), a safetensors range reader, and the exact NVFP4/MXFP8
+dequantizer. The looped text graph is the next component.
 
 ## The checkpoint
 
