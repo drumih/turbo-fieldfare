@@ -15,6 +15,20 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private let bf16FloatX: MTLComputePipelineState
     private let relativeAttention: MTLComputePipelineState
     private let shortConv: MTLComputePipelineState
+    private var logitsWeights: MTLBuffer?
+    private var logitsWeightsBytes = 0
+    private var logitsX: MTLBuffer?
+    private var logitsXBytes = 0
+    private var logitsY: MTLBuffer?
+    private var logitsYBytes = 0
+    private var packedCache: MTLBuffer?
+    private var packedBytes = 0
+    private var scaleCache: MTLBuffer?
+    private var scaleBytes = 0
+    private var xCache: MTLBuffer?
+    private var xBytes = 0
+    private var yCache: MTLBuffer?
+    private var yBytes = 0
 
     public init() throws {
         self.context = try MetalContext()
@@ -24,6 +38,52 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         self.bf16FloatX = try context.pipeline("bf16_gemv_floatx")
         self.relativeAttention = try context.pipeline("relative_attention")
         self.shortConv = try context.pipeline("short_conv4")
+    }
+
+    private func upload(
+        _ data: Data, cache: inout MTLBuffer?, bytes: inout Int, label: String
+    ) throws -> MTLBuffer {
+        if cache == nil || bytes < data.count {
+            guard
+                let created = context.device.makeBuffer(
+                    length: data.count, options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed(label) }
+            cache = created
+            bytes = data.count
+        }
+        guard let buffer = cache else {
+            throw MetalError.bufferAllocationFailed(label)
+        }
+        data.copyBytes(
+            to: buffer.contents().assumingMemoryBound(to: UInt8.self),
+            count: data.count)
+        return buffer
+    }
+
+    private func upload(
+        _ values: [Float], cache: inout MTLBuffer?, bytes: inout Int, label: String
+    ) throws -> MTLBuffer {
+        let data = values.withUnsafeBufferPointer {
+            Data(buffer: $0)
+        }
+        return try upload(data, cache: &cache, bytes: &bytes, label: label)
+    }
+
+    private func output(
+        bytes required: Int, cache: inout MTLBuffer?, bytes: inout Int, label: String
+    ) throws -> MTLBuffer {
+        if cache == nil || bytes < required {
+            guard
+                let created = context.device.makeBuffer(
+                    length: required, options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed(label) }
+            cache = created
+            bytes = required
+        }
+        guard let buffer = cache else {
+            throw MetalError.bufferAllocationFailed(label)
+        }
+        return buffer
     }
 
     public func shortConvolution(
@@ -148,15 +208,13 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         weights: Data, x: [Float], rows: Int, columns: Int
     ) throws -> [Float] {
         precondition(x.count == columns)
-        guard
-            let weightsBuffer = context.device.makeBuffer(
-                bytes: [UInt8](weights), length: weights.count,
-                options: .storageModeShared),
-            let xBuffer = context.device.makeBuffer(
-                bytes: x, length: x.count * 4, options: .storageModeShared),
-            let yBuffer = context.device.makeBuffer(
-                length: rows * 4, options: .storageModeShared),
-            let commandBuffer = context.queue.makeCommandBuffer(),
+        let weightsBuffer = try upload(
+            weights, cache: &packedCache, bytes: &packedBytes, label: "dense weights")
+        let xBuffer = try upload(
+            x, cache: &xCache, bytes: &xBytes, label: "dense x")
+        let yBuffer = try output(
+            bytes: rows * 4, cache: &yCache, bytes: &yBytes, label: "dense y")
+        guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else { throw MetalError.bufferAllocationFailed("inkling dense gemv") }
         encoder.setComputePipelineState(bf16FloatX)
@@ -183,16 +241,16 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     {
         precondition(hidden.count == columns)
         let halves = hidden.map { Float16($0) }
-        guard
-            let weightsBuffer = context.device.makeBuffer(
-                bytes: [UInt8](weights), length: weights.count,
-                options: .storageModeShared),
-            let xBuffer = context.device.makeBuffer(
-                bytes: halves, length: halves.count * 2,
-                options: .storageModeShared),
-            let yBuffer = context.device.makeBuffer(
-                length: rows * 4, options: .storageModeShared),
-            let commandBuffer = context.queue.makeCommandBuffer(),
+        let weightsBuffer = try upload(
+            weights, cache: &logitsWeights, bytes: &logitsWeightsBytes,
+            label: "logits weights")
+        let halvesData = halves.withUnsafeBufferPointer { Data(buffer: $0) }
+        let xBuffer = try upload(
+            halvesData, cache: &logitsX, bytes: &logitsXBytes, label: "logits x")
+        let yBuffer = try output(
+            bytes: rows * 4, cache: &logitsY, bytes: &logitsYBytes,
+            label: "logits y")
+        guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else { throw MetalError.bufferAllocationFailed("inkling logits") }
         encoder.setComputePipelineState(bf16Float)
@@ -223,16 +281,14 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         let outer = w13 ? expert.w13Outer : expert.w2Outer
         precondition(x.count == columns)
         let pipeline = expert.format == .nvfp4 ? nvfp4 : mxfp8
-        guard
-            let packedBuffer = context.device.makeBuffer(
-                bytes: [UInt8](packed), length: packed.count, options: .storageModeShared),
-            let scaleBuffer = context.device.makeBuffer(
-                bytes: [UInt8](scales), length: scales.count, options: .storageModeShared),
-            let xBuffer = context.device.makeBuffer(
-                bytes: x, length: x.count * 4, options: .storageModeShared),
-            let yBuffer = context.device.makeBuffer(
-                length: rows * 4, options: .storageModeShared)
-        else { throw MetalError.bufferAllocationFailed("inkling expert") }
+        let packedBuffer = try upload(
+            packed, cache: &packedCache, bytes: &packedBytes, label: "expert packed")
+        let scaleBuffer = try upload(
+            scales, cache: &scaleCache, bytes: &scaleBytes, label: "expert scales")
+        let xBuffer = try upload(
+            x, cache: &xCache, bytes: &xBytes, label: "expert x")
+        let yBuffer = try output(
+            bytes: rows * 4, cache: &yCache, bytes: &yBytes, label: "expert y")
         var rowsValue = UInt32(rows)
         var columnsValue = UInt32(columns)
         guard let commandBuffer = context.queue.makeCommandBuffer(),

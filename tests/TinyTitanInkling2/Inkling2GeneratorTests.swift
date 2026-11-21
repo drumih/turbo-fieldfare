@@ -18,9 +18,8 @@ import Testing
             directory: directory, config: config, store: store)
         var generator = Inkling2Generator(model: model, tokenizer: tokenizer)
         let prompt =
-            "<|message_system|><|content_text|>Thinking effort level: 0"
-            + "<|end_message|><|message_user|><|content_text|>"
-            + "The capital of France is<|end_message|>"
+            "<|message_user|><|content_text|>The capital of France is"
+            + "<|end_message|><|message_model|><|content_text|>"
         let result = try generator.generate(prompt: prompt, maxTokens: 8)
         print("generated=\(result.tokens) text=\(result.text)")
         #expect(!result.tokens.isEmpty)
