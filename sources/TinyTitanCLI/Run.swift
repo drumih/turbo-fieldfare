@@ -14,6 +14,7 @@ import TinyTitanCPUEngine
 import TinyTitanLegacyEngine
 import TinyTitanCore
 import TinyTitanVariants
+import TinyTitanInkling2
 
 private struct MessageJSON: Decodable {
     let role: String
@@ -78,6 +79,9 @@ public func run(
             stderr.write(Data((line + "\n").utf8))
         }
         let modelURL = URL(fileURLWithPath: args.model)
+        if Inkling2Run.isInkling2(modelURL) {
+            return Inkling2Run.run(args: args, stdout: stdout, stderr: stderr)
+        }
         if let nemotron = await NemotronRun.runIfNemotron(
             args: args, stdout: stdout, stderr: stderr)
         {

@@ -278,7 +278,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
                 "TinyTitanVariants",
-                "TinyTitanCPUEngine",
+                "TinyTitanCPUEngine", "TinyTitanInkling2",
             ],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
