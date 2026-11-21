@@ -50,7 +50,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private var expertActivatedBytes = 0
     private var expertOut: MTLBuffer?
     private var expertOutBytes = 0
-    private let expertSlotsPerLayer = 32
+    private let expertSlotsPerLayer = 48
     var packedCache: MTLBuffer?
     var packedBytes = 0
     var scaleCache: MTLBuffer?
