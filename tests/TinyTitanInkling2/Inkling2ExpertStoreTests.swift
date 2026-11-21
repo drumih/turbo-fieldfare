@@ -118,5 +118,21 @@ import Testing
         #expect(expert.w2.count == 2304 * 1152)
         #expect(expert.w13.allSatisfy { $0.isFinite })
         #expect(expert.w2.allSatisfy { $0.isFinite })
+        // Independent Python dequant of the same bytes: low nibble first,
+        // E4M3 block scale times amax[expert]/denominator.
+        let w13Head: [Float] = [
+            0.009372413, -0.056234475, 0.018744825, -0.018744825, -0.018744825,
+        ]
+        let w2Head: [Float] = [
+            -0.010069003, 0.030207010, -0.040276013, 0.010069003, -0.010069003,
+        ]
+        for (index, expected) in w13Head.enumerated() {
+            #expect(abs(expert.w13[index] - expected) < 1e-6)
+        }
+        for (index, expected) in w2Head.enumerated() {
+            #expect(abs(expert.w2[index] - expected) < 1e-6)
+        }
+        #expect(abs(expert.w13.prefix(100).reduce(0, +) - (-0.012075993)) < 1e-5)
+        #expect(abs(expert.w2.prefix(100).reduce(0, +) - 0.027330152) < 1e-5)
     }
 }
