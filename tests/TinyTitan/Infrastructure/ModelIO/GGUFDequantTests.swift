@@ -65,12 +65,12 @@ import Testing
     /// the port rather than floating-point noise.
     @Test func matchesGGMLReferenceBitForBit() throws {
         let vectors = try Self.vectors()
-        #expect(vectors.count == 9, "fixture should carry nine block types")
+        #expect(vectors.count == 11, "fixture should carry eleven block types")
         #expect(
             Set(vectors.map(\.type.name))
                 == [
                     "Q2_K", "Q4_K", "Q6_K", "Q8_0", "Q2_0", "IQ4_NL", "IQ4_XS",
-                    "IQ2_S", "IQ3_XXS",
+                    "IQ2_S", "IQ3_XXS", "NVFP4", "MXFP4",
                 ])
         for vector in vectors {
             let got = try GGUFDequant.decode(type: vector.type, bytes: vector.bytes)

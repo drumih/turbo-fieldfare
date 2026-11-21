@@ -126,6 +126,7 @@ public final class MetalContext: @unchecked Sendable {
         "gguf_embed",
         "gguf_q2k_q4k_gemv",
         "gguf_q2k_q4k_tiled",
+        "gguf_gemv_ids",
         "ple_iq",
     ]
 
@@ -143,6 +144,7 @@ public final class MetalContext: @unchecked Sendable {
         "gguf_embed": "Metal/Quant",
         "gguf_q2k_q4k_gemv": "Metal/Quant",
         "gguf_q2k_q4k_tiled": "Metal/Quant",
+        "gguf_gemv_ids": "Metal/Quant",
         "ple_iq": "Metal/Prefill",
         "bf16_gemv": "Metal/Quant",
         "quant_nvfp4": "Metal/Quant",

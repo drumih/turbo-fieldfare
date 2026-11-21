@@ -3,7 +3,14 @@
 // dequantize_row_* so the Swift decoder is checked against the reference and
 // not against itself.
 //
-// Build against a llama.cpp checkout whose ggml library is configured and built:
+// Build against a llama.cpp checkout whose ggml library is configured and built.
+// Either link the shared library of a default (Metal) build:
+//
+//   clang -O1 -I <llama.cpp>/ggml/include -I <llama.cpp>/ggml/src \
+//     -o gguf-ref-vectors tools/gguf-ref-vectors.c \
+//     -L <llama.cpp>/build/bin -lggml-base -Wl,-rpath,<llama.cpp>/build/bin
+//
+// or the object files of a CPU-only build:
 //
 //   cmake -S <llama.cpp> -B <llama.cpp>/build -DLLAMA_CURL=OFF -DGGML_METAL=OFF
 //   cmake --build <llama.cpp>/build --target ggml -j 8
@@ -117,6 +124,21 @@ int main(void) {
         set_d(buf + 136, 0, -0.006f);
         dequantize_row_iq4_xs((const block_iq4_xs *)buf, y, 512);
         emit("iq4_xs", buf, sizeof buf, y, 512);
+    }
+    { // nvfp4: 2 blocks of 64, d[4] (UE4M3) at 0, qs[32] at 4; the
+      // pattern's scale bytes cover subnormal, normal and the 0x7F zero code
+        uint8_t buf[72];
+        for (int i = 0; i < 72; i++) buf[i] = pat(i);
+        buf[0] = 0x38; buf[36] = 0x7F; buf[37] = 0x05;
+        dequantize_row_nvfp4((const block_nvfp4 *)buf, y, 128);
+        emit("nvfp4", buf, sizeof buf, y, 128);
+    }
+    { // mxfp4: 2 blocks of 32, e (E8M0) at 0, qs[16] at 1
+        uint8_t buf[34];
+        for (int i = 0; i < 34; i++) buf[i] = pat(i);
+        buf[0] = 127; buf[17] = 121;
+        dequantize_row_mxfp4((const block_mxfp4 *)buf, y, 64);
+        emit("mxfp4", buf, sizeof buf, y, 64);
     }
     return 0;
 }

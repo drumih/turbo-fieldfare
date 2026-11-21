@@ -103,8 +103,71 @@ package enum GGUFDequant {
             decodeQ2K(bytes, offset: offset, into: &values)
         case .q4K:
             decodeQ4K(bytes, offset: offset, into: &values)
+        case .nvfp4:
+            decodeNVFP4(bytes, offset: offset, into: &values)
+        case .mxfp4:
+            decodeMXFP4(bytes, offset: offset, into: &values)
         default:
             throw GGUFDequantError.unsupportedType(type.name)
+        }
+    }
+
+    /// `kvalues_fp4` (ggml-common.h): E2M1 values doubled, so the block scales
+    /// below carry the matching factor of one half.
+    package static let fp4Values: [Float] = [
+        0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
+    ]
+
+    /// ggml's `ggml_ue4m3_to_fp32`: unsigned E4M3 (bias 7) times one half;
+    /// 0x00 and 0x7F decode to zero and the top bit is ignored, as in ggml.
+    package static func ue4m3Half(_ code: UInt8) -> Float {
+        if code == 0 || code == 0x7F { return 0 }
+        let exponent = Int((code >> 3) & 0x0F)
+        let mantissa = Float(code & 0x07)
+        let raw =
+            exponent == 0
+            ? Float(sign: .plus, exponent: -9, significand: mantissa)
+            : Float(sign: .plus, exponent: exponent - 7, significand: 1 + mantissa / 8)
+        return raw * 0.5
+    }
+
+    /// ggml's `ggml_e8m0_to_fp32_half`: 2^(e - 128), with the two subnormal codes.
+    package static func e8m0Half(_ code: UInt8) -> Float {
+        code < 2
+            ? Float(bitPattern: UInt32(0x0020_0000) << UInt32(code))
+            : Float(bitPattern: UInt32(code - 1) << 23)
+    }
+
+    /// NVFP4 (`block_nvfp4`): 64 values as four 16-value sub-blocks, each with
+    /// a UE4M3 scale at bytes 0..<4; sub-block `s` packs value `j` in the low
+    /// nibble and `j + 8` in the high nibble of byte `4 + 8s + j`.
+    private static func decodeNVFP4(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        for sub in 0..<4 {
+            let scale = ue4m3Half(bytes[offset + sub])
+            let base = offset + 4 + sub * 8
+            var high = [Float](repeating: 0, count: 8)
+            for j in 0..<8 {
+                let packed = bytes[base + j]
+                values.append(fp4Values[Int(packed & 0x0F)] * scale)
+                high[j] = fp4Values[Int(packed >> 4)] * scale
+            }
+            values.append(contentsOf: high)
+        }
+    }
+
+    /// MXFP4 (`block_mxfp4`): 32 values, an E8M0 scale at byte 0, then value
+    /// `j` in the low and `j + 16` in the high nibble of byte `1 + j`.
+    private static func decodeMXFP4(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        let scale = e8m0Half(bytes[offset])
+        for j in 0..<16 {
+            values.append(fp4Values[Int(bytes[offset + 1 + j] & 0x0F)] * scale)
+        }
+        for j in 0..<16 {
+            values.append(fp4Values[Int(bytes[offset + 1 + j] >> 4)] * scale)
         }
     }
 
