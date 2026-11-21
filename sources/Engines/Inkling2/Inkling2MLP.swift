@@ -47,17 +47,10 @@ public struct Inkling2MLP: Sendable {
                 "expertDiskLoad", Date().timeIntervalSince(loadStart))
             let packed = box.values.compactMap { $0 }
             precondition(packed.count == route.indices.count)
-            let gateUps = try gpu.gemvBatch(
-                packed, xs: Array(repeating: x, count: packed.count),
-                rows: 2 * packed[0].w2Columns, columns: packed[0].w13Columns,
-                w13: true)
-            let activated = zip(gateUps, packed).map { gateUp, expert in
-                Inkling2MoE.activate(
-                    gateUp, hidden: expert.rows, intermediate: expert.w2Columns)
-            }
-            let results = try gpu.gemvBatch(
-                packed, xs: activated, rows: packed[0].rows,
-                columns: packed[0].w2Columns, w13: false)
+            let results = try gpu.expertForwardBatch(
+                packed, x: x, hidden: packed[0].rows,
+                intermediate: packed[0].w2Columns,
+                gateCap: Inkling2MoE.gateCap, upCap: Inkling2MoE.upCap)
             for (result, weight) in zip(results, route.weights) {
                 for dimension in output.indices {
                     output[dimension] += result[dimension] * weight

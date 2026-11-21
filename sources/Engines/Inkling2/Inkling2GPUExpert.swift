@@ -15,6 +15,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private let bf16FloatX: MTLComputePipelineState
     private let relativeAttention: MTLComputePipelineState
     private let shortConv: MTLComputePipelineState
+    private let swiglu: MTLComputePipelineState
     private var logitsWeights: MTLBuffer?
     private var logitsWeightsBytes = 0
     private var logitsX: MTLBuffer?
@@ -53,6 +54,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         self.bf16FloatX = try context.pipeline("bf16_gemv_floatx")
         self.relativeAttention = try context.pipeline("relative_attention")
         self.shortConv = try context.pipeline("short_conv4")
+        self.swiglu = try context.pipeline("softcapped_swiglu")
     }
 
     private func upload(
@@ -350,6 +352,111 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         }
         expertOrder[layer] = order
         return value
+    }
+
+    /// One command buffer for the whole routed MLP: every expert's w13 GEMV,
+    /// the GPU SwiGLU, and its w2 GEMV. No intermediate crosses to the CPU.
+    public func expertForwardBatch(
+        _ experts: [Inkling2PackedExpert], x: [Float], hidden: Int,
+        intermediate: Int, gateCap: Float, upCap: Float
+    ) throws -> [[Float]] {
+        guard let commandBuffer = context.queue.makeCommandBuffer() else {
+            throw MetalError.commandEncoderFailed
+        }
+        guard
+            let xBuffer = context.device.makeBuffer(
+                bytes: x, length: x.count * 4, options: .storageModeShared)
+        else { throw MetalError.bufferAllocationFailed("expert forward x") }
+        var outputs: [MTLBuffer] = []
+        for expert in experts {
+            let buffers = try expertBuffers(expert)
+            guard
+                let gateUp = context.device.makeBuffer(
+                    length: 2 * intermediate * 4, options: .storageModeShared),
+                let activated = context.device.makeBuffer(
+                    length: intermediate * 4, options: .storageModeShared),
+                let out = context.device.makeBuffer(
+                    length: hidden * 4, options: .storageModeShared)
+            else { throw MetalError.bufferAllocationFailed("expert forward") }
+            // w13
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
+            let pipeline = expert.format == .nvfp4 ? nvfp4 : mxfp8
+            encoder.setComputePipelineState(pipeline)
+            encoder.setBuffer(buffers.w13Packed, offset: 0, index: 0)
+            encoder.setBuffer(buffers.w13Scales, offset: 0, index: 1)
+            var rows = UInt32(2 * intermediate)
+            var columns = UInt32(hidden)
+            if expert.format == .nvfp4 {
+                encoder.setBuffer(buffers.w13Outer, offset: 0, index: 2)
+                encoder.setBuffer(xBuffer, offset: 0, index: 3)
+                encoder.setBuffer(gateUp, offset: 0, index: 4)
+                encoder.setBytes(&rows, length: 4, index: 5)
+                encoder.setBytes(&columns, length: 4, index: 6)
+            } else {
+                encoder.setBuffer(xBuffer, offset: 0, index: 2)
+                encoder.setBuffer(gateUp, offset: 0, index: 3)
+                encoder.setBytes(&rows, length: 4, index: 4)
+                encoder.setBytes(&columns, length: 4, index: 5)
+            }
+            encoder.dispatchThreadgroups(
+                MTLSize(width: 2 * intermediate, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            encoder.endEncoding()
+            // SwiGLU
+            guard let activationEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
+            activationEncoder.setComputePipelineState(swiglu)
+            activationEncoder.setBuffer(gateUp, offset: 0, index: 0)
+            activationEncoder.setBuffer(activated, offset: 0, index: 1)
+            var gate = gateCap
+            var up = upCap
+            var width = UInt32(intermediate)
+            activationEncoder.setBytes(&gate, length: 4, index: 2)
+            activationEncoder.setBytes(&up, length: 4, index: 3)
+            activationEncoder.setBytes(&width, length: 4, index: 4)
+            activationEncoder.dispatchThreads(
+                MTLSize(width: intermediate, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(
+                    width: min(intermediate, 256), height: 1, depth: 1))
+            activationEncoder.endEncoding()
+            // w2
+            guard let downEncoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw MetalError.commandEncoderFailed
+            }
+            downEncoder.setComputePipelineState(pipeline)
+            downEncoder.setBuffer(buffers.w2Packed, offset: 0, index: 0)
+            downEncoder.setBuffer(buffers.w2Scales, offset: 0, index: 1)
+            var downRows = UInt32(hidden)
+            var downColumns = UInt32(intermediate)
+            if expert.format == .nvfp4 {
+                downEncoder.setBuffer(buffers.w2Outer, offset: 0, index: 2)
+                downEncoder.setBuffer(activated, offset: 0, index: 3)
+                downEncoder.setBuffer(out, offset: 0, index: 4)
+                downEncoder.setBytes(&downRows, length: 4, index: 5)
+                downEncoder.setBytes(&downColumns, length: 4, index: 6)
+            } else {
+                downEncoder.setBuffer(activated, offset: 0, index: 2)
+                downEncoder.setBuffer(out, offset: 0, index: 3)
+                downEncoder.setBytes(&downRows, length: 4, index: 4)
+                downEncoder.setBytes(&downColumns, length: 4, index: 5)
+            }
+            downEncoder.dispatchThreadgroups(
+                MTLSize(width: hidden, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            downEncoder.endEncoding()
+            outputs.append(out)
+        }
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return outputs.map { buffer in
+            Array(
+                UnsafeBufferPointer(
+                    start: buffer.contents().bindMemory(to: Float.self, capacity: hidden),
+                    count: hidden))
+        }
     }
 
     /// One command buffer for a whole routed-expert stage. Each expert keeps

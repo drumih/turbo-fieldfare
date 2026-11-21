@@ -86,3 +86,20 @@ kernel void mxfp8_gemv(
     }
     if (tid == 0u) y[row] = partial[0];
 }
+
+// Softcapped SwiGLU for one expert: input is interleaved [gate, up] rows.
+kernel void softcapped_swiglu(
+    device const float* gate_up [[buffer(0)]],
+    device float* out [[buffer(1)]],
+    constant float& gate_cap [[buffer(2)]],
+    constant float& up_cap [[buffer(3)]],
+    constant uint& intermediate [[buffer(4)]],
+    uint index [[thread_position_in_grid]])
+{
+    if (index >= intermediate) return;
+    const float gate = gate_up[index * 2u];
+    const float up = gate_up[index * 2u + 1u];
+    const float g = tanh(gate / gate_cap) * gate_cap * (1.0f / (1.0f + exp(-gate)));
+    const float u = tanh(up / up_cap) * up_cap;
+    out[index] = g * u;
+}
