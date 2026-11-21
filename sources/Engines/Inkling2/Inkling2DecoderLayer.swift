@@ -9,13 +9,12 @@ public struct Inkling2AttentionResidual: Sendable {
     private let queryCount: Int
 
     public init(
-        tensors: Inkling2DenseTensors, layer: Int, name: String, queries: Int,
+        tensors: Inkling2DenseTensors, tensorName: String, queries: Int,
         hidden: Int
     ) throws {
-        let tensorName = "\(name).query"
-        if tensors.hasLayerTensor(layer, tensorName) {
-            self.query = try tensors.layerMatrix(layer, tensorName)
-            self.queryCount = self.query.count / hidden
+        if tensors.hasTensor(tensorName) {
+            self.query = try tensors.matrix(tensorName)
+            self.queryCount = max(1, self.query.count / hidden)
         } else {
             self.query = [Float](repeating: 0, count: queries * hidden)
             self.queryCount = queries
@@ -90,10 +89,12 @@ public struct Inkling2DecoderLayer: Sendable {
             layer == 0
             ? nil
             : try Inkling2AttentionResidual(
-                tensors: tensors, layer: layer, name: "attention_input",
-                queries: 3, hidden: hidden)
+                tensors: tensors,
+                tensorName: "model.llm.attn_res.attn_queries.\(layer - 1)",
+                queries: isSliding ? 1 : 3, hidden: hidden)
         self.mlpInput = try Inkling2AttentionResidual(
-            tensors: tensors, layer: layer, name: "mlp_input",
+            tensors: tensors,
+            tensorName: "model.llm.attn_res.mlp_queries.\(layer)",
             queries: 1, hidden: hidden)
         self.attnConv = try tensors.layerMatrix(layer, "attn_sconv.weight")
         self.mlpConv = try tensors.layerMatrix(layer, "mlp_sconv.weight")

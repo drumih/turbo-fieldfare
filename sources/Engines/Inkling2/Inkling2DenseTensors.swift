@@ -50,6 +50,21 @@ public struct Inkling2DenseTensors: Sendable {
         try file.floatValues("model.llm.layers.\(layer).\(suffix)")
     }
 
+    public func matrix(_ name: String) throws -> [Float] {
+        try file.floatValues(name)
+    }
+
+    public func matrixShape(_ name: String) throws -> [Int] {
+        guard let tensor = file.tensor(name) else {
+            throw Inkling2Safetensors.Error.missing(name)
+        }
+        return tensor.shape
+    }
+
+    public func hasTensor(_ name: String) -> Bool {
+        file.tensor(name) != nil
+    }
+
     public func hasLayerTensor(_ layer: Int, _ suffix: String) -> Bool {
         file.tensor("model.llm.layers.\(layer).\(suffix)") != nil
     }
