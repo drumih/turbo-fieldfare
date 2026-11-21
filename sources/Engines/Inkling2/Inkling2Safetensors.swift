@@ -114,5 +114,21 @@ public struct Inkling2Safetensors: Sendable {
         return bytes
     }
 
+    public func data(for name: String, offset: Int, count: Int) throws -> Data {
+        guard let tensor = tensors[name] else { throw Error.missing(name) }
+        guard offset >= 0, count >= 0, offset + count <= tensor.byteCount else {
+            throw Error.invalid(
+                "\(name) slice [\(offset), \(offset + count)) outside \(tensor.byteCount)")
+        }
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(dataStart + tensor.offset + offset))
+        let bytes = try handle.read(upToCount: count) ?? Data()
+        guard bytes.count == count else {
+            throw Error.shortRead(name, expected: count, got: bytes.count)
+        }
+        return bytes
+    }
+
     public func tensor(_ name: String) -> Tensor? { tensors[name] }
 }
