@@ -53,7 +53,12 @@ dispatch cost made it slower (33 s vs 25.5 s); norms and embedding are still CPU
 Attention KV state and the decoder/text caches are now threaded through the 48
 layer visits. A real continuation run produced two greedy tokens in one cached
 session (`conveni`, `ég`); this is not coherent text and is not a quality claim.
-The sampling loop and CLI/server are still absent.
+The sampling loop and CLI/server are still absent. Two reference-parity fixes
+landed: the router correction bias now affects selection only (not the sigmoid
+scores), and the fused expert gate/up rows are read interleaved. A templated
+"The capital of France is" prompt still produces spaces, so at least one
+architecture mismatch remains; this is not a working-quality model and no text
+quality is claimed.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
