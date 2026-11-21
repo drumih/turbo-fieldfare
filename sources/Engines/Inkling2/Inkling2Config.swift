@@ -28,6 +28,10 @@ public struct Inkling2Config: Sendable, Equatable {
         public let relativeDimension: Int
         public let convolutionKernel: Int
         public let attentionResidualBlock: Int
+        public let logScalingAlpha: Float
+        public let logScalingNFloor: Int
+        public let finalLogitSoftcapping: Float
+        public let unpaddedVocabularySize: Int
         public let loop: Loop
     }
 
@@ -85,6 +89,12 @@ public struct Inkling2Config: Sendable, Equatable {
             relativeDimension: try require(text, "d_rel"),
             convolutionKernel: try require(text, "sconv_kernel_size"),
             attentionResidualBlock: try require(text, "n_layers_per_attn_res_block"),
+            logScalingAlpha: (text["log_scaling_alpha"] as? NSNumber)?.floatValue ?? 0,
+            logScalingNFloor: (text["log_scaling_n_floor"] as? NSNumber)?.intValue ?? 0,
+            finalLogitSoftcapping: (text["final_logit_softcapping"] as? NSNumber)?
+                .floatValue ?? 0,
+            unpaddedVocabularySize: (text["unpadded_vocab_size"] as? NSNumber)?.intValue
+                ?? (text["vocab_size"] as? Int ?? 0),
             loop: Loop(coreStart: coreStart, coreEnd: coreEnd, passes: passes))
         guard textConfig.layerCount == 24,
             textConfig.experts == 128,

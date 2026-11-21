@@ -26,7 +26,7 @@ kernel void relative_attention(
     if (gid >= total || dim > 128u) return;
     const uint head = gid % heads;
     const uint query = gid / heads;
-    const uint kvHead = head % kvHeads;
+    const uint kvHead = head / (heads / kvHeads);
     const uint qBase = query * heads * dim + head * dim;
     const uint rBase = query * heads * relDim + head * relDim;
     const float sinkValue = sink[query * heads + head];

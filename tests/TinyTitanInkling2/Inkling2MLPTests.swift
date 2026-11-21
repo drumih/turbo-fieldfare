@@ -13,11 +13,19 @@ import Testing
         let directory = URL(fileURLWithPath: path)
         let tensors = try Inkling2DenseTensors(directory: directory)
         let store = try Inkling2ExpertStore(directory: directory)
-        let mlp = try Inkling2MLP(
+        let x = try tensors.embeddingRow(0)
+        let cpu = try Inkling2MLP(tensors: tensors, store: store, layer: 0)
+        let gpu = try Inkling2MLP(
             tensors: tensors, store: store, layer: 0,
             gpu: try Inkling2GPUExpert())
-        let output = try mlp.forward(tensors.embeddingRow(0))
+        let cpuOutput = try cpu.forward(x)
+        let output = try gpu.forward(x)
         #expect(output.count == 2304)
         #expect(output.allSatisfy { $0.isFinite })
+        var maxDifference: Float = 0
+        for index in 0..<output.count {
+            maxDifference = max(maxDifference, abs(cpuOutput[index] - output[index]))
+        }
+        print("mlp max difference=\(maxDifference)")
     }
 }

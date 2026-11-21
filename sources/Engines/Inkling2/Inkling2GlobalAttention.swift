@@ -31,12 +31,15 @@ public struct Inkling2GlobalAttention: Sendable {
     private let kernelSize: Int
     private let gpu: Inkling2GPUExpert?
     private let gpuWeights: [String: Data]
+    private let logScalingAlpha: Float?
+    private let logScalingNFloor: Int?
 
     public init(
         tensors: Inkling2DenseTensors, layer: Int,
         heads: Int, kvHeads: Int, headDim: Int,
         relativeDim: Int, extent: Int, sliding: Int,
-        hidden: Int, kernelSize: Int, gpu: Inkling2GPUExpert? = nil
+        hidden: Int, kernelSize: Int, gpu: Inkling2GPUExpert? = nil,
+        logScalingAlpha: Float? = nil, logScalingNFloor: Int? = nil
     ) throws {
         let prefix = "model.llm.layers.\(layer).attn."
         self.heads = heads
@@ -48,6 +51,8 @@ public struct Inkling2GlobalAttention: Sendable {
         self.hidden = hidden
         self.kernelSize = kernelSize
         self.gpu = gpu
+        self.logScalingAlpha = logScalingAlpha
+        self.logScalingNFloor = logScalingNFloor
         var gpuWeights: [String: Data] = [:]
         if gpu != nil {
             for tensor in [
@@ -164,8 +169,23 @@ public struct Inkling2GlobalAttention: Sendable {
         let pastKeys = state?.keys ?? []
         let pastValues = state?.values ?? []
         let pastCount = pastKeys.count / kvWidth
-        let allK = pastKeys + kAll
-        let allV = pastValues + vAll
+        if sliding == 0, let logScalingAlpha, let logScalingNFloor,
+            logScalingNFloor > 0
+        {
+            for token in 0..<tokenCount {
+                let position = Float(pastCount + token + 1)
+                let tau =
+                    1 + logScalingAlpha
+                    * log(
+                        max(position / Float(logScalingNFloor), 1))
+                for index in 0..<qWidth {
+                    qAll[token * qWidth + index] *= tau
+                }
+                for index in 0..<rWidth {
+                    rAll[token * rWidth + index] *= tau
+                }
+            }
+        }
         // L2 clip K per KV head.
         for token in 0..<tokenCount {
             for head in 0..<kvHeads {
@@ -188,6 +208,8 @@ public struct Inkling2GlobalAttention: Sendable {
                 for index in range { vAll[index] = values[index - range.lowerBound] / norm }
             }
         }
+        let allK = pastKeys + kAll
+        let allV = pastValues + vAll
         var output = [Float](repeating: 0, count: tokenCount * hidden)
         if let gpu {
             let headsOutput = try gpu.attention(
@@ -229,7 +251,7 @@ public struct Inkling2GlobalAttention: Sendable {
                     let distance = absolute - key
                     guard distance < extent else { continue }
                     var score: Float = 0
-                    let kvHead = head % kvHeads
+                    let kvHead = head / (heads / kvHeads)
                     for dimension in 0..<headDim {
                         score +=
                             qVec[dimension] * allK[key * kvWidth + kvHead * headDim + dimension]
@@ -245,7 +267,7 @@ public struct Inkling2GlobalAttention: Sendable {
                 var headResult = [Float](repeating: 0, count: headDim)
                 for (offset, key) in (firstKey...absolute).enumerated() {
                     let probability = probabilities[offset]
-                    let kvHead = head % kvHeads
+                    let kvHead = head / (heads / kvHeads)
                     for dimension in 0..<headDim {
                         headResult[dimension] +=
                             probability * allV[key * kvWidth + kvHead * headDim + dimension]

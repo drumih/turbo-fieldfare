@@ -39,7 +39,9 @@ public struct Inkling2TextModel: Sendable {
                     extent: config.text.relativeExtent,
                     sliding: config.text.slidingWindow,
                     hidden: config.text.hiddenSize,
-                    kernelSize: config.text.convolutionKernel, gpu: gpu)
+                    kernelSize: config.text.convolutionKernel, gpu: gpu,
+                    logScalingAlpha: config.text.logScalingAlpha,
+                    logScalingNFloor: config.text.logScalingNFloor)
             } else {
                 attention = try Inkling2GlobalAttention(
                     tensors: tensors, layer: index,
@@ -50,7 +52,9 @@ public struct Inkling2TextModel: Sendable {
                     extent: config.text.relativeExtent,
                     sliding: 0,
                     hidden: config.text.hiddenSize,
-                    kernelSize: config.text.convolutionKernel, gpu: gpu)
+                    kernelSize: config.text.convolutionKernel, gpu: gpu,
+                    logScalingAlpha: config.text.logScalingAlpha,
+                    logScalingNFloor: config.text.logScalingNFloor)
             }
             layers.append(
                 try Inkling2DecoderLayer(
@@ -62,10 +66,10 @@ public struct Inkling2TextModel: Sendable {
                     attention: attention, gpu: gpu))
         }
         self.layers = layers
+        let core = Array(config.text.loop.coreStart..<config.text.loop.coreEnd)
         self.layerIndices =
             Array(0..<config.text.loop.coreStart)
-            + Array(config.text.loop.coreStart..<config.text.loop.coreEnd)
-            .flatMap { Array(repeating: $0, count: config.text.loop.passes) }
+            + Array(repeating: core, count: config.text.loop.passes).flatMap { $0 }
             + Array(config.text.loop.coreEnd..<config.text.layerCount)
         self.messageQueries = try Self.loadMessageQueries(
             tensors: tensors, loop: config.text.loop, hidden: config.text.hiddenSize)
@@ -111,13 +115,24 @@ public struct Inkling2TextModel: Sendable {
         Array(repeating: Inkling2DecoderCache(), count: layerIndices.count)
     }
 
+    private func finalize(_ logits: [Float]) -> [Float] {
+        var values = Array(
+            logits.prefix(min(logits.count, config.text.unpaddedVocabularySize)))
+        if config.text.finalLogitSoftcapping > 0 {
+            let cap = config.text.finalLogitSoftcapping
+            values = values.map { tanh($0 / cap) * cap }
+        }
+        return values
+    }
+
     public func forward(token: Int) throws -> [Float] {
         var caches = makeCaches()
         return try forward(token: token, caches: &caches)
     }
 
     public func forward(
-        token: Int, caches: inout [Inkling2DecoderCache]
+        token: Int, caches: inout [Inkling2DecoderCache],
+        capture: ((Int, [Float]) -> Void)? = nil
     ) throws -> [Float] {
         precondition(caches.count == layerIndices.count)
         let hidden = config.text.hiddenSize
@@ -164,6 +179,7 @@ public struct Inkling2TextModel: Sendable {
                 }
                 messages = message
             }
+            capture?(visit, x)
             x = try layers[index].forward(
                 x, blocks: &blocks, messages: messages, cache: &caches[visit])
         }
@@ -172,10 +188,11 @@ public struct Inkling2TextModel: Sendable {
         if let gpu {
             let shape = try tensors.matrixShape("model.llm.unembed.weight")
             let weights = try tensors.tensorBytes("model.llm.unembed.weight")
-            return try gpu.logits(
-                weights: weights, hidden: normalized,
-                rows: shape[0], columns: shape[1])
+            return finalize(
+                try gpu.logits(
+                    weights: weights, hidden: normalized,
+                    rows: shape[0], columns: shape[1]))
         }
-        return try tensors.logits(normalized)
+        return finalize(try tensors.logits(normalized))
     }
 }
