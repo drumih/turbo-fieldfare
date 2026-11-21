@@ -109,6 +109,24 @@ import Testing
         }
     }
 
+    /// Host dequant throughput for the two quants the port targets. This is
+    /// load-time code, so the number is recorded against the loader budget,
+    /// not against decode tokens/s.
+    @Test func q2KAndQ4KThroughput() throws {
+        let blocks = 4_096
+        let q2 = [UInt8](repeating: 0x5A, count: blocks * 84)
+        let q4 = [UInt8](repeating: 0x5A, count: blocks * 144)
+        for (type, bytes) in [(GGUFType.q2K, q2), (.q4K, q4)] {
+            let start = Date()
+            let values = try GGUFDequant.decode(type: type, bytes: bytes)
+            let seconds = Date().timeIntervalSince(start)
+            #expect(values.count == blocks * 256)
+            print(
+                "\(type.name): \(blocks) blocks in \(seconds * 1000) ms "
+                    + "(\(Double(bytes.count) / seconds / 1e9) GB/s)")
+        }
+    }
+
     @Test func refusesAByteCountThatIsNotABlock() throws {
         #expect(
             throws: GGUFDequantError.byteCountNotABlockMultiple(
