@@ -42,6 +42,26 @@ static void set_d(void *block, size_t off, float value) {
 int main(void) {
     float y[512];
 
+    { // q2_K: 2 blocks, d at 0, dmin at 2
+        uint8_t buf[168];
+        for (int i = 0; i < 168; i++) buf[i] = pat(i);
+        set_d(buf + 0, 80, 0.002f);
+        set_d(buf + 0, 82, 0.001f);
+        set_d(buf + 84, 80, -0.003f);
+        set_d(buf + 84, 82, 0.0005f);
+        dequantize_row_q2_K((const block_q2_K *)buf, y, 512);
+        emit("q2_K", buf, sizeof buf, y, 512);
+    }
+    { // q4_K: 2 blocks, d at 0, dmin at 2
+        uint8_t buf[288];
+        for (int i = 0; i < 288; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.004f);
+        set_d(buf + 0, 2, 0.0015f);
+        set_d(buf + 144, 0, -0.006f);
+        set_d(buf + 144, 2, 0.0007f);
+        dequantize_row_q4_K((const block_q4_K *)buf, y, 512);
+        emit("q4_K", buf, sizeof buf, y, 512);
+    }
     { // q6_K: 2 blocks, d at 208
         uint8_t buf[420];
         for (int i = 0; i < 420; i++) buf[i] = pat(i);

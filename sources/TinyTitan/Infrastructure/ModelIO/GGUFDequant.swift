@@ -99,8 +99,94 @@ package enum GGUFDequant {
             decodeIQ2S(bytes, offset: offset, into: &values)
         case .iq3XXS:
             decodeIQ3XXS(bytes, offset: offset, into: &values)
+        case .q2K:
+            decodeQ2K(bytes, offset: offset, into: &values)
+        case .q4K:
+            decodeQ4K(bytes, offset: offset, into: &values)
         default:
             throw GGUFDequantError.unsupportedType(type.name)
+        }
+    }
+
+    /// Q2_K: 256 values, 84-byte block. Two 128-value halves, four 2-bit
+    /// shifts per half; each 16-value group has its own 4-bit scale and
+    /// 4-bit minimum. Ported from ggml's `dequantize_row_q2_K`.
+    private static func decodeQ2K(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        let d = fp16(bytes, offset + 80)
+        let dmin = fp16(bytes, offset + 82)
+        var scaleIndex = offset
+        var q = offset + 16
+        for _ in 0..<2 {
+            var shift: UInt8 = 0
+            for _ in 0..<4 {
+                var sc = bytes[scaleIndex]
+                var dl = d * Float(sc & 0x0F)
+                var ml = dmin * Float(sc >> 4)
+                for l in 0..<16 {
+                    let quant = (bytes[q + l] >> shift) & 0x03
+                    values.append(dl * Float(quant) - ml)
+                }
+                scaleIndex += 1
+                sc = bytes[scaleIndex]
+                dl = d * Float(sc & 0x0F)
+                ml = dmin * Float(sc >> 4)
+                for l in 0..<16 {
+                    let quant = (bytes[q + 16 + l] >> shift) & 0x03
+                    values.append(dl * Float(quant) - ml)
+                }
+                scaleIndex += 1
+                shift += 2
+            }
+            q += 32
+        }
+    }
+
+    /// Q4_K: 256 values, 144-byte block. Each 32-value group uses one 6-bit
+    /// scale and one 6-bit minimum from the packed 12-byte scale table.
+    private static func decodeQ4K(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, into values: inout [Float]
+    ) {
+        let d = fp16(bytes, offset)
+        let dmin = fp16(bytes, offset + 2)
+        var scaleIndex = 0
+        var q = offset + 16
+        for _ in 0..<4 {
+            var sc = 0
+            var m = 0
+            scaleMinK4(bytes, offset: offset, index: scaleIndex, sc: &sc, m: &m)
+            let d1 = d * Float(sc)
+            let m1 = dmin * Float(m)
+            scaleMinK4(bytes, offset: offset, index: scaleIndex + 1, sc: &sc, m: &m)
+            let d2 = d * Float(sc)
+            let m2 = dmin * Float(m)
+            for l in 0..<32 {
+                values.append(d1 * Float(bytes[q + l] & 0x0F) - m1)
+            }
+            for l in 0..<32 {
+                values.append(d2 * Float(bytes[q + l] >> 4) - m2)
+            }
+            q += 32
+            scaleIndex += 2
+        }
+    }
+
+    private static func scaleMinK4(
+        _ bytes: UnsafeRawBufferPointer, offset: Int, index: Int,
+        sc: inout Int, m: inout Int
+    ) {
+        let scales = offset + 4
+        if index < 4 {
+            sc = Int(bytes[scales + index] & 0x3F)
+            m = Int(bytes[scales + index + 4] & 0x3F)
+        } else {
+            sc =
+                Int(bytes[scales + index + 4] & 0x0F)
+                | (Int(bytes[scales + index - 4] >> 6) << 4)
+            m =
+                Int(bytes[scales + index + 4] >> 4)
+                | (Int(bytes[scales + index] >> 6) << 4)
         }
     }
 

@@ -65,10 +65,13 @@ import Testing
     /// the port rather than floating-point noise.
     @Test func matchesGGMLReferenceBitForBit() throws {
         let vectors = try Self.vectors()
-        #expect(vectors.count == 7, "fixture should carry seven block types")
+        #expect(vectors.count == 9, "fixture should carry nine block types")
         #expect(
             Set(vectors.map(\.type.name))
-                == ["Q6_K", "Q8_0", "Q2_0", "IQ4_NL", "IQ4_XS", "IQ2_S", "IQ3_XXS"])
+                == [
+                    "Q2_K", "Q4_K", "Q6_K", "Q8_0", "Q2_0", "IQ4_NL", "IQ4_XS",
+                    "IQ2_S", "IQ3_XXS",
+                ])
         for vector in vectors {
             let got = try GGUFDequant.decode(type: vector.type, bytes: vector.bytes)
             #expect(
@@ -99,10 +102,10 @@ import Testing
     }
 
     @Test func refusesBlockTypesItDoesNotDecode() throws {
-        for (type, bytes) in [(GGUFType.q4K, 144), (.q5K, 176)] {
-            #expect(throws: GGUFDequantError.unsupportedType(type.name)) {
-                try GGUFDequant.decode(type: type, bytes: [UInt8](repeating: 0, count: bytes))
-            }
+        let type = GGUFType.q5K
+        #expect(throws: GGUFDequantError.unsupportedType(type.name)) {
+            try GGUFDequant.decode(
+                type: type, bytes: [UInt8](repeating: 0, count: 176))
         }
     }
 
