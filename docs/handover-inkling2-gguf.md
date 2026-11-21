@@ -55,14 +55,23 @@
 3. **Kernel optimizations that survived measurement**:
    - Packed 64-bit quant loads (`ulong`) instead of 8 separate byte loads.
    - Q2_K two-accumulator block loop.
-   - **Row-tiled geometry (llama.cpp's shape) added in
-     `gguf_q2k_q4k_tiled.metal`: median GPU time per 2304 × 2304 projection is
-     0.0307 ms for both Q2_K and Q4_K (paired, 200 dispatches per sample,
-     `TINYTITAN_KERNEL_BENCH=1`). One-row was 0.0447/0.0514 ms, eight-lanes
-     0.0431/0.0487 ms. The tiled kernel is the current kernel of record.
+   - **Row-tiled geometry (llama.cpp's `kernel_mul_mv_q{2,4}_K_f32` shape)**
+     in `gguf_q2k_q4k_tiled.metal` is the kernel of record
+     (`GGUFKQuantGEMV.Kernel.rowTiled`, the default). Paired
+     `pairedGeometryBenchmark`, 2304 × 2304, GPU time per projection
+     (median of 7 rotated rounds × 200 dispatches in one command buffer),
+     three runs on the 24 GB M3, 2026-11-21:
+     | Kernel | Q2_K | Q4_K |
+     | --- | --- | --- |
+     | `rowPerSIMDGroup` (baseline) | 0.0447–0.0494 ms | 0.0510–0.0557 ms |
+     | `rowTiled` | **0.0300–0.0332 ms** | **0.0333–0.0370 ms** (up to 89.6 GB/s) |
+     These are **GPU-only** times; the older ~0.34 ms figures were wall clock
+     including commit/wait per projection and are not comparable. The one-row
+     kernel is kept only as the A/B baseline.
    - **Rejected by measurement:** two rows per SIMD group, threadgroup-shared
-     `x`, vectorized `x` loads, `#pragma unroll 2`, and the original one-row
-     kernel without packed loads.
+     `x`, vectorized `x` loads, `#pragma unroll 2`, the original one-row
+     kernel without packed loads, and eight lanes per row / four rows per SIMD
+     group (`gguf_q2k_q4k_multi.metal`, 0.0430 / 0.0494 ms — deleted).
 
 4. **Commits on `main`**:
    - `173838e7` — Q2_K/Q4_K decode
@@ -71,7 +80,8 @@
    - `45ac7937` — kernel-only microbenchmark
    - `b32ffab3` — packed 64-bit q loads
    - `bcf31e0d` — two-accumulator Q2_K loop
-   - Last pushed commit: **`bcf31e0d`**
+   - `b0866b08` — tiled Q2_K/Q4_K GEMV geometry
+   - the commit after it — eight-lane kernel deleted, tiled made the default
 
 ## What is missing
 
@@ -83,14 +93,11 @@ model implementation.
 
 Still required:
 
-1. **Kernel parity/optimization is now at ~0.031 ms/projection**, inside the
-   0.08 ms budget for 17 tok/s; keep the paired benchmark green. The next work
-   is the model, not more kernel micro-tuning. Reference geometry from
-   `~/.unsloth/llama.cpp/ggml/src/ggml-metal/kernels/mul_mv.metal`
-   (`kernel_mul_mv_q2_K_f32_impl` around line 1246 and the Q4_K equivalent):
-   multiple rows per SIMD group, packed 16-bit quant loads, integer/group
-   accumulators. Use a **paired A/B** microbenchmark; single sequential runs
-   have a noise floor larger than several effects.
+1. **Kernel geometry is ported** (above). Whether the GEMVs fit the 17 tok/s
+   budget can only be judged per token once the model runs; the expert
+   projections are not 2304 × 2304. Further kernel work should be driven by
+   an end-to-end per-phase profile, with paired A/B as before. Reference:
+   `~/.unsloth/llama.cpp/ggml/src/ggml-metal/kernels/mul_mv.metal`.
 2. **Inkling2 GGUF loader/architecture** from
    `~/.unsloth/llama.cpp/src/models/inkling2.cpp`, `conversion/inkling2.py`,
    and `models/templates/Inkling.jinja`. Needs tensor mapping, loop core
@@ -116,8 +123,9 @@ Still required:
   swift test -c release --filter GGUFKQuantGEMVTests
   ```
 
-- Current output shape: `Q2_K GEMV 2304x2304: ... ms`,
-  `Q4_K GEMV 2304x2304: ... ms`.
+- Paired A/B: `TINYTITAN_KERNEL_BENCH=1 swift test -c release --no-parallel
+  --filter GGUFKQuantGEMVTests/pairedGeometryBenchmark`; output lines are
+  `Q2_K rowTiled 2304x2304: median ... ms (min ..., max ...) ... GB/s`.
 - Validate every kernel change against `matchesDequantizedDotProduct` before
   recording speed.
 - Record commit, machine state, and the run-to-run spread. Do not publish a

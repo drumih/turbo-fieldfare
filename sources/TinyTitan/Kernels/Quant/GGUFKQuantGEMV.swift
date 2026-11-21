@@ -16,16 +16,17 @@ final class GGUFKQuantGEMV {
         let type: GGUFType
     }
 
-    /// The kernel geometries under measurement (see the `.metal` files).
+    /// The kernel geometries. `rowTiled` is the kernel of record; the one-row
+    /// kernel stays as the simple, independently written baseline every
+    /// geometry change is A/B'd against (`pairedGeometryBenchmark`).
     enum Kernel: CaseIterable, Sendable {
         /// One SIMD group per row, eight rows per threadgroup
         /// (`gguf_q2k_q4k_gemv.metal`).
         case rowPerSIMDGroup
-        /// Eight lanes per row, four rows per SIMD group
-        /// (`gguf_q2k_q4k_multi.metal`).
-        case eightLanesPerRow
         /// llama.cpp's geometry: all 32 lanes on a tile of rows, activations
-        /// reused across the tile (`gguf_q2k_q4k_tiled.metal`).
+        /// reused across the tile (`gguf_q2k_q4k_tiled.metal`). About 1.5x
+        /// the one-row kernel on 2304 x 2304 (Q2_K 0.0299 vs 0.0443 ms,
+        /// Q4_K 0.0333 vs 0.0516 ms GPU time per projection, M3 24 GB).
         case rowTiled
     }
 
@@ -41,10 +42,7 @@ final class GGUFKQuantGEMV {
     init(context: MetalContext) throws {
         self.context = context
         var pipelines: [String: MTLComputePipelineState] = [:]
-        for name in [
-            "q2k_gemv", "q4k_gemv", "q2k_gemv_multi", "q4k_gemv_multi",
-            "q2k_gemv_tiled", "q4k_gemv_tiled",
-        ] {
+        for name in ["q2k_gemv", "q4k_gemv", "q2k_gemv_tiled", "q4k_gemv_tiled"] {
             pipelines[name] = try context.pipeline(name)
         }
         self.pipelines = pipelines
@@ -66,8 +64,6 @@ final class GGUFKQuantGEMV {
         switch kernel {
         case .rowPerSIMDGroup:
             (name, rows, threads) = ("\(prefix)_gemv", 8, 256)
-        case .eightLanesPerRow:
-            (name, rows, threads) = ("\(prefix)_gemv_multi", 32, 256)
         case .rowTiled:
             // KQ_TILE_SIMDGROUPS (2) x KQ_TILE_ROWS_Q2K (4) / _Q4K (2).
             (name, rows, threads) = ("\(prefix)_gemv_tiled", type == .q2K ? 8 : 4, 64)
@@ -122,7 +118,7 @@ final class GGUFKQuantGEMV {
     }
 
     func gemv(
-        prepared: Prepared, x: [Float], kernel: Kernel = .rowPerSIMDGroup
+        prepared: Prepared, x: [Float], kernel: Kernel = .rowTiled
     ) throws -> [Float] {
         guard x.count == prepared.columns else {
             throw GGUFDequantError.byteCountNotABlockMultiple(
@@ -170,7 +166,7 @@ final class GGUFKQuantGEMV {
     /// for anything measured.
     func gemv(
         weights: [UInt8], x: [Float], rows: Int, columns: Int, type: GGUFType,
-        kernel: Kernel = .rowPerSIMDGroup
+        kernel: Kernel = .rowTiled
     ) throws -> [Float] {
         guard x.count == columns else {
             throw GGUFDequantError.byteCountNotABlockMultiple(
