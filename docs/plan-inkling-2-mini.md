@@ -42,8 +42,10 @@ attention, routed MLP, both short convolutions and the block residual) now runs
 on one token, and a real layer-5 global block now exercises the three-input
 attention path, loads the checkpoint's real attention-residual queries, and has
 the loop message controllers, and a streamed LM head (all 201,024 logits are
-finite on a real hidden row). The loop graph and per-pass caches are next; no
-full forward pass exists yet.
+finite on a real hidden row). The full 24-layer prelude/loop/coda forward now
+runs on one token and produces 201,024 finite logits in 2,380 s on CPU. Sampling,
+per-token caches, CLI/server integration and Metal kernels remain; this is a
+correctness reference, not a usable runtime.
 
 ## The checkpoint
 
