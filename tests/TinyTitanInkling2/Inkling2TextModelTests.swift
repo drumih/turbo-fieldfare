@@ -17,10 +17,7 @@ import Testing
         let model = try Inkling2TextModel(
             directory: directory, config: config, store: store)
         let prompt =
-            "<|begin_of_text|><|message_system|><|content_text|>"
-            + "Thinking effort level: 0.9<|end_message|><|message_user|>"
-            + "The capital of France is<|end_message|><|message_model|>"
-            + "<|content_text|>"
+            "<|message_user|><|content_text|>The capital of France is<|end_message|>"
         let promptIds = try tokenizer.encode(prompt)
         var caches = model.makeCaches()
         for id in promptIds.dropLast() {
@@ -28,13 +25,13 @@ import Testing
         }
         var next = promptIds.last ?? 0
         var generated: [Int] = []
-        for _ in 0..<4 {
+        for _ in 0..<6 {
             let logits = try model.forward(token: next, caches: &caches)
             next = Inkling2TextModel.greedyToken(logits)
             generated.append(next)
         }
         print("prompt=\(promptIds) generated=\(generated) text=\(tokenizer.decode(generated))")
-        #expect(generated.count == 4)
+        #expect(generated.count == 6)
         #expect(generated.allSatisfy { (0..<200_058).contains($0) })
     }
 
