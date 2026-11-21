@@ -42,6 +42,50 @@ public struct Inkling2DenseTensors: Sendable {
         try file.floatValues("model.llm.norm.weight")
     }
 
+    /// Full-vocabulary logits from the unembedding, streamed in row chunks so
+    /// the 926 MB matrix is never resident.
+    public func logits(_ hidden: [Float]) throws -> [Float] {
+        guard let tensor = file.tensor("model.llm.unembed.weight") else {
+            throw Inkling2Safetensors.Error.missing("model.llm.unembed.weight")
+        }
+        guard tensor.shape.count == 2, tensor.shape[1] == hidden.count else {
+            throw Inkling2Safetensors.Error.invalid("unembed shape does not match hidden")
+        }
+        let rowsPerChunk = 1024
+        var result = [Float](repeating: 0, count: tensor.shape[0])
+        var row = 0
+        while row < tensor.shape[0] {
+            let count = min(rowsPerChunk, tensor.shape[0] - row)
+            let bytes = count * hidden.count * tensor.dtype.byteWidth
+            let data = try file.data(
+                for: "model.llm.unembed.weight",
+                offset: row * hidden.count * tensor.dtype.byteWidth,
+                count: bytes)
+            data.withUnsafeBytes { raw in
+                for local in 0..<count {
+                    var dot: Float = 0
+                    for column in 0..<hidden.count {
+                        let offset = (local * hidden.count + column) * tensor.dtype.byteWidth
+                        let value: Float
+                        if tensor.dtype == .f32 {
+                            value = Float(
+                                bitPattern: raw.loadUnaligned(
+                                    fromByteOffset: offset, as: UInt32.self))
+                        } else {
+                            let bits = raw.loadUnaligned(
+                                fromByteOffset: offset, as: UInt16.self)
+                            value = Float(bitPattern: UInt32(bits) << 16)
+                        }
+                        dot += value * hidden[column]
+                    }
+                    result[row + local] = dot
+                }
+            }
+            row += count
+        }
+        return result
+    }
+
     public func layerNorm(_ layer: Int, _ suffix: String) throws -> [Float] {
         try file.floatValues("model.llm.layers.\(layer).\(suffix)")
     }
