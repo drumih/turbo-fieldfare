@@ -84,7 +84,8 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     public func attention(
         q: [Float], k: [Float], v: [Float], r: [Float], gate: [Float],
         sink: [Float], relative: [Float], tokens: Int, heads: Int, kvHeads: Int,
-        dim: Int, relativeDim: Int, extent: Int, sliding: Int
+        dim: Int, relativeDim: Int, extent: Int, sliding: Int,
+        pastKeys: Int = 0
     ) throws -> [Float] {
         func buffer(_ values: [Float], _ label: String) throws -> MTLBuffer {
             guard
@@ -121,6 +122,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         var relativeValue = UInt32(relativeDim)
         var extentValue = UInt32(extent)
         var slidingValue = UInt32(sliding)
+        var pastValue = UInt32(pastKeys)
         encoder.setBytes(&tokensValue, length: 4, index: 8)
         encoder.setBytes(&headsValue, length: 4, index: 9)
         encoder.setBytes(&kvHeadsValue, length: 4, index: 10)
@@ -128,6 +130,7 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         encoder.setBytes(&relativeValue, length: 4, index: 12)
         encoder.setBytes(&extentValue, length: 4, index: 13)
         encoder.setBytes(&slidingValue, length: 4, index: 14)
+        encoder.setBytes(&pastValue, length: 4, index: 15)
         let total = tokens * heads
         encoder.dispatchThreads(
             MTLSize(width: total, height: 1, depth: 1),

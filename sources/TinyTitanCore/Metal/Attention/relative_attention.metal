@@ -19,6 +19,7 @@ kernel void relative_attention(
     constant uint& relDim        [[buffer(12)]],
     constant uint& extent        [[buffer(13)]],
     constant uint& sliding       [[buffer(14)]],
+    constant uint& pastKeys      [[buffer(15)]],
     uint gid [[thread_position_in_grid]])
 {
     const uint total = tokens * heads;
@@ -33,8 +34,8 @@ kernel void relative_attention(
     float l = 0.0f;
     float acc[128];
     for (uint d = 0; d < dim; ++d) acc[d] = 0.0f;
-    for (uint key = 0; key <= query; ++key) {
-        const uint distance = query - key;
+    for (uint key = 0; key <= pastKeys + query; ++key) {
+        const uint distance = pastKeys + query - key;
         if (sliding > 0u && distance >= sliding) continue;
         if (distance >= extent) continue;
         float score = 0.0f;

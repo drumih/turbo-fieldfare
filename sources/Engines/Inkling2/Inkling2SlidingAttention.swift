@@ -6,6 +6,9 @@ public struct Inkling2SlidingAttention: Sendable {
     public struct State: Sendable {
         public var k: [Float]
         public var v: [Float]
+        public var keys: [Float]
+        public var values: [Float]
+        public var position: Int
     }
 
     public let heads: Int
@@ -157,6 +160,11 @@ public struct Inkling2SlidingAttention: Sendable {
             kernelSize: kernelSize, state: priorV)
         kAll = kConvResult.values
         vAll = vConvResult.values
+        let pastKeys = state?.keys ?? []
+        let pastValues = state?.values ?? []
+        let pastCount = pastKeys.count / kvWidth
+        let allK = pastKeys + kAll
+        let allV = pastValues + vAll
         // L2 clip K per KV head.
         for token in 0..<tokenCount {
             for head in 0..<kvHeads {
@@ -182,10 +190,10 @@ public struct Inkling2SlidingAttention: Sendable {
         var output = [Float](repeating: 0, count: tokenCount * hidden)
         if let gpu {
             let headsOutput = try gpu.attention(
-                q: qAll, k: kAll, v: vAll, r: rAll, gate: gateAll, sink: sinkAll,
+                q: qAll, k: allK, v: allV, r: rAll, gate: gateAll, sink: sinkAll,
                 relative: relProjection, tokens: tokenCount, heads: heads,
                 kvHeads: kvHeads, dim: headDim, relativeDim: relativeDim,
-                extent: extent, sliding: sliding)
+                extent: extent, sliding: sliding, pastKeys: pastCount)
             for query in 0..<tokenCount {
                 let headOutput = Array(
                     headsOutput[(query * qWidth)..<((query + 1) * qWidth)])
@@ -194,7 +202,12 @@ public struct Inkling2SlidingAttention: Sendable {
                 output.replaceSubrange(
                     (query * hidden)..<((query + 1) * hidden), with: projected)
             }
-            return (output, State(k: kConvResult.state, v: vConvResult.state))
+            return (
+                output,
+                State(
+                    k: kConvResult.state, v: vConvResult.state,
+                    keys: allK, values: allV, position: pastCount + tokenCount)
+            )
         }
         for query in 0..<tokenCount {
             var headOutput = [Float](repeating: 0, count: qWidth)
@@ -208,16 +221,17 @@ public struct Inkling2SlidingAttention: Sendable {
                         (query * rWidth + head * relativeDim)..<(query * rWidth + (head + 1)
                             * relativeDim)
                     ])
-                let firstKey = max(0, query - sliding + 1)
+                let absolute = pastCount + query
+                let firstKey = sliding > 0 ? max(0, absolute - sliding + 1) : 0
                 var logits: [Float] = []
-                for key in firstKey...query {
-                    let distance = query - key
+                for key in firstKey...absolute {
+                    let distance = absolute - key
                     guard distance < extent else { continue }
                     var score: Float = 0
                     let kvHead = head % kvHeads
                     for dimension in 0..<headDim {
                         score +=
-                            qVec[dimension] * kAll[key * kvWidth + kvHead * headDim + dimension]
+                            qVec[dimension] * allK[key * kvWidth + kvHead * headDim + dimension]
                     }
                     score /= Float(headDim).squareRoot()
                     for dimension in 0..<relativeDim {
@@ -228,12 +242,12 @@ public struct Inkling2SlidingAttention: Sendable {
                 logits.append(sinkAll[query * heads + head])
                 let probabilities = Inkling2AttentionMath.softmax(logits)
                 var headResult = [Float](repeating: 0, count: headDim)
-                for (offset, key) in (firstKey...query).enumerated() {
+                for (offset, key) in (firstKey...absolute).enumerated() {
                     let probability = probabilities[offset]
                     let kvHead = head % kvHeads
                     for dimension in 0..<headDim {
                         headResult[dimension] +=
-                            probability * vAll[key * kvWidth + kvHead * headDim + dimension]
+                            probability * allV[key * kvWidth + kvHead * headDim + dimension]
                     }
                 }
                 for dimension in 0..<headDim {
@@ -246,7 +260,12 @@ public struct Inkling2SlidingAttention: Sendable {
             output.replaceSubrange(
                 (query * hidden)..<((query + 1) * hidden), with: projected)
         }
-        return (output, State(k: kConvResult.state, v: vConvResult.state))
+        return (
+            output,
+            State(
+                k: kConvResult.state, v: vConvResult.state,
+                keys: allK, values: allV, position: pastCount + tokenCount)
+        )
     }
 
     private func project(
