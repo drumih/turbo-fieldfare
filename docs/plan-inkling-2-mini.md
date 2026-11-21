@@ -66,10 +66,11 @@ template and 8 tokens it produces
 system effort prompt it produces `The user asks: "The`. Both are coherent
 reasoning, still short of the final answer. A 32-token run was killed by
 memory pressure from per-token Metal allocations; per-token autorelease pools and reusable GPU weight/scratch buffers were added;
-16 tokens now complete safely. A direct-answer prefix produces the correct
-factual response `The capital of France is Paris.<|end_message|>`, and the
-thinking path produces coherent reasoning. This is one correct answer, not a
-100% quality verdict; CLI/server and a broader quality suite are still absent.
+16 tokens now complete safely. A direct-answer prefix produces correct responses to three factual prompts:
+`The capital of France is Paris.`, `The chemical symbol for water is **H₂O**.`
+and `Two plus two equals four.` The thinking path also produces coherent
+reasoning. This is a 3/3 short factual check, not a 100% quality verdict;
+CLI/server integration and a broader quality suite are still absent.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
