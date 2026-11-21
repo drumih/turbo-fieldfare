@@ -41,10 +41,12 @@ public struct Inkling2Router: Sendable {
             for index in 0..<hidden {
                 dot += gate[row + index] * x[index]
             }
-            scores[expert] = 1 / (1 + exp(-(dot + bias[expert])))
+            scores[expert] = 1 / (1 + exp(-dot))
         }
         let ranked = scores.indices.sorted { a, b in
-            scores[a] == scores[b] ? a < b : scores[a] > scores[b]
+            let correctionA = scores[a] + bias[a]
+            let correctionB = scores[b] + bias[b]
+            return correctionA == correctionB ? a < b : correctionA > correctionB
         }
         let indices = Array(ranked.prefix(topK))
         let total = indices.reduce(Float(0)) { $0 + scores[$1] }

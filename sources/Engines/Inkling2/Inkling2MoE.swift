@@ -40,8 +40,8 @@ public enum Inkling2MoE {
         precondition(gateUp.count == 2 * intermediate)
         var activated = [Float](repeating: 0, count: intermediate)
         for index in 0..<intermediate {
-            let gate = gateUp[index]
-            let up = gateUp[intermediate + index]
+            let gate = gateUp[index * 2]
+            let up = gateUp[index * 2 + 1]
             let g = tanh(gate / gateCap) * gateCap * (1 / (1 + exp(-gate)))
             let u = tanh(up / upCap) * upCap
             activated[index] = g * u

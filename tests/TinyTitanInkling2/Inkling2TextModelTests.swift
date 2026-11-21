@@ -7,6 +7,38 @@ import Testing
     @Test(
         .enabled(
             if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
+    func generatesFromAPromptWithCaches() throws {
+        let path = try #require(
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])
+        let directory = URL(fileURLWithPath: path)
+        let config = try Inkling2Config.load(directory: directory)
+        let store = try Inkling2ExpertStore(directory: directory)
+        let tokenizer = try Inkling2Tokenizer(directory: directory)
+        let model = try Inkling2TextModel(
+            directory: directory, config: config, store: store)
+        let prompt =
+            "<|begin_of_text|><|message_user|>The capital of France is"
+            + "<|end_message|><|message_model|><|content_text|>"
+        let promptIds = try tokenizer.encode(prompt)
+        var caches = model.makeCaches()
+        for id in promptIds.dropLast() {
+            _ = try model.forward(token: id, caches: &caches)
+        }
+        var next = promptIds.last ?? 0
+        var generated: [Int] = []
+        for _ in 0..<4 {
+            let logits = try model.forward(token: next, caches: &caches)
+            next = Inkling2TextModel.greedyToken(logits)
+            generated.append(next)
+        }
+        print("prompt=\(promptIds) generated=\(generated) text=\(tokenizer.decode(generated))")
+        #expect(generated.count == 4)
+        #expect(generated.allSatisfy { (0..<201_024).contains($0) })
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"] != nil))
     func producesOneTokenOfLogits() throws {
         let path = try #require(
             ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_MODEL"])

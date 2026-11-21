@@ -8,8 +8,8 @@ import Testing
         // hidden 2, intermediate 2. gate = identity, up = identity, down = identity.
         let w13: [Float] = [
             1, 0,  // gate row 0
-            0, 1,  // gate row 1
             1, 0,  // up row 0
+            0, 1,  // gate row 1
             0, 1,  // up row 1
         ]
         let w2: [Float] = [1, 0, 0, 1]
