@@ -4,13 +4,7 @@ import Foundation
 /// and scoring, but K/V use the dynamic per-token short convolution and the
 /// mask is fully causal instead of windowed.
 public struct Inkling2GlobalAttention: Sendable {
-    public struct State: Sendable {
-        public var k: [Float]
-        public var v: [Float]
-        public var keys: [Float]
-        public var values: [Float]
-        public var position: Int
-    }
+    public typealias State = Inkling2AttentionState
 
     public let heads: Int
     public let kvHeads: Int
@@ -298,7 +292,13 @@ public struct Inkling2GlobalAttention: Sendable {
 }
 
 extension Inkling2GlobalAttention: Inkling2AttentionBlock {
-    public func forward(query: [Float], key: [Float], value: [Float]) throws -> [Float] {
-        try forward(query: query, key: key, value: value, tokenCount: 1).values
+    public func forward(
+        query: [Float], key: [Float], value: [Float],
+        state: inout Inkling2AttentionState?
+    ) throws -> [Float] {
+        let result = try forward(
+            query: query, key: key, value: value, tokenCount: 1, state: state)
+        state = result.state
+        return result.values
     }
 }

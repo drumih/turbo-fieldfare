@@ -16,18 +16,24 @@ import Testing
         let initStart = Date()
         let model = try Inkling2TextModel(
             directory: directory, config: config, store: store)
+        var caches = model.makeCaches()
         let forwardStart = Date()
-        let logits = try model.forward(token: 0)
+        let logits = try model.forward(token: 0, caches: &caches)
+        let next = Inkling2TextModel.greedyToken(logits)
+        let logits2 = try model.forward(token: next, caches: &caches)
         let forwardEnd = Date()
         print(
             "init=\(forwardStart.timeIntervalSince(initStart)) "
                 + "forward=\(forwardEnd.timeIntervalSince(forwardStart))")
         #expect(logits.count == 201_024)
         #expect(logits.allSatisfy { $0.isFinite })
-        let next = Inkling2TextModel.greedyToken(logits)
+        let next2 = Inkling2TextModel.greedyToken(logits2)
         let tokenizer = try Inkling2Tokenizer(directory: directory)
-        print("next=\(next) text=\(tokenizer.decode([next]))")
-        #expect((0..<201_024).contains(next))
+        print(
+            "next=\(next) text=\(tokenizer.decode([next])) "
+                + "next2=\(next2) text2=\(tokenizer.decode([next2]))")
+        #expect(logits2.count == 201_024)
+        #expect(logits2.allSatisfy { $0.isFinite })
     }
 
     @Test(

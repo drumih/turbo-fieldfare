@@ -22,7 +22,9 @@ import Testing
             kernelSize: 4, isBlockBoundary: false,
             isSliding: false, attention: attention)
         var blocks: [[Float]] = [try tensors.embeddingRow(0)]
-        let output = try layer.forward(tensors.embeddingRow(0), blocks: &blocks)
+        var cache = Inkling2DecoderCache()
+        let output = try layer.forward(
+            tensors.embeddingRow(0), blocks: &blocks, cache: &cache)
         #expect(output.count == 2304)
         #expect(output.allSatisfy { $0.isFinite })
         #expect(blocks.count == 1)
@@ -46,7 +48,9 @@ import Testing
             kernelSize: 4, isBlockBoundary: true,
             isSliding: true, attention: attention)
         var blocks: [[Float]] = []
-        let output = try layer.forward(tensors.embeddingRow(0), blocks: &blocks)
+        var cache = Inkling2DecoderCache()
+        let output = try layer.forward(
+            tensors.embeddingRow(0), blocks: &blocks, cache: &cache)
         #expect(output.count == 2304)
         #expect(output.allSatisfy { $0.isFinite })
         #expect(blocks.count == 1)

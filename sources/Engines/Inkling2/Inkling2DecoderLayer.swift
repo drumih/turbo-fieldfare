@@ -57,6 +57,15 @@ public struct Inkling2AttentionResidual: Sendable {
     public var parts: Int { queryCount }
 }
 
+/// Per-visit continuation state for one decoder block.
+public struct Inkling2DecoderCache: Sendable {
+    public var attention: Inkling2AttentionState?
+    public var attnConv: [Float]?
+    public var mlpConv: [Float]?
+
+    public init() {}
+}
+
 /// One decoder block for the first loop pass (no messages yet).
 public struct Inkling2DecoderLayer: Sendable {
     private let attention: any Inkling2AttentionBlock
@@ -111,7 +120,8 @@ public struct Inkling2DecoderLayer: Sendable {
     }
 
     public func forward(
-        _ x: [Float], blocks: inout [[Float]], messages: [Float]? = nil
+        _ x: [Float], blocks: inout [[Float]], messages: [Float]? = nil,
+        cache: inout Inkling2DecoderCache
     ) throws -> [Float] {
         let parts = attentionInput?.forwardAll(blocks, partial: x) ?? [x]
         var qPart = parts[0]
@@ -141,7 +151,8 @@ public struct Inkling2DecoderLayer: Sendable {
         let attentionOutput = try attention.forward(
             query: Inkling2Ops.rmsNorm(qPart, weight: qNorm),
             key: Inkling2Ops.rmsNorm(kPart, weight: kNorm),
-            value: Inkling2Ops.rmsNorm(vPart, weight: vNorm))
+            value: Inkling2Ops.rmsNorm(vPart, weight: vNorm),
+            state: &cache.attention)
         let attnResidual = Inkling2AttentionMath.shortConvolution(
             attentionOutput, length: 1, channels: hidden, kernel: attnConv,
             kernelSize: kernelSize, state: nil
@@ -175,5 +186,8 @@ public struct Inkling2DecoderLayer: Sendable {
 }
 
 public protocol Inkling2AttentionBlock: Sendable {
-    func forward(query: [Float], key: [Float], value: [Float]) throws -> [Float]
+    func forward(
+        query: [Float], key: [Float], value: [Float],
+        state: inout Inkling2AttentionState?
+    ) throws -> [Float]
 }

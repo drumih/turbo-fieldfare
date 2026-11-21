@@ -107,7 +107,19 @@ public struct Inkling2TextModel: Sendable {
         return best
     }
 
+    public func makeCaches() -> [Inkling2DecoderCache] {
+        Array(repeating: Inkling2DecoderCache(), count: layerIndices.count)
+    }
+
     public func forward(token: Int) throws -> [Float] {
+        var caches = makeCaches()
+        return try forward(token: token, caches: &caches)
+    }
+
+    public func forward(
+        token: Int, caches: inout [Inkling2DecoderCache]
+    ) throws -> [Float] {
+        precondition(caches.count == layerIndices.count)
         let hidden = config.text.hiddenSize
         var x = Inkling2Ops.rmsNorm(
             try tensors.embeddingRow(token), weight: embeddingNorm)
@@ -152,7 +164,8 @@ public struct Inkling2TextModel: Sendable {
                 }
                 messages = message
             }
-            x = try layers[index].forward(x, blocks: &blocks, messages: messages)
+            x = try layers[index].forward(
+                x, blocks: &blocks, messages: messages, cache: &caches[visit])
         }
         let final = finalResidual.forward(blocks, partial: x)
         let normalized = Inkling2Ops.rmsNorm(final, weight: finalNorm)
