@@ -35,8 +35,8 @@ public struct Inkling2Generator {
                 try model.forward(token: next, caches: &caches)
             }
             next = Inkling2TextModel.greedyToken(logits)
-            generated.append(next)
             if stops.contains(next) { break }
+            generated.append(next)
         }
         return (generated, tokenizer.decode(generated))
     }
