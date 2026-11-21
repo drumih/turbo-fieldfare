@@ -15,6 +15,8 @@ public struct Inkling2ExpertWeights: Sendable {
 public enum Inkling2ExpertFormat: Sendable { case nvfp4, mxfp8 }
 
 public struct Inkling2PackedExpert: Sendable {
+    public let layer: Int
+    public let expert: Int
     public let format: Inkling2ExpertFormat
     public let w13: Data
     public let w13Scales: Data
@@ -65,13 +67,15 @@ public struct Inkling2ExpertStore: Sendable {
                 try float("\(prefix).w2_weight_amax", index: expert)
                 / float("\(prefix).w2_weight_outer_scale_denominator", index: 0)
             return Inkling2PackedExpert(
-                format: .nvfp4, w13: w13, w13Scales: w13Scales, w13Outer: w13Outer,
+                layer: layer, expert: expert, format: .nvfp4, w13: w13, w13Scales: w13Scales,
+                w13Outer: w13Outer,
                 w2: w2, w2Scales: w2Scales, w2Outer: w2Outer,
                 rows: w13Shape[1], w13Columns: w13Shape[2] * 2,
                 w2Columns: w2Shape[2] * 2)
         }
         return Inkling2PackedExpert(
-            format: .mxfp8, w13: w13, w13Scales: w13Scales, w13Outer: 1,
+            layer: layer, expert: expert, format: .mxfp8, w13: w13, w13Scales: w13Scales,
+            w13Outer: 1,
             w2: w2, w2Scales: w2Scales, w2Outer: 1,
             rows: w13Shape[1], w13Columns: w13Shape[2],
             w2Columns: w2Shape[2])

@@ -1,5 +1,13 @@
 import Foundation
 
+/// unchecked-invariant: every access to the mutable load result is under `lock`.
+private final class Inkling2ExpertLoadBox: @unchecked Sendable {
+    let lock = NSLock()
+    var values: [Inkling2PackedExpert?]
+    var error: Error?
+    init(count: Int) { self.values = Array(repeating: nil, count: count) }
+}
+
 /// One token through a routed-expert MLP: route top-8, stream those experts,
 /// run the softcapped SwiGLU and combine by router weight.
 public struct Inkling2MLP: Sendable {
@@ -22,9 +30,23 @@ public struct Inkling2MLP: Sendable {
         let route = router.route(x)
         var output = [Float](repeating: 0, count: x.count)
         if let gpu {
-            let packed = try route.indices.map {
-                try store.packed(layer: layer, expert: $0)
+            let loadStart = Date()
+            let box = Inkling2ExpertLoadBox(count: route.indices.count)
+            DispatchQueue.concurrentPerform(iterations: route.indices.count) {
+                index in
+                do {
+                    let value = try store.packed(
+                        layer: layer, expert: route.indices[index])
+                    box.lock.withLock { box.values[index] = value }
+                } catch {
+                    box.lock.withLock { box.error = error }
+                }
             }
+            if let loadError = box.error { throw loadError }
+            Inkling2Profiler.record(
+                "expertDiskLoad", Date().timeIntervalSince(loadStart))
+            let packed = box.values.compactMap { $0 }
+            precondition(packed.count == route.indices.count)
             let gateUps = try gpu.gemvBatch(
                 packed, xs: Array(repeating: x, count: packed.count),
                 rows: 2 * packed[0].w2Columns, columns: packed[0].w13Columns,

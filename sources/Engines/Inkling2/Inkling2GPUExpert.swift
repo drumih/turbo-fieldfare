@@ -22,6 +22,20 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private var logitsY: MTLBuffer?
     private var logitsYBytes = 0
     private var logitsWeightsLoaded = false
+    private struct GPUExpertBuffers {
+        let w13Packed: MTLBuffer
+        let w13Scales: MTLBuffer
+        let w13Outer: MTLBuffer?
+        let w2Packed: MTLBuffer
+        let w2Scales: MTLBuffer
+        let w2Outer: MTLBuffer?
+        let bytes: Int
+    }
+    private var expertCache: [Int: [Int: GPUExpertBuffers]] = [:]
+    private var expertOrder: [Int: [Int]] = [:]
+    private var expertCacheBytes = 0
+    private let expertCacheLimit = 1_500_000_000
+    private let expertSlotsPerLayer = 24
     private var packedCache: MTLBuffer?
     private var packedBytes = 0
     private var scaleCache: MTLBuffer?
@@ -279,6 +293,65 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         return Array(UnsafeBufferPointer(start: pointer, count: rows))
     }
 
+    private func expertBuffers(_ expert: Inkling2PackedExpert) throws -> GPUExpertBuffers {
+        let layer = expert.layer
+        let index = expert.expert
+        if let cached = expertCache[layer]?[index] {
+            Inkling2Profiler.record("expertHit", 0)
+            if let order = expertOrder[layer], let position = order.firstIndex(of: index) {
+                var updated = order
+                updated.remove(at: position)
+                updated.append(index)
+                expertOrder[layer] = updated
+            }
+            return cached
+        }
+        Inkling2Profiler.record("expertMiss", 0)
+        guard
+            let w13Packed = context.device.makeBuffer(
+                bytes: [UInt8](expert.w13), length: expert.w13.count,
+                options: .storageModeShared),
+            let w13Scales = context.device.makeBuffer(
+                bytes: [UInt8](expert.w13Scales), length: expert.w13Scales.count,
+                options: .storageModeShared),
+            let w2Packed = context.device.makeBuffer(
+                bytes: [UInt8](expert.w2), length: expert.w2.count,
+                options: .storageModeShared),
+            let w2Scales = context.device.makeBuffer(
+                bytes: [UInt8](expert.w2Scales), length: expert.w2Scales.count,
+                options: .storageModeShared)
+        else { throw MetalError.bufferAllocationFailed("expert slot") }
+        var w13Outer: MTLBuffer?
+        var w2Outer: MTLBuffer?
+        if expert.format == .nvfp4 {
+            var outer = expert.w13Outer
+            w13Outer = context.device.makeBuffer(
+                bytes: &outer, length: 4, options: .storageModeShared)
+            outer = expert.w2Outer
+            w2Outer = context.device.makeBuffer(
+                bytes: &outer, length: 4, options: .storageModeShared)
+        }
+        let cost =
+            expert.w13.count + expert.w13Scales.count
+            + expert.w2.count + expert.w2Scales.count + 8
+        let value = GPUExpertBuffers(
+            w13Packed: w13Packed, w13Scales: w13Scales, w13Outer: w13Outer,
+            w2Packed: w2Packed, w2Scales: w2Scales, w2Outer: w2Outer, bytes: cost)
+        expertCache[layer, default: [:]][index] = value
+        var order = expertOrder[layer] ?? []
+        order.append(index)
+        expertOrder[layer] = order
+        expertCacheBytes += cost
+        while order.count > expertSlotsPerLayer, order.count > 1 {
+            let oldest = order.removeFirst()
+            if let evicted = expertCache[layer]?.removeValue(forKey: oldest) {
+                expertCacheBytes -= evicted.bytes
+            }
+        }
+        expertOrder[layer] = order
+        return value
+    }
+
     /// One command buffer for a whole routed-expert stage. Each expert keeps
     /// its own packed/scales/output buffers; the activation vector is shared.
     public func gemvBatch(
@@ -291,16 +364,8 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
         }
         var outputs: [(MTLBuffer, MTLBuffer)] = []
         for (expert, x) in zip(experts, xs) {
-            let packed = w13 ? expert.w13 : expert.w2
-            let scales = w13 ? expert.w13Scales : expert.w2Scales
-            let outer = w13 ? expert.w13Outer : expert.w2Outer
+            let buffers = try expertBuffers(expert)
             guard
-                let packedBuffer = context.device.makeBuffer(
-                    bytes: [UInt8](packed), length: packed.count,
-                    options: .storageModeShared),
-                let scaleBuffer = context.device.makeBuffer(
-                    bytes: [UInt8](scales), length: scales.count,
-                    options: .storageModeShared),
                 let xBuffer = context.device.makeBuffer(
                     bytes: x, length: x.count * 4, options: .storageModeShared),
                 let yBuffer = context.device.makeBuffer(
@@ -309,17 +374,15 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
             else { throw MetalError.bufferAllocationFailed("expert batch") }
             let pipeline = expert.format == .nvfp4 ? nvfp4 : mxfp8
             encoder.setComputePipelineState(pipeline)
-            encoder.setBuffer(packedBuffer, offset: 0, index: 0)
-            encoder.setBuffer(scaleBuffer, offset: 0, index: 1)
+            encoder.setBuffer(
+                w13 ? buffers.w13Packed : buffers.w2Packed, offset: 0, index: 0)
+            encoder.setBuffer(
+                w13 ? buffers.w13Scales : buffers.w2Scales, offset: 0, index: 1)
             var rowsValue = UInt32(rows)
             var columnsValue = UInt32(columns)
             if expert.format == .nvfp4 {
-                var outerValue = outer
-                guard
-                    let outerBuffer = context.device.makeBuffer(
-                        bytes: &outerValue, length: 4, options: .storageModeShared)
-                else { throw MetalError.bufferAllocationFailed("expert batch outer") }
-                encoder.setBuffer(outerBuffer, offset: 0, index: 2)
+                encoder.setBuffer(
+                    w13 ? buffers.w13Outer : buffers.w2Outer, offset: 0, index: 2)
                 encoder.setBuffer(xBuffer, offset: 0, index: 3)
                 encoder.setBuffer(yBuffer, offset: 0, index: 4)
                 encoder.setBytes(&rowsValue, length: 4, index: 5)
