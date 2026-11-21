@@ -66,10 +66,10 @@ template and 8 tokens it produces
 system effort prompt it produces `The user asks: "The`. Both are coherent
 reasoning, still short of the final answer. A 32-token run was killed by
 memory pressure from per-token Metal allocations; per-token autorelease pools and reusable GPU weight/scratch buffers were added;
-16 tokens now complete safely. A direct-answer prefix produces correct responses to three factual prompts:
-`The capital of France is Paris.`, `The chemical symbol for water is **H₂O**.`
-and `Two plus two equals four.` The thinking path also produces coherent
-reasoning. This is a 3/3 short factual check, not a 100% quality verdict. The one-shot CLI now
+16 tokens now complete safely. A direct-answer prefix produces correct responses to six factual prompts:
+Paris, H₂O, four, Jupiter, cold and nine. The thinking path also produces
+coherent reasoning. This is a 6/6 short factual check, not a 100% quality
+verdict. The one-shot CLI now
 detects an Inkling directory and runs it directly:
 `TinyTitanCLI --model models/inkling-2-mini --prompt 'The capital of France is' --max-new 8`
 prints `The capital of France is Paris.<|end_message|>`. The loopback server,
