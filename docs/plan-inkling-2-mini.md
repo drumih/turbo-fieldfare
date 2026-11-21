@@ -28,8 +28,9 @@ The Swift `TinyTitanInkling2` target now carries the real tokenizer (validated
 against HF IDs), a safetensors range reader, the exact NVFP4/MXFP8 dequantizer,
 the text architecture config parser, a streaming expert loader that reads one
 expert's byte range and applies its per-projection scales, and a dense BF16/F32
-tensor accessor. The looped text graph is the next component; no forward pass
-exists yet.
+tensor accessor. Embedding-row reads, embedding/final norms and RMSNorm are in
+place, and a real embedding row was validated against the partial checkpoint.
+The looped text graph is the next component; no forward pass exists yet.
 
 ## The checkpoint
 
