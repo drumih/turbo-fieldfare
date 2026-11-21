@@ -30,9 +30,10 @@ the text architecture config parser, a streaming expert loader that reads one
 expert's byte range and applies its per-projection scales, and a dense BF16/F32
 tensor accessor. Embedding-row reads, embedding/final norms and RMSNorm are in
 place, a real embedding row was validated against the partial checkpoint, and
-the sparse router plus softcapped SwiGLU/MoE combine are implemented. The
-looped text graph and attention are the next components; no forward pass exists
-yet.
+the sparse router plus softcapped SwiGLU/MoE combine are implemented, and the
+attention block has its FP32 primitives (L2 clip, softmax, short convolution
+with carry state). The relative/sliding attention graph and the loop are next;
+no forward pass exists yet.
 
 ## The checkpoint
 
