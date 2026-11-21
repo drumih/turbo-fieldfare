@@ -6,6 +6,7 @@ public struct Inkling2AttentionResidual: Sendable {
     private let query: [Float]
     private let normalizeValues: Bool
     private let hidden: Int
+    private let queryCount: Int
 
     public init(
         tensors: Inkling2DenseTensors, layer: Int, name: String, queries: Int,
@@ -14,33 +15,47 @@ public struct Inkling2AttentionResidual: Sendable {
         let tensorName = "\(name).query"
         if tensors.hasLayerTensor(layer, tensorName) {
             self.query = try tensors.layerMatrix(layer, tensorName)
+            self.queryCount = self.query.count / hidden
         } else {
             self.query = [Float](repeating: 0, count: queries * hidden)
+            self.queryCount = queries
         }
         self.normalizeValues = true
         self.hidden = hidden
     }
 
     public func forward(_ blocks: [[Float]], partial: [Float]) -> [Float] {
+        forwardAll(blocks, partial: partial)[0]
+    }
+
+    public func forwardAll(_ blocks: [[Float]], partial: [Float]) -> [[Float]] {
         var states = blocks
         states.append(partial)
         let normalized = states.map {
             Inkling2Ops.rmsNorm($0, weight: [Float](repeating: 1, count: hidden))
         }
-        var logits: [Float] = []
-        for state in normalized {
-            var dot: Float = 0
-            for index in 0..<hidden { dot += state[index] * query[index] }
-            logits.append(dot / Float(hidden).squareRoot())
+        var outputs: [[Float]] = []
+        for queryIndex in 0..<queryCount {
+            var logits: [Float] = []
+            for state in normalized {
+                var dot: Float = 0
+                for index in 0..<hidden {
+                    dot += state[index] * query[queryIndex * hidden + index]
+                }
+                logits.append(dot / Float(hidden).squareRoot())
+            }
+            let probabilities = Inkling2AttentionMath.softmax(logits)
+            var output = [Float](repeating: 0, count: hidden)
+            for (stateIndex, probability) in probabilities.enumerated() {
+                let value = normalizeValues ? normalized[stateIndex] : states[stateIndex]
+                for index in 0..<hidden { output[index] += probability * value[index] }
+            }
+            outputs.append(output)
         }
-        let probabilities = Inkling2AttentionMath.softmax(logits)
-        var output = [Float](repeating: 0, count: hidden)
-        for (stateIndex, probability) in probabilities.enumerated() {
-            let value = normalizeValues ? normalized[stateIndex] : states[stateIndex]
-            for index in 0..<hidden { output[index] += probability * value[index] }
-        }
-        return output
+        return outputs
     }
+
+    public var parts: Int { queryCount }
 }
 
 /// One decoder block for the first loop pass (no messages yet).
@@ -51,6 +66,7 @@ public struct Inkling2DecoderLayer: Sendable {
     private let layer: Int
     private let hidden: Int
     private let isBlockBoundary: Bool
+    private let isSliding: Bool
     private let attentionInput: Inkling2AttentionResidual?
     private let mlpInput: Inkling2AttentionResidual
     private let attnConv: [Float]
@@ -60,13 +76,14 @@ public struct Inkling2DecoderLayer: Sendable {
     public init(
         tensors: Inkling2DenseTensors, store: Inkling2ExpertStore, layer: Int,
         hidden: Int, kernelSize: Int, isBlockBoundary: Bool,
-        attention: any Inkling2AttentionBlock
+        isSliding: Bool, attention: any Inkling2AttentionBlock
     ) throws {
         self.tensors = tensors
         self.layer = layer
         self.hidden = hidden
         self.kernelSize = kernelSize
         self.isBlockBoundary = isBlockBoundary
+        self.isSliding = isSliding
         self.attention = attention
         self.mlp = try Inkling2MLP(tensors: tensors, store: store, layer: layer)
         self.attentionInput =
@@ -83,11 +100,20 @@ public struct Inkling2DecoderLayer: Sendable {
     }
 
     public func forward(_ x: [Float], blocks: inout [[Float]]) throws -> [Float] {
-        let mixed =
-            attentionInput?.forward(blocks, partial: x) ?? x
-        let normed = try tensors.layerMatrix(layer, "attn_norm.weight")
-        let attentionInputValues = Inkling2Ops.rmsNorm(mixed, weight: normed)
-        let attentionOutput = try attention.forward(attentionInputValues)
+        let parts = attentionInput?.forwardAll(blocks, partial: x) ?? [x]
+        let qPart = parts[0]
+        let kPart = parts[min(1, parts.count - 1)]
+        let vPart = parts[min(2, parts.count - 1)]
+        let qNormName = isSliding ? "attn_norm.weight" : "q_input_norm.weight"
+        let kNormName = isSliding ? "attn_norm.weight" : "k_input_norm.weight"
+        let vNormName = isSliding ? "attn_norm.weight" : "v_input_norm.weight"
+        let qNorm = try tensors.layerMatrix(layer, qNormName)
+        let kNorm = try tensors.layerMatrix(layer, kNormName)
+        let vNorm = try tensors.layerMatrix(layer, vNormName)
+        let attentionOutput = try attention.forward(
+            query: Inkling2Ops.rmsNorm(qPart, weight: qNorm),
+            key: Inkling2Ops.rmsNorm(kPart, weight: kNorm),
+            value: Inkling2Ops.rmsNorm(vPart, weight: vNorm))
         let attnResidual = Inkling2AttentionMath.shortConvolution(
             attentionOutput, length: 1, channels: hidden, kernel: attnConv,
             kernelSize: kernelSize, state: nil
@@ -114,5 +140,5 @@ public struct Inkling2DecoderLayer: Sendable {
 }
 
 public protocol Inkling2AttentionBlock: Sendable {
-    func forward(_ x: [Float]) throws -> [Float]
+    func forward(query: [Float], key: [Float], value: [Float]) throws -> [Float]
 }

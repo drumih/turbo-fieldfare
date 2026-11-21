@@ -65,7 +65,16 @@ public struct Inkling2SlidingAttention: Sendable {
     public func forward(
         _ x: [Float], tokenCount: Int, state: State? = nil
     ) throws -> (values: [Float], state: State) {
-        precondition(x.count == tokenCount * hidden)
+        try forward(query: x, key: x, value: x, tokenCount: tokenCount, state: state)
+    }
+
+    public func forward(
+        query: [Float], key: [Float], value: [Float],
+        tokenCount: Int, state: State? = nil
+    ) throws -> (values: [Float], state: State) {
+        precondition(query.count == tokenCount * hidden)
+        precondition(key.count == tokenCount * hidden)
+        precondition(value.count == tokenCount * hidden)
         let qWidth = heads * headDim
         let kvWidth = kvHeads * headDim
         let rWidth = heads * relativeDim
@@ -76,13 +85,15 @@ public struct Inkling2SlidingAttention: Sendable {
         var gateAll = [Float](repeating: 0, count: tokenCount * qWidth)
         var sinkAll = [Float](repeating: 0, count: tokenCount * heads)
         for token in 0..<tokenCount {
-            let input = Array(x[(token * hidden)..<((token + 1) * hidden)])
-            let qToken = project(q, rows: qWidth, columns: hidden, input)
-            let kToken = project(k, rows: kvWidth, columns: hidden, input)
-            let vToken = project(v, rows: kvWidth, columns: hidden, input)
-            let rToken = project(r, rows: rWidth, columns: hidden, input)
-            let gateToken = project(gate, rows: qWidth, columns: hidden, input)
-            let sinkToken = project(sink, rows: heads, columns: hidden, input)
+            let queryInput = Array(query[(token * hidden)..<((token + 1) * hidden)])
+            let keyInput = Array(key[(token * hidden)..<((token + 1) * hidden)])
+            let valueInput = Array(value[(token * hidden)..<((token + 1) * hidden)])
+            let qToken = project(q, rows: qWidth, columns: hidden, queryInput)
+            let kToken = project(k, rows: kvWidth, columns: hidden, keyInput)
+            let vToken = project(v, rows: kvWidth, columns: hidden, valueInput)
+            let rToken = project(r, rows: rWidth, columns: hidden, queryInput)
+            let gateToken = project(gate, rows: qWidth, columns: hidden, queryInput)
+            let sinkToken = project(sink, rows: heads, columns: hidden, queryInput)
             for head in 0..<heads {
                 let qRange =
                     (token * qWidth + head * headDim)..<(token * qWidth + (head + 1) * headDim)
@@ -217,7 +228,7 @@ public struct Inkling2SlidingAttention: Sendable {
 }
 
 extension Inkling2SlidingAttention: Inkling2AttentionBlock {
-    public func forward(_ x: [Float]) throws -> [Float] {
-        try forward(x, tokenCount: 1).values
+    public func forward(query: [Float], key: [Float], value: [Float]) throws -> [Float] {
+        try forward(query: query, key: key, value: value, tokenCount: 1).values
     }
 }
