@@ -73,6 +73,8 @@ public struct Inkling2GlobalAttention: Sendable {
         try forward(query: x, key: x, value: x, tokenCount: tokenCount, state: state)
     }
 
+    // lint:allow-long The projection, convolution and attention stages share
+    // the q/k/v/r buffers; splitting them would pass five arrays between helpers.
     public func forward(
         query: [Float], key: [Float], value: [Float],
         tokenCount: Int, state: State? = nil
