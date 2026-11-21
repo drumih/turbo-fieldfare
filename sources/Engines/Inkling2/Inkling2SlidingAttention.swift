@@ -215,3 +215,9 @@ public struct Inkling2SlidingAttention: Sendable {
         return result
     }
 }
+
+extension Inkling2SlidingAttention: Inkling2AttentionBlock {
+    public func forward(_ x: [Float]) throws -> [Float] {
+        try forward(x, tokenCount: 1).values
+    }
+}

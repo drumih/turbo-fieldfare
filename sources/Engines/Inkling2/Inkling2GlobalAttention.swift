@@ -222,3 +222,9 @@ public struct Inkling2GlobalAttention: Sendable {
         return result
     }
 }
+
+extension Inkling2GlobalAttention: Inkling2AttentionBlock {
+    public func forward(_ x: [Float]) throws -> [Float] {
+        try forward(x, tokenCount: 1).values
+    }
+}

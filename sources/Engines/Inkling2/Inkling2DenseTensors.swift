@@ -50,6 +50,10 @@ public struct Inkling2DenseTensors: Sendable {
         try file.floatValues("model.llm.layers.\(layer).\(suffix)")
     }
 
+    public func hasLayerTensor(_ layer: Int, _ suffix: String) -> Bool {
+        file.tensor("model.llm.layers.\(layer).\(suffix)") != nil
+    }
+
     public func layerMatrixShape(_ layer: Int, _ suffix: String) throws -> [Int] {
         guard let tensor = file.tensor("model.llm.layers.\(layer).\(suffix)") else {
             throw Inkling2Safetensors.Error.missing("model.llm.layers.\(layer).\(suffix)")
