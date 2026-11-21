@@ -391,6 +391,7 @@ let package = Package(
                 .copy("Runtime/ple_golden.json"),
                 .copy("Infrastructure/ModelIO/GGUFDequantVectors.txt"),
                 .copy("Infrastructure/ModelIO/GGUFTokenizerVectors.json"),
+                .copy("Inkling2GGUF/Inkling2GGUFReferences"),
             ],
             swiftSettings: tinytitanLanguageStandard
         ),
