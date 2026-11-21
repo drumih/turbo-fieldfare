@@ -25,8 +25,9 @@ Phase 0's metadata reader is `benchmark/inkling2_quant_contract.py` (with
 `test_inkling2_quant_contract` in CI): it validates the real HF metadata and
 proves the 20-layer NVFP4 / 4-layer MXFP8 split before any weight is loaded.
 The Swift `TinyTitanInkling2` target now carries the real tokenizer (validated
-against HF IDs), a safetensors range reader, and the exact NVFP4/MXFP8
-dequantizer. The looped text graph is the next component.
+against HF IDs), a safetensors range reader, the exact NVFP4/MXFP8 dequantizer
+and the text architecture config parser. The looped text graph and the expert
+loader are the next components; no forward pass exists yet.
 
 ## The checkpoint
 
