@@ -55,10 +55,11 @@ layer visits. A real continuation run produced two greedy tokens in one cached
 session (`conveni`, `ég`); this is not coherent text and is not a quality claim.
 The sampling loop and CLI/server are still absent. Two reference-parity fixes
 landed: the router correction bias now affects selection only (not the sigmoid
-scores), and the fused expert gate/up rows are read interleaved. A templated
-"The capital of France is" prompt still produces spaces, so at least one
-architecture mismatch remains; this is not a working-quality model and no text
-quality is claimed.
+scores), and the fused expert gate/up rows are read interleaved. Three more parity fixes landed: the loop now repeats the whole 6..17 block,
+GQA maps query head h to KV head h//3, and K/V normalization happens before the
+attention copy. A templated "The capital of France is" prompt now produces the
+coherent but repeating continuation "The capital of France"; it does not answer
+"Paris", so quality is still not acceptable and no 100% claim is made.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
