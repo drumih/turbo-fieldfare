@@ -41,8 +41,9 @@ MXFP8 expert paths are tested. A complete layer-0 decoder block (norm, sliding
 attention, routed MLP, both short convolutions and the block residual) now runs
 on one token, and a real layer-5 global block now exercises the three-input
 attention path, loads the checkpoint's real attention-residual queries, and has
-the loop message controllers. The loop graph and the LM head are next; no full
-forward pass exists yet.
+the loop message controllers, and a streamed LM head (all 201,024 logits are
+finite on a real hidden row). The loop graph and per-pass caches are next; no
+full forward pass exists yet.
 
 ## The checkpoint
 
