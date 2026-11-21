@@ -71,6 +71,7 @@ public struct Inkling2DecoderLayer: Sendable {
     private let attnConv: [Float]
     private let mlpConv: [Float]
     private let kernelSize: Int
+    private let controllers: [String: Inkling2MessageController]
 
     public init(
         tensors: Inkling2DenseTensors, store: Inkling2ExpertStore, layer: Int,
@@ -98,13 +99,37 @@ public struct Inkling2DecoderLayer: Sendable {
             queries: 1, hidden: hidden)
         self.attnConv = try tensors.layerMatrix(layer, "attn_sconv.weight")
         self.mlpConv = try tensors.layerMatrix(layer, "mlp_sconv.weight")
+        var controllers: [String: Inkling2MessageController] = [:]
+        for name in ["attn", "k", "v", "mlp"]
+        where tensors.hasTensor("model.llm.layers.\(layer).controllers.\(name).down_weight") {
+            controllers[name] = try Inkling2MessageController(
+                tensors: tensors, layer: layer, name: name)
+        }
+        self.controllers = controllers
     }
 
-    public func forward(_ x: [Float], blocks: inout [[Float]]) throws -> [Float] {
+    public func forward(
+        _ x: [Float], blocks: inout [[Float]], messages: [Float]? = nil
+    ) throws -> [Float] {
         let parts = attentionInput?.forwardAll(blocks, partial: x) ?? [x]
-        let qPart = parts[0]
-        let kPart = parts[min(1, parts.count - 1)]
-        let vPart = parts[min(2, parts.count - 1)]
+        var qPart = parts[0]
+        var kPart = parts[min(1, parts.count - 1)]
+        var vPart = parts[min(2, parts.count - 1)]
+        if let messages {
+            let names = ["attn", "k", "v"]
+            let inputs = [qPart, kPart, vPart]
+            var controlled: [[Float]] = []
+            for (index, name) in names.enumerated() {
+                let message = Array(
+                    messages[(index * hidden)..<((index + 1) * hidden)])
+                controlled.append(
+                    controllers[name]?.forward(inputs[index], message: message)
+                        ?? inputs[index])
+            }
+            qPart = controlled[0]
+            kPart = controlled[1]
+            vPart = controlled[2]
+        }
         let qNormName = isSliding ? "attn_norm.weight" : "q_input_norm.weight"
         let kNormName = isSliding ? "attn_norm.weight" : "k_input_norm.weight"
         let vNormName = isSliding ? "attn_norm.weight" : "v_input_norm.weight"
@@ -126,7 +151,14 @@ public struct Inkling2DecoderLayer: Sendable {
         if !isBlockBoundary {
             for index in 0..<hidden { residual[index] += x[index] }
         }
-        let mlpInputValues = mlpInput.forward(blocks, partial: residual)
+        var mlpInputValues = mlpInput.forward(blocks, partial: residual)
+        if let messages {
+            mlpInputValues =
+                controllers["mlp"]?.forward(
+                    mlpInputValues,
+                    message: Array(messages[(3 * hidden)..<(4 * hidden)]))
+                ?? mlpInputValues
+        }
         let postNorm = try tensors.layerMatrix(layer, "mlp_norm.weight")
         let normalized = Inkling2Ops.rmsNorm(mlpInputValues, weight: postNorm)
         let mlpOutput = try mlp.forward(normalized)
