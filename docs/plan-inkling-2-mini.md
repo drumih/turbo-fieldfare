@@ -50,9 +50,10 @@ whole 6..17 core. The relative-attention score/softmax/sink/gate core now runs
 on the GPU and matches the CPU path. A GPU short-convolution kernel matches the
 CPU path, but the one-token path keeps the small convolution on CPU because the
 dispatch cost made it slower (33 s vs 25.5 s); norms and embedding are still CPU.
-Attention now returns KV state and the GPU kernel accepts a past-key offset, but
-the decoder and text model do not thread those caches yet, so continuation is
-still not implemented.
+Attention KV state and the decoder/text caches are now threaded through the 48
+layer visits. A real continuation run produced two greedy tokens in one cached
+session (`conveni`, `ég`); this is not coherent text and is not a quality claim.
+The sampling loop and CLI/server are still absent.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
