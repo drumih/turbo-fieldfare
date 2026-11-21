@@ -1,15 +1,42 @@
-# Handover — Inkling2 Q2_K/Q4_K GGUF port to Swift/Metal
+# Handover — native Inkling2 GGUF (`UD-Q2_K_XL`, `UD-Q4_K_XL`) on Swift/Metal
 
 **Prompt for the next agent:**
 
-> Continue the native Swift/Metal port of llama.cpp's Inkling2 `UD-Q2_K_XL` and
-> `UD-Q4_K_XL` GGUF execution into TinyTitan. The goal is parity first and then
-> **at least 25% faster than the llama.cpp reference** on this 24 GB M3:
-> Q2_K target **≥17 tok/s**, Q4_K target **≥14 tok/s**. Work only from measured
-> microbenchmarks and bit-exact/quality checks. The current tree has working
-> Q2_K/Q4_K block decode and fused GEMV kernels, but **no Inkling2 GGUF
-> architecture path and no end-to-end model run**. Do not claim the speed target;
-> it is not reached.
+> Continue the native Swift/Metal execution of Unsloth's Inkling-2-Mini
+> `UD-Q2_K_XL` and `UD-Q4_K_XL` GGUFs in TinyTitan (wiki tracker TT-113). The
+> goal is greedy parity with llama.cpp first, then **at least 25% faster than
+> llama.cpp** on this 24 GB M3: `UD-Q2_K_XL` **≥17 tok/s**, `UD-Q4_K_XL`
+> **≥14 tok/s**. **The names are misleading: neither file is mostly Q2_K or
+> Q4_K** (table below) — kernels are chosen per tensor. Use every engine on the
+> chip where it measurably pays: GPU for the token graph, CPU/AMX for small
+> f32 ops and expert prefetch, ANE for prefill. Work only from measured,
+> paired results and parity checks. There is still **no end-to-end GGUF run**;
+> do not claim the target.
+
+## What the two files actually contain (measured 2026-11-21)
+
+Read with llama.cpp's `gguf-py` and pinned by
+`Inkling2GGUFManifestTests` (`TINYTITAN_INKLING2_GGUF=<file>`):
+
+| Tensor | `UD-Q2_K_XL` (9.14 GB) | `UD-Q4_K_XL` (17.63 GB) |
+| --- | --- | --- |
+| `ffn_gate_up_exps` | IQ1_S (0–4, 6), IQ2_XXS (5, 7, 12–14), IQ2_XS (8, 10), IQ2_S (rest) | NVFP4 (0–19), Q8_0 (20–23) |
+| `ffn_down_exps` | Q2_0 (0–4, 6, 12–14, 21–23), NVFP4 (5, 7–11, 15–19), MXFP4 (20) | NVFP4 (0–19), Q8_0 (20–23) |
+| `attn_q/k/v/output/gate/rel` | IQ3_XXS, Q4_K, Q5_K, Q6_K, Q8_0 (mixed per layer) | Q8_0 |
+| `token_embd` / `output` | IQ4_XS / Q4_K | Q8_0 / Q8_0 |
+| small tensors | F32 (norms, convs, router, loop controllers), BF16 (sink, conv proj) | same |
+| `ffn_*_exps.scale` | F32 per-expert multiplier, layers 0–19 | same |
+
+By bytes, Q2_K_XL is IQ2_S 2.39 GB, NVFP4 2.10, Q2_0 1.15, IQ2_XXS 0.88,
+IQ1_S 0.80, IQ2_XS 0.39, Q8_0 0.39, **Q4_K 0.30**, IQ4_XS 0.25, MXFP4 0.18.
+Q4_K_XL is NVFP4 11.47 GB and Q8_0 6.0 GB, **no Q4_K at all**. GGUF NVFP4 is
+ggml's `block_nvfp4` (64 values: 4 UE4M3 sub-block scales + 32 bytes), not the
+safetensors layout the native NVFP4 kernel reads.
+
+Geometry: 24 stored layers, `block_count` 48 unrolled (core 6..<18 × 3),
+full attention at 5/11/17/23 (sliding window 1024 elsewhere), 24 q / 8 kv
+heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
+200,058 (padded 201,024), logit softcap 30.
 
 ## Goal and reference
 
@@ -27,7 +54,7 @@
   - Q4: all layers on GPU, `-fa on`; `-ncmoe 4/8` is slower.
   - Sampling recommendation: temperature 1.0, top-p 1.0, top-k 0, min-p 0.0.
     Sampling does not change benchmark throughput.
-- Native target: **Q2_K ≥17 tok/s, Q4_K ≥14 tok/s**.
+- Native target: **`UD-Q2_K_XL` ≥17 tok/s, `UD-Q4_K_XL` ≥14 tok/s**.
 
 ## What is complete
 
@@ -83,34 +110,40 @@
    - `b0866b08` — tiled Q2_K/Q4_K GEMV geometry
    - the commit after it — eight-lane kernel deleted, tiled made the default
 
-## What is missing
+5. **GGUF reader fix (2026-11-21).** `GGUFType.nvfp4.blockSize` was 1
+   instead of ggml's 64, so every NVFP4 tensor was sized 64× too large and
+   both Inkling GGUFs were refused as running past the end of the file.
+   `GGUFTypeSizeTests` now pins every type's (elements, bytes) to ggml's
+   `GGML_QUANT_SIZES`; NVFP4 was the only wrong row.
 
-There is **no Inkling2 GGUF architecture path**. TinyTitan's current GGUF path
-is hardcoded to the Qwen3.8 architecture in
-`sources/TinyTitanCLI/RunGGUF.swift` and `GGUFDecoder`; it cannot load these
-Inkling2 GGUFs. The Q2_K/Q4_K code above is a kernel/format foundation, not a
-model implementation.
+## What is missing — the plan
 
-Still required:
+`Inkling2GGUFManifest` (`sources/TinyTitan/Infrastructure/ModelIO/`) now reads
+and validates both files. Everything after that is open:
 
-1. **Kernel geometry is ported** (above). Whether the GEMVs fit the 17 tok/s
-   budget can only be judged per token once the model runs; the expert
-   projections are not 2304 × 2304. Further kernel work should be driven by
-   an end-to-end per-phase profile, with paired A/B as before. Reference:
-   `~/.unsloth/llama.cpp/ggml/src/ggml-metal/kernels/mul_mv.metal`.
-2. **Inkling2 GGUF loader/architecture** from
-   `~/.unsloth/llama.cpp/src/models/inkling2.cpp`, `conversion/inkling2.py`,
-   and `models/templates/Inkling.jinja`. Needs tensor mapping, loop core
-   (6–17 repeated three times), controllers/message bank, relative attention,
-   short-convolution state, sliding/full attention pattern, MoE router and
-   experts.
-3. **Graph/command-buffer executor.** The existing native Inkling engine is
-   eager and slow; llama.cpp wins through composed `ggml` graphs and fused
-   Metal kernels. Encode a layer/ubatch before waiting; do not dispatch one
-   projection at a time.
-4. **Expert cache/prefetch and KV/conv state** using the lessons from
-   TinyTitan's Qwen engine.
-5. **End-to-end quality gate and paired benchmark** against llama.cpp.
+1. **Per-type GEMV coverage.** Have: Q8_0, Q6_K, IQ2_S, IQ3_XXS, IQ4_XS, Q2_0
+   (`gguf_gemv_vec.metal`, Qwen3.8 route), Q2_K/Q4_K (tiled). Missing:
+   GGUF-layout NVFP4, MXFP4, IQ1_S, IQ2_XXS, IQ2_XS, Q5_K. Each lands with a
+   host decode bit-exact against ggml and a paired microbenchmark.
+   **Start with `UD-Q4_K_XL`**: it needs only NVFP4 + Q8_0.
+2. **GPU-resident token graph.** The native safetensors engine
+   (`sources/Engines/Inkling2`) has the right math and passes 6/6 factual
+   prompts but decodes 1.7–1.9 tok/s because it is eager and CPU-bound. The
+   GGUF engine encodes the whole token — 48 layer visits, depth mixes, loop
+   controllers, short convolutions, relative attention with sinks, router —
+   into one command buffer, with the router's top-8 written to a GPU buffer
+   that indirect expert GEMVs read (no CPU round trip). Port the math from
+   the native engine and `~/.unsloth/llama.cpp/src/models/inkling2.cpp`.
+3. **Residency and prefetch.** Q2_K_XL (9.1 GB) fits resident. Q4_K_XL
+   (17.6 GB) leaves little headroom on 24 GB: map experts (`GGUFMappedShards`)
+   and prefetch the next layer's routed experts on CPU threads while the GPU
+   runs the current one; measure hit rates before tuning.
+4. **CPU/AMX and ANE.** Measure, don't assume: small f32 ops (loop
+   controllers, router) may be cheaper on AMX while the GPU streams experts;
+   prefill on the ANE only if it beats batched GPU GEMM.
+5. **Parity, then the paired benchmark.** Greedy tokens and top-k logits
+   against `llama-server` on the same prompts, then a paired tok/s run against
+   `llama-bench` under identical machine state.
 
 ## Microbenchmark procedure
 

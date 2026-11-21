@@ -41,11 +41,12 @@ package enum GGUFType: UInt32, CaseIterable, Sendable {
     /// Elements per block. 1 for the unpacked types.
     package var blockSize: UInt64 {
         switch self {
-        case .f32, .f16, .i8, .i16, .i32, .i64, .f64, .bf16, .nvfp4, .f8E4M3:
+        case .f32, .f16, .i8, .i16, .i32, .i64, .f64, .bf16, .f8E4M3:
             return 1
         case .q4_0, .q4_1, .q5_0, .q5_1, .q8_0, .q8_1, .iq4NL, .mxfp4:
             return 32
-        case .q2_0:
+        case .q2_0, .nvfp4:
+            // NVFP4: 4 UE4M3 sub-block scales + 32 bytes of E2M1 pairs.
             return 64
         case .q1_0:
             return 128
