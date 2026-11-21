@@ -69,8 +69,11 @@ memory pressure from per-token Metal allocations; per-token autorelease pools an
 16 tokens now complete safely. A direct-answer prefix produces correct responses to three factual prompts:
 `The capital of France is Paris.`, `The chemical symbol for water is **H₂O**.`
 and `Two plus two equals four.` The thinking path also produces coherent
-reasoning. This is a 3/3 short factual check, not a 100% quality verdict;
-CLI/server integration and a broader quality suite are still absent.
+reasoning. This is a 3/3 short factual check, not a 100% quality verdict. The one-shot CLI now
+detects an Inkling directory and runs it directly:
+`TinyTitanCLI --model models/inkling-2-mini --prompt 'The capital of France is' --max-new 8`
+prints `The capital of France is Paris.<|end_message|>`. The loopback server,
+sampling controls and a broader quality suite are still absent.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
