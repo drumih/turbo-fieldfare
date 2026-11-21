@@ -1,8 +1,13 @@
 # Inkling 2 Mini in TinyTitan 7.x — port plan and quality contract
 
-**Status: proposal, not implemented.** This is a new engine family, a new
-mixed-quantization runtime and a multimodal surface — not a model-profile entry.
-The phases below are ordered so the quantized weights are never requantized.
+**Status: Phase 0 contract reader landed; the engine is not implemented.** This
+is a new engine family, a new mixed-quantization runtime and a multimodal
+surface — not a model-profile entry. The phases below are ordered so the
+quantized weights are never requantized.
+
+Phase 0's metadata reader is `benchmark/inkling2_quant_contract.py` (with
+`test_inkling2_quant_contract` in CI): it validates the real HF metadata and
+proves the 20-layer NVFP4 / 4-layer MXFP8 split before any weight is loaded.
 
 ## The checkpoint
 

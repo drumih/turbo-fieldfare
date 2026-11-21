@@ -324,7 +324,7 @@ jobs:
         # flight, and the override with and without its reason.
         run: |
           cd benchmark
-          python3 -m unittest test_release_ci_green
+          python3 -m unittest test_release_ci_green test_inkling2_quant_contract
       - name: Golden-baseline capture gates
         # `tools/golden-baseline.sh --check` is the only gate that exercises real
         # inference, and `tools/release.sh` runs it before a tag — so the capture
