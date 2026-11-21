@@ -47,7 +47,9 @@ runs on one token: 201,024 finite logits in 25.5 s of forward time (145-185 s mo
 GEMV (NVFP4/MXFP8 Metal kernels), the LM head and the attention projections
 (BF16 GEMV with FP32 activation/output) to the GPU, with the loop repeating the
 whole 6..17 core. The relative-attention score/softmax/sink/gate core now runs
-on the GPU and matches the CPU path; short convolutions and norms are still CPU.
+on the GPU and matches the CPU path. A GPU short-convolution kernel matches the
+CPU path, but the one-token path keeps the small convolution on CPU because the
+dispatch cost made it slower (33 s vs 25.5 s); norms and embedding are still CPU.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
