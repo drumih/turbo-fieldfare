@@ -34,10 +34,11 @@ the sparse router plus softcapped SwiGLU/MoE combine are implemented, and the
 attention block has its FP32 primitives (L2 clip, softmax, short convolution
 with carry state) and relative/sliding band math. A real layer-0 expert's
 NVFP4 values are pinned against an independent Python dequant (first five
-values and prefix sums). A real layer-0 sliding attention block now runs on a
-single embedding row and returns finite output plus conv state. The four global
-layers, attention-residual controllers and the loop are next; no full forward
-pass exists yet.
+values and prefix sums). A real layer-0 sliding attention block and a real layer-5 global attention
+block now run on a single embedding row; both return finite output plus conv
+state. The complete 20 GB checkpoint is downloaded and the real NVFP4 and
+MXFP8 expert paths are tested. Attention-residual controllers, the loop and the
+LM head are next; no full forward pass exists yet.
 
 ## The checkpoint
 
