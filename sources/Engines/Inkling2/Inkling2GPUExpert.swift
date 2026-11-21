@@ -11,11 +11,49 @@ public final class Inkling2GPUExpert: @unchecked Sendable {
     private let context: MetalContext
     private let nvfp4: MTLComputePipelineState
     private let mxfp8: MTLComputePipelineState
+    private let bf16Float: MTLComputePipelineState
 
     public init() throws {
         self.context = try MetalContext()
         self.nvfp4 = try context.pipeline("nvfp4_gemv")
         self.mxfp8 = try context.pipeline("mxfp8_gemv")
+        self.bf16Float = try context.pipeline("bf16_gemv_float_simd")
+    }
+
+    public func logits(weights: Data, hidden: [Float], rows: Int, columns: Int)
+        throws -> [Float]
+    {
+        precondition(hidden.count == columns)
+        let halves = hidden.map { Float16($0) }
+        guard
+            let weightsBuffer = context.device.makeBuffer(
+                bytes: [UInt8](weights), length: weights.count,
+                options: .storageModeShared),
+            let xBuffer = context.device.makeBuffer(
+                bytes: halves, length: halves.count * 2,
+                options: .storageModeShared),
+            let yBuffer = context.device.makeBuffer(
+                length: rows * 4, options: .storageModeShared),
+            let commandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else { throw MetalError.bufferAllocationFailed("inkling logits") }
+        encoder.setComputePipelineState(bf16Float)
+        encoder.setBuffer(weightsBuffer, offset: 0, index: 0)
+        encoder.setBuffer(xBuffer, offset: 0, index: 1)
+        encoder.setBuffer(yBuffer, offset: 0, index: 2)
+        var rowsValue = UInt32(rows)
+        var columnsValue = UInt32(columns)
+        encoder.setBytes(&rowsValue, length: 4, index: 3)
+        encoder.setBytes(&columnsValue, length: 4, index: 4)
+        let groups = (rows + 7) / 8
+        encoder.dispatchThreadgroups(
+            MTLSize(width: groups, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let pointer = yBuffer.contents().bindMemory(to: Float.self, capacity: rows)
+        return Array(UnsafeBufferPointer(start: pointer, count: rows))
     }
 
     public func gemv(

@@ -12,12 +12,14 @@ public struct Inkling2TextModel: Sendable {
     private let finalResidual: Inkling2AttentionResidual
     private let finalNorm: [Float]
     private let embeddingNorm: [Float]
+    private let gpu: Inkling2GPUExpert?
 
     public init(
         directory: URL, config: Inkling2Config, store: Inkling2ExpertStore,
         useGPU: Bool = true
     ) throws {
         let gpu = useGPU ? try Inkling2GPUExpert() : nil
+        self.gpu = gpu
         self.config = config
         let tensors = try Inkling2DenseTensors(directory: directory)
         self.tensors = tensors
@@ -154,6 +156,13 @@ public struct Inkling2TextModel: Sendable {
         }
         let final = finalResidual.forward(blocks, partial: x)
         let normalized = Inkling2Ops.rmsNorm(final, weight: finalNorm)
+        if let gpu {
+            let shape = try tensors.matrixShape("model.llm.unembed.weight")
+            let weights = try tensors.tensorBytes("model.llm.unembed.weight")
+            return try gpu.logits(
+                weights: weights, hidden: normalized,
+                rows: shape[0], columns: shape[1])
+        }
         return try tensors.logits(normalized)
     }
 }

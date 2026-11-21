@@ -44,6 +44,10 @@ public struct Inkling2DenseTensors: Sendable {
 
     /// Full-vocabulary logits from the unembedding, streamed in row chunks so
     /// the 926 MB matrix is never resident.
+    public func tensorBytes(_ name: String) throws -> Data {
+        try file.data(for: name)
+    }
+
     public func logits(_ hidden: [Float]) throws -> [Float] {
         guard let tensor = file.tensor("model.llm.unembed.weight") else {
             throw Inkling2Safetensors.Error.missing("model.llm.unembed.weight")
