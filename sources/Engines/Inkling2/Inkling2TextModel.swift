@@ -14,8 +14,10 @@ public struct Inkling2TextModel: Sendable {
     private let embeddingNorm: [Float]
 
     public init(
-        directory: URL, config: Inkling2Config, store: Inkling2ExpertStore
+        directory: URL, config: Inkling2Config, store: Inkling2ExpertStore,
+        useGPU: Bool = true
     ) throws {
+        let gpu = useGPU ? try Inkling2GPUExpert() : nil
         self.config = config
         let tensors = try Inkling2DenseTensors(directory: directory)
         self.tensors = tensors
@@ -55,7 +57,7 @@ public struct Inkling2TextModel: Sendable {
                     kernelSize: config.text.convolutionKernel,
                     isBlockBoundary: index % config.text.attentionResidualBlock == 0,
                     isSliding: local.contains(index),
-                    attention: attention))
+                    attention: attention, gpu: gpu))
         }
         self.layers = layers
         self.layerIndices =

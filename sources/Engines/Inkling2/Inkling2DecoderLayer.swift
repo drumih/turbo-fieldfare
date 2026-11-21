@@ -76,7 +76,8 @@ public struct Inkling2DecoderLayer: Sendable {
     public init(
         tensors: Inkling2DenseTensors, store: Inkling2ExpertStore, layer: Int,
         hidden: Int, kernelSize: Int, isBlockBoundary: Bool,
-        isSliding: Bool, attention: any Inkling2AttentionBlock
+        isSliding: Bool, attention: any Inkling2AttentionBlock,
+        gpu: Inkling2GPUExpert? = nil
     ) throws {
         self.tensors = tensors
         self.layer = layer
@@ -85,7 +86,8 @@ public struct Inkling2DecoderLayer: Sendable {
         self.isBlockBoundary = isBlockBoundary
         self.isSliding = isSliding
         self.attention = attention
-        self.mlp = try Inkling2MLP(tensors: tensors, store: store, layer: layer)
+        self.mlp = try Inkling2MLP(
+            tensors: tensors, store: store, layer: layer, gpu: gpu)
         self.attentionInput =
             layer == 0
             ? nil

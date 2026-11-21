@@ -20,14 +20,8 @@ public enum Inkling2MoE {
             }
             gateUp[row] = dot
         }
-        var activated = [Float](repeating: 0, count: intermediate)
-        for index in 0..<intermediate {
-            let gate = gateUp[index]
-            let up = gateUp[intermediate + index]
-            let g = tanh(gate / gateCap) * gateCap * (1 / (1 + exp(-gate)))
-            let u = tanh(up / upCap) * upCap
-            activated[index] = g * u
-        }
+        let activated = Self.activate(
+            gateUp, hidden: weights.hidden, intermediate: intermediate)
         var output = [Float](repeating: 0, count: weights.hidden)
         for row in 0..<weights.hidden {
             var dot: Float = 0
@@ -38,6 +32,22 @@ public enum Inkling2MoE {
             output[row] = dot
         }
         return output
+    }
+
+    public static func activate(
+        _ gateUp: [Float], hidden: Int, intermediate: Int
+    ) -> [Float] {
+        precondition(gateUp.count == 2 * intermediate)
+        var activated = [Float](repeating: 0, count: intermediate)
+        for index in 0..<intermediate {
+            let gate = gateUp[index]
+            let up = gateUp[intermediate + index]
+            let g = tanh(gate / gateCap) * gateCap * (1 / (1 + exp(-gate)))
+            let u = tanh(up / upCap) * upCap
+            activated[index] = g * u
+        }
+        _ = hidden
+        return activated
     }
 
     public static func forward(

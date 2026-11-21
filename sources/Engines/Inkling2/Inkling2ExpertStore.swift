@@ -12,6 +12,21 @@ public struct Inkling2ExpertWeights: Sendable {
     public let intermediate: Int
 }
 
+public enum Inkling2ExpertFormat: Sendable { case nvfp4, mxfp8 }
+
+public struct Inkling2PackedExpert: Sendable {
+    public let format: Inkling2ExpertFormat
+    public let w13: Data
+    public let w13Scales: Data
+    public let w13Outer: Float
+    public let w2: Data
+    public let w2Scales: Data
+    public let w2Outer: Float
+    public let rows: Int
+    public let w13Columns: Int
+    public let w2Columns: Int
+}
+
 /// Reads one routed expert at a time from the main safetensors file.
 public struct Inkling2ExpertStore: Sendable {
     private let file: Inkling2Safetensors
@@ -27,6 +42,39 @@ public struct Inkling2ExpertStore: Sendable {
             throw Inkling2Safetensors.Error.missing("a routed-expert w13_weight")
         }
         self.experts = expertTensor.shape.first ?? 0
+    }
+
+    public func packed(layer: Int, expert: Int) throws -> Inkling2PackedExpert {
+        guard layer >= 0, layer < 24, expert >= 0, expert < experts else {
+            throw Inkling2Safetensors.Error.invalid("expert out of range")
+        }
+        let prefix = "model.llm.layers.\(layer).mlp.experts"
+        let w13 = try slice("\(prefix).w13_weight", expert: expert, experts: experts)
+        let w13Scales = try slice(
+            "\(prefix).w13_weight_scale", expert: expert, experts: experts)
+        let w2 = try slice("\(prefix).w2_weight", expert: expert, experts: experts)
+        let w2Scales = try slice(
+            "\(prefix).w2_weight_scale", expert: expert, experts: experts)
+        let w13Shape = try shape("\(prefix).w13_weight")
+        let w2Shape = try shape("\(prefix).w2_weight")
+        if layer < 20 {
+            let w13Outer =
+                try float("\(prefix).w13_weight_amax", index: expert)
+                / float("\(prefix).w13_weight_outer_scale_denominator", index: 0)
+            let w2Outer =
+                try float("\(prefix).w2_weight_amax", index: expert)
+                / float("\(prefix).w2_weight_outer_scale_denominator", index: 0)
+            return Inkling2PackedExpert(
+                format: .nvfp4, w13: w13, w13Scales: w13Scales, w13Outer: w13Outer,
+                w2: w2, w2Scales: w2Scales, w2Outer: w2Outer,
+                rows: w13Shape[1], w13Columns: w13Shape[2] * 2,
+                w2Columns: w2Shape[2] * 2)
+        }
+        return Inkling2PackedExpert(
+            format: .mxfp8, w13: w13, w13Scales: w13Scales, w13Outer: 1,
+            w2: w2, w2Scales: w2Scales, w2Outer: 1,
+            rows: w13Shape[1], w13Columns: w13Shape[2],
+            w2Columns: w2Shape[2])
     }
 
     public func load(layer: Int, expert: Int) throws -> Inkling2ExpertWeights {

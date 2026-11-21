@@ -13,7 +13,9 @@ import Testing
         let directory = URL(fileURLWithPath: path)
         let tensors = try Inkling2DenseTensors(directory: directory)
         let store = try Inkling2ExpertStore(directory: directory)
-        let mlp = try Inkling2MLP(tensors: tensors, store: store, layer: 0)
+        let mlp = try Inkling2MLP(
+            tensors: tensors, store: store, layer: 0,
+            gpu: try Inkling2GPUExpert())
         let output = try mlp.forward(tensors.embeddingRow(0))
         #expect(output.count == 2304)
         #expect(output.allSatisfy { $0.isFinite })
