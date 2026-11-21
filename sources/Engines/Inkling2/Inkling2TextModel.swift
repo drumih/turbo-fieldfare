@@ -95,6 +95,8 @@ public struct Inkling2TextModel: Sendable {
         return result
     }
 
+    public var visitIndices: [Int] { layerIndices }
+
     public func forward(token: Int) throws -> [Float] {
         let hidden = config.text.hiddenSize
         var x = Inkling2Ops.rmsNorm(

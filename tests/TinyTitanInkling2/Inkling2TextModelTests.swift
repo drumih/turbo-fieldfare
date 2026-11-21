@@ -32,5 +32,9 @@ import Testing
         let model = try Inkling2TextModel(
             directory: directory, config: config, store: store)
         #expect(model.config.text.layerCount == 24)
+        #expect(
+            model.visitIndices
+                == Array(0...5) + Array(6...17) + Array(6...17) + Array(6...17)
+                + Array(18...23))
     }
 }
