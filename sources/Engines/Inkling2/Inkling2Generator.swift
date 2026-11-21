@@ -5,6 +5,8 @@ public struct Inkling2Generator {
     private let model: Inkling2TextModel
     private let tokenizer: Inkling2Tokenizer
     private var caches: [Inkling2DecoderCache]
+    public private(set) var lastPrefillSeconds: Double = 0
+    public private(set) var lastDecodeSeconds: Double = 0
 
     public init(model: Inkling2TextModel, tokenizer: Inkling2Tokenizer) {
         self.model = model
@@ -17,13 +19,16 @@ public struct Inkling2Generator {
     ) throws -> (tokens: [Int], text: String) {
         var promptIds = try tokenizer.encode(prompt)
         guard !promptIds.isEmpty else { return ([], "") }
+        let prefillStart = Date()
         for id in promptIds.dropLast() {
             _ = try autoreleasepool {
                 try model.forward(token: id, caches: &caches)
             }
         }
+        self.lastPrefillSeconds = Date().timeIntervalSince(prefillStart)
         var next = promptIds.removeLast()
         var generated: [Int] = []
+        let decodeStart = Date()
         let stops = Set(
             [
                 try tokenizer.encode("<|end_message|>").first,
@@ -38,6 +43,7 @@ public struct Inkling2Generator {
             if stops.contains(next) { break }
             generated.append(next)
         }
+        self.lastDecodeSeconds = Date().timeIntervalSince(decodeStart)
         return (generated, tokenizer.decode(generated))
     }
 }

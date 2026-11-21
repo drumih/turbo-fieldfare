@@ -36,17 +36,19 @@ enum Inkling2Run {
             let prompt =
                 "<|message_user|><|content_text|>\(userPrompt)<|end_message|>"
                 + "<|message_model|><|content_text|>"
-            let generationStart = Date()
             let result = try generator.generate(
                 prompt: prompt, maxTokens: args.maxNew)
-            let generationSeconds = Date().timeIntervalSince(generationStart)
             stdout.write(Data((result.text + "\n").utf8))
             if !args.quiet {
                 stderr.write(
                     Data(
                         String(
-                            format: "inkling: load %.1fs, generate %.1fs, %d tokens\n",
-                            loadSeconds, generationSeconds, result.tokens.count
+                            format:
+                                "inkling: load %.1fs, prefill %.1fs, decode %.1fs, %d tokens (%.3f tok/s)\n",
+                            loadSeconds, generator.lastPrefillSeconds,
+                            generator.lastDecodeSeconds, result.tokens.count,
+                            generator.lastDecodeSeconds > 0
+                                ? Double(result.tokens.count) / generator.lastDecodeSeconds : 0
                         ).utf8))
             }
             return RunResult(exitCode: 0)
