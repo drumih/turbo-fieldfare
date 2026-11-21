@@ -345,7 +345,7 @@ let package = Package(
                 // the variant-isolation rule; only a variant may not import
                 // the server.
                 "TinyTitanVariants",
-                "TinyTitanCPUEngine",
+                "TinyTitanCPUEngine", "TinyTitanInkling2",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
