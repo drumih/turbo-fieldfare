@@ -39,9 +39,9 @@ kernel void q2k_gemv(
         const uchar scale = b[scIndex];
         const float dl = d * float(scale & 0x0Fu);
         const float ml = dmin * float(scale >> 4u);
-        device const uchar* qs = b + 16u + qBase;
+        const ulong packed = *(device const ulong*)(b + 16u + qBase + l0);
         for (uint i = 0u; i < 8u; ++i) {
-            const uint quant = (uint(qs[l0 + i]) >> shift) & 3u;
+            const uint quant = (uint((packed >> (8u * i)) & 0xFFu) >> shift) & 3u;
             sum = fma(dl * float(quant) - ml, x[blockIndex * 256u + e0 + i], sum);
         }
     }
@@ -88,10 +88,11 @@ kernel void q4k_gemv(
         const float ds = d * sc;
         const float dm = dmin * mm;
         const bool low = (g & 1u) == 0u;
-        device const uchar* qs = b + 16u + (g / 2u) * 32u;
+        const ulong packed = *(device const ulong*)(
+            b + 16u + (g / 2u) * 32u + within);
         for (uint i = 0u; i < 8u; ++i) {
-            const uint packed = uint(qs[within + i]);
-            const uint nibble = low ? (packed & 0x0Fu) : (packed >> 4u);
+            const uint byte = uint((packed >> (8u * i)) & 0xFFu);
+            const uint nibble = low ? (byte & 0x0Fu) : (byte >> 4u);
             sum = fma(ds * float(nibble) - dm, x[blockIndex * 256u + e0 + i], sum);
         }
     }
