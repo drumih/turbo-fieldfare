@@ -39,7 +39,8 @@ extension Inkling2GGUFDecoder {
                 try ops.control(
                     cur: row(inputs[j]), message: row(message), down: layer.loopDown[j],
                     gain: layer.loopGain[j], forget: layer.loopForget[j],
-                    h: scratch(s.controlHidden), out: row(out), width: hidden, encoder: e)
+                    joined: scratch(s.controlJoined), h: scratch(s.controlHidden), out: row(out),
+                    width: hidden, encoder: e)
                 inputs[j] = out
             }
         }
@@ -162,7 +163,8 @@ extension Inkling2GGUFDecoder {
             try ops.control(
                 cur: row(next), message: row(message), down: layer.loopDown[3],
                 gain: layer.loopGain[3], forget: layer.loopForget[3],
-                h: scratch(s.controlHidden), out: row(out), width: hidden, encoder: e)
+                joined: scratch(s.controlJoined), h: scratch(s.controlHidden), out: row(out),
+                width: hidden, encoder: e)
             next = out
         }
         labelPrefix = "v\(visit).moeIn"
@@ -190,29 +192,35 @@ extension Inkling2GGUFDecoder {
         let feedForward = m.layers[layer.index].expertFeedForward
         try ops.route(
             router: layer.router, bias: layer.routerBias, x: row(input),
-            ids: scratch(s.routeIDs), weights: scratch(s.routeWeights),
+            logits: scratch(s.routerLogits), ids: scratch(s.routeIDs),
+            weights: scratch(s.routeWeights),
             args: .init(
                 experts: UInt32(m.expertCount), width: UInt32(hidden), used: UInt32(used),
                 weightScale: m.expertWeightsScale, normEpsilon: 1e-20),
             encoder: e)
-        try ops.gemvIds.encode(
-            .init(
-                type: layer.gateUp.type, rows: 2 * feedForward, columns: hidden, slots: used,
-                expertStride: layer.gateUp.byteCount / m.expertCount, xSlotStride: 0),
-            weights: layer.gateUp.operand, x: row(input), y: scratch(s.gateUp),
-            ids: scratch(s.routeIDs), scales: layer.gateUpScale?.operand, encoder: e)
+        let experts = !ops.skipped.contains("experts")
+        if experts {
+            try ops.gemvIds.encode(
+                .init(
+                    type: layer.gateUp.type, rows: 2 * feedForward, columns: hidden, slots: used,
+                    expertStride: layer.gateUp.byteCount / m.expertCount, xSlotStride: 0),
+                weights: layer.gateUp.operand, x: row(input), y: scratch(s.gateUp),
+                ids: scratch(s.routeIDs), scales: layer.gateUpScale?.operand, encoder: e)
+        }
         try ops.situ(
             gateUp: scratch(s.gateUp), act: scratch(s.activation),
             args: .init(
                 feedForward: UInt32(feedForward), slots: UInt32(used), beta: m.situBeta,
                 linearBeta: m.situLinearBeta),
             encoder: e)
-        try ops.gemvIds.encode(
-            .init(
-                type: layer.down.type, rows: hidden, columns: feedForward, slots: used,
-                expertStride: layer.down.byteCount / m.expertCount, xSlotStride: feedForward),
-            weights: layer.down.operand, x: scratch(s.activation), y: scratch(s.down),
-            ids: scratch(s.routeIDs), scales: layer.downScale?.operand, encoder: e)
+        if experts {
+            try ops.gemvIds.encode(
+                .init(
+                    type: layer.down.type, rows: hidden, columns: feedForward, slots: used,
+                    expertStride: layer.down.byteCount / m.expertCount, xSlotStride: feedForward),
+                weights: layer.down.operand, x: scratch(s.activation), y: scratch(s.down),
+                ids: scratch(s.routeIDs), scales: layer.downScale?.operand, encoder: e)
+        }
         let out = try rows(1)
         try ops.weightedSum(
             down: scratch(s.down), weights: scratch(s.routeWeights), out: row(out),

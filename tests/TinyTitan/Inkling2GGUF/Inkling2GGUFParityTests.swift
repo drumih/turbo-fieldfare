@@ -124,6 +124,9 @@ extension Inkling2GGUFParityTests {
         let path = try #require(Self.modelPath)
         let decoder = try Inkling2GGUFDecoder(url: URL(fileURLWithPath: path), maxContext: 512)
         decoder.weights.prefault()
+        if let skip = ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SKIP"] {
+            decoder.ops.skipped = Set(skip.split(separator: ",").map(String.init))
+        }
         let prompt = [371, 151451, 149879, 151194, 149884]
         var next = 0
         for (position, token) in prompt.enumerated() {
@@ -131,19 +134,31 @@ extension Inkling2GGUFParityTests {
         }
         let count = 64
         var samples: [Double] = []
+        var encode: [Double] = []
+        var gpu: [Double] = []
         for offset in 0..<count {
             let started = Date()
             next = try decoder.step(token: next, position: prompt.count + offset).next
             samples.append(Date().timeIntervalSince(started))
+            encode.append(decoder.lastEncodeSeconds)
+            gpu.append(decoder.lastGPUSeconds)
         }
+        if ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SERIES"] == "1" {
+            let series = gpu.map { String(format: "%.0f", $0 * 1e3) }.joined(separator: " ")
+            FileHandle.standardError.write(Data("GPU ms per token: \(series)\n".utf8))
+        }
+        encode.sort()
+        gpu.sort()
         let total = samples.reduce(0, +)
         let sorted = samples.sorted()
         #expect(total > 0)
         FileHandle.standardError.write(
             Data(
                 String(
-                    format: "decode %d tokens: %.2f tok/s, median %.1f ms, min %.1f ms\n", count,
-                    Double(count) / total, sorted[count / 2] * 1e3, sorted[0] * 1e3
+                    format:
+                        "decode %d tokens: %.2f tok/s, median %.1f ms, min %.1f ms; median encode %.1f ms, GPU %.1f ms\n",
+                    count, Double(count) / total, sorted[count / 2] * 1e3, sorted[0] * 1e3,
+                    encode[count / 2] * 1e3, gpu[count / 2] * 1e3
                 ).utf8))
     }
 }

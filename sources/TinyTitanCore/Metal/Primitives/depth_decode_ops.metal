@@ -165,13 +165,13 @@ struct DepthControlArgs {
     float epsilon;
 };
 
-// h = D . [rms(cur); rms(message)], D is [rank][2 * width] f32.
-kernel void control_project(
+// joined = [rms(cur); rms(message)], the controller's 2 * width input; the
+// projection h = D . joined then runs on the parallel dense GEMV.
+kernel void control_join(
     device const float* cur [[buffer(0)]],
     device const float* message [[buffer(1)]],
-    device const float* down [[buffer(2)]],
-    device float* h [[buffer(3)]],
-    constant DepthControlArgs& args [[buffer(4)]],
+    device float* joined [[buffer(2)]],
+    constant DepthControlArgs& args [[buffer(3)]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -189,18 +189,14 @@ kernel void control_project(
         depth_threadgroup_sum(a, scratch, sg, lane, simdgroups) / float(args.width) + args.epsilon);
     const float invMessage = rsqrt(
         depth_threadgroup_sum(b, scratch, sg, lane, simdgroups) / float(args.width) + args.epsilon);
-    for (uint r = sg; r < args.rank; r += simdgroups) {
-        device const float* w = down + ulong(r) * 2u * args.width;
-        float sum = 0.0f;
-        for (uint i = lane; i < args.width; i += 32u) {
-            sum += w[i] * cur[i] * invCur + w[args.width + i] * message[i] * invMessage;
-        }
-        sum = simd_sum(sum);
-        if (lane == 0u) h[r] = sum;
+    for (uint i = tid; i < args.width; i += threads) {
+        joined[i] = cur[i] * invCur;
+        joined[args.width + i] = message[i] * invMessage;
     }
 }
 
 // out = (1 - tanh(F . h)) * cur + tanh(G . h) * message; F, G are [width][rank].
+// One SIMD group per output reads the two contiguous rank-length rows.
 kernel void control_apply(
     device const float* cur [[buffer(0)]],
     device const float* message [[buffer(1)]],
@@ -209,16 +205,21 @@ kernel void control_apply(
     device const float* forget [[buffer(4)]],
     device float* out [[buffer(5)]],
     constant DepthControlArgs& args [[buffer(6)]],
-    uint index [[thread_position_in_grid]])
+    uint groupIndex [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
 {
+    const uint index = groupIndex * 4u + sg;
     if (index >= args.width) return;
     float g = 0.0f;
     float f = 0.0f;
-    for (uint r = 0u; r < args.rank; ++r) {
+    for (uint r = lane; r < args.rank; r += 32u) {
         g += gain[index * args.rank + r] * h[r];
         f += forget[index * args.rank + r] * h[r];
     }
-    out[index] = (1.0f - tanh(f)) * cur[index] + tanh(g) * message[index];
+    g = simd_sum(g);
+    f = simd_sum(f);
+    if (lane == 0u) out[index] = (1.0f - tanh(f)) * cur[index] + tanh(g) * message[index];
 }
 
 struct DepthConvArgs {

@@ -110,51 +110,62 @@ struct DepthRouterArgs {
     float normEpsilon;
 };
 
-// Sigmoid router: p = sigmoid(W . x); top-`used` by p + bias; weights are the
-// chosen p normalised by their sum (+ eps) and multiplied by weightScale.
-kernel void sigmoid_router_topk(
-    device const float* weights [[buffer(0)]],
-    device const float* x [[buffer(1)]],
-    device const float* bias [[buffer(2)]],
-    device int* ids [[buffer(3)]],
-    device float* routeWeights [[buffer(4)]],
-    constant DepthRouterArgs& args [[buffer(5)]],
-    uint tid [[thread_index_in_threadgroup]],
-    uint threads [[threads_per_threadgroup]],
-    uint sg [[simdgroup_index_in_threadgroup]],
+// Sigmoid top-k over router logits (computed by a parallel GEMV), in one SIMD
+// group: p = sigmoid(logit); top-`used` by p + bias, ties to the lower index;
+// weights are the chosen p normalised by their sum (+ eps) times weightScale.
+// Up to 32 * 8 experts (each lane holds `experts / 32` of them).
+kernel void sigmoid_topk(
+    device const float* logits [[buffer(0)]],
+    device const float* bias [[buffer(1)]],
+    device int* ids [[buffer(2)]],
+    device float* routeWeights [[buffer(3)]],
+    constant DepthRouterArgs& args [[buffer(4)]],
     uint lane [[thread_index_in_simdgroup]])
 {
-    threadgroup float probs[256];
-    const uint simdgroups = (threads + 31u) / 32u;
-    for (uint e = sg; e < args.experts; e += simdgroups) {
-        device const float* w = weights + ulong(e) * args.width;
-        float sum = 0.0f;
-        for (uint i = lane; i < args.width; i += 32u) sum += w[i] * x[i];
-        sum = simd_sum(sum);
-        if (lane == 0u) probs[e] = 1.0f / (1.0f + exp(-sum));
+    const uint perLane = (args.experts + 31u) / 32u;
+    float probs[8];
+    float selection[8];
+    for (uint i = 0u; i < perLane; ++i) {
+        const uint e = lane * perLane + i;
+        probs[i] = e < args.experts ? 1.0f / (1.0f + exp(-logits[e])) : 0.0f;
+        selection[i] = e < args.experts ? probs[i] + bias[e] : -INFINITY;
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    if (tid != 0u) return;
-    uint chosen[16];
     float total = 0.0f;
+    int chosen = 0;
+    float chosenProb = 0.0f;
     for (uint k = 0u; k < args.used; ++k) {
         float best = -INFINITY;
-        uint bestIndex = 0u;
-        for (uint e = 0u; e < args.experts; ++e) {
-            bool taken = false;
-            for (uint i = 0u; i < k; ++i) taken = taken || chosen[i] == e;
-            const float selection = probs[e] + bias[e];
-            if (!taken && selection > best) {
-                best = selection;
-                bestIndex = e;
+        uint bestIndex = 0xFFFFFFFFu;
+        for (uint i = 0u; i < perLane; ++i) {
+            if (selection[i] > best) {
+                best = selection[i];
+                bestIndex = lane * perLane + i;
             }
         }
-        chosen[k] = bestIndex;
-        total += probs[bestIndex];
+        for (uint offset = 16u; offset > 0u; offset /= 2u) {
+            const float otherValue = simd_shuffle_xor(best, offset);
+            const uint otherIndex = simd_shuffle_xor(bestIndex, offset);
+            if (otherValue > best || (otherValue == best && otherIndex < bestIndex)) {
+                best = otherValue;
+                bestIndex = otherIndex;
+            }
+        }
+        // The owning lane retires the winner and reports its probability.
+        float prob = 0.0f;
+        if (bestIndex / perLane == lane) {
+            prob = probs[bestIndex % perLane];
+            selection[bestIndex % perLane] = -INFINITY;
+        }
+        prob = simd_sum(prob);
+        total += prob;
+        if (lane == k) {
+            chosen = int(bestIndex);
+            chosenProb = prob;
+        }
     }
-    for (uint k = 0u; k < args.used; ++k) {
-        ids[k] = int(chosen[k]);
-        routeWeights[k] = probs[chosen[k]] / (total + args.normEpsilon) * args.weightScale;
+    if (lane < args.used) {
+        ids[lane] = chosen;
+        routeWeights[lane] = chosenProb / (total + args.normEpsilon) * args.weightScale;
     }
 }
 

@@ -33,6 +33,8 @@ final class Inkling2GGUFState {
     let dynamicK: MTLBuffer
     let dynamicV: MTLBuffer
     let controlHidden: MTLBuffer
+    let controlJoined: MTLBuffer
+    let routerLogits: MTLBuffer
     let attentionLogits: MTLBuffer
     let routeIDs: MTLBuffer
     let routeWeights: MTLBuffer
@@ -86,6 +88,8 @@ final class Inkling2GGUFState {
         dynamicK = try buffer(m.convolutionTaps * layer.kvHeads * 4, "dynamic K")
         dynamicV = try buffer(m.convolutionTaps * layer.kvHeads * 4, "dynamic V")
         controlHidden = try buffer(m.loopGateRank * 4, "control hidden")
+        controlJoined = try buffer(2 * m.hidden * 4, "control input")
+        routerLogits = try buffer(m.expertCount * 4, "router logits")
         attentionLogits = try buffer(layer.heads * maxContext * 4, "attention logits")
         routeIDs = try buffer(m.expertsPerToken * 4, "route ids")
         routeWeights = try buffer(m.expertsPerToken * 4, "route weights")

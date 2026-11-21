@@ -71,6 +71,11 @@ final class Inkling2GGUFOps {
     }
 
     let gemvIds: GGUFGemvIds
+    /// Profiling ablation: op categories left out of the encoded token, so the
+    /// GPU-time difference attributes cost. Tokens produced with any category
+    /// skipped are meaningless. Categories: mix, control, conv, clip, attention,
+    /// router, smallGemv, projection, rms, elementwise, experts, head.
+    var skipped: Set<String> = []
     private var pipelines: [String: MTLComputePipelineState] = [:]
     /// A one-element buffer holding expert id 0, for dense GGUF GEMVs.
     private let zeroID: MTLBuffer
@@ -79,8 +84,8 @@ final class Inkling2GGUFOps {
         gemvIds = try GGUFGemvIds(context: context)
         for name in [
             "embed_q8_0_row", "rms_norm_rows", "dense_gemv_f32_bf16", "depth_mix",
-            "control_project", "control_apply", "short_conv_step", "clip_heads", "kv_store",
-            "relative_attention_decode", "sigmoid_router_topk", "situ_activation",
+            "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_store",
+            "relative_attention_decode", "sigmoid_topk", "situ_activation",
             "moe_weighted_sum", "vector_add", "vector_sigmoid_mul", "vector_copy",
             "argmax_partial", "argmax_final",
         ] {
@@ -121,6 +126,8 @@ final class Inkling2GGUFOps {
     func gemv(
         _ weight: Inkling2GGUFTensor, x: Operand, y: Operand, encoder: MTLComputeCommandEncoder
     ) throws {
+        let category = [.f32, .bf16].contains(weight.type) ? "smallGemv" : "projection"
+        if skipped.contains(category) { return }
         switch weight.type {
         case .f32, .bf16:
             try pipeline("dense_gemv_f32_bf16", encoder)
@@ -161,6 +168,7 @@ final class Inkling2GGUFOps {
         _ x: Operand, weight: Operand?, out: Operand, width: Int, count: Int = 1,
         stride: Int? = nil, epsilon: Float, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("rms") { return }
         try pipeline("rms_norm_rows", encoder)
         set(x, 0, encoder)
         set(weight ?? x, 1, encoder)
@@ -177,6 +185,7 @@ final class Inkling2GGUFOps {
         pool: MTLBuffer, rows: [Int], queries: Operand, queryCount: Int, out: Operand,
         width: Int, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("mix") { return }
         guard !rows.isEmpty, rows.count <= 32 else {
             throw MetalError.invalidState("depth mix over \(rows.count) states")
         }
@@ -193,20 +202,22 @@ final class Inkling2GGUFOps {
         groups(queryCount, threads: 1_024, encoder)
     }
 
-    /// out = loop message controller(cur, message); `h` is a rank-sized scratch.
+    /// out = loop message controller(cur, message). `joined` holds 2 * width
+    /// floats and `h` the controller rank.
     func control(
         cur: Operand, message: Operand, down: Inkling2GGUFTensor, gain: Inkling2GGUFTensor,
-        forget: Inkling2GGUFTensor, h: Operand, out: Operand, width: Int,
+        forget: Inkling2GGUFTensor, joined: Operand, h: Operand, out: Operand, width: Int,
         encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("control") { return }
         var args = ControlArgs(width: UInt32(width), rank: UInt32(down.rows), epsilon: 1e-6)
-        try pipeline("control_project", encoder)
+        try pipeline("control_join", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
-        set(down.operand, 2, encoder)
-        set(h, 3, encoder)
-        encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 4)
+        set(joined, 2, encoder)
+        encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
         groups(1, threads: 1_024, encoder)
+        try gemv(down, x: joined, y: h, encoder: encoder)
         try pipeline("control_apply", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
@@ -215,7 +226,7 @@ final class Inkling2GGUFOps {
         set(forget.operand, 4, encoder)
         set(out, 5, encoder)
         encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 6)
-        threads(width, encoder)
+        groups((width + 3) / 4, threads: 128, encoder)
     }
 
     /// Short convolution step over `channels`, updating `state` ([channels][3]).
@@ -223,6 +234,7 @@ final class Inkling2GGUFOps {
         x: Operand, weight: Inkling2GGUFTensor, state: Operand, out: Operand,
         dynamic: Operand?, heads: Int, channels: Int, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("conv") { return }
         try pipeline("short_conv_step", encoder)
         set(x, 0, encoder)
         set(weight.operand, 1, encoder)
@@ -242,6 +254,7 @@ final class Inkling2GGUFOps {
         _ v: Operand, heads: Int, headDim: Int, scale: Inkling2GGUFTensor?, threshold: Float,
         tau: (floor: Float, alpha: Float)?, step: Operand, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("clip") { return }
         try pipeline("clip_heads", encoder)
         set(v, 0, encoder)
         set(scale?.operand ?? v, 1, encoder)
@@ -258,6 +271,7 @@ final class Inkling2GGUFOps {
         k: Operand, v: Operand, kCache: MTLBuffer, vCache: MTLBuffer, width: Int,
         capacity: Int, ring: Bool, step: Operand, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("attention") { return }
         try pipeline("kv_store", encoder)
         set(k, 0, encoder)
         set(v, 1, encoder)
@@ -274,6 +288,7 @@ final class Inkling2GGUFOps {
         relativeBias: Inkling2GGUFTensor, sinks: Operand, out: Operand, step: Operand,
         logits: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("attention") { return }
         try pipeline("relative_attention_decode", encoder)
         set(q, 0, encoder)
         encoder.setBuffer(kCache, offset: 0, index: 1)
@@ -290,24 +305,31 @@ final class Inkling2GGUFOps {
         groups(Int(args.heads), threads: 256, encoder)
     }
 
+    /// Router logits on the parallel dense GEMV, then the sigmoid top-k in
+    /// one SIMD group. `logits` holds `experts` floats.
     func route(
-        router: Inkling2GGUFTensor, bias: Inkling2GGUFTensor, x: Operand, ids: Operand,
-        weights: Operand, args: RouterArgs, encoder: MTLComputeCommandEncoder
+        router: Inkling2GGUFTensor, bias: Inkling2GGUFTensor, x: Operand, logits: Operand,
+        ids: Operand, weights: Operand, args: RouterArgs, encoder: MTLComputeCommandEncoder
     ) throws {
-        try pipeline("sigmoid_router_topk", encoder)
-        set(router.operand, 0, encoder)
-        set(x, 1, encoder)
-        set(bias.operand, 2, encoder)
-        set(ids, 3, encoder)
-        set(weights, 4, encoder)
+        if skipped.contains("router") { return }
+        guard args.experts <= 256, args.used <= 32 else {
+            throw MetalError.invalidState("router: \(args.experts) experts, top-\(args.used)")
+        }
+        try gemv(router, x: x, y: logits, encoder: encoder)
+        try pipeline("sigmoid_topk", encoder)
+        set(logits, 0, encoder)
+        set(bias.operand, 1, encoder)
+        set(ids, 2, encoder)
+        set(weights, 3, encoder)
         var copy = args
-        encoder.setBytes(&copy, length: MemoryLayout<RouterArgs>.stride, index: 5)
-        groups(1, threads: 1_024, encoder)
+        encoder.setBytes(&copy, length: MemoryLayout<RouterArgs>.stride, index: 4)
+        groups(1, threads: 32, encoder)
     }
 
     func situ(
         gateUp: Operand, act: Operand, args: SituArgs, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("elementwise") { return }
         try pipeline("situ_activation", encoder)
         set(gateUp, 0, encoder)
         set(act, 1, encoder)
@@ -320,6 +342,7 @@ final class Inkling2GGUFOps {
         down: Operand, weights: Operand, out: Operand, width: Int, slots: Int,
         encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("elementwise") { return }
         try pipeline("moe_weighted_sum", encoder)
         set(down, 0, encoder)
         set(weights, 1, encoder)
@@ -334,6 +357,7 @@ final class Inkling2GGUFOps {
     )
         throws
     {
+        if skipped.contains("elementwise") { return }
         try pipeline("vector_add", encoder)
         set(a, 0, encoder)
         set(b, 1, encoder)
@@ -346,6 +370,7 @@ final class Inkling2GGUFOps {
     func sigmoidMultiply(
         _ a: Operand, by b: Operand, count: Int, encoder: MTLComputeCommandEncoder
     ) throws {
+        if skipped.contains("elementwise") { return }
         try pipeline("vector_sigmoid_mul", encoder)
         set(a, 0, encoder)
         set(b, 1, encoder)
@@ -357,6 +382,7 @@ final class Inkling2GGUFOps {
     func copy(_ src: Operand, to dst: Operand, count: Int, encoder: MTLComputeCommandEncoder)
         throws
     {
+        if skipped.contains("elementwise") { return }
         try pipeline("vector_copy", encoder)
         set(src, 0, encoder)
         set(dst, 1, encoder)

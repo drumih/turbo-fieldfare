@@ -16,6 +16,9 @@ final class Inkling2GGUFDecoder {
     private let context: MetalContext
     let ops: Inkling2GGUFOps
     var rowCursor = 0
+    /// CPU time spent encoding, and GPU time of, the last token's command buffer.
+    private(set) var lastEncodeSeconds: Double = 0
+    private(set) var lastGPUSeconds: Double = 0
     /// What each pool row of the last token holds, for diagnostics.
     private(set) var rowLabels: [String] = []
     var labelPrefix = ""
@@ -52,11 +55,14 @@ final class Inkling2GGUFDecoder {
         guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder()
         else { throw MetalError.commandEncoderFailed }
+        let encodeStarted = Date()
         try encodeToken(encoder)
         encoder.endEncoding()
+        lastEncodeSeconds = Date().timeIntervalSince(encodeStarted)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         if let error = commandBuffer.error { throw error }
+        lastGPUSeconds = commandBuffer.gpuEndTime - commandBuffer.gpuStartTime
         let next = Int(state.nextToken.contents().load(as: Int32.self))
         guard returnLogits else { return (next, nil) }
         let cap = manifest.finalLogitSoftcap
@@ -201,7 +207,9 @@ final class Inkling2GGUFDecoder {
         labelPrefix = "final"
         let mixed = try mix(blocks + [cur], query: weights.outputResQuery.operand, count: 1, e)
         let normed = try rmsInto(mixed, weights.outputNorm, e)
-        try ops.gemv(weights.output, x: row(normed), y: scratch(state.logits), encoder: e)
+        if !ops.skipped.contains("head") {
+            try ops.gemv(weights.output, x: row(normed), y: scratch(state.logits), encoder: e)
+        }
         try ops.argmax(
             logits: scratch(state.logits), count: m.vocabulary,
             partials: scratch(state.argmaxPartials), groupCount: Inkling2GGUFState.argmaxGroups,
