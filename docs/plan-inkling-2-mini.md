@@ -37,8 +37,10 @@ NVFP4 values are pinned against an independent Python dequant (first five
 values and prefix sums). A real layer-0 sliding attention block and a real layer-5 global attention
 block now run on a single embedding row; both return finite output plus conv
 state. The complete 20 GB checkpoint is downloaded and the real NVFP4 and
-MXFP8 expert paths are tested. Attention-residual controllers, the loop and the
-LM head are next; no full forward pass exists yet.
+MXFP8 expert paths are tested. A complete layer-0 decoder block (norm, sliding
+attention, routed MLP, both short convolutions and the block residual) now runs
+on one token. Attention-residual controllers, the loop and the LM head are next;
+no full forward pass exists yet.
 
 ## The checkpoint
 
