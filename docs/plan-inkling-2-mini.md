@@ -1,9 +1,24 @@
 # Inkling 2 Mini in TinyTitan 7.x — port plan and quality contract
 
-**Status: Phase 0 contract reader landed; the engine is not implemented.** This
-is a new engine family, a new mixed-quantization runtime and a multimodal
-surface — not a model-profile entry. The phases below are ordered so the
-quantized weights are never requantized.
+**Status: Phase 0 complete; Phase 1 blocked on operator inputs.** The Python and
+Swift contract readers validate the real metadata (commit `5ffc1515`,
+`6e9c988e`), but the engine is not implemented. This is a new engine family, a
+new mixed-quantization runtime and a multimodal surface — not a model-profile
+entry. The phases below are ordered so the quantized weights are never
+requantized.
+
+### Blockers (2026-11-21)
+
+- **No checkpoint installed.** `models/` holds only the Ornith 4-bit and six
+  dense Qwen 3.5 installs. The ~20 GB Inkling download is an operator action
+  and has not been authorized; this is not something a gate may fetch.
+- **Scope undecided:** text-only vs full multimodal, and preserve
+  NVFP4/MXFP8 vs a BF16 port. Phase 1 differs in each case.
+- **Reference host absent:** full logits/token parity needs a PyTorch/vLLM run;
+  this Mac has no NVIDIA GPU.
+- **Host limit:** 24 GiB RAM vs the model card's 32 GB recommendation, and
+  42 GiB free disk before a 20 GB install. Text-only expert streaming may fit,
+  but 1M context/vision is not a 24 GiB target.
 
 Phase 0's metadata reader is `benchmark/inkling2_quant_contract.py` (with
 `test_inkling2_quant_contract` in CI): it validates the real HF metadata and
