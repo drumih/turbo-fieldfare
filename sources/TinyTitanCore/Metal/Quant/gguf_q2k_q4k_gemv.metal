@@ -7,6 +7,24 @@ using namespace metal;
 // the 84/144-byte blocks are read once and no full-precision expert is
 // materialised.
 
+static inline float q2k_block(
+    device const uchar* b, device const float* x, uint base, uint e0,
+    uint qBase, uint l0, uint shift, uint scIndex)
+{
+    const float d = float(as_type<half>(ushort(ushort(b[80]) | (ushort(b[81]) << 8u))));
+    const float dmin = float(as_type<half>(ushort(ushort(b[82]) | (ushort(b[83]) << 8u))));
+    const uchar scale = b[scIndex];
+    const float dl = d * float(scale & 0x0Fu);
+    const float ml = dmin * float(scale >> 4u);
+    const ulong packed = *(device const ulong*)(b + 16u + qBase + l0);
+    float sum = 0.0f;
+    for (uint i = 0u; i < 8u; ++i) {
+        const uint quant = (uint((packed >> (8u * i)) & 0xFFu) >> shift) & 3u;
+        sum = fma(dl * float(quant) - ml, x[base + e0 + i], sum);
+    }
+    return sum;
+}
+
 kernel void q2k_gemv(
     device const uchar* weights [[buffer(0)]],
     device const float* x [[buffer(1)]],
@@ -22,7 +40,6 @@ kernel void q2k_gemv(
     const uint blockCount = columns / 256u;
     device const uchar* rowWeights = weights + row * blockCount * 84u;
     const uint e0 = lane * 8u;
-    const uint sub = e0 / 16u;
     const uint halfBlock = e0 / 128u;
     const uint e2 = e0 % 128u;
     const uint j = e2 / 32u;
@@ -31,21 +48,23 @@ kernel void q2k_gemv(
     const uint shift = 2u * j;
     const uint scIndex = halfBlock * 8u + j * 2u + within / 16u;
     const uint l0 = within % 16u;
-    float sum = 0.0f;
-    for (uint blockIndex = 0u; blockIndex < blockCount; ++blockIndex) {
-        device const uchar* b = rowWeights + blockIndex * 84u;
-        const float d = float(as_type<half>(ushort(ushort(b[80]) | (ushort(b[81]) << 8u))));
-        const float dmin = float(as_type<half>(ushort(ushort(b[82]) | (ushort(b[83]) << 8u))));
-        const uchar scale = b[scIndex];
-        const float dl = d * float(scale & 0x0Fu);
-        const float ml = dmin * float(scale >> 4u);
-        const ulong packed = *(device const ulong*)(b + 16u + qBase + l0);
-        for (uint i = 0u; i < 8u; ++i) {
-            const uint quant = (uint((packed >> (8u * i)) & 0xFFu) >> shift) & 3u;
-            sum = fma(dl * float(quant) - ml, x[blockIndex * 256u + e0 + i], sum);
-        }
+    float sumA = 0.0f;
+    float sumB = 0.0f;
+    uint blockIndex = 0u;
+    for (; blockIndex + 1u < blockCount; blockIndex += 2u) {
+        sumA += q2k_block(
+            rowWeights + blockIndex * 84u, x, blockIndex * 256u, e0,
+            qBase, l0, shift, scIndex);
+        sumB += q2k_block(
+            rowWeights + (blockIndex + 1u) * 84u, x, (blockIndex + 1u) * 256u, e0,
+            qBase, l0, shift, scIndex);
     }
-    sum = simd_sum(sum);
+    if (blockIndex < blockCount) {
+        sumA += q2k_block(
+            rowWeights + blockIndex * 84u, x, blockIndex * 256u, e0,
+            qBase, l0, shift, scIndex);
+    }
+    const float sum = simd_sum(sumA + sumB);
     if (lane == 0u) y[row] = sum;
 }
 
