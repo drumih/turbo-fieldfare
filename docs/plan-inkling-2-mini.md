@@ -43,7 +43,8 @@ on one token, and a real layer-5 global block now exercises the three-input
 attention path, loads the checkpoint's real attention-residual queries, and has
 the loop message controllers, and a streamed LM head (all 201,024 logits are
 finite on a real hidden row). The full 24-layer prelude/loop/coda forward now
-runs on one token and produces 201,024 finite logits in 2,380 s on CPU. Sampling,
+runs on one token and produces 201,024 finite logits in 2,148 s on CPU after the
+loop was corrected to repeat the whole 6..17 core. Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
 
