@@ -18,6 +18,8 @@ import Testing
         let logits = try model.forward(token: 0)
         #expect(logits.count == 201_024)
         #expect(logits.allSatisfy { $0.isFinite })
+        let next = Inkling2TextModel.greedyToken(logits)
+        #expect((0..<201_024).contains(next))
     }
 
     @Test(

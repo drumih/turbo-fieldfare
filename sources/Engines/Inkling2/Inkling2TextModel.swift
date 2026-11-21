@@ -97,6 +97,12 @@ public struct Inkling2TextModel: Sendable {
 
     public var visitIndices: [Int] { layerIndices }
 
+    public static func greedyToken(_ logits: [Float]) -> Int {
+        var best = 0
+        for index in logits.indices where logits[index] > logits[best] { best = index }
+        return best
+    }
+
     public func forward(token: Int) throws -> [Float] {
         let hidden = config.text.hiddenSize
         var x = Inkling2Ops.rmsNorm(
