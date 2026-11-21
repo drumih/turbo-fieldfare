@@ -60,8 +60,13 @@ GQA maps query head h to KV head h//3, and K/V normalization happens before the
 attention copy. Using the checkpoint's exact chat template, a "The capital of France is" prompt
 now emits `<|message_model|><|content_thinking|>The user has given...` — a
 coherent, on-topic reasoning continuation. The earlier echo was caused by a
-wrong manual assistant prefix. Generation still stops after the test's fixed
-token budget, so there is no complete answer or quality verdict yet.
+wrong manual assistant prefix. A greedy `Inkling2Generator` now drives the cached loop. With the exact chat
+template and 8 tokens it produces
+`<|message_model|><|content_thinking|>The user has given me a`; with the
+system effort prompt it produces `The user asks: "The`. Both are coherent
+reasoning, still short of the final answer. A 32-token run was killed by
+memory pressure from per-token Metal allocations; per-token autorelease pools
+were added and the 8-token run completes, but longer runs remain unverified.
 The first greedy token is id 184,972 (`البيانات`). Sampling,
 per-token caches, CLI/server integration and Metal kernels remain; this is a
 correctness reference, not a usable runtime.
