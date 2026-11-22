@@ -282,3 +282,153 @@ kernel void control_apply_chunk(
         if (lane == 0u) out[at] = (1.0f - tanh(f)) * cur[at] + tanh(g) * message[at];
     }
 }
+
+// short_conv_step for a chunk, in parallel: the 4-tap window covers inputs
+// only, so out[t][c] needs x[t - 3 ... t] (the state for positions before the
+// chunk), never an earlier output. One thread per (token, channel) computes
+// out[t][c] with short_conv_step's expressions; short_conv_state then shifts
+// the last three inputs into the state (a separate dispatch, after every read
+// of the old state). The sequential kernel walked 64 tokens per channel on
+// 6,656 threads. Grid: tokens x channels.
+static inline float depth_conv_input(
+    device const float* x, device const float* routeWeights, constant DepthConvArgs& args,
+    uint t, uint c)
+{
+    if (args.slots == 0u) return x[t * args.channels + c];
+    float xv = 0.0f;
+    for (uint s = 0u; s < args.slots; ++s) {
+        xv += routeWeights[t * args.slots + s] * x[(t * args.slots + s) * args.channels + c];
+    }
+    return xv;
+}
+
+kernel void short_conv_chunk(
+    device const float* x [[buffer(0)]],
+    device const float* weight [[buffer(1)]],
+    device const float* state [[buffer(2)]],
+    device float* out [[buffer(3)]],
+    device const float* routeWeights [[buffer(4)]],
+    device const float* residual [[buffer(5)]],
+    constant DepthConvArgs& args [[buffer(6)]],
+    uint index [[thread_position_in_grid]])
+{
+    const uint c = index % args.channels;
+    const uint t = index / args.channels;
+    if (t >= args.tokens) return;
+    float window[3];
+    for (uint k = 0u; k < 3u; ++k) {
+        const int source = int(t) - 3 + int(k);
+        window[k] = source >= 0
+            ? depth_conv_input(x, routeWeights, args, uint(source), c)
+            : state[c * 3u + uint(source + 3)];
+    }
+    const float xv = depth_conv_input(x, routeWeights, args, t, c);
+    const float conv = window[0] * weight[c * 4u + 0u] + window[1] * weight[c * 4u + 1u]
+        + window[2] * weight[c * 4u + 2u] + xv * weight[c * 4u + 3u];
+    out[t * args.channels + c] = (xv + conv) * args.scale
+        + (args.hasResidual != 0u ? residual[t * args.channels + c] : 0.0f);
+}
+
+kernel void short_conv_state(
+    device const float* x [[buffer(0)]],
+    device float* state [[buffer(2)]],
+    device const float* routeWeights [[buffer(4)]],
+    constant DepthConvArgs& args [[buffer(6)]],
+    uint c [[thread_position_in_grid]])
+{
+    if (c >= args.channels) return;
+    float next[3];
+    for (uint k = 0u; k < 3u; ++k) {
+        const int source = int(args.tokens) - 3 + int(k);
+        next[k] = source >= 0
+            ? depth_conv_input(x, routeWeights, args, uint(source), c)
+            : state[c * 3u + uint(source + 3)];
+    }
+    for (uint k = 0u; k < 3u; ++k) state[c * 3u + k] = next[k];
+}
+
+// kv_finish for a chunk, in parallel: the K/V convolutions' windows cover
+// inputs only, so each (K or V head, token) is its own threadgroup with
+// kv_finish's expressions and reduction; kv_finish_state then shifts the last
+// three inputs into the state once every read of the old state is done. The
+// sequential kernel ran 16 threadgroups walking the chunk with two barriers
+// per token. Grid: 2 * kvHeads * tokens threadgroups of headDim threads.
+kernel void kv_finish_chunk(
+    device const float* k [[buffer(0)]],
+    device const float* v [[buffer(1)]],
+    device const float* kWeight [[buffer(2)]],
+    device const float* vWeight [[buffer(3)]],
+    device const float* state [[buffer(4)]],
+    device const float* kDynamic [[buffer(5)]],
+    device const float* vDynamic [[buffer(6)]],
+    device half* kCache [[buffer(7)]],
+    device half* vCache [[buffer(8)]],
+    device const DepthStep* step [[buffer(9)]],
+    constant DepthKVFinishArgs& args [[buffer(10)]],
+    uint groupIndex [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float scratch[32];
+    const uint t = groupIndex / (2u * args.kvHeads);
+    const uint unit = groupIndex % (2u * args.kvHeads);
+    const bool isV = unit >= args.kvHeads;
+    const uint head = unit % args.kvHeads;
+    const uint width = args.kvHeads * args.headDim;
+    const uint c = head * args.headDim + tid;
+    device const float* xs = isV ? v : k;
+    device const float* weight = isV ? vWeight : kWeight;
+    device const float* dynamic = isV ? vDynamic : kDynamic;
+    device const float* st = state + (isV ? width : 0u) * 3u;
+    device half* cache = isV ? vCache : kCache;
+    float window[3];
+    for (uint i = 0u; i < 3u; ++i) {
+        const int source = int(t) - 3 + int(i);
+        window[i] = source >= 0 ? xs[uint(source) * width + c] : st[c * 3u + uint(source + 3)];
+    }
+    const float s0 = window[0];
+    const float s1 = window[1];
+    const float s2 = window[2];
+    const float xv = xs[t * width + c];
+    float conv = s0 * weight[c * 4u + 0u] + s1 * weight[c * 4u + 1u]
+        + s2 * weight[c * 4u + 2u] + xv * weight[c * 4u + 3u];
+    if (args.hasDynamic != 0u) {
+        device const float* taps = dynamic + (t * args.kvHeads + head) * 4u;
+        conv += xv * taps[0];
+        conv += s2 * taps[1];
+        conv += s1 * taps[2];
+        conv += s0 * taps[3];
+    }
+    const float value = (xv + conv) * args.scale;
+    const uint simdgroups = (threads + 31u) / 32u;
+    const float sq = depth_threadgroup_sum(value * value, scratch, sg, lane, simdgroups);
+    const float factor = isV
+        ? rsqrt(sq / float(args.headDim) + args.epsilon)
+        : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
+    const uint position = step[0].position + t;
+    const uint slot = args.ring != 0u ? position % args.capacity : position;
+    cache[ulong(slot) * width + c] = half(value * factor);
+}
+
+kernel void kv_finish_state(
+    device const float* k [[buffer(0)]],
+    device const float* v [[buffer(1)]],
+    device float* state [[buffer(4)]],
+    constant DepthKVFinishArgs& args [[buffer(10)]],
+    uint index [[thread_position_in_grid]])
+{
+    const uint width = args.kvHeads * args.headDim;
+    if (index >= 2u * width) return;
+    const bool isV = index >= width;
+    const uint c = index % width;
+    device const float* xs = isV ? v : k;
+    device float* st = state + (isV ? width : 0u) * 3u;
+    float next[3];
+    for (uint i = 0u; i < 3u; ++i) {
+        const int source = int(args.tokens) - 3 + int(i);
+        next[i] = source >= 0 ? xs[uint(source) * width + c] : st[c * 3u + uint(source + 3)];
+    }
+    for (uint i = 0u; i < 3u; ++i) st[c * 3u + i] = next[i];
+}

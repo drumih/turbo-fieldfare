@@ -54,6 +54,7 @@ final class Inkling2GGUFOps {
         for name in [
             "embed_q8_0_row", "embed_iq4_xs_row", "rms_norm_rows", "dense_gemv_f32_bf16",
             "dense_gemv_wide_rows", "dense_gemm_small_rows", "control_join", "control_apply_chunk",
+            "short_conv_chunk", "short_conv_state", "kv_finish_chunk", "kv_finish_state",
             "depth_mix",
             "control_down", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
             "relative_attention_decode", "relative_attention_chunk", "sigmoid_topk",

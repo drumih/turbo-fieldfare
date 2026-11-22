@@ -66,7 +66,9 @@ extension Inkling2GGUFOps {
         tokens: Int, encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("conv") { return }
-        try pipeline("short_conv_step", encoder)
+        let chunk = tokens > 1
+        if chunk { try requireSequential("chunk convolution") }
+        try pipeline(chunk ? "short_conv_chunk" : "short_conv_step", encoder)
         set(x, 0, encoder)
         set(weight.operand, 1, encoder)
         set(state, 2, encoder)
@@ -78,6 +80,14 @@ extension Inkling2GGUFOps {
             hasResidual: residual == nil ? 0 : 1, scale: 1 / Float(5).squareRoot(),
             tokens: UInt32(tokens))
         encoder.setBytes(&args, length: MemoryLayout<ConvArgs>.stride, index: 6)
+        if !chunk {
+            threads(channels, encoder)
+            return
+        }
+        // Every (token, channel) output in parallel, then the state shift once
+        // all reads of the old state are done; buffers stay bound.
+        threads(channels * tokens, encoder)
+        try pipeline("short_conv_state", encoder)
         threads(channels, encoder)
     }
 
@@ -89,7 +99,9 @@ extension Inkling2GGUFOps {
         vCache: MTLBuffer, step: Operand, args: KVFinishArgs, encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("conv") { return }
-        try pipeline("kv_finish", encoder)
+        // A chunk: every (head, token) in parallel; the state shift is
+        // `kvFinishState`, after the group this joins.
+        try pipeline(args.tokens > 1 ? "kv_finish_chunk" : "kv_finish", encoder)
         set(k, 0, encoder)
         set(v, 1, encoder)
         set(kWeight.operand, 2, encoder)
@@ -102,7 +114,26 @@ extension Inkling2GGUFOps {
         set(step, 9, encoder)
         var copy = args
         encoder.setBytes(&copy, length: MemoryLayout<KVFinishArgs>.stride, index: 10)
-        groups(2 * Int(args.kvHeads), threads: Int(args.headDim), encoder)
+        groups(
+            2 * Int(args.kvHeads) * (args.tokens > 1 ? Int(args.tokens) : 1),
+            threads: Int(args.headDim), encoder)
+    }
+
+    /// A chunk's K/V convolution state shift (the last three inputs), after
+    /// `kvFinish` has read the old state. Nothing to do at one token, where
+    /// kv_finish shifts the state itself.
+    func kvFinishState(
+        k: Operand, v: Operand, state: Operand, args: KVFinishArgs,
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        if skipped.contains("conv") || args.tokens <= 1 { return }
+        try pipeline("kv_finish_state", encoder)
+        set(k, 0, encoder)
+        set(v, 1, encoder)
+        set(state, 4, encoder)
+        var copy = args
+        encoder.setBytes(&copy, length: MemoryLayout<KVFinishArgs>.stride, index: 10)
+        threads(2 * Int(args.kvHeads * args.headDim), encoder)
     }
 
     /// Per-(head, token) L2 clip, optionally scaled, optionally times the

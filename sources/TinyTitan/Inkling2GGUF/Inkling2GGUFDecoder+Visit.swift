@@ -163,6 +163,8 @@ extension Inkling2GGUFDecoder {
                 scratch(s.r), heads: heads, headDim: m.relativeLength, scale: layer.relClip,
                 threshold: m.relativeClip, tau: tau, step: step, tokens: t, encoder: e)
         }
+        try ops.kvFinishState(
+            k: scratch(s.k), v: scratch(s.v), state: .init(state), args: kvArgs, encoder: e)
 
         // Gated attention over the cache, output projection and conv (+ residual).
         let attentionArgs = Inkling2GGUFOps.AttentionArgs(
