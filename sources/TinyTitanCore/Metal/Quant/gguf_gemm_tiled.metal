@@ -168,6 +168,9 @@ static void gguf_gemm_tiled_impl(
     const uint sgRow = BM == 128u ? sg * 32u : (BN == 32u ? (sg % 2u) * 32u : sg * 16u);
     const uint sgToken = BM == 128u ? 0u : (BN == 32u ? (sg / 2u) * 16u : 0u);
 
+    // One decode-store-barrier-MMA step per BK. (Prefetching step k + BK into
+    // registers during step k's MMAs measured slower on both row tiles: a
+    // routed layer at T=512 29.2 -> 32.1 ms on the 128-row tile.)
     for (uint k = 0u; k < args.columns; k += BK) {
         for (uint part = 0u; part < PARTS; ++part) {
             half wv[16];
