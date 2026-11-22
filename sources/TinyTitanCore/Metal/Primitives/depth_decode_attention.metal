@@ -19,7 +19,8 @@ struct DepthAttentionArgs {
 // b(d) = R . bias[d] for d < extent else 0, plus one extra logit 0 (the sink).
 // The bias and sink are not scaled: this is llama.cpp's flash-attention path,
 // where they form the additive mask, and the checkpoint's own reference.
-// out = sum_j softmax_j * v_j. K/V caches are half [capacity][kvHeads][headDim].
+// out = sigmoid(gate) * sum_j softmax_j * v_j. K/V caches are half
+// [capacity][kvHeads][headDim].
 kernel void relative_attention_decode(
     device const float* q [[buffer(0)]],
     device const half* kCache [[buffer(1)]],
@@ -31,6 +32,7 @@ kernel void relative_attention_decode(
     device const uint* step [[buffer(7)]],
     device float* logits [[buffer(8)]],
     constant DepthAttentionArgs& args [[buffer(9)]],
+    device const float* gate [[buffer(10)]],
     uint head [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
@@ -98,7 +100,8 @@ kernel void relative_attention_decode(
     for (uint d = tid; d < args.headDim; d += threads) {
         float acc = 0.0f;
         for (uint i = 0u; i < simdgroups; ++i) acc += partial[i][d];
-        out[head * args.headDim + d] = acc / denominator;
+        const float g = gate[head * args.headDim + d];
+        out[head * args.headDim + d] = acc / denominator / (1.0f + exp(-g));
     }
 }
 
@@ -191,51 +194,6 @@ kernel void situ_activation(
     const float u = gateUp[slot * 2u * args.feedForward + args.feedForward + j];
     const float gated = args.beta * tanh(g / args.beta) / (1.0f + exp(-g));
     act[index] = gated * args.linearBeta * tanh(u / args.linearBeta);
-}
-
-// out[c] = sum_s w[s] * down[s][c]
-kernel void moe_weighted_sum(
-    device const float* down [[buffer(0)]],
-    device const float* routeWeights [[buffer(1)]],
-    device float* out [[buffer(2)]],
-    constant uint2& shape [[buffer(3)]],  // (width, slots)
-    uint c [[thread_position_in_grid]])
-{
-    if (c >= shape.x) return;
-    float sum = 0.0f;
-    for (uint s = 0u; s < shape.y; ++s) sum += routeWeights[s] * down[s * shape.x + c];
-    out[c] = sum;
-}
-
-// out = a + b
-kernel void vector_add(
-    device const float* a [[buffer(0)]],
-    device const float* b [[buffer(1)]],
-    device float* out [[buffer(2)]],
-    constant uint& count [[buffer(3)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i < count) out[i] = a[i] + b[i];
-}
-
-// a *= sigmoid(b)
-kernel void vector_sigmoid_mul(
-    device float* a [[buffer(0)]],
-    device const float* b [[buffer(1)]],
-    constant uint& count [[buffer(2)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i < count) a[i] = a[i] / (1.0f + exp(-b[i]));
-}
-
-// dst = src (count floats)
-kernel void vector_copy(
-    device const float* src [[buffer(0)]],
-    device float* dst [[buffer(1)]],
-    constant uint& count [[buffer(2)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i < count) dst[i] = src[i];
 }
 
 // Two-pass argmax over `count` logits: pass 1 writes one (value, index) per

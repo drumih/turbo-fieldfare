@@ -107,6 +107,8 @@ struct DepthMixArgs {
     uint stateCount;
     uint queryCount;
     float epsilon;
+    uint normWeighted;  // 1: RMS-normalise the output and multiply by `normWeight`
+    float normEpsilon;
 };
 
 // Attention over depth: for query q, out[q] = sum_s softmax_s(rms(s) . q / sqrt(width)) * rms(s).
@@ -117,6 +119,7 @@ kernel void depth_mix(
     device float* out [[buffer(2)]],
     constant DepthMixArgs& args [[buffer(3)]],
     constant uint* rowsOf [[buffer(4)]],
+    device const float* normWeight [[buffer(5)]],
     uint query [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
@@ -150,13 +153,20 @@ kernel void depth_mix(
     float denominator = 0.0f;
     for (uint s = 0u; s < args.stateCount; ++s) denominator += exp(score[s] - peak);
     device float* o = out + query * args.width;
+    float outSquares = 0.0f;
     for (uint i = tid; i < args.width; i += threads) {
         float value = 0.0f;
         for (uint s = 0u; s < args.stateCount; ++s) {
             value += exp(score[s] - peak) / denominator * inv[s] * pool[rowsOf[s] * args.width + i];
         }
         o[i] = value;
+        outSquares += value * value;
     }
+    if (args.normWeighted == 0u) return;
+    // Each thread rescales the elements it wrote, so only the sum is shared.
+    const float total = depth_threadgroup_sum(outSquares, scratch, sg, lane, simdgroups);
+    const float r = rsqrt(total / float(args.width) + args.normEpsilon);
+    for (uint i = tid; i < args.width; i += threads) o[i] = o[i] * r * normWeight[i];
 }
 
 struct DepthControlArgs {
@@ -224,40 +234,104 @@ kernel void control_apply(
 
 struct DepthConvArgs {
     uint channels;
-    uint heads;
-    uint hasDynamic;
+    uint slots;        // > 0: the input is sum_s weights[s] * x[s][c] (routed experts)
+    uint hasResidual;  // add `residual` after the scale
     float scale;
 };
 
 // Causal 4-tap short convolution with residual, one channel per thread:
-// out = (x + sum_k w[k] * [s0 s1 s2 x][k] (+ dynamic per-head taps)) * scale,
-// state <- [s1 s2 x]. `state` is [channels][3]; weight is [channels][4];
-// dynamic is [heads][4] with lag 0 the current input.
+// out = (x + sum_k w[k] * [s0 s1 s2 x][k]) * scale (+ residual), state <- [s1 s2 x].
+// `state` is [channels][3]; weight is [channels][4].
 kernel void short_conv_step(
     device const float* x [[buffer(0)]],
     device const float* weight [[buffer(1)]],
     device float* state [[buffer(2)]],
     device float* out [[buffer(3)]],
-    device const float* dynamic [[buffer(4)]],
-    constant DepthConvArgs& args [[buffer(5)]],
+    device const float* routeWeights [[buffer(4)]],
+    device const float* residual [[buffer(5)]],
+    constant DepthConvArgs& args [[buffer(6)]],
     uint c [[thread_position_in_grid]])
 {
     if (c >= args.channels) return;
-    const float s0 = state[c * 3u + 0u];
-    const float s1 = state[c * 3u + 1u];
-    const float s2 = state[c * 3u + 2u];
-    const float xv = x[c];
-    const float window[4] = {s0, s1, s2, xv};
+    float xv;
+    if (args.slots > 0u) {
+        xv = 0.0f;
+        for (uint s = 0u; s < args.slots; ++s) xv += routeWeights[s] * x[s * args.channels + c];
+    } else {
+        xv = x[c];
+    }
+    const float window[4] = {state[c * 3u + 0u], state[c * 3u + 1u], state[c * 3u + 2u], xv};
     float conv = 0.0f;
     for (uint k = 0u; k < 4u; ++k) conv += window[k] * weight[c * 4u + k];
+    state[c * 3u + 0u] = window[1];
+    state[c * 3u + 1u] = window[2];
+    state[c * 3u + 2u] = xv;
+    out[c] = (xv + conv) * args.scale + (args.hasResidual != 0u ? residual[c] : 0.0f);
+}
+
+struct DepthKVFinishArgs {
+    uint headDim;
+    uint kvHeads;
+    uint hasDynamic;
+    uint capacity;
+    uint ring;
+    float threshold;  // K clip
+    float epsilon;    // V RMS norm
+    float scale;      // convolution residual scale
+};
+
+// K and V after their projections, in one kernel: one threadgroup per head
+// (first kvHeads for K, then V), one thread per channel. Each runs its
+// causal convolution (with the per-head dynamic taps of full layers), then K
+// is L2-clipped and V RMS-normalised per head, and both are stored as half
+// at this position's cache slot. `state` holds K channels then V channels.
+kernel void kv_finish(
+    device const float* k [[buffer(0)]],
+    device const float* v [[buffer(1)]],
+    device const float* kWeight [[buffer(2)]],
+    device const float* vWeight [[buffer(3)]],
+    device float* state [[buffer(4)]],
+    device const float* kDynamic [[buffer(5)]],
+    device const float* vDynamic [[buffer(6)]],
+    device half* kCache [[buffer(7)]],
+    device half* vCache [[buffer(8)]],
+    device const DepthStep* step [[buffer(9)]],
+    constant DepthKVFinishArgs& args [[buffer(10)]],
+    uint groupIndex [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float scratch[32];
+    const bool isV = groupIndex >= args.kvHeads;
+    const uint head = groupIndex % args.kvHeads;
+    const uint width = args.kvHeads * args.headDim;
+    const uint c = head * args.headDim + tid;
+    device const float* xs = isV ? v : k;
+    device const float* weight = isV ? vWeight : kWeight;
+    device const float* dynamic = isV ? vDynamic : kDynamic;
+    device float* st = state + (isV ? width : 0u) * 3u;
+
+    const float xv = xs[c];
+    const float window[4] = {st[c * 3u + 0u], st[c * 3u + 1u], st[c * 3u + 2u], xv};
+    float conv = 0.0f;
+    for (uint t = 0u; t < 4u; ++t) conv += window[t] * weight[c * 4u + t];
     if (args.hasDynamic != 0u) {
-        const uint head = c / (args.channels / args.heads);
         for (uint lag = 0u; lag < 4u; ++lag) conv += window[3u - lag] * dynamic[head * 4u + lag];
     }
-    state[c * 3u + 0u] = s1;
-    state[c * 3u + 1u] = s2;
-    state[c * 3u + 2u] = xv;
-    out[c] = (xv + conv) * args.scale;
+    st[c * 3u + 0u] = window[1];
+    st[c * 3u + 1u] = window[2];
+    st[c * 3u + 2u] = xv;
+    const float value = (xv + conv) * args.scale;
+
+    const float sq = depth_threadgroup_sum(value * value, scratch, sg, lane, (threads + 31u) / 32u);
+    const float factor = isV
+        ? rsqrt(sq / float(args.headDim) + args.epsilon)
+        : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
+    const uint slot = args.ring != 0u ? step[0].position % args.capacity : step[0].position;
+    device half* cache = isV ? vCache : kCache;
+    cache[ulong(slot) * width + c] = half(value * factor);
 }
 
 struct DepthClipArgs {
@@ -294,26 +368,4 @@ kernel void clip_heads(
     for (uint i = lane; i < args.headDim; i += 32u) {
         h[i] = h[i] * (args.hasScale != 0u ? scale[head * args.headDim + i] : 1.0f) * factor;
     }
-}
-
-struct DepthKVArgs {
-    uint width;
-    uint capacity;
-    uint ring;
-};
-
-// Stores this position's K and V (width floats each) as half at its cache slot.
-kernel void kv_store(
-    device const float* k [[buffer(0)]],
-    device const float* v [[buffer(1)]],
-    device half* kCache [[buffer(2)]],
-    device half* vCache [[buffer(3)]],
-    device const DepthStep* step [[buffer(4)]],
-    constant DepthKVArgs& args [[buffer(5)]],
-    uint i [[thread_position_in_grid]])
-{
-    if (i >= args.width) return;
-    const uint slot = args.ring != 0u ? step[0].position % args.capacity : step[0].position;
-    kCache[ulong(slot) * args.width + i] = half(k[i]);
-    vCache[ulong(slot) * args.width + i] = half(v[i]);
 }

@@ -21,6 +21,8 @@ final class Inkling2GGUFOps {
         var stateCount: UInt32
         var queryCount: UInt32
         var epsilon: Float
+        var normWeighted: UInt32
+        var normEpsilon: Float
     }
     private struct ControlArgs {
         var width: UInt32
@@ -29,8 +31,18 @@ final class Inkling2GGUFOps {
     }
     private struct ConvArgs {
         var channels: UInt32
-        var heads: UInt32
+        var slots: UInt32
+        var hasResidual: UInt32
+        var scale: Float
+    }
+    struct KVFinishArgs {
+        var headDim: UInt32
+        var kvHeads: UInt32
         var hasDynamic: UInt32
+        var capacity: UInt32
+        var ring: UInt32
+        var threshold: Float
+        var epsilon: Float
         var scale: Float
     }
     private struct ClipArgs {
@@ -40,11 +52,6 @@ final class Inkling2GGUFOps {
         var threshold: Float
         var tauFloor: Float
         var tauAlpha: Float
-    }
-    private struct KVArgs {
-        var width: UInt32
-        var capacity: UInt32
-        var ring: UInt32
     }
     struct AttentionArgs {
         var heads: UInt32
@@ -84,9 +91,8 @@ final class Inkling2GGUFOps {
         gemvIds = try GGUFGemvIds(context: context)
         for name in [
             "embed_q8_0_row", "rms_norm_rows", "dense_gemv_f32_bf16", "depth_mix",
-            "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_store",
+            "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
             "relative_attention_decode", "sigmoid_topk", "situ_activation",
-            "moe_weighted_sum", "vector_add", "vector_sigmoid_mul", "vector_copy",
             "argmax_partial", "argmax_final",
         ] {
             pipelines[name] = try context.pipeline(name)
@@ -108,7 +114,45 @@ final class Inkling2GGUFOps {
         encoder.setBuffer(operand.buffer, offset: operand.offset, index: index)
     }
 
+    // MARK: Ordering
+
+    /// Inside `concurrent(_:_:)`; dispatches then share one barrier.
+    private var inGroup = false
+    private var groupNeedsBarrier = false
+
+    /// The token is encoded with `MTLDispatchType.concurrent`, so every
+    /// dispatch is ordered after the previous ones by a buffer barrier unless
+    /// it belongs to a group of mutually independent dispatches.
+    private func order(_ encoder: MTLComputeCommandEncoder) {
+        if !inGroup || groupNeedsBarrier {
+            encoder.memoryBarrier(scope: .buffers)
+            groupNeedsBarrier = false
+        }
+    }
+
+    /// Encodes `body`'s dispatches after one barrier and without barriers
+    /// between them: they must read only data written before the group and
+    /// write disjoint buffers. Multi-dispatch ops (control, route, argmax)
+    /// may not appear inside a group.
+    func concurrent(
+        _ encoder: MTLComputeCommandEncoder, _ body: () throws -> Void
+    ) rethrows {
+        precondition(!inGroup, "concurrent groups do not nest")
+        inGroup = true
+        groupNeedsBarrier = true
+        defer { inGroup = false }
+        try body()
+    }
+
+    private func requireSequential(_ name: String) throws {
+        guard !inGroup else {
+            throw MetalError.invalidState(
+                "\(name) has internal dependencies; not in a concurrent group")
+        }
+    }
+
     private func threads(_ count: Int, _ encoder: MTLComputeCommandEncoder, width: Int = 256) {
+        order(encoder)
         encoder.dispatchThreads(
             MTLSize(width: count, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: min(width, max(count, 1)), height: 1, depth: 1))
@@ -117,6 +161,7 @@ final class Inkling2GGUFOps {
     private func groups(
         _ count: Int, threads: Int, _ encoder: MTLComputeCommandEncoder
     ) {
+        order(encoder)
         encoder.dispatchThreadgroups(
             MTLSize(width: count, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
@@ -140,6 +185,7 @@ final class Inkling2GGUFOps {
             encoder.setBytes(&bf16, length: 4, index: 4)
             groups((weight.rows + 3) / 4, threads: 128, encoder)
         default:
+            order(encoder)
             try gemvIds.encode(
                 .init(
                     type: weight.type, rows: weight.rows, columns: weight.columns, slots: 1,
@@ -147,6 +193,17 @@ final class Inkling2GGUFOps {
                 weights: weight.operand, x: x, y: y, ids: .init(zeroID), scales: nil,
                 encoder: encoder)
         }
+    }
+
+    /// A routed expert GEMV (`GGUFGemvIds`), ordered like every other dispatch.
+    func experts(
+        _ shape: GGUFGemvIds.Shape, weights: Operand, x: Operand, y: Operand, ids: Operand,
+        scales: Operand?, encoder: MTLComputeCommandEncoder
+    ) throws {
+        if skipped.contains("experts") { return }
+        order(encoder)
+        try gemvIds.encode(
+            shape, weights: weights, x: x, y: y, ids: ids, scales: scales, encoder: encoder)
     }
 
     func embed(
@@ -181,12 +238,15 @@ final class Inkling2GGUFOps {
     }
 
     /// out[q] = depth mix of the pool rows `rows` with query q of `queries`.
+    /// With `norm` (one query only), the output is RMS-normalised and scaled by
+    /// it in the same kernel.
     func depthMix(
         pool: MTLBuffer, rows: [Int], queries: Operand, queryCount: Int, out: Operand,
-        width: Int, encoder: MTLComputeCommandEncoder
+        width: Int, norm: (weight: Operand, epsilon: Float)? = nil,
+        encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("mix") { return }
-        guard !rows.isEmpty, rows.count <= 32 else {
+        guard !rows.isEmpty, rows.count <= 32, norm == nil || queryCount == 1 else {
             throw MetalError.invalidState("depth mix over \(rows.count) states")
         }
         try pipeline("depth_mix", encoder)
@@ -195,10 +255,12 @@ final class Inkling2GGUFOps {
         set(out, 2, encoder)
         var args = MixArgs(
             width: UInt32(width), stateCount: UInt32(rows.count),
-            queryCount: UInt32(queryCount), epsilon: 1e-6)
+            queryCount: UInt32(queryCount), epsilon: 1e-6, normWeighted: norm == nil ? 0 : 1,
+            normEpsilon: norm?.epsilon ?? 0)
         encoder.setBytes(&args, length: MemoryLayout<MixArgs>.stride, index: 3)
         var indices = rows.map(UInt32.init)
         encoder.setBytes(&indices, length: indices.count * 4, index: 4)
+        set(norm?.weight ?? queries, 5, encoder)
         groups(queryCount, threads: 1_024, encoder)
     }
 
@@ -209,6 +271,7 @@ final class Inkling2GGUFOps {
         forget: Inkling2GGUFTensor, joined: Operand, h: Operand, out: Operand, width: Int,
         encoder: MTLComputeCommandEncoder
     ) throws {
+        try requireSequential("control")
         if skipped.contains("control") { return }
         var args = ControlArgs(width: UInt32(width), rank: UInt32(down.rows), epsilon: 1e-6)
         try pipeline("control_join", encoder)
@@ -230,9 +293,12 @@ final class Inkling2GGUFOps {
     }
 
     /// Short convolution step over `channels`, updating `state` ([channels][3]).
+    /// With `routeWeights`, the input is the weighted sum of `slots` rows of `x`;
+    /// with `residual`, it is added to the output.
     func shortConv(
         x: Operand, weight: Inkling2GGUFTensor, state: Operand, out: Operand,
-        dynamic: Operand?, heads: Int, channels: Int, encoder: MTLComputeCommandEncoder
+        routeWeights: Operand? = nil, slots: Int = 0, residual: Operand? = nil, channels: Int,
+        encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("conv") { return }
         try pipeline("short_conv_step", encoder)
@@ -240,13 +306,37 @@ final class Inkling2GGUFOps {
         set(weight.operand, 1, encoder)
         set(state, 2, encoder)
         set(out, 3, encoder)
-        set(dynamic ?? x, 4, encoder)
-        let taps = Float(dynamic == nil ? 4 : 8)
+        set(routeWeights ?? x, 4, encoder)
+        set(residual ?? x, 5, encoder)
         var args = ConvArgs(
-            channels: UInt32(channels), heads: UInt32(heads),
-            hasDynamic: dynamic == nil ? 0 : 1, scale: 1 / (taps + 1).squareRoot())
-        encoder.setBytes(&args, length: MemoryLayout<ConvArgs>.stride, index: 5)
+            channels: UInt32(channels), slots: routeWeights == nil ? 0 : UInt32(slots),
+            hasResidual: residual == nil ? 0 : 1, scale: 1 / Float(5).squareRoot())
+        encoder.setBytes(&args, length: MemoryLayout<ConvArgs>.stride, index: 6)
         threads(channels, encoder)
+    }
+
+    /// K and V convolutions, the K clip, the V norm and the cache store, in
+    /// one dispatch (one threadgroup per K or V head).
+    func kvFinish(
+        k: Operand, v: Operand, kWeight: Inkling2GGUFTensor, vWeight: Inkling2GGUFTensor,
+        state: Operand, dynamicK: Operand?, dynamicV: Operand?, kCache: MTLBuffer,
+        vCache: MTLBuffer, step: Operand, args: KVFinishArgs, encoder: MTLComputeCommandEncoder
+    ) throws {
+        if skipped.contains("conv") { return }
+        try pipeline("kv_finish", encoder)
+        set(k, 0, encoder)
+        set(v, 1, encoder)
+        set(kWeight.operand, 2, encoder)
+        set(vWeight.operand, 3, encoder)
+        set(state, 4, encoder)
+        set(dynamicK ?? k, 5, encoder)
+        set(dynamicV ?? v, 6, encoder)
+        encoder.setBuffer(kCache, offset: 0, index: 7)
+        encoder.setBuffer(vCache, offset: 0, index: 8)
+        set(step, 9, encoder)
+        var copy = args
+        encoder.setBytes(&copy, length: MemoryLayout<KVFinishArgs>.stride, index: 10)
+        groups(2 * Int(args.kvHeads), threads: Int(args.headDim), encoder)
     }
 
     /// Per-head L2 clip (optionally scaled, optionally times the log-position tau).
@@ -267,26 +357,10 @@ final class Inkling2GGUFOps {
         groups(heads, threads: 32, encoder)
     }
 
-    func storeKV(
-        k: Operand, v: Operand, kCache: MTLBuffer, vCache: MTLBuffer, width: Int,
-        capacity: Int, ring: Bool, step: Operand, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("attention") { return }
-        try pipeline("kv_store", encoder)
-        set(k, 0, encoder)
-        set(v, 1, encoder)
-        encoder.setBuffer(kCache, offset: 0, index: 2)
-        encoder.setBuffer(vCache, offset: 0, index: 3)
-        set(step, 4, encoder)
-        var args = KVArgs(width: UInt32(width), capacity: UInt32(capacity), ring: ring ? 1 : 0)
-        encoder.setBytes(&args, length: MemoryLayout<KVArgs>.stride, index: 5)
-        threads(width, encoder)
-    }
-
     func attention(
         q: Operand, kCache: MTLBuffer, vCache: MTLBuffer, r: Operand,
-        relativeBias: Inkling2GGUFTensor, sinks: Operand, out: Operand, step: Operand,
-        logits: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
+        relativeBias: Inkling2GGUFTensor, sinks: Operand, gate: Operand, out: Operand,
+        step: Operand, logits: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("attention") { return }
         try pipeline("relative_attention_decode", encoder)
@@ -301,6 +375,7 @@ final class Inkling2GGUFOps {
         set(logits, 8, encoder)
         var copy = args
         encoder.setBytes(&copy, length: MemoryLayout<AttentionArgs>.stride, index: 9)
+        set(gate, 10, encoder)
         // relative_attention_decode's partial[8][128] assumes eight SIMD groups.
         groups(Int(args.heads), threads: 256, encoder)
     }
@@ -311,6 +386,7 @@ final class Inkling2GGUFOps {
         router: Inkling2GGUFTensor, bias: Inkling2GGUFTensor, x: Operand, logits: Operand,
         ids: Operand, weights: Operand, args: RouterArgs, encoder: MTLComputeCommandEncoder
     ) throws {
+        try requireSequential("route")
         if skipped.contains("router") { return }
         guard args.experts <= 256, args.used <= 32 else {
             throw MetalError.invalidState("router: \(args.experts) experts, top-\(args.used)")
@@ -338,64 +414,12 @@ final class Inkling2GGUFOps {
         threads(Int(args.feedForward * args.slots), encoder)
     }
 
-    func weightedSum(
-        down: Operand, weights: Operand, out: Operand, width: Int, slots: Int,
-        encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("elementwise") { return }
-        try pipeline("moe_weighted_sum", encoder)
-        set(down, 0, encoder)
-        set(weights, 1, encoder)
-        set(out, 2, encoder)
-        var shape = (UInt32(width), UInt32(slots))
-        encoder.setBytes(&shape, length: 8, index: 3)
-        threads(width, encoder)
-    }
-
-    func add(
-        _ a: Operand, _ b: Operand, out: Operand, count: Int, encoder: MTLComputeCommandEncoder
-    )
-        throws
-    {
-        if skipped.contains("elementwise") { return }
-        try pipeline("vector_add", encoder)
-        set(a, 0, encoder)
-        set(b, 1, encoder)
-        set(out, 2, encoder)
-        var n = UInt32(count)
-        encoder.setBytes(&n, length: 4, index: 3)
-        threads(count, encoder)
-    }
-
-    func sigmoidMultiply(
-        _ a: Operand, by b: Operand, count: Int, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("elementwise") { return }
-        try pipeline("vector_sigmoid_mul", encoder)
-        set(a, 0, encoder)
-        set(b, 1, encoder)
-        var n = UInt32(count)
-        encoder.setBytes(&n, length: 4, index: 2)
-        threads(count, encoder)
-    }
-
-    func copy(_ src: Operand, to dst: Operand, count: Int, encoder: MTLComputeCommandEncoder)
-        throws
-    {
-        if skipped.contains("elementwise") { return }
-        try pipeline("vector_copy", encoder)
-        set(src, 0, encoder)
-        set(dst, 1, encoder)
-        var n = UInt32(count)
-        encoder.setBytes(&n, length: 4, index: 2)
-        threads(count, encoder)
-    }
-
     /// token = argmax(logits[0..<count]); `partials` holds `groupCount` float2.
     func argmax(
         logits: Operand, count: Int, partials: Operand, groupCount: Int, token: Operand,
         encoder: MTLComputeCommandEncoder
     ) throws {
+        try requireSequential("argmax")
         var n = UInt32(count)
         try pipeline("argmax_partial", encoder)
         set(logits, 0, encoder)

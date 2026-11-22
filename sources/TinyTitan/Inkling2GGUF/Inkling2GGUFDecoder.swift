@@ -53,7 +53,7 @@ final class Inkling2GGUFDecoder {
         state.token.contents().storeBytes(of: Int32(token), as: Int32.self)
         state.step.contents().storeBytes(of: UInt32(position), as: UInt32.self)
         guard let commandBuffer = context.queue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeComputeCommandEncoder()
+            let encoder = commandBuffer.makeComputeCommandEncoder(dispatchType: .concurrent)
         else { throw MetalError.commandEncoderFailed }
         let encodeStarted = Date()
         try encodeToken(encoder)
@@ -140,12 +140,13 @@ final class Inkling2GGUFDecoder {
     }
 
     func mix(
-        _ states: [Int], query: Operand, count: Int, _ e: MTLComputeCommandEncoder
+        _ states: [Int], query: Operand, count: Int,
+        norm: (weight: Operand, epsilon: Float)? = nil, _ e: MTLComputeCommandEncoder
     ) throws -> Int {
         let out = try rows(count)
         try ops.depthMix(
             pool: state.pool, rows: states, queries: query, queryCount: count, out: row(out),
-            width: hidden, encoder: e)
+            width: hidden, norm: norm, encoder: e)
         return out
     }
 
@@ -186,16 +187,16 @@ final class Inkling2GGUFDecoder {
                     let kvQuery = weights.loopKVResQuery
                 {
                     let offset = 2 * (stored - m.loopStart) * hidden * 4
-                    let mAttn = try mix(
-                        bank + [bankLast],
-                        query: .init(
-                            attnQuery.operand.buffer, offset: attnQuery.operand.offset + offset),
-                        count: 2, e)
-                    let mKV = try mix(
-                        bank + [bankLast],
-                        query: .init(
-                            kvQuery.operand.buffer, offset: kvQuery.operand.offset + offset),
-                        count: 2, e)
+                    let attn = Operand(
+                        attnQuery.operand.buffer, offset: attnQuery.operand.offset + offset)
+                    let kv = Operand(
+                        kvQuery.operand.buffer, offset: kvQuery.operand.offset + offset)
+                    var mAttn = 0
+                    var mKV = 0
+                    try ops.concurrent(e) {
+                        mAttn = try mix(bank + [bankLast], query: attn, count: 2, e)
+                        mKV = try mix(bank + [bankLast], query: kv, count: 2, e)
+                    }
                     messages = [mAttn, mKV, mKV + 1, mAttn + 1]
                 }
             }
