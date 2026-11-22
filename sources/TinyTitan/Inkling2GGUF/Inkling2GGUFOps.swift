@@ -319,12 +319,9 @@ final class Inkling2GGUFOps {
                 throw MetalError.invalidState("a chunk's controller needs the join scratch")
             }
             try requireSequential("chunk controller")
-            try pipeline("control_join", encoder)
-            set(cur, 0, encoder)
-            set(message, 1, encoder)
-            set(joined, 2, encoder)
-            encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
-            groups(tokens, threads: 1_024, encoder)
+            try controlJoin(
+                cur: cur, message: message, joined: joined, width: width,
+                tokens: tokens, encoder: encoder)
             try gemv(down, x: joined, y: h, tokens: tokens, encoder: encoder)
             return
         }
@@ -335,6 +332,23 @@ final class Inkling2GGUFOps {
         set(h, 3, encoder)
         encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 4)
         groups(down.rows, tokens: tokens, threads: 256, encoder)
+    }
+
+    /// joined[t] = [rms(cur[t]), rms(message[t])], a chunk controller's input
+    /// to its down projection (`gemv` with `tokens`). One dispatch; may join a
+    /// group, as may that GEMM.
+    func controlJoin(
+        cur: Operand, message: Operand, joined: Operand, width: Int, tokens: Int,
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        if skipped.contains("control") { return }
+        var args = ControlArgs(width: UInt32(width), rank: 0, epsilon: 1e-6)
+        try pipeline("control_join", encoder)
+        set(cur, 0, encoder)
+        set(message, 1, encoder)
+        set(joined, 2, encoder)
+        encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
+        groups(tokens, threads: 1_024, encoder)
     }
 
     /// out = (1 - tanh(F . h)) * cur + tanh(G . h) * message for every token,

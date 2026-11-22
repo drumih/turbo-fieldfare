@@ -68,7 +68,31 @@ extension Inkling2GGUFDecoder {
                         tokens: tokens, encoder: e)
                 }
             }
-            if tokens == 1 { try ops.concurrent(e, downs) } else { try downs() }
+            if tokens == 1 {
+                try ops.concurrent(e, downs)
+            } else {
+                // A chunk: the three joins share one barrier, then the three
+                // down GEMMs another (each controller its own join slice).
+                let joinBytes = s.maxChunk * 2 * hidden * 4
+                func joined(_ j: Int) -> Operand {
+                    .init(s.controlJoined, offset: j * joinBytes)
+                }
+                try ops.concurrent(e) {
+                    for j in controlled {
+                        guard let message = messages[j] else { continue }
+                        try ops.controlJoin(
+                            cur: row(inputs[j]), message: row(message), joined: joined(j),
+                            width: hidden, tokens: tokens, encoder: e)
+                    }
+                }
+                try ops.concurrent(e) {
+                    for j in controlled {
+                        try ops.gemv(
+                            layer.loopDown[j], x: joined(j), y: slice(j), tokens: tokens,
+                            encoder: e)
+                    }
+                }
+            }
             func applies() throws {
                 for (k, j) in controlled.enumerated() {
                     guard let message = messages[j] else { continue }
