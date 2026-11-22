@@ -20,21 +20,27 @@
 
 | | Q4_K_XL native | llama.cpp | ratio | Q2_K_XL native | llama.cpp | ratio |
 | --- | --- | --- | --- | --- | --- | --- |
-| decode tg64 | 16.15–16.60 | 13.78–14.28 | 1.16–1.20× | 15.85–16.08 | 16.38–16.62 | 0.97× |
-| prefill pp64 | 95.4–96.9 | 87.2–93.0 | 1.04–1.09× | 93.4–93.5 | 92.0–92.8 | 1.01× |
-| prefill pp512 | 110.7–111.3 | 112.1–123.0 | 0.90–0.99× | 109.0–109.1 | 122.1–122.4 | 0.89× |
+| decode tg64 | 16.15–16.60 | 13.78–14.28 | 1.16–1.20× | 18.61–19.48 | 16.66–16.89 | 1.12–1.16× |
+| prefill pp64 | 95.4–96.9 | 87.2–93.0 | 1.04–1.09× | 99.3–99.5 | 85.8–89.3 | 1.11–1.16× |
+| prefill pp512 | 110.7–111.3 | 112.1–123.0 | 0.90–0.99× | 111.9–112.4 | 121.9–122.6 | 0.91–0.92× |
 
 llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
 -n 64 -r 3` (Homebrew's `llama-bench` has no `inkling2` architecture). Native:
 `TINYTITAN_INKLING2_GGUF=<gguf> TINYTITAN_KERNEL_BENCH=1 swift test -c release
 --no-parallel --filter "Inkling2GGUFParityTests/(decodeThroughput|prefillThroughput)"`.
 
-**The finding that sets the next step:** a native decode step costs ~60 ms GPU
-on *both* files, although Q2_K_XL reads about half the bytes. Decode is held
-by per-token fixed cost (48 visits of small dispatches, mixes, attention,
-barriers), not bandwidth — llama.cpp's Q2 time falls with its bytes and ours
-does not. That is the lever for both files; pp512 (experts ~50% of the chunk,
-attention ~14%) is the second.
+**Where the Q2_K_XL step goes** (`TINYTITAN_INKLING2_SKIP`, `a396f6cc`): GPU
+~50 ms = projections ~18 ms, experts ~18 ms, the rest ~14 (controllers ~6,
+small f32/bf16 GEMVs ~5, mixes ~3, head ~1). An earlier note here blamed a
+fixed per-token cost; the ablation showed the generic block GEMV instead
+(Q6_K ran at 20 GB/s), and fixing it took decode from 0.97× to 1.12–1.16×.
+What is left in the block GEMV: the 1–2-bit expert types sit at a ~0.21–0.24
+ms floor per 8-slot 2304×2304 (34–58 GB/s against NVFP4's 87) whatever their
+bytes — not bandwidth, not per-value ALU (scale-after-dot gained 5%), not lane
+balance (a flat item list was 25% slower). Untried: the IQ grid in
+threadgroup memory (llama's arrangement) with more rows per threadgroup to
+amortise the copy. K-quant projections run 44–67 GB/s against Q8_0's 79
+(≤1 ms to gain).
 
 ## What the two files actually contain (measured 2026-11-21)
 
