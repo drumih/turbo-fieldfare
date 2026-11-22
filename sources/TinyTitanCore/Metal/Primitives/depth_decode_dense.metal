@@ -49,10 +49,11 @@ kernel void dense_gemv_wide_rows(
 }
 
 // y[t][r] = W[r] . x[t] for few rows over a chunk (router, conv taps, sinks,
-// controller downs at prefill). A threadgroup holds an 8-row x 32-token tile;
-// each SIMD group an 8 x 8 register block, its lanes splitting the columns in
-// float4 steps, so each weight and activation quad feeds eight FMAs instead
-// of the per-(row, token) kernels' one. Needs columns % 4 == 0; flat grid of
+// controller downs at prefill). A threadgroup holds an 8-row x 8-token tile;
+// its four SIMD groups split the columns (quads q = lane + 32 * sg, stride
+// 128) with an 8 x 8 register block each, reduced through threadgroup memory,
+// so each weight and activation quad feeds eight FMAs and even a 24-row
+// matrix at 64 tokens is 24 threadgroups. Needs columns % 4 == 0; flat grid of
 // row tiles x token tiles, 128 threads.
 kernel void dense_gemm_small_rows(
     device const uchar* weights [[buffer(0)]],
@@ -62,19 +63,20 @@ kernel void dense_gemm_small_rows(
     constant uint& isBF16 [[buffer(4)]],
     constant uint& tokens [[buffer(5)]],
     uint groupIndex [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]])
 {
+    threadgroup float partial[4][64];
     const uint rowTiles = (args.rows + 7u) / 8u;
     const uint row0 = (groupIndex % rowTiles) * 8u;
-    const uint token0 = (groupIndex / rowTiles) * 32u + sg * 8u;
-    if (token0 >= tokens) return;
+    const uint token0 = (groupIndex / rowTiles) * 8u;
     const uint quads = args.columns / 4u;
     float acc[8][8];
     for (uint r = 0u; r < 8u; ++r) {
         for (uint t = 0u; t < 8u; ++t) acc[r][t] = 0.0f;
     }
-    for (uint q = lane; q < quads; q += 32u) {
+    for (uint q = lane + 32u * sg; q < quads; q += 128u) {
         float4 xv[8];
         for (uint t = 0u; t < 8u; ++t) {
             const uint token = min(token0 + t, tokens - 1u);
@@ -94,9 +96,16 @@ kernel void dense_gemm_small_rows(
     for (uint r = 0u; r < 8u; ++r) {
         for (uint t = 0u; t < 8u; ++t) {
             const float total = simd_sum(acc[r][t]);
-            if (lane == 0u && row0 + r < args.rows && token0 + t < tokens) {
-                yAll[ulong(token0 + t) * args.rows + row0 + r] = total;
-            }
+            if (lane == 0u) partial[sg][r * 8u + t] = total;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid < 64u) {
+        const uint r = tid / 8u;
+        const uint t = tid % 8u;
+        if (row0 + r < args.rows && token0 + t < tokens) {
+            yAll[ulong(token0 + t) * args.rows + row0 + r] =
+                partial[0][tid] + partial[1][tid] + partial[2][tid] + partial[3][tid];
         }
     }
 }

@@ -187,8 +187,9 @@ final class Inkling2GGUFOps {
     }
 
     /// y[t] = W . x[t] over a chunk for a small f32/bf16 W (any row count;
-    /// columns % 4 == 0): 8-row x 32-token register tiles, so W is read once
-    /// per token tile instead of once per token.
+    /// columns % 4 == 0): 8-row x 8-token tiles, the columns split across the
+    /// threadgroup's SIMD groups, so W is read once per token tile instead of
+    /// once per token and small matrices still fill the GPU.
     func smallRowsGemm(
         _ weight: Inkling2GGUFTensor, x: Operand, y: Operand, tokens: Int,
         encoder: MTLComputeCommandEncoder
@@ -207,7 +208,7 @@ final class Inkling2GGUFOps {
         encoder.setBytes(&bf16, length: 4, index: 4)
         var count = UInt32(tokens)
         encoder.setBytes(&count, length: 4, index: 5)
-        groups((weight.rows + 7) / 8 * ((tokens + 31) / 32), threads: 128, encoder)
+        groups((weight.rows + 7) / 8 * ((tokens + 7) / 8), threads: 128, encoder)
     }
 
     /// The decode GEMV over `shape.slots` expert slots, on the dedicated

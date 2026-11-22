@@ -208,8 +208,11 @@ extension Inkling2GGUFParityTests {
         let decoder = try Inkling2GGUFDecoder(
             url: URL(fileURLWithPath: path), maxContext: 1_024, maxChunk: 512)
         decoder.weights.prefault()
-        if let skip = ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SKIP"] {
-            decoder.ops.skipped = Set(skip.split(separator: ",").map(String.init))
+        // The skip set applies after the first (unmeasured) run, so a skipped
+        // router keeps real expert ids: "router,X" against "router" then
+        // attributes X without X's effect on routing.
+        let skip = ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SKIP"].map {
+            Set($0.split(separator: ",").map(String.init))
         }
         let lengths =
             ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_PP"].map {
@@ -219,7 +222,8 @@ extension Inkling2GGUFParityTests {
             // Ordinary text-range token ids; the content does not change the cost.
             let prompt = (0..<length).map { 300 + ($0 * 7_919) % 150_000 }
             var samples: [(wall: Double, gpu: Double)] = []
-            for _ in 0..<4 {
+            for run in 0..<4 {
+                decoder.ops.skipped = run == 0 ? [] : skip ?? []
                 decoder.state.reset()
                 let started = Date()
                 _ = try decoder.prefill(prompt, position: 0)

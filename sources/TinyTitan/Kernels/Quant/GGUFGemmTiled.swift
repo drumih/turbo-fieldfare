@@ -29,6 +29,8 @@ final class GGUFGemmTiled {
     static let wideTileRows = 128
     /// Below this many 128-row threadgroups a dense GEMM takes 64-row tiles.
     static let smallGridThreshold = 128
+    // (8-token tiles for dense projections at chunks of <= 64 tokens measured
+    // no faster at pp64: ~101 tok/s against 102-107 with these.)
     static let narrowTileRows = 64
     /// `GEMM_NARROW_BK`: the 8-token kernels need columns % depth == 0.
     static let narrowTileDepth = 64
@@ -45,7 +47,6 @@ final class GGUFGemmTiled {
     init(context: MetalContext) throws {
         let wide: [(GGUFType, String)] = [
             (.q8_0, "q8_0"), (.nvfp4, "nvfp4"), (.f32, "f32"), (.bf16, "bf16"),
-            (.iq3XXS, "iq3_xxs"), (.q4K, "q4_k"), (.q5K, "q5_k"), (.q6K, "q6_k"),
             (.iq1S, "iq1_s"), (.iq2XXS, "iq2_xxs"), (.iq2XS, "iq2_xs"), (.iq2S, "iq2_s"),
             (.q2_0, "q2_0"), (.mxfp4, "mxfp4"),
         ]
