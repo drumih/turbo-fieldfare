@@ -92,6 +92,8 @@ Peak decode on a base 8-core M3 MacBook Pro with 24 GB, after a warm-up pass.
 | Qwen3.8-Flash-Next 125B-A6B | 8-bit | **2.1 tok/s** | NA | 86% (2.1) | 25% |
 | Ornith 1.5 122B | 4-bit | **2.9 tok/s** | NA | 81% (2.1) | NA |
 | Ornith 1.5 122B | 8-bit | **1.2 tok/s** | NA | 81% (2.1) | NA |
+| Inkling 2 Mini 26B-A5B | UD-Q4_K_XL (GGUF) | **19.6 tok/s** | NA | 71.6% (2.1) | 5.6% |
+| Inkling 2 Mini 26B-A5B | UD-Q2_K_XL (GGUF) | **21.8 tok/s** | NA | 71.6% (2.1) | 5.6% |
 | Laguna-S-2.1 118B-A8B | 4-bit | **1.5 tok/s** | NA | 70% (2.1) | NA |
 | Laguna-S-2.1 118B-A8B | 8-bit | **0.7 tok/s** | NA | 70% (2.1) | NA |
 | Ornith 1.5 35B-A3B | 4-bit | **21.7 tok/s** | NA | 68% (2.1) | NA |
