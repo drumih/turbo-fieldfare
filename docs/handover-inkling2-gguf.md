@@ -217,12 +217,13 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 ## What is missing — the plan
 
 1. **Prefill to 1.25×** (pp64 ≥ ~115 tok/s, pp512 ≥ ~153). The lever is the
-   routed expert GEMM's own pipeline. Untried: double-buffered K steps with
-   the decode of step k+1 overlapping the MMAs of step k (an earlier
-   software-pipelining attempt on the 64-row tile gained nothing; retry on the
-   128-row one), and llama.cpp's `mul_mm_id` compared kernel for kernel. The
-   ANE can take the dense projections (~0.44 s of pp512 on Q4, probe 6–8
-   TF/s) but not the experts (static graphs; ~49 GB of fp16 weights).
+   routed expert GEMM's own pipeline. Tried and rejected: register prefetch
+   of step k+1 during step k's MMAs (slower on both row tiles: 29.2 → 32.1
+   ms at T=512), and a second threadgroup buffer does not fit at 128 rows.
+   Untried: llama.cpp's `mul_mm_id` compared kernel for kernel. The ANE can
+   take the dense projections (~0.44 s of pp512 on Q4, probe 6–8 TF/s) but
+   not the experts (static graphs; ~49 GB of fp16 weights), so even ideal
+   offload leaves pp512 near 1.1×.
 2. **Decode headroom:** the 1–2-bit expert GEMVs sit at a ~0.22 ms floor
    (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
    memory, with more rows per threadgroup to amortise the copy.
