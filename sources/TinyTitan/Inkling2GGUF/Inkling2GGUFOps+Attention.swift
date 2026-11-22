@@ -239,7 +239,9 @@ extension Inkling2GGUFOps {
     /// One expert matrix over a chunk's grouped pairs on the tiled GEMM. (A
     /// register kernel without threadgroup staging, for experts holding few
     /// pairs, measured 6x slower at pp64: every row group re-read the tokens'
-    /// activations.)
+    /// activations; staging up to 8 tokens' activations per 512-column chunk in
+    /// threadgroup memory instead was still 5x slower, 54-60 ms vs 11 ms per
+    /// routed layer, the per-lane fp32 form losing to the MMA tile.)
     private func expertsChunk(
         type: GGUFType, weights: Operand, rows: Int, columns: Int, experts: Int,
         expertStride: Int, tokens: Int, xDivisor: Int, x: Operand, y: Operand,
