@@ -147,7 +147,8 @@ final class GGUFGemmTiled {
         // tiles exit. A grid sized from the average with threadgroups looping
         // over further tiles saved ~8% on evenly routed benchmarks but lost
         // 4% at pp512 on the real, skewed routing (a popular expert's tiles
-        // serialise in one threadgroup).
+        // serialise in one threadgroup). Doing that for the 8-token grid only
+        // lost ~4-5% at pp64 as well (118 -> 113.6 tok/s on Q2_K_XL).
         let tokensPerTile = narrow ? 8 : 32
         dispatch(
             rows: rows, tileRows: narrow ? Self.narrowTileRows : Self.wideTileRows,
