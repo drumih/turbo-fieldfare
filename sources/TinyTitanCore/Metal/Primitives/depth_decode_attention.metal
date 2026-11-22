@@ -1,8 +1,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Attention, routing and elementwise ops of the single-token depth decoder
-// (see depth_decode_ops.metal for the step buffer and the shared helpers).
+// Attention, routing and elementwise ops of the depth decoder, for a chunk of
+// tokens (one at decode); see depth_decode_ops.metal for the step buffer.
 
 struct DepthAttentionArgs {
     uint heads;
@@ -11,16 +11,21 @@ struct DepthAttentionArgs {
     uint relative;   // relative bias rank (16)
     uint extent;     // relative bias extent; distances past it get bias 0
     uint capacity;   // cache slots
-    uint ring;       // 1 for the sliding-window ring of `capacity` positions
+    uint ring;       // 1: a ring of `capacity` slots (sliding-window layers)
     float scale;     // 1 / sqrt(headDim), applied to q.k only
+    uint window;     // sliding window: keys at distance >= window are masked
+    uint tokens;     // chunk length; the chunk wrote positions p0 ..< p0 + tokens
 };
 
-// One threadgroup per query head. logit_j = scale * q.k_j + b(dist_j) - sink,
-// b(d) = R . bias[d] for d < extent else 0, plus one extra logit 0 (the sink).
-// The bias and sink are not scaled: this is llama.cpp's flash-attention path,
-// where they form the additive mask, and the checkpoint's own reference.
-// out = sigmoid(gate) * sum_j softmax_j * v_j. K/V caches are half
-// [capacity][kvHeads][headDim].
+constant uint ATTENTION_CHUNK = 1024u;
+
+// One threadgroup per (query head, chunk token). For key j at distance d,
+// logit_j = scale * q.k_j + b(d) - sink, b(d) = R . bias[d] for d < extent else
+// 0, plus one extra logit 0 (the sink). The bias and sink are not scaled: this
+// is llama.cpp's flash-attention path, where they form the additive mask, and
+// the checkpoint's own reference. out = sigmoid(gate) * sum_j softmax_j * v_j,
+// with an online softmax over 1,024-key chunks. K/V caches are half
+// [capacity][kvHeads][headDim]; q, r, sinks, gate and out are token-major.
 kernel void relative_attention_decode(
     device const float* q [[buffer(0)]],
     device const half* kCache [[buffer(1)]],
@@ -30,78 +35,95 @@ kernel void relative_attention_decode(
     device const float* sinks [[buffer(5)]],
     device float* out [[buffer(6)]],
     device const uint* step [[buffer(7)]],
-    device float* logits [[buffer(8)]],
-    constant DepthAttentionArgs& args [[buffer(9)]],
-    device const float* gate [[buffer(10)]],
-    uint head [[threadgroup_position_in_grid]],
+    constant DepthAttentionArgs& args [[buffer(8)]],
+    device const float* gate [[buffer(9)]],
+    uint groupIndex [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]])
 {
     threadgroup float scratch[32];
+    threadgroup float probabilities[ATTENTION_CHUNK];
     threadgroup float partial[8][128];
+    const uint head = groupIndex % args.heads;   // flat grid of heads x tokens
+    const uint token = groupIndex / args.heads;
     const uint simdgroups = (threads + 31u) / 32u;
-    const uint position = step[0];
-    const uint valid = args.ring != 0u ? min(position + 1u, args.capacity) : position + 1u;
+    const uint position = step[0] + token;
+    const uint last = step[0] + args.tokens - 1u;  // latest position in the cache
     const uint kvHead = head / (args.heads / args.kvHeads);
     const uint rowWidth = args.kvHeads * args.headDim;
-    device const float* qh = q + head * args.headDim;
-    device const float* rh = r + head * args.relative;
-    device float* lh = logits + ulong(head) * args.capacity;
-    const float sink = sinks[head];
+    const uint qWidth = args.heads * args.headDim;
+    device const float* qh = q + token * qWidth + head * args.headDim;
+    device const float* rh = r + (token * args.heads + head) * args.relative;
+    const float sink = sinks[token * args.heads + head];
+    // Slots to scan: every slot written so far (ring), or positions 0 ... p.
+    const uint slots = args.ring != 0u ? min(last + 1u, args.capacity) : position + 1u;
 
-    float peak = 0.0f;  // the sink logit
-    for (uint j = tid; j < valid; j += threads) {
-        const uint distance =
-            args.ring != 0u ? (position + args.capacity - j) % args.capacity : position - j;
-        device const half* kj = kCache + ulong(j) * rowWidth + kvHead * args.headDim;
-        float dot = 0.0f;
-        for (uint i = 0u; i < args.headDim; ++i) dot += qh[i] * float(kj[i]);
-        float bias = 0.0f;
-        if (distance < args.extent) {
-            device const float* b = relativeBias + distance * args.relative;
-            for (uint i = 0u; i < args.relative; ++i) bias += rh[i] * b[i];
+    for (uint d = lane; d < args.headDim; d += 32u) partial[sg][d] = 0.0f;
+    float running = 0.0f;   // running max, starting at the sink logit 0
+    float total = 0.0f;     // running sum of exp(logit - running)
+    for (uint first = 0u; first < slots; first += ATTENTION_CHUNK) {
+        const uint count = min(ATTENTION_CHUNK, slots - first);
+        float chunkPeak = -INFINITY;
+        for (uint i = tid; i < count; i += threads) {
+            const uint j = first + i;
+            // The position this slot holds, then its distance to the query.
+            const uint held = args.ring != 0u ? last - (last + args.capacity - j) % args.capacity : j;
+            float logit = -INFINITY;
+            if (held <= position && position - held < args.window) {
+                const uint distance = position - held;
+                device const half* kj = kCache + ulong(j) * rowWidth + kvHead * args.headDim;
+                float dot = 0.0f;
+                for (uint e = 0u; e < args.headDim; ++e) dot += qh[e] * float(kj[e]);
+                float bias = 0.0f;
+                if (distance < args.extent) {
+                    device const float* b = relativeBias + distance * args.relative;
+                    for (uint e = 0u; e < args.relative; ++e) bias += rh[e] * b[e];
+                }
+                logit = args.scale * dot + bias - sink;
+            }
+            probabilities[i] = logit;
+            chunkPeak = max(chunkPeak, logit);
         }
-        const float logit = args.scale * dot + bias - sink;
-        lh[j] = logit;
-        peak = max(peak, logit);
-    }
-    peak = simd_max(peak);
-    if (lane == 0u) scratch[sg] = peak;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    peak = scratch[0];
-    for (uint i = 1u; i < simdgroups; ++i) peak = max(peak, scratch[i]);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-
-    float sum = 0.0f;
-    for (uint j = tid; j < valid; j += threads) {
-        const float p = exp(lh[j] - peak);
-        lh[j] = p;
-        sum += p;
-    }
-    sum = simd_sum(sum);
-    if (lane == 0u) scratch[sg] = sum;
-    // The output pass reads every position's probability, written by other
-    // threads into device memory.
-    threadgroup_barrier(mem_flags::mem_threadgroup | mem_flags::mem_device);
-    float denominator = exp(-peak);  // the sink's exp(0 - peak)
-    for (uint i = 0u; i < simdgroups; ++i) denominator += scratch[i];
-
-    // Each SIMD group accumulates a stride of positions for all dimensions.
-    for (uint d = lane; d < args.headDim; d += 32u) {
-        float acc = 0.0f;
-        for (uint j = sg; j < valid; j += simdgroups) {
-            acc += lh[j] * float(vCache[ulong(j) * rowWidth + kvHead * args.headDim + d]);
+        chunkPeak = simd_max(chunkPeak);
+        if (lane == 0u) scratch[sg] = chunkPeak;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float peak = running;
+        for (uint i = 0u; i < simdgroups; ++i) peak = max(peak, scratch[i]);
+        const float rescale = exp(running - peak);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float sum = 0.0f;
+        for (uint i = tid; i < count; i += threads) {
+            const float p = exp(probabilities[i] - peak);
+            probabilities[i] = p;
+            sum += p;
         }
-        partial[sg][d] = acc;
+        sum = simd_sum(sum);
+        if (lane == 0u) scratch[sg] = sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        float chunkSum = 0.0f;
+        for (uint i = 0u; i < simdgroups; ++i) chunkSum += scratch[i];
+        total = total * rescale + chunkSum;
+        running = peak;
+        // Each SIMD group accumulates a stride of positions for all dimensions.
+        for (uint d = lane; d < args.headDim; d += 32u) {
+            float acc = partial[sg][d] * rescale;
+            for (uint i = sg; i < count; i += simdgroups) {
+                if (probabilities[i] == 0.0f) continue;
+                acc += probabilities[i]
+                    * float(vCache[ulong(first + i) * rowWidth + kvHead * args.headDim + d]);
+            }
+            partial[sg][d] = acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    const float denominator = total + exp(-running);  // the sink's exp(0 - running)
     for (uint d = tid; d < args.headDim; d += threads) {
         float acc = 0.0f;
         for (uint i = 0u; i < simdgroups; ++i) acc += partial[i][d];
-        const float g = gate[head * args.headDim + d];
-        out[head * args.headDim + d] = acc / denominator / (1.0f + exp(-g));
+        const uint at = token * qWidth + head * args.headDim + d;
+        out[at] = acc / denominator / (1.0f + exp(-gate[at]));
     }
 }
 
@@ -116,15 +138,20 @@ struct DepthRouterArgs {
 // Sigmoid top-k over router logits (computed by a parallel GEMV), in one SIMD
 // group: p = sigmoid(logit); top-`used` by p + bias, ties to the lower index;
 // weights are the chosen p normalised by their sum (+ eps) times weightScale.
-// Up to 32 * 8 experts (each lane holds `experts / 32` of them).
+// Up to 32 * 8 experts (each lane holds `experts / 32` of them). One SIMD
+// group per token: logits [tokens][experts], ids and weights [tokens][used].
 kernel void sigmoid_topk(
-    device const float* logits [[buffer(0)]],
+    device const float* allLogits [[buffer(0)]],
     device const float* bias [[buffer(1)]],
-    device int* ids [[buffer(2)]],
-    device float* routeWeights [[buffer(3)]],
+    device int* allIds [[buffer(2)]],
+    device float* allWeights [[buffer(3)]],
     constant DepthRouterArgs& args [[buffer(4)]],
+    uint token [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_simdgroup]])
 {
+    device const float* logits = allLogits + token * args.experts;
+    device int* ids = allIds + token * args.used;
+    device float* routeWeights = allWeights + token * args.used;
     const uint perLane = (args.experts + 31u) / 32u;
     float probs[8];
     float selection[8];

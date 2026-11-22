@@ -2,26 +2,33 @@ import Foundation
 import Metal
 import TinyTitanCore
 
-/// GPU buffers of one Inkling2 GGUF decode session.
+/// GPU buffers of one Inkling2 GGUF session, sized for chunks of up to
+/// `maxChunk` tokens (one at decode).
 ///
 /// Recurrent state is per *unrolled* layer visit (48), as in llama.cpp: each
 /// pass of the looped core has its own KV cache and convolution history.
-/// Sliding-window visits keep a ring of `slidingWindow` positions; full
-/// attention visits keep `maxContext`.
+/// Sliding-window visits keep a ring of `slidingWindow + maxChunk` positions —
+/// the extra `maxChunk` slots keep a chunk's later tokens from overwriting keys
+/// its earlier tokens still attend to; full-attention visits keep `maxContext`.
 final class Inkling2GGUFState {
     /// Convolution channels per visit: K, V, attention output, FFN output.
     let convChannels: Int
     let kvWidth: Int
     let maxContext: Int
+    let maxChunk: Int
     let kCaches: [MTLBuffer]
     let vCaches: [MTLBuffer]
     let capacities: [Int]
     let convStates: [MTLBuffer]
-    /// Hidden vectors produced during a token; rows are handed out in order.
+    /// Hidden vectors of a chunk, in slabs of `maxChunk * hidden` floats:
+    /// slabs `0 ..< persistentSlabs` hold values that outlive a layer visit,
+    /// the rest a visit's temporaries.
     let pool: MTLBuffer
-    let poolRows: Int
+    let slabFloats: Int
+    let persistentSlabs = 40
+    let transientSlabs = 24
     let step: MTLBuffer
-    let token: MTLBuffer
+    let tokens: MTLBuffer
     let nextToken: MTLBuffer
     let q: MTLBuffer
     let k: MTLBuffer
@@ -35,17 +42,21 @@ final class Inkling2GGUFState {
     let controlHidden: MTLBuffer
     let controlJoined: MTLBuffer
     let routerLogits: MTLBuffer
-    let attentionLogits: MTLBuffer
     let routeIDs: MTLBuffer
     let routeWeights: MTLBuffer
     let gateUp: MTLBuffer
     let activation: MTLBuffer
     let down: MTLBuffer
+    let expertLists: MTLBuffer
+    let expertCounts: MTLBuffer
+    let expertGridSizes: MTLBuffer
     let logits: MTLBuffer
     let argmaxPartials: MTLBuffer
     static let argmaxGroups = 256
 
-    init(manifest m: Inkling2GGUFManifest, device: MTLDevice, maxContext: Int) throws {
+    init(
+        manifest m: Inkling2GGUFManifest, device: MTLDevice, maxContext: Int, maxChunk: Int
+    ) throws {
         func buffer(_ bytes: Int, _ label: String) throws -> MTLBuffer {
             guard let made = device.makeBuffer(length: max(bytes, 16), options: .storageModeShared)
             else { throw MetalError.bufferAllocationFailed("Inkling2 GGUF \(label)") }
@@ -53,17 +64,20 @@ final class Inkling2GGUFState {
             return made
         }
         let layer = m.layers[0]
-        let attentionWidth = m.headDimension * layer.heads
+        let heads = layer.heads
+        let attentionWidth = m.headDimension * heads
+        let t = maxChunk
         kvWidth = m.headDimension * layer.kvHeads
         convChannels = 2 * kvWidth + 2 * m.hidden
         self.maxContext = maxContext
+        self.maxChunk = maxChunk
         var kCaches: [MTLBuffer] = []
         var vCaches: [MTLBuffer] = []
         var capacities: [Int] = []
         var convStates: [MTLBuffer] = []
         for visit in 0..<m.unrolledLayers {
             let sliding = m.layers[m.storedLayer(forUnrolled: visit)].isSliding
-            let capacity = sliding ? min(m.slidingWindow, maxContext) : maxContext
+            let capacity = sliding ? min(m.slidingWindow + maxChunk, maxContext) : maxContext
             capacities.append(capacity)
             kCaches.append(try buffer(capacity * kvWidth * 2, "K cache \(visit)"))
             vCaches.append(try buffer(capacity * kvWidth * 2, "V cache \(visit)"))
@@ -73,30 +87,33 @@ final class Inkling2GGUFState {
         self.vCaches = vCaches
         self.capacities = capacities
         self.convStates = convStates
-        poolRows = 2_048
-        pool = try buffer(poolRows * m.hidden * 4, "hidden pool")
+        slabFloats = t * m.hidden
+        pool = try buffer((persistentSlabs + transientSlabs) * slabFloats * 4, "hidden pool")
         step = try buffer(16, "step")
-        token = try buffer(16, "token")
+        tokens = try buffer(t * 4, "tokens")
         nextToken = try buffer(16, "next token")
-        q = try buffer(attentionWidth * 4, "q")
-        k = try buffer(kvWidth * 4, "k")
-        v = try buffer(kvWidth * 4, "v")
-        r = try buffer(m.relativeLength * layer.heads * 4, "r")
-        sinks = try buffer(layer.heads * 4, "sinks")
-        gate = try buffer(attentionWidth * 4, "gate")
-        attention = try buffer(attentionWidth * 4, "attention")
-        dynamicK = try buffer(m.convolutionTaps * layer.kvHeads * 4, "dynamic K")
-        dynamicV = try buffer(m.convolutionTaps * layer.kvHeads * 4, "dynamic V")
-        controlHidden = try buffer(m.loopGateRank * 4, "control hidden")
-        controlJoined = try buffer(2 * m.hidden * 4, "control input")
-        routerLogits = try buffer(m.expertCount * 4, "router logits")
-        attentionLogits = try buffer(layer.heads * maxContext * 4, "attention logits")
-        routeIDs = try buffer(m.expertsPerToken * 4, "route ids")
-        routeWeights = try buffer(m.expertsPerToken * 4, "route weights")
+        q = try buffer(t * attentionWidth * 4, "q")
+        k = try buffer(t * kvWidth * 4, "k")
+        v = try buffer(t * kvWidth * 4, "v")
+        r = try buffer(t * m.relativeLength * heads * 4, "r")
+        sinks = try buffer(t * heads * 4, "sinks")
+        gate = try buffer(t * attentionWidth * 4, "gate")
+        attention = try buffer(t * attentionWidth * 4, "attention")
+        dynamicK = try buffer(t * m.convolutionTaps * layer.kvHeads * 4, "dynamic K")
+        dynamicV = try buffer(t * m.convolutionTaps * layer.kvHeads * 4, "dynamic V")
+        controlHidden = try buffer(t * m.loopGateRank * 4, "control hidden")
+        controlJoined = try buffer(t * 2 * m.hidden * 4, "control input")
+        routerLogits = try buffer(t * m.expertCount * 4, "router logits")
+        let pairs = t * m.expertsPerToken
+        routeIDs = try buffer(pairs * 4, "route ids")
+        routeWeights = try buffer(pairs * 4, "route weights")
         let feedForward = m.layers.map(\.expertFeedForward).max() ?? 0
-        gateUp = try buffer(m.expertsPerToken * 2 * feedForward * 4, "gate_up")
-        activation = try buffer(m.expertsPerToken * feedForward * 4, "activation")
-        down = try buffer(m.expertsPerToken * m.hidden * 4, "down")
+        gateUp = try buffer(pairs * 2 * feedForward * 4, "gate_up")
+        activation = try buffer(pairs * feedForward * 4, "activation")
+        down = try buffer(pairs * m.hidden * 4, "down")
+        expertLists = try buffer(m.expertCount * pairs * 4, "expert lists")
+        expertCounts = try buffer(m.expertCount * 4, "expert counts")
+        expertGridSizes = try buffer(24, "expert grid sizes")
         logits = try buffer(m.paddedVocabulary * 4, "logits")
         argmaxPartials = try buffer(Self.argmaxGroups * 8, "argmax partials")
     }
@@ -111,6 +128,6 @@ final class Inkling2GGUFState {
     /// Bytes of recurrent state and scratch held by this session.
     var allocatedBytes: Int {
         (kCaches + vCaches + convStates).reduce(0) { $0 + $1.length } + pool.length
-            + attentionLogits.length + logits.length
+            + gateUp.length + down.length + activation.length + logits.length
     }
 }

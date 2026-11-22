@@ -2,82 +2,39 @@ import Foundation
 import Metal
 import TinyTitanCore
 
-/// Encoders for the single-token depth-decoder kernels
-/// (`depth_decode_ops.metal`, `depth_decode_attention.metal`) and the GGUF
-/// GEMVs. Every method appends dispatches to one compute encoder; nothing here
-/// waits on the GPU.
+/// Encoders for the depth-decoder kernels (`depth_decode_ops.metal`,
+/// `depth_decode_attention.metal`) and the GGUF GEMVs/GEMMs, for a chunk of
+/// `tokens` positions: one at decode (bandwidth-bound GEMVs), more at prefill
+/// (tiled GEMMs that decode each weight block once per 32 tokens). Every method
+/// appends dispatches to one compute encoder; nothing here waits on the GPU.
 final class Inkling2GGUFOps {
     typealias Operand = GGUFGemvIds.Operand
 
-    private struct RMSArgs {
+    struct RMSArgs {
         var width: UInt32
         var inStride: UInt32
         var outStride: UInt32
         var hasWeight: UInt32
         var epsilon: Float
     }
-    private struct MixArgs {
+    struct MixArgs {
         var width: UInt32
         var stateCount: UInt32
         var queryCount: UInt32
         var epsilon: Float
         var normWeighted: UInt32
         var normEpsilon: Float
+        var tokens: UInt32
+        var slab: UInt32
     }
-    private struct ControlArgs {
+    struct ControlArgs {
         var width: UInt32
         var rank: UInt32
         var epsilon: Float
     }
-    private struct ConvArgs {
-        var channels: UInt32
-        var slots: UInt32
-        var hasResidual: UInt32
-        var scale: Float
-    }
-    struct KVFinishArgs {
-        var headDim: UInt32
-        var kvHeads: UInt32
-        var hasDynamic: UInt32
-        var capacity: UInt32
-        var ring: UInt32
-        var threshold: Float
-        var epsilon: Float
-        var scale: Float
-    }
-    private struct ClipArgs {
-        var headDim: UInt32
-        var hasScale: UInt32
-        var applyTau: UInt32
-        var threshold: Float
-        var tauFloor: Float
-        var tauAlpha: Float
-    }
-    struct AttentionArgs {
-        var heads: UInt32
-        var kvHeads: UInt32
-        var headDim: UInt32
-        var relative: UInt32
-        var extent: UInt32
-        var capacity: UInt32
-        var ring: UInt32
-        var scale: Float
-    }
-    struct RouterArgs {
-        var experts: UInt32
-        var width: UInt32
-        var used: UInt32
-        var weightScale: Float
-        var normEpsilon: Float
-    }
-    struct SituArgs {
-        var feedForward: UInt32
-        var slots: UInt32
-        var beta: Float
-        var linearBeta: Float
-    }
 
     let gemvIds: GGUFGemvIds
+    let gemm: GGUFGemmTiled
     /// Profiling ablation: op categories left out of the encoded token, so the
     /// GPU-time difference attributes cost. Tokens produced with any category
     /// skipped are meaningless. Categories: mix, control, conv, clip, attention,
@@ -89,6 +46,7 @@ final class Inkling2GGUFOps {
 
     init(context: MetalContext) throws {
         gemvIds = try GGUFGemvIds(context: context)
+        gemm = try GGUFGemmTiled(context: context)
         for name in [
             "embed_q8_0_row", "rms_norm_rows", "dense_gemv_f32_bf16", "depth_mix",
             "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
@@ -105,12 +63,12 @@ final class Inkling2GGUFOps {
         zeroID = buffer
     }
 
-    private func pipeline(_ name: String, _ encoder: MTLComputeCommandEncoder) throws {
+    func pipeline(_ name: String, _ encoder: MTLComputeCommandEncoder) throws {
         guard let state = pipelines[name] else { throw MetalError.missingFunction(name) }
         encoder.setComputePipelineState(state)
     }
 
-    private func set(_ operand: Operand, _ index: Int, _ encoder: MTLComputeCommandEncoder) {
+    func set(_ operand: Operand, _ index: Int, _ encoder: MTLComputeCommandEncoder) {
         encoder.setBuffer(operand.buffer, offset: operand.offset, index: index)
     }
 
@@ -123,7 +81,7 @@ final class Inkling2GGUFOps {
     /// The token is encoded with `MTLDispatchType.concurrent`, so every
     /// dispatch is ordered after the previous ones by a buffer barrier unless
     /// it belongs to a group of mutually independent dispatches.
-    private func order(_ encoder: MTLComputeCommandEncoder) {
+    func order(_ encoder: MTLComputeCommandEncoder) {
         if !inGroup || groupNeedsBarrier {
             encoder.memoryBarrier(scope: .buffers)
             groupNeedsBarrier = false
@@ -132,8 +90,8 @@ final class Inkling2GGUFOps {
 
     /// Encodes `body`'s dispatches after one barrier and without barriers
     /// between them: they must read only data written before the group and
-    /// write disjoint buffers. Multi-dispatch ops (control, route, argmax)
-    /// may not appear inside a group.
+    /// write disjoint buffers. Multi-dispatch ops (control, route, the MoE,
+    /// argmax, and every prefill GEMM) may not appear inside a group.
     func concurrent(
         _ encoder: MTLComputeCommandEncoder, _ body: () throws -> Void
     ) rethrows {
@@ -144,35 +102,52 @@ final class Inkling2GGUFOps {
         try body()
     }
 
-    private func requireSequential(_ name: String) throws {
+    func requireSequential(_ name: String) throws {
         guard !inGroup else {
             throw MetalError.invalidState(
                 "\(name) has internal dependencies; not in a concurrent group")
         }
     }
 
-    private func threads(_ count: Int, _ encoder: MTLComputeCommandEncoder, width: Int = 256) {
+    func threads(
+        _ count: Int, tokens: Int = 1, _ encoder: MTLComputeCommandEncoder, width: Int = 256
+    ) {
         order(encoder)
         encoder.dispatchThreads(
-            MTLSize(width: count, height: 1, depth: 1),
+            MTLSize(width: count, height: tokens, depth: 1),
             threadsPerThreadgroup: MTLSize(width: min(width, max(count, 1)), height: 1, depth: 1))
     }
 
-    private func groups(
-        _ count: Int, threads: Int, _ encoder: MTLComputeCommandEncoder
+    /// `count` threadgroups per token, as one flat grid (token-major): the
+    /// kernels decode (item, token) themselves, because Metal will not mix a
+    /// vector threadgroup position with the scalar SIMD-group attributes.
+    func groups(
+        _ count: Int, tokens: Int = 1, threads: Int, _ encoder: MTLComputeCommandEncoder
     ) {
         order(encoder)
         encoder.dispatchThreadgroups(
-            MTLSize(width: count, height: 1, depth: 1),
+            MTLSize(width: count * tokens, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
     }
 
-    /// y = W . x for a dense tensor of any supported type.
+    // MARK: Projections
+
+    /// y[t] = W . x[t] for `tokens` token-major rows of `x`: a GEMV at one
+    /// token, the tiled GEMM for a chunk.
     func gemv(
-        _ weight: Inkling2GGUFTensor, x: Operand, y: Operand, encoder: MTLComputeCommandEncoder
+        _ weight: Inkling2GGUFTensor, x: Operand, y: Operand, tokens: Int = 1,
+        encoder: MTLComputeCommandEncoder
     ) throws {
         let category = [.f32, .bf16].contains(weight.type) ? "smallGemv" : "projection"
         if skipped.contains(category) { return }
+        if tokens > 1 {
+            try requireSequential("prefill GEMM")
+            order(encoder)
+            try gemm.encodeDense(
+                type: weight.type, weights: weight.operand, rows: weight.rows,
+                columns: weight.columns, tokens: tokens, x: x, y: y, encoder: encoder)
+            return
+        }
         switch weight.type {
         case .f32, .bf16:
             try pipeline("dense_gemv_f32_bf16", encoder)
@@ -195,19 +170,8 @@ final class Inkling2GGUFOps {
         }
     }
 
-    /// A routed expert GEMV (`GGUFGemvIds`), ordered like every other dispatch.
-    func experts(
-        _ shape: GGUFGemvIds.Shape, weights: Operand, x: Operand, y: Operand, ids: Operand,
-        scales: Operand?, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("experts") { return }
-        order(encoder)
-        try gemvIds.encode(
-            shape, weights: weights, x: x, y: y, ids: ids, scales: scales, encoder: encoder)
-    }
-
     func embed(
-        _ table: Inkling2GGUFTensor, token: Operand, out: Operand,
+        _ table: Inkling2GGUFTensor, token: Operand, out: Operand, tokens: Int = 1,
         encoder: MTLComputeCommandEncoder
     ) throws {
         guard table.type == .q8_0 else { throw GGUFDequantError.unsupportedType(table.type.name) }
@@ -217,7 +181,7 @@ final class Inkling2GGUFOps {
         set(out, 2, encoder)
         var columns = UInt32(table.columns)
         encoder.setBytes(&columns, length: 4, index: 3)
-        threads(table.columns, encoder)
+        threads(table.columns, tokens: tokens, encoder)
     }
 
     /// RMS-normalises `count` vectors of `width` (strides in floats).
@@ -237,12 +201,12 @@ final class Inkling2GGUFOps {
         groups(count, threads: min(256, max(32, (width + 31) / 32 * 32)), encoder)
     }
 
-    /// out[q] = depth mix of the pool rows `rows` with query q of `queries`.
-    /// With `norm` (one query only), the output is RMS-normalised and scaled by
-    /// it in the same kernel.
+    /// out slab q = depth mix of the pool slabs `rows` with query q, for every
+    /// token of the chunk (`slab` floats per pool slab). With `norm` (one query
+    /// only), the output is RMS-normalised and scaled in the same kernel.
     func depthMix(
-        pool: MTLBuffer, rows: [Int], queries: Operand, queryCount: Int, out: Operand,
-        width: Int, norm: (weight: Operand, epsilon: Float)? = nil,
+        pool: Operand, rows: [Int], queries: Operand, queryCount: Int, out: Operand,
+        width: Int, tokens: Int, slab: Int, norm: (weight: Operand, epsilon: Float)? = nil,
         encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("mix") { return }
@@ -250,26 +214,26 @@ final class Inkling2GGUFOps {
             throw MetalError.invalidState("depth mix over \(rows.count) states")
         }
         try pipeline("depth_mix", encoder)
-        encoder.setBuffer(pool, offset: 0, index: 0)
+        set(pool, 0, encoder)
         set(queries, 1, encoder)
         set(out, 2, encoder)
         var args = MixArgs(
             width: UInt32(width), stateCount: UInt32(rows.count),
             queryCount: UInt32(queryCount), epsilon: 1e-6, normWeighted: norm == nil ? 0 : 1,
-            normEpsilon: norm?.epsilon ?? 0)
+            normEpsilon: norm?.epsilon ?? 0, tokens: UInt32(tokens), slab: UInt32(slab))
         encoder.setBytes(&args, length: MemoryLayout<MixArgs>.stride, index: 3)
         var indices = rows.map(UInt32.init)
         encoder.setBytes(&indices, length: indices.count * 4, index: 4)
         set(norm?.weight ?? queries, 5, encoder)
-        groups(queryCount, threads: 1_024, encoder)
+        groups(queryCount, tokens: tokens, threads: 1_024, encoder)
     }
 
-    /// out = loop message controller(cur, message). `joined` holds 2 * width
-    /// floats and `h` the controller rank.
+    /// out = loop message controller(cur, message) for every token. `joined`
+    /// holds tokens x 2 * width floats and `h` tokens x rank.
     func control(
         cur: Operand, message: Operand, down: Inkling2GGUFTensor, gain: Inkling2GGUFTensor,
         forget: Inkling2GGUFTensor, joined: Operand, h: Operand, out: Operand, width: Int,
-        encoder: MTLComputeCommandEncoder
+        tokens: Int, encoder: MTLComputeCommandEncoder
     ) throws {
         try requireSequential("control")
         if skipped.contains("control") { return }
@@ -279,8 +243,8 @@ final class Inkling2GGUFOps {
         set(message, 1, encoder)
         set(joined, 2, encoder)
         encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
-        groups(1, threads: 1_024, encoder)
-        try gemv(down, x: joined, y: h, encoder: encoder)
+        groups(tokens, threads: 1_024, encoder)
+        try gemv(down, x: joined, y: h, tokens: tokens, encoder: encoder)
         try pipeline("control_apply", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
@@ -289,148 +253,6 @@ final class Inkling2GGUFOps {
         set(forget.operand, 4, encoder)
         set(out, 5, encoder)
         encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 6)
-        groups((width + 3) / 4, threads: 128, encoder)
-    }
-
-    /// Short convolution step over `channels`, updating `state` ([channels][3]).
-    /// With `routeWeights`, the input is the weighted sum of `slots` rows of `x`;
-    /// with `residual`, it is added to the output.
-    func shortConv(
-        x: Operand, weight: Inkling2GGUFTensor, state: Operand, out: Operand,
-        routeWeights: Operand? = nil, slots: Int = 0, residual: Operand? = nil, channels: Int,
-        encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("conv") { return }
-        try pipeline("short_conv_step", encoder)
-        set(x, 0, encoder)
-        set(weight.operand, 1, encoder)
-        set(state, 2, encoder)
-        set(out, 3, encoder)
-        set(routeWeights ?? x, 4, encoder)
-        set(residual ?? x, 5, encoder)
-        var args = ConvArgs(
-            channels: UInt32(channels), slots: routeWeights == nil ? 0 : UInt32(slots),
-            hasResidual: residual == nil ? 0 : 1, scale: 1 / Float(5).squareRoot())
-        encoder.setBytes(&args, length: MemoryLayout<ConvArgs>.stride, index: 6)
-        threads(channels, encoder)
-    }
-
-    /// K and V convolutions, the K clip, the V norm and the cache store, in
-    /// one dispatch (one threadgroup per K or V head).
-    func kvFinish(
-        k: Operand, v: Operand, kWeight: Inkling2GGUFTensor, vWeight: Inkling2GGUFTensor,
-        state: Operand, dynamicK: Operand?, dynamicV: Operand?, kCache: MTLBuffer,
-        vCache: MTLBuffer, step: Operand, args: KVFinishArgs, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("conv") { return }
-        try pipeline("kv_finish", encoder)
-        set(k, 0, encoder)
-        set(v, 1, encoder)
-        set(kWeight.operand, 2, encoder)
-        set(vWeight.operand, 3, encoder)
-        set(state, 4, encoder)
-        set(dynamicK ?? k, 5, encoder)
-        set(dynamicV ?? v, 6, encoder)
-        encoder.setBuffer(kCache, offset: 0, index: 7)
-        encoder.setBuffer(vCache, offset: 0, index: 8)
-        set(step, 9, encoder)
-        var copy = args
-        encoder.setBytes(&copy, length: MemoryLayout<KVFinishArgs>.stride, index: 10)
-        groups(2 * Int(args.kvHeads), threads: Int(args.headDim), encoder)
-    }
-
-    /// Per-head L2 clip (optionally scaled, optionally times the log-position tau).
-    func clipHeads(
-        _ v: Operand, heads: Int, headDim: Int, scale: Inkling2GGUFTensor?, threshold: Float,
-        tau: (floor: Float, alpha: Float)?, step: Operand, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("clip") { return }
-        try pipeline("clip_heads", encoder)
-        set(v, 0, encoder)
-        set(scale?.operand ?? v, 1, encoder)
-        set(step, 2, encoder)
-        var args = ClipArgs(
-            headDim: UInt32(headDim), hasScale: scale == nil ? 0 : 1,
-            applyTau: tau == nil ? 0 : 1, threshold: threshold,
-            tauFloor: tau?.floor ?? 1, tauAlpha: tau?.alpha ?? 0)
-        encoder.setBytes(&args, length: MemoryLayout<ClipArgs>.stride, index: 3)
-        groups(heads, threads: 32, encoder)
-    }
-
-    func attention(
-        q: Operand, kCache: MTLBuffer, vCache: MTLBuffer, r: Operand,
-        relativeBias: Inkling2GGUFTensor, sinks: Operand, gate: Operand, out: Operand,
-        step: Operand, logits: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("attention") { return }
-        try pipeline("relative_attention_decode", encoder)
-        set(q, 0, encoder)
-        encoder.setBuffer(kCache, offset: 0, index: 1)
-        encoder.setBuffer(vCache, offset: 0, index: 2)
-        set(r, 3, encoder)
-        set(relativeBias.operand, 4, encoder)
-        set(sinks, 5, encoder)
-        set(out, 6, encoder)
-        set(step, 7, encoder)
-        set(logits, 8, encoder)
-        var copy = args
-        encoder.setBytes(&copy, length: MemoryLayout<AttentionArgs>.stride, index: 9)
-        set(gate, 10, encoder)
-        // relative_attention_decode's partial[8][128] assumes eight SIMD groups.
-        groups(Int(args.heads), threads: 256, encoder)
-    }
-
-    /// Router logits on the parallel dense GEMV, then the sigmoid top-k in
-    /// one SIMD group. `logits` holds `experts` floats.
-    func route(
-        router: Inkling2GGUFTensor, bias: Inkling2GGUFTensor, x: Operand, logits: Operand,
-        ids: Operand, weights: Operand, args: RouterArgs, encoder: MTLComputeCommandEncoder
-    ) throws {
-        try requireSequential("route")
-        if skipped.contains("router") { return }
-        guard args.experts <= 256, args.used <= 32 else {
-            throw MetalError.invalidState("router: \(args.experts) experts, top-\(args.used)")
-        }
-        try gemv(router, x: x, y: logits, encoder: encoder)
-        try pipeline("sigmoid_topk", encoder)
-        set(logits, 0, encoder)
-        set(bias.operand, 1, encoder)
-        set(ids, 2, encoder)
-        set(weights, 3, encoder)
-        var copy = args
-        encoder.setBytes(&copy, length: MemoryLayout<RouterArgs>.stride, index: 4)
-        groups(1, threads: 32, encoder)
-    }
-
-    func situ(
-        gateUp: Operand, act: Operand, args: SituArgs, encoder: MTLComputeCommandEncoder
-    ) throws {
-        if skipped.contains("elementwise") { return }
-        try pipeline("situ_activation", encoder)
-        set(gateUp, 0, encoder)
-        set(act, 1, encoder)
-        var copy = args
-        encoder.setBytes(&copy, length: MemoryLayout<SituArgs>.stride, index: 2)
-        threads(Int(args.feedForward * args.slots), encoder)
-    }
-
-    /// token = argmax(logits[0..<count]); `partials` holds `groupCount` float2.
-    func argmax(
-        logits: Operand, count: Int, partials: Operand, groupCount: Int, token: Operand,
-        encoder: MTLComputeCommandEncoder
-    ) throws {
-        try requireSequential("argmax")
-        var n = UInt32(count)
-        try pipeline("argmax_partial", encoder)
-        set(logits, 0, encoder)
-        set(partials, 1, encoder)
-        encoder.setBytes(&n, length: 4, index: 2)
-        groups(groupCount, threads: 256, encoder)
-        try pipeline("argmax_final", encoder)
-        set(partials, 0, encoder)
-        set(token, 1, encoder)
-        var g = UInt32(groupCount)
-        encoder.setBytes(&g, length: 4, index: 2)
-        groups(1, threads: 32, encoder)
+        groups((width + 3) / 4, tokens: tokens, threads: 128, encoder)
     }
 }

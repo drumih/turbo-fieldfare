@@ -3,9 +3,10 @@ import Metal
 import TinyTitanCore
 
 extension Inkling2GGUFDecoder {
-    /// One layer visit of llama.cpp's inkling2 graph: depth-mixed attention
-    /// inputs, optional loop messages, relative attention with sinks and short
-    /// convolutions, then the depth-mixed, routed MoE. Returns the new `cur`.
+    /// One layer visit of llama.cpp's inkling2 graph for the chunk's tokens:
+    /// depth-mixed attention inputs, optional loop messages, relative attention
+    /// with sinks and short convolutions, then the depth-mixed, routed MoE.
+    /// Returns the new `cur` (a persistent slab).
     func encodeVisit(
         visit: Int, layer: Inkling2GGUFLayerWeights, cur: Int, blocks: inout [Int],
         messages: [Int?], _ e: MTLComputeCommandEncoder
@@ -21,6 +22,12 @@ extension Inkling2GGUFDecoder {
         return try encodeFeedForward(
             visit: visit, layer: layer, ffnInput: attended, blocks: blocks,
             message: messages[3], e)
+    }
+
+    /// Mutually independent dispatches: one concurrent group at decode; at
+    /// prefill the tiled GEMMs order themselves, so they run in sequence.
+    private func independent(_ e: MTLComputeCommandEncoder, _ body: () throws -> Void) throws {
+        if tokens == 1 { try ops.concurrent(e, body) } else { try body() }
     }
 
     /// The three attention inputs (Q, K, V): depth-mixed, loop-controlled and
@@ -51,7 +58,7 @@ extension Inkling2GGUFDecoder {
                     cur: row(inputs[j]), message: row(message), down: layer.loopDown[j],
                     gain: layer.loopGain[j], forget: layer.loopForget[j],
                     joined: scratch(s.controlJoined), h: scratch(s.controlHidden), out: row(out),
-                    width: hidden, encoder: e)
+                    width: hidden, tokens: tokens, encoder: e)
                 inputs[j] = out
             }
         }
@@ -72,8 +79,32 @@ extension Inkling2GGUFDecoder {
         return normed
     }
 
+    /// Every projection of the attention inputs; each reads a finished input
+    /// and writes its own scratch.
+    private func encodeProjections(
+        layer: Inkling2GGUFLayerWeights, inputs: [Int], _ e: MTLComputeCommandEncoder
+    ) throws {
+        let s = state
+        let t = tokens
+        let jobs: [(Inkling2GGUFTensor, Int, MTLBuffer)] = [
+            (layer.attnQ, inputs[0], s.q), (layer.attnK, inputs[1], s.k),
+            (layer.attnV, inputs[2], s.v), (layer.attnRel, inputs[0], s.r),
+            (layer.attnGate, inputs[0], s.gate), (layer.attnSink, inputs[0], s.sinks),
+        ]
+        var dynamic: [(Inkling2GGUFTensor, Int, MTLBuffer)] = []
+        if let kProj = layer.kConvProj, let vProj = layer.vConvProj {
+            dynamic = [(kProj, inputs[1], s.dynamicK), (vProj, inputs[2], s.dynamicV)]
+        }
+        try independent(e) {
+            for (weight, input, out) in jobs + dynamic {
+                try ops.gemv(weight, x: row(input), y: scratch(out), tokens: t, encoder: e)
+            }
+        }
+    }
+
     /// Relative attention with sinks over this visit's cache, gated and
-    /// projected, then the post-attention short convolution. Returns its row.
+    /// projected, then the post-attention short convolution (+ the residual
+    /// stream when the visit continues a block). Returns its slab.
     private func encodeAttention(
         visit: Int, layer: Inkling2GGUFLayerWeights, inputs: [Int], residual: Int?,
         _ e: MTLComputeCommandEncoder
@@ -85,78 +116,59 @@ extension Inkling2GGUFDecoder {
         let kvHeads = m.layers[layer.index].kvHeads
         let headDim = m.headDimension
         let kvWidth = kvHeads * headDim
-
-        // Every projection of the attention inputs, as one concurrent group:
-        // each reads a finished input row and writes its own scratch.
+        let t = tokens
         let state = s.convStates[visit]
-        var dynamicK: Operand?
-        var dynamicV: Operand?
-        if layer.kConvProj != nil {
-            dynamicK = scratch(s.dynamicK)
-            dynamicV = scratch(s.dynamicV)
-        }
-        try ops.concurrent(e) {
-            try ops.gemv(layer.attnQ, x: row(inputs[0]), y: scratch(s.q), encoder: e)
-            try ops.gemv(layer.attnK, x: row(inputs[1]), y: scratch(s.k), encoder: e)
-            try ops.gemv(layer.attnV, x: row(inputs[2]), y: scratch(s.v), encoder: e)
-            try ops.gemv(layer.attnRel, x: row(inputs[0]), y: scratch(s.r), encoder: e)
-            try ops.gemv(layer.attnGate, x: row(inputs[0]), y: scratch(s.gate), encoder: e)
-            try ops.gemv(layer.attnSink, x: row(inputs[0]), y: scratch(s.sinks), encoder: e)
-            if let kProj = layer.kConvProj, let vProj = layer.vConvProj {
-                try ops.gemv(kProj, x: row(inputs[1]), y: scratch(s.dynamicK), encoder: e)
-                try ops.gemv(vProj, x: row(inputs[2]), y: scratch(s.dynamicV), encoder: e)
-            }
-        }
+        try encodeProjections(layer: layer, inputs: inputs, e)
+        let dynamicK: Operand? = layer.kConvProj == nil ? nil : scratch(s.dynamicK)
+        let dynamicV: Operand? = layer.vConvProj == nil ? nil : scratch(s.dynamicV)
         // K/V convolutions, clip, norm and cache store, with the Q and R clips.
         let tau: (floor: Float, alpha: Float)? =
             sliding ? nil : (Float(m.logScaleFloor), m.logScaleAlpha)
         let step = scratch(s.step)
         let capacity = s.capacities[visit]
+        let kvArgs = Inkling2GGUFOps.KVFinishArgs(
+            headDim: UInt32(headDim), kvHeads: UInt32(kvHeads),
+            hasDynamic: dynamicK == nil ? 0 : 1, capacity: UInt32(capacity),
+            ring: sliding ? 1 : 0, threshold: m.qkClip, epsilon: m.rmsEpsilon,
+            scale: 1 / Float(dynamicK == nil ? 5 : 9).squareRoot(), tokens: UInt32(t))
         try ops.concurrent(e) {
             try ops.kvFinish(
                 k: scratch(s.k), v: scratch(s.v), kWeight: layer.kConv, vWeight: layer.vConv,
                 state: .init(state), dynamicK: dynamicK, dynamicV: dynamicV,
-                kCache: s.kCaches[visit], vCache: s.vCaches[visit], step: step,
-                args: .init(
-                    headDim: UInt32(headDim), kvHeads: UInt32(kvHeads),
-                    hasDynamic: dynamicK == nil ? 0 : 1, capacity: UInt32(capacity),
-                    ring: sliding ? 1 : 0, threshold: m.qkClip, epsilon: m.rmsEpsilon,
-                    scale: 1 / Float(dynamicK == nil ? 5 : 9).squareRoot()),
+                kCache: s.kCaches[visit], vCache: s.vCaches[visit], step: step, args: kvArgs,
                 encoder: e)
             try ops.clipHeads(
                 scratch(s.q), heads: heads, headDim: headDim, scale: layer.qClip,
-                threshold: m.qkClip, tau: tau, step: step, encoder: e)
+                threshold: m.qkClip, tau: tau, step: step, tokens: t, encoder: e)
             try ops.clipHeads(
                 scratch(s.r), heads: heads, headDim: m.relativeLength, scale: layer.relClip,
-                threshold: m.relativeClip, tau: tau, step: step, encoder: e)
+                threshold: m.relativeClip, tau: tau, step: step, tokens: t, encoder: e)
         }
 
         // Gated attention over the cache, output projection and conv (+ residual).
+        let attentionArgs = Inkling2GGUFOps.AttentionArgs(
+            heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(headDim),
+            relative: UInt32(m.relativeLength), extent: UInt32(layer.relBias.rows),
+            capacity: UInt32(capacity), ring: sliding ? 1 : 0,
+            scale: 1 / Float(headDim).squareRoot(),
+            window: sliding ? UInt32(m.slidingWindow) : UInt32.max, tokens: UInt32(t))
         try ops.attention(
             q: scratch(s.q), kCache: s.kCaches[visit], vCache: s.vCaches[visit], r: scratch(s.r),
             relativeBias: layer.relBias, sinks: scratch(s.sinks), gate: scratch(s.gate),
-            out: scratch(s.attention), step: step, logits: scratch(s.attentionLogits),
-            args: .init(
-                heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(headDim),
-                relative: UInt32(m.relativeLength), extent: UInt32(layer.relBias.rows),
-                capacity: UInt32(capacity), ring: sliding ? 1 : 0,
-                scale: 1 / Float(headDim).squareRoot()),
-            encoder: e)
-        labelPrefix = "v\(visit).attnProj"
+            out: scratch(s.attention), step: step, args: attentionArgs, encoder: e)
         let projected = try rows(1)
-        try ops.gemv(layer.attnOutput, x: scratch(s.attention), y: row(projected), encoder: e)
-        labelPrefix = "v\(visit).attnConv"
+        try ops.gemv(
+            layer.attnOutput, x: scratch(s.attention), y: row(projected), tokens: t, encoder: e)
         let attended = try rows(1)
         try ops.shortConv(
             x: row(projected), weight: layer.attnPostConv,
             state: .init(state, offset: 2 * kvWidth * 12), out: row(attended),
-            residual: residual.map { row($0) }, channels: hidden, encoder: e)
-
+            residual: residual.map { row($0) }, channels: hidden, tokens: t, encoder: e)
         return attended
     }
 
     /// The depth-mixed, loop-controlled, routed MoE with its post-convolution
-    /// and residual. Returns the new `cur`.
+    /// and residual. Returns the new `cur` in a persistent slab.
     private func encodeFeedForward(
         visit: Int, layer: Inkling2GGUFLayerWeights, ffnInput: Int, blocks: [Int],
         message: Int?, _ e: MTLComputeCommandEncoder
@@ -164,7 +176,6 @@ extension Inkling2GGUFDecoder {
         let m = manifest
         let s = state
         let kvWidth = m.layers[layer.index].kvHeads * m.headDimension
-        labelPrefix = "v\(visit).moeIn"
         let moeInput: Int
         if let message {
             let mixed = try mix(blocks + [ffnInput], query: layer.ffnResQuery.operand, count: 1, e)
@@ -173,7 +184,7 @@ extension Inkling2GGUFDecoder {
                 cur: row(mixed), message: row(message), down: layer.loopDown[3],
                 gain: layer.loopGain[3], forget: layer.loopForget[3],
                 joined: scratch(s.controlJoined), h: scratch(s.controlHidden),
-                out: row(controlled), width: hidden, encoder: e)
+                out: row(controlled), width: hidden, tokens: tokens, encoder: e)
             moeInput = try rmsInto(controlled, layer.ffnNorm, e)
         } else {
             moeInput = try mix(
@@ -183,17 +194,16 @@ extension Inkling2GGUFDecoder {
         try encodeMoE(layer: layer, input: moeInput, e)
         // The post-convolution reads the routed experts' weighted sum and adds
         // the FFN input.
-        labelPrefix = "v\(visit).out"
-        let out = try rows(1)
+        let out = try persistentSlab()
         try ops.shortConv(
             x: scratch(s.down), weight: layer.ffnPostConv,
             state: .init(s.convStates[visit], offset: (2 * kvWidth + hidden) * 12),
             out: row(out), routeWeights: scratch(s.routeWeights), slots: m.expertsPerToken,
-            residual: row(ffnInput), channels: hidden, encoder: e)
+            residual: row(ffnInput), channels: hidden, tokens: tokens, encoder: e)
         return out
     }
 
-    /// Router, gate_up, SiTU and down; the slot outputs stay in `state.down`.
+    /// Router, gate_up, SiTU and down; the pair outputs stay in `state.down`.
     private func encodeMoE(
         layer: Inkling2GGUFLayerWeights, input: Int, _ e: MTLComputeCommandEncoder
     ) throws {
@@ -201,31 +211,26 @@ extension Inkling2GGUFDecoder {
         let s = state
         let used = m.expertsPerToken
         let feedForward = m.layers[layer.index].expertFeedForward
+        let routerArgs = Inkling2GGUFOps.RouterArgs(
+            experts: UInt32(m.expertCount), width: UInt32(hidden), used: UInt32(used),
+            weightScale: m.expertWeightsScale, normEpsilon: 1e-20)
         try ops.route(
             router: layer.router, bias: layer.routerBias, x: row(input),
             logits: scratch(s.routerLogits), ids: scratch(s.routeIDs),
-            weights: scratch(s.routeWeights),
-            args: .init(
-                experts: UInt32(m.expertCount), width: UInt32(hidden), used: UInt32(used),
-                weightScale: m.expertWeightsScale, normEpsilon: 1e-20),
-            encoder: e)
+            weights: scratch(s.routeWeights), args: routerArgs, tokens: tokens, encoder: e)
+        let situArgs = Inkling2GGUFOps.SituArgs(
+            feedForward: UInt32(feedForward), slots: UInt32(used * tokens), beta: m.situBeta,
+            linearBeta: m.situLinearBeta)
+        let grouping = (
+            lists: scratch(s.expertLists), counts: scratch(s.expertCounts),
+            sizes: scratch(s.expertGridSizes)
+        )
         try ops.experts(
-            .init(
-                type: layer.gateUp.type, rows: 2 * feedForward, columns: hidden, slots: used,
-                expertStride: layer.gateUp.byteCount / m.expertCount, xSlotStride: 0),
-            weights: layer.gateUp.operand, x: row(input), y: scratch(s.gateUp),
-            ids: scratch(s.routeIDs), scales: layer.gateUpScale?.operand, encoder: e)
-        try ops.situ(
-            gateUp: scratch(s.gateUp), act: scratch(s.activation),
-            args: .init(
-                feedForward: UInt32(feedForward), slots: UInt32(used), beta: m.situBeta,
-                linearBeta: m.situLinearBeta),
-            encoder: e)
-        try ops.experts(
-            .init(
-                type: layer.down.type, rows: hidden, columns: feedForward, slots: used,
-                expertStride: layer.down.byteCount / m.expertCount, xSlotStride: feedForward),
-            weights: layer.down.operand, x: scratch(s.activation), y: scratch(s.down),
-            ids: scratch(s.routeIDs), scales: layer.downScale?.operand, encoder: e)
+            gateUp: layer.gateUp, down: layer.down, gateUpScale: layer.gateUpScale?.operand,
+            downScale: layer.downScale?.operand, experts: m.expertCount, used: used,
+            feedForward: feedForward, hidden: hidden, tokens: tokens, input: row(input),
+            ids: scratch(s.routeIDs), gateUpOut: scratch(s.gateUp),
+            activation: scratch(s.activation), downOut: scratch(s.down), grouping: grouping,
+            situ: situArgs, encoder: e)
     }
 }

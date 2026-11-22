@@ -1,10 +1,12 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Single-token decode ops for a depth-mixed, looped, relative-attention MoE
-// decoder (llama.cpp's inkling2 graph). Every kernel works on f32 vectors that
-// stay on the GPU; position-dependent values come from `DepthStep` in a device
-// buffer, so one token's command sequence is the same at every position.
+// Decode and prefill ops for a depth-mixed, looped, relative-attention MoE
+// decoder (llama.cpp's inkling2 graph), for a chunk of `tokens` consecutive
+// positions starting at `DepthStep.position` (one token at decode). Vectors of
+// a chunk are token-major: element c of token t is at [t * width + c]. Ops
+// with a recurrence over positions (the short convolutions, the KV store) walk
+// the chunk's tokens in order; everything else is parallel over tokens.
 
 struct DepthStep {
     uint position;
@@ -22,19 +24,19 @@ static inline float depth_threadgroup_sum(
     return total;
 }
 
-// out[t][c] = dequant(row token of a Q8_0 matrix)[c]
+// out[t][c] = dequant(row token[t] of a Q8_0 matrix)[c]; grid (columns, tokens).
 kernel void embed_q8_0_row(
     device const uchar* weights [[buffer(0)]],
     device const int* token [[buffer(1)]],
     device float* out [[buffer(2)]],
     constant uint& columns [[buffer(3)]],
-    uint index [[thread_position_in_grid]])
+    uint2 index [[thread_position_in_grid]])
 {
-    if (index >= columns) return;
-    device const uchar* row = weights + ulong(token[0]) * (columns / 32u) * 34u;
-    device const uchar* b = row + (index / 32u) * 34u;
+    if (index.x >= columns) return;
+    device const uchar* row = weights + ulong(token[index.y]) * (columns / 32u) * 34u;
+    device const uchar* b = row + (index.x / 32u) * 34u;
     const float d = float(as_type<half>(*(device const ushort*)b));
-    out[index] = d * float(((device const char*)(b + 2u))[index % 32u]);
+    out[index.y * columns + index.x] = d * float(((device const char*)(b + 2u))[index.x % 32u]);
 }
 
 struct DepthRMSArgs {
@@ -75,7 +77,7 @@ struct DepthGemvArgs {
 };
 
 // y[r] = W[r] . x for an f32 (isBF16 = 0) or bf16 row-major matrix; one SIMD
-// group per row, four per threadgroup.
+// group per row, four per threadgroup (decode; prefill uses the tiled GEMM).
 kernel void dense_gemv_f32_bf16(
     device const uchar* weights [[buffer(0)]],
     device const float* x [[buffer(1)]],
@@ -109,10 +111,13 @@ struct DepthMixArgs {
     float epsilon;
     uint normWeighted;  // 1: RMS-normalise the output and multiply by `normWeight`
     float normEpsilon;
+    uint tokens;
+    uint slab;          // floats per pool slab (tokens * width at prefill)
 };
 
-// Attention over depth: for query q, out[q] = sum_s softmax_s(rms(s) . q / sqrt(width)) * rms(s).
-// `rowsOf` lists the pool rows holding the states (earlier blocks, then cur).
+// Attention over depth, per (query, token): out = sum_s softmax_s(rms(s) . q /
+// sqrt(width)) * rms(s). `rowsOf` lists the pool slabs holding the states
+// (earlier blocks, then cur); query q's output is slab q of `out`.
 kernel void depth_mix(
     device const float* pool [[buffer(0)]],
     device const float* queries [[buffer(1)]],
@@ -120,7 +125,7 @@ kernel void depth_mix(
     constant DepthMixArgs& args [[buffer(3)]],
     constant uint* rowsOf [[buffer(4)]],
     device const float* normWeight [[buffer(5)]],
-    uint query [[threadgroup_position_in_grid]],
+    uint groupIndex [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -129,10 +134,14 @@ kernel void depth_mix(
     threadgroup float scratch[32];
     threadgroup float inv[32];
     threadgroup float score[32];
+    // A flat grid of (query, token) pairs: the SIMD-group attributes are
+    // scalar, so the threadgroup position must be too.
+    const uint query = groupIndex % args.queryCount;
+    const uint token = groupIndex / args.queryCount;
     const uint simdgroups = (threads + 31u) / 32u;
     device const float* q = queries + query * args.width;
     for (uint s = 0u; s < args.stateCount; ++s) {
-        device const float* xs = pool + rowsOf[s] * args.width;
+        device const float* xs = pool + ulong(rowsOf[s]) * args.slab + token * args.width;
         float sq = 0.0f;
         float dot = 0.0f;
         for (uint i = tid; i < args.width; i += threads) {
@@ -152,12 +161,13 @@ kernel void depth_mix(
     for (uint s = 0u; s < args.stateCount; ++s) peak = max(peak, score[s]);
     float denominator = 0.0f;
     for (uint s = 0u; s < args.stateCount; ++s) denominator += exp(score[s] - peak);
-    device float* o = out + query * args.width;
+    device float* o = out + ulong(query) * args.slab + token * args.width;
     float outSquares = 0.0f;
     for (uint i = tid; i < args.width; i += threads) {
         float value = 0.0f;
         for (uint s = 0u; s < args.stateCount; ++s) {
-            value += exp(score[s] - peak) / denominator * inv[s] * pool[rowsOf[s] * args.width + i];
+            value += exp(score[s] - peak) / denominator * inv[s]
+                * pool[ulong(rowsOf[s]) * args.slab + token * args.width + i];
         }
         o[i] = value;
         outSquares += value * value;
@@ -175,13 +185,14 @@ struct DepthControlArgs {
     float epsilon;
 };
 
-// joined = [rms(cur); rms(message)], the controller's 2 * width input; the
-// projection h = D . joined then runs on the parallel dense GEMV.
+// joined[t] = [rms(cur[t]); rms(message[t])], the controller's 2 * width input,
+// one threadgroup per token; h = D . joined then runs on the dense GEMV/GEMM.
 kernel void control_join(
     device const float* cur [[buffer(0)]],
     device const float* message [[buffer(1)]],
     device float* joined [[buffer(2)]],
     constant DepthControlArgs& args [[buffer(3)]],
+    uint token [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -189,24 +200,28 @@ kernel void control_join(
 {
     threadgroup float scratch[32];
     const uint simdgroups = (threads + 31u) / 32u;
+    device const float* c = cur + token * args.width;
+    device const float* m = message + token * args.width;
+    device float* j = joined + token * 2u * args.width;
     float a = 0.0f;
     float b = 0.0f;
     for (uint i = tid; i < args.width; i += threads) {
-        a += cur[i] * cur[i];
-        b += message[i] * message[i];
+        a += c[i] * c[i];
+        b += m[i] * m[i];
     }
     const float invCur = rsqrt(
         depth_threadgroup_sum(a, scratch, sg, lane, simdgroups) / float(args.width) + args.epsilon);
     const float invMessage = rsqrt(
         depth_threadgroup_sum(b, scratch, sg, lane, simdgroups) / float(args.width) + args.epsilon);
     for (uint i = tid; i < args.width; i += threads) {
-        joined[i] = cur[i] * invCur;
-        joined[args.width + i] = message[i] * invMessage;
+        j[i] = c[i] * invCur;
+        j[args.width + i] = m[i] * invMessage;
     }
 }
 
 // out = (1 - tanh(F . h)) * cur + tanh(G . h) * message; F, G are [width][rank].
-// One SIMD group per output reads the two contiguous rank-length rows.
+// One SIMD group per output reads the two contiguous rank-length rows; a flat
+// grid of width / 4 threadgroups per token.
 kernel void control_apply(
     device const float* cur [[buffer(0)]],
     device const float* message [[buffer(1)]],
@@ -219,29 +234,35 @@ kernel void control_apply(
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]])
 {
-    const uint index = groupIndex * 4u + sg;
+    const uint groupsPerToken = (args.width + 3u) / 4u;
+    const uint index = (groupIndex % groupsPerToken) * 4u + sg;
+    const uint token = groupIndex / groupsPerToken;
     if (index >= args.width) return;
+    device const float* ht = h + token * args.rank;
     float g = 0.0f;
     float f = 0.0f;
     for (uint r = lane; r < args.rank; r += 32u) {
-        g += gain[index * args.rank + r] * h[r];
-        f += forget[index * args.rank + r] * h[r];
+        g += gain[index * args.rank + r] * ht[r];
+        f += forget[index * args.rank + r] * ht[r];
     }
     g = simd_sum(g);
     f = simd_sum(f);
-    if (lane == 0u) out[index] = (1.0f - tanh(f)) * cur[index] + tanh(g) * message[index];
+    const uint at = token * args.width + index;
+    if (lane == 0u) out[at] = (1.0f - tanh(f)) * cur[at] + tanh(g) * message[at];
 }
 
 struct DepthConvArgs {
     uint channels;
-    uint slots;        // > 0: the input is sum_s weights[s] * x[s][c] (routed experts)
+    uint slots;        // > 0: the input is sum_s weights[t][s] * x[t * slots + s][c]
     uint hasResidual;  // add `residual` after the scale
     float scale;
+    uint tokens;
 };
 
-// Causal 4-tap short convolution with residual, one channel per thread:
-// out = (x + sum_k w[k] * [s0 s1 s2 x][k]) * scale (+ residual), state <- [s1 s2 x].
-// `state` is [channels][3]; weight is [channels][4].
+// Causal 4-tap short convolution with residual, one channel per thread, over
+// the chunk's tokens in order: out[t] = (x[t] + sum_k w[k] * [s0 s1 s2 x[t]][k])
+// * scale (+ residual[t]), state <- [s1 s2 x[t]]. `state` is [channels][3];
+// weight is [channels][4].
 kernel void short_conv_step(
     device const float* x [[buffer(0)]],
     device const float* weight [[buffer(1)]],
@@ -253,20 +274,34 @@ kernel void short_conv_step(
     uint c [[thread_position_in_grid]])
 {
     if (c >= args.channels) return;
-    float xv;
-    if (args.slots > 0u) {
-        xv = 0.0f;
-        for (uint s = 0u; s < args.slots; ++s) xv += routeWeights[s] * x[s * args.channels + c];
-    } else {
-        xv = x[c];
+    float s0 = state[c * 3u + 0u];
+    float s1 = state[c * 3u + 1u];
+    float s2 = state[c * 3u + 2u];
+    const float w0 = weight[c * 4u + 0u];
+    const float w1 = weight[c * 4u + 1u];
+    const float w2 = weight[c * 4u + 2u];
+    const float w3 = weight[c * 4u + 3u];
+    for (uint t = 0u; t < args.tokens; ++t) {
+        float xv;
+        if (args.slots > 0u) {
+            xv = 0.0f;
+            for (uint s = 0u; s < args.slots; ++s) {
+                xv += routeWeights[t * args.slots + s]
+                    * x[(t * args.slots + s) * args.channels + c];
+            }
+        } else {
+            xv = x[t * args.channels + c];
+        }
+        const float conv = s0 * w0 + s1 * w1 + s2 * w2 + xv * w3;
+        s0 = s1;
+        s1 = s2;
+        s2 = xv;
+        out[t * args.channels + c] = (xv + conv) * args.scale
+            + (args.hasResidual != 0u ? residual[t * args.channels + c] : 0.0f);
     }
-    const float window[4] = {state[c * 3u + 0u], state[c * 3u + 1u], state[c * 3u + 2u], xv};
-    float conv = 0.0f;
-    for (uint k = 0u; k < 4u; ++k) conv += window[k] * weight[c * 4u + k];
-    state[c * 3u + 0u] = window[1];
-    state[c * 3u + 1u] = window[2];
-    state[c * 3u + 2u] = xv;
-    out[c] = (xv + conv) * args.scale + (args.hasResidual != 0u ? residual[c] : 0.0f);
+    state[c * 3u + 0u] = s0;
+    state[c * 3u + 1u] = s1;
+    state[c * 3u + 2u] = s2;
 }
 
 struct DepthKVFinishArgs {
@@ -278,13 +313,16 @@ struct DepthKVFinishArgs {
     float threshold;  // K clip
     float epsilon;    // V RMS norm
     float scale;      // convolution residual scale
+    uint tokens;
 };
 
 // K and V after their projections, in one kernel: one threadgroup per head
-// (first kvHeads for K, then V), one thread per channel. Each runs its
-// causal convolution (with the per-head dynamic taps of full layers), then K
-// is L2-clipped and V RMS-normalised per head, and both are stored as half
-// at this position's cache slot. `state` holds K channels then V channels.
+// (first kvHeads for K, then V), one thread per channel, over the chunk's
+// tokens in order. Each runs its causal convolution (with the per-head dynamic
+// taps of full layers), then K is L2-clipped and V RMS-normalised per head, and
+// both are stored as half at that position's cache slot. `state` holds K
+// channels then V channels; dynamic taps are [tokens][kvHeads][4], lag 0 the
+// current input.
 kernel void kv_finish(
     device const float* k [[buffer(0)]],
     device const float* v [[buffer(1)]],
@@ -312,26 +350,40 @@ kernel void kv_finish(
     device const float* weight = isV ? vWeight : kWeight;
     device const float* dynamic = isV ? vDynamic : kDynamic;
     device float* st = state + (isV ? width : 0u) * 3u;
-
-    const float xv = xs[c];
-    const float window[4] = {st[c * 3u + 0u], st[c * 3u + 1u], st[c * 3u + 2u], xv};
-    float conv = 0.0f;
-    for (uint t = 0u; t < 4u; ++t) conv += window[t] * weight[c * 4u + t];
-    if (args.hasDynamic != 0u) {
-        for (uint lag = 0u; lag < 4u; ++lag) conv += window[3u - lag] * dynamic[head * 4u + lag];
-    }
-    st[c * 3u + 0u] = window[1];
-    st[c * 3u + 1u] = window[2];
-    st[c * 3u + 2u] = xv;
-    const float value = (xv + conv) * args.scale;
-
-    const float sq = depth_threadgroup_sum(value * value, scratch, sg, lane, (threads + 31u) / 32u);
-    const float factor = isV
-        ? rsqrt(sq / float(args.headDim) + args.epsilon)
-        : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
-    const uint slot = args.ring != 0u ? step[0].position % args.capacity : step[0].position;
     device half* cache = isV ? vCache : kCache;
-    cache[ulong(slot) * width + c] = half(value * factor);
+    float s0 = st[c * 3u + 0u];
+    float s1 = st[c * 3u + 1u];
+    float s2 = st[c * 3u + 2u];
+    const float w0 = weight[c * 4u + 0u];
+    const float w1 = weight[c * 4u + 1u];
+    const float w2 = weight[c * 4u + 2u];
+    const float w3 = weight[c * 4u + 3u];
+    const uint simdgroups = (threads + 31u) / 32u;
+    for (uint t = 0u; t < args.tokens; ++t) {
+        const float xv = xs[t * width + c];
+        float conv = s0 * w0 + s1 * w1 + s2 * w2 + xv * w3;
+        if (args.hasDynamic != 0u) {
+            device const float* taps = dynamic + (t * args.kvHeads + head) * 4u;
+            conv += xv * taps[0];
+            conv += s2 * taps[1];
+            conv += s1 * taps[2];
+            conv += s0 * taps[3];
+        }
+        s0 = s1;
+        s1 = s2;
+        s2 = xv;
+        const float value = (xv + conv) * args.scale;
+        const float sq = depth_threadgroup_sum(value * value, scratch, sg, lane, simdgroups);
+        const float factor = isV
+            ? rsqrt(sq / float(args.headDim) + args.epsilon)
+            : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
+        const uint position = step[0].position + t;
+        const uint slot = args.ring != 0u ? position % args.capacity : position;
+        cache[ulong(slot) * width + c] = half(value * factor);
+    }
+    st[c * 3u + 0u] = s0;
+    st[c * 3u + 1u] = s1;
+    st[c * 3u + 2u] = s2;
 }
 
 struct DepthClipArgs {
@@ -341,19 +393,23 @@ struct DepthClipArgs {
     float threshold;
     float tauFloor;
     float tauAlpha;
+    uint heads;
 };
 
-// Per head (one SIMD group each): v *= scale; v *= clamp(t / (|v| + 1e-6), 0, 1);
+// Per (head, token), one SIMD group: v *= scale; v *= clamp(t / (|v| + 1e-6), 0, 1);
 // then, for full-attention layers, v *= 1 + alpha * log(max(1, (pos + 1) / floor)).
+// A flat grid of heads x tokens; v is [tokens][heads][headDim].
 kernel void clip_heads(
     device float* v [[buffer(0)]],
     device const float* scale [[buffer(1)]],
     device const DepthStep* step [[buffer(2)]],
     constant DepthClipArgs& args [[buffer(3)]],
-    uint head [[threadgroup_position_in_grid]],
+    uint groupIndex [[threadgroup_position_in_grid]],
     uint lane [[thread_index_in_simdgroup]])
 {
-    device float* h = v + head * args.headDim;
+    const uint head = groupIndex % args.heads;
+    const uint token = groupIndex / args.heads;
+    device float* h = v + (token * args.heads + head) * args.headDim;
     float sq = 0.0f;
     for (uint i = lane; i < args.headDim; i += 32u) {
         const float value = h[i] * (args.hasScale != 0u ? scale[head * args.headDim + i] : 1.0f);
@@ -362,7 +418,8 @@ kernel void clip_heads(
     const float norm = sqrt(simd_sum(sq)) + 1e-6f;
     float factor = clamp(args.threshold / norm, 0.0f, 1.0f);
     if (args.applyTau != 0u) {
-        const float ratio = max(1.0f, (float(step[0].position) + 1.0f) / args.tauFloor);
+        const float position = float(step[0].position + token);
+        const float ratio = max(1.0f, (position + 1.0f) / args.tauFloor);
         factor *= 1.0f + args.tauAlpha * log(ratio);
     }
     for (uint i = lane; i < args.headDim; i += 32u) {

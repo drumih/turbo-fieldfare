@@ -163,13 +163,33 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
    (`q2kxl-reference.json`). The decoder refuses the file until then.
 3. **Front ends:** a tokenizer for the GGUF's `inkling2` BPE vocabulary, then
    the CLI and server routes (today the decoder takes token ids).
-4. **Prefill:** prompts run token by token. The ANE probe
-   (`docs/inkling2-ane-prefill-probe-2026-11-22.md`) says **go** for the dense
-   projections: 6–8 TF/s on the ANE, ~3× the GPU through Core ML, error
-   3.6e-4 (fp16 level), 100% ANE placement. Prerequisite: a batched GPU
-   prefill (chunk attention + batched expert GEMMs); then run the dense ~30%
-   of the FLOPs on the ANE concurrently. Probe Core ML block-wise int8 for an
-   exact Q8_0 representation before spending 1.29 GB on fp16 copies.
+4. **Prefill (batched, 2026-11-22).** One graph for decode and prefill: a
+   chunk of up to `maxChunk` tokens runs in one command buffer; decode is a
+   one-token chunk on the tuned GEMVs. New: `gguf_gemm_tiled.metal`
+   (llama.cpp `mul_mm` geometry, 64 x 32 tiles, simdgroup half MMA with fp32
+   accumulation, dense or expert-grouped with a GPU-sized indirect grid),
+   token-dimension kernels (convolutions and the KV store walk the chunk in
+   order), an online-softmax attention over a sliding ring of `window +
+   maxChunk` slots (so a chunk never overwrites keys its own earlier tokens
+   need), and liveness-based slab reuse for the hidden-vector pool.
+   - **Parity:** `chunkedPrefillMatchesTokenByTokenAndLlamaCpp` — the whole
+     prompt as one chunk, then decode: 96/96 greedy tokens identical to
+     llama.cpp; last-prompt-token logits against token by token: max |Δ|
+     0.005–0.021 on four prompts, 0.45 / 0.89 on two (softcap ±30), top-1
+     equal — the half-precision tiles, as in llama.cpp's `mul_mm`.
+   - **Speed (pp shapes, one chunk):** pp64 **55–57 tok/s**, pp512 **97
+     tok/s**, against llama.cpp **70.7 / 120.6** — 3–6× the token-by-token
+     path (~17), still **below** llama. Decode unchanged (interleaved A/B,
+     3 pairs: 13.66/13.90/13.88 vs HEAD 13.68/13.48/12.36 tok/s; the machine
+     ran slower than earlier in the day for all variants).
+   - **Where the time is:** the tiled kernel moves weights through threadgroup
+     memory at ~25 G weights/s for dense and MoE alike (1.7–2.2 TF/s dense;
+     a routed layer ~80 µs/token at T=512, ~600 µs at T=64 where experts get
+     ~4 tokens). Rejected by measurement: arithmetic fp16 E2M1 decode in the
+     tile (no gain), a register multi-token GEMV for small chunks (~1 ms/token,
+     register spills). Next: fix the tile pipeline (likely threadgroup bank
+     conflicts in `simdgroup_load`), then put the dense projections on the
+     ANE (probe: 6–8 TF/s, `docs/inkling2-ane-prefill-probe-2026-11-22.md`).
 5. **CPU/AMX:** only where a measurement shows the GPU waiting.
 
 ## Microbenchmark procedure

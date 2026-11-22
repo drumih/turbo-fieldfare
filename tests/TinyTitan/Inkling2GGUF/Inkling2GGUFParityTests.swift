@@ -92,24 +92,53 @@ import Testing
 }
 
 extension Inkling2GGUFParityTests {
-    /// Diagnostic: the norm of every intermediate vector of the first token.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_TRACE"] == "1"))
-    func traceFirstToken() throws {
+    /// The prompt runs as one prefill chunk (tiled GEMMs, expert-grouped MoE,
+    /// chunk attention); its next-token logits must agree with feeding the
+    /// same prompt token by token, and the greedy continuation must match
+    /// llama.cpp's.
+    @Test(.enabled(if: modelPath != nil))
+    func chunkedPrefillMatchesTokenByTokenAndLlamaCpp() throws {
         let path = try #require(Self.modelPath)
-        let decoder = try Inkling2GGUFDecoder(url: URL(fileURLWithPath: path), maxContext: 64)
-        let result = try decoder.step(token: 371, position: 0, returnLogits: true)
-        for row in decoder.rowSummaries() {
-            let first = row.first.map { String(format: "%.4f", $0) }.joined(separator: " ")
-            FileHandle.standardError.write(
-                Data(
-                    String(
-                        format: "%@ norm=%.4f sum=%.6f first=[%@]\n", row.label, row.norm, row.sum,
-                        first
-                    ).utf8))
+        let reference = try Self.reference(for: path)
+        let decoder = try Inkling2GGUFDecoder(
+            url: URL(fileURLWithPath: path), maxContext: 256, maxChunk: 64)
+        decoder.weights.prefault()
+        let log = { (line: String) in FileHandle.standardError.write(Data((line + "\n").utf8)) }
+        var matched = 0
+        var total = 0
+        for item in reference.cases {
+            decoder.state.reset()
+            var sequential: [Float] = []
+            for (position, token) in item.prompt_ids.enumerated() {
+                sequential = try #require(
+                    decoder.step(token: token, position: position, returnLogits: true).logits)
+            }
+            decoder.state.reset()
+            var result = try decoder.prefill(item.prompt_ids, position: 0, returnLogits: true)
+            let chunked = try #require(result.logits)
+            let worst = zip(chunked, sequential).map { abs($0 - $1) }.max() ?? 0
+            let top = { (l: [Float]) in l.indices.max { l[$0] < l[$1] } }
+            #expect(
+                top(chunked) == top(sequential), "\(item.prompt.debugDescription) top-1 differs")
+            var produced: [Int] = []
+            var position = item.prompt_ids.count
+            for (index, expected) in item.steps.enumerated() {
+                produced.append(result.next)
+                total += 1
+                matched += result.next == expected.id ? 1 : 0
+                if index + 1 < item.steps.count {
+                    result = try decoder.step(token: expected.id, position: position)
+                    position += 1
+                }
+            }
+            log(
+                String(
+                    format: "%@: prefill vs token-by-token max |dlogit| %.4f, greedy %@",
+                    item.prompt.debugDescription, worst,
+                    produced == item.steps.map(\.id) ? "identical" : "differs"))
         }
-        let logits = try #require(result.logits)
-        let finite = logits.allSatisfy { $0.isFinite }
-        #expect(finite)
+        log("chunked prefill greedy agreement \(matched)/\(total)")
+        #expect(matched == total, "chunked prefill greedy agreement \(matched)/\(total)")
     }
 }
 
@@ -122,7 +151,10 @@ extension Inkling2GGUFParityTests {
                 && ProcessInfo.processInfo.environment["TINYTITAN_KERNEL_BENCH"] == "1"))
     func decodeThroughput() throws {
         let path = try #require(Self.modelPath)
-        let decoder = try Inkling2GGUFDecoder(url: URL(fileURLWithPath: path), maxContext: 512)
+        let chunk =
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_CHUNK"].flatMap(Int.init) ?? 256
+        let decoder = try Inkling2GGUFDecoder(
+            url: URL(fileURLWithPath: path), maxContext: 512, maxChunk: chunk)
         decoder.weights.prefault()
         if let skip = ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SKIP"] {
             decoder.ops.skipped = Set(skip.split(separator: ",").map(String.init))
@@ -160,5 +192,41 @@ extension Inkling2GGUFParityTests {
                     count, Double(count) / total, sorted[count / 2] * 1e3, sorted[0] * 1e3,
                     encode[count / 2] * 1e3, gpu[count / 2] * 1e3
                 ).utf8))
+    }
+}
+
+extension Inkling2GGUFParityTests {
+    /// Prefill throughput for prompts of 64 and 512 tokens (llama-bench's pp64
+    /// and pp512 shapes), one chunk each, GPU and wall time. Opt-in with
+    /// `TINYTITAN_KERNEL_BENCH=1`.
+    @Test(
+        .enabled(
+            if: modelPath != nil
+                && ProcessInfo.processInfo.environment["TINYTITAN_KERNEL_BENCH"] == "1"))
+    func prefillThroughput() throws {
+        let path = try #require(Self.modelPath)
+        let decoder = try Inkling2GGUFDecoder(
+            url: URL(fileURLWithPath: path), maxContext: 1_024, maxChunk: 512)
+        decoder.weights.prefault()
+        for length in [64, 512] {
+            // Ordinary text-range token ids; the content does not change the cost.
+            let prompt = (0..<length).map { 300 + ($0 * 7_919) % 150_000 }
+            var samples: [(wall: Double, gpu: Double)] = []
+            for _ in 0..<4 {
+                decoder.state.reset()
+                let started = Date()
+                _ = try decoder.prefill(prompt, position: 0)
+                samples.append((Date().timeIntervalSince(started), decoder.lastGPUSeconds))
+            }
+            let warm = samples.dropFirst().sorted { $0.wall < $1.wall }
+            let median = warm[warm.count / 2]
+            #expect(median.wall > 0)
+            FileHandle.standardError.write(
+                Data(
+                    String(
+                        format: "prefill pp%d: %.1f tok/s (wall %.1f ms, GPU %.1f ms)\n", length,
+                        Double(length) / median.wall, median.wall * 1e3, median.gpu * 1e3
+                    ).utf8))
+        }
     }
 }

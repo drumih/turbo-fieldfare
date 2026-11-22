@@ -2,11 +2,12 @@ import Foundation
 import Metal
 import TinyTitanCore
 
-/// Native single-token decoder for Inkling2 GGUFs, ported from llama.cpp's
-/// `src/models/inkling2.cpp` graph. A token's whole forward — 48 layer visits,
-/// depth mixes, loop controllers, short convolutions, relative attention, the
-/// sigmoid router and the routed experts — is one command buffer with no CPU
-/// round trip; the next token is the GPU argmax.
+/// Native decoder for Inkling2 GGUFs, ported from llama.cpp's
+/// `src/models/inkling2.cpp` graph. One command buffer runs a chunk of
+/// consecutive tokens — one at decode, up to `maxChunk` at prefill — through
+/// the 48 layer visits (depth mixes, loop controllers, short convolutions,
+/// relative attention, the sigmoid router and the routed experts) with no CPU
+/// round trip; the next token is the GPU argmax of the chunk's last position.
 final class Inkling2GGUFDecoder {
     typealias Operand = GGUFGemvIds.Operand
 
@@ -15,15 +16,17 @@ final class Inkling2GGUFDecoder {
     let state: Inkling2GGUFState
     private let context: MetalContext
     let ops: Inkling2GGUFOps
-    var rowCursor = 0
-    /// CPU time spent encoding, and GPU time of, the last token's command buffer.
+    /// Tokens of the chunk being encoded.
+    private(set) var tokens = 1
+    /// CPU time spent encoding, and GPU time of, the last chunk's command buffer.
     private(set) var lastEncodeSeconds: Double = 0
     private(set) var lastGPUSeconds: Double = 0
-    /// What each pool row of the last token holds, for diagnostics.
-    private(set) var rowLabels: [String] = []
-    var labelPrefix = ""
+    private var freePersistent: [Int] = []
+    private var transientCursor = 0
 
-    init(url: URL, maxContext: Int = 4_096, context: MetalContext? = nil) throws {
+    init(
+        url: URL, maxContext: Int = 4_096, maxChunk: Int = 256, context: MetalContext? = nil
+    ) throws {
         let context = try context ?? MetalContext()
         self.context = context
         manifest = try Inkling2GGUFManifest(url: url)
@@ -36,9 +39,13 @@ final class Inkling2GGUFDecoder {
                 )
             }
         }
+        guard maxChunk >= 1, maxChunk <= maxContext else {
+            throw MetalError.invalidState("chunk \(maxChunk) for context \(maxContext)")
+        }
         weights = try Inkling2GGUFWeights(manifest: manifest, device: context.device)
         state = try Inkling2GGUFState(
-            manifest: manifest, device: context.device, maxContext: maxContext)
+            manifest: manifest, device: context.device, maxContext: maxContext,
+            maxChunk: maxChunk)
         ops = try Inkling2GGUFOps(context: context)
     }
 
@@ -47,16 +54,56 @@ final class Inkling2GGUFDecoder {
     func step(token: Int, position: Int, returnLogits: Bool = false) throws
         -> (next: Int, logits: [Float]?)
     {
-        guard position < state.maxContext else {
-            throw MetalError.invalidState("position \(position) past context \(state.maxContext)")
+        try prefill([token], position: position, returnLogits: returnLogits)
+    }
+
+    /// Feeds `prompt` at positions `position ..<`, in chunks of up to
+    /// `maxChunk` tokens, and returns the greedy token after its last one
+    /// (with its softcapped logits when asked).
+    func prefill(_ prompt: [Int], position: Int, returnLogits: Bool = false) throws
+        -> (next: Int, logits: [Float]?)
+    {
+        guard !prompt.isEmpty, position + prompt.count <= state.maxContext else {
+            throw MetalError.invalidState(
+                "\(prompt.count) tokens at \(position) for context \(state.maxContext)")
         }
-        state.token.contents().storeBytes(of: Int32(token), as: Int32.self)
+        var result: (next: Int, logits: [Float]?) = (0, nil)
+        var offset = 0
+        while offset < prompt.count {
+            let chunk = Array(prompt[offset..<min(prompt.count, offset + state.maxChunk)])
+            let last = offset + chunk.count == prompt.count
+            result = try run(chunk, position: position + offset, returnLogits: returnLogits && last)
+            offset += chunk.count
+        }
+        return result
+    }
+
+    /// Greedy generation: prefill `prompt`, then decode until `count` tokens.
+    func generate(prompt: [Int], count: Int) throws -> [Int] {
+        state.reset()
+        var next = try prefill(prompt, position: 0).next
+        var produced: [Int] = []
+        for offset in 0..<count {
+            produced.append(next)
+            if offset + 1 < count {
+                next = try step(token: next, position: prompt.count + offset).next
+            }
+        }
+        return produced
+    }
+
+    private func run(_ chunk: [Int], position: Int, returnLogits: Bool) throws
+        -> (next: Int, logits: [Float]?)
+    {
+        tokens = chunk.count
+        let tokenSlots = state.tokens.contents().bindMemory(to: Int32.self, capacity: chunk.count)
+        for (index, token) in chunk.enumerated() { tokenSlots[index] = Int32(token) }
         state.step.contents().storeBytes(of: UInt32(position), as: UInt32.self)
         guard let commandBuffer = context.queue.makeCommandBuffer(),
             let encoder = commandBuffer.makeComputeCommandEncoder(dispatchType: .concurrent)
         else { throw MetalError.commandEncoderFailed }
         let encodeStarted = Date()
-        try encodeToken(encoder)
+        try encodeChunk(encoder)
         encoder.endEncoding()
         lastEncodeSeconds = Date().timeIntervalSince(encodeStarted)
         commandBuffer.commit()
@@ -73,70 +120,47 @@ final class Inkling2GGUFDecoder {
         return (next, logits)
     }
 
-    /// Greedy generation: prefill `prompt` token by token, then `count` tokens.
-    func generate(prompt: [Int], count: Int) throws -> [Int] {
-        state.reset()
-        var next = 0
-        for (position, token) in prompt.enumerated() {
-            next = try step(token: token, position: position).next
-        }
-        var produced: [Int] = []
-        for offset in 0..<count {
-            produced.append(next)
-            if offset + 1 < count {
-                next = try step(token: next, position: prompt.count + offset).next
-            }
-        }
-        return produced
-    }
-
-    // MARK: - Graph
+    // MARK: - Pool slabs
 
     var hidden: Int { manifest.hidden }
 
+    /// A slab for a value that may outlive its layer visit (a visit's output).
+    func persistentSlab() throws -> Int {
+        guard let slab = freePersistent.popLast() else {
+            throw MetalError.invalidState("no free persistent slab")
+        }
+        return slab
+    }
+
+    /// `count` consecutive slabs for one visit's temporaries.
     func rows(_ count: Int) throws -> Int {
-        guard rowCursor + count <= state.poolRows else {
-            throw MetalError.invalidState("hidden pool exhausted at \(rowCursor) rows")
+        guard transientCursor + count <= state.transientSlabs else {
+            throw MetalError.invalidState("transient slabs exhausted at \(transientCursor)")
         }
-        defer { rowCursor += count }
-        rowLabels.append(contentsOf: (0..<count).map { "\(labelPrefix)#\($0)" })
-        return rowCursor
+        defer { transientCursor += count }
+        return state.persistentSlabs + transientCursor
     }
 
-    /// L2 norm of every pool row the last token wrote, with its label.
-    func rowNorms() -> [(label: String, norm: Float)] {
-        rowSummaries().map { ($0.label, $0.norm) }
+    /// Starts a visit: temporaries are released and every persistent slab
+    /// outside `live` returns to the free list.
+    private func beginVisit(live: Set<Int>) {
+        transientCursor = 0
+        freePersistent = (0..<state.persistentSlabs).filter { !live.contains($0) }.reversed()
     }
 
-    /// Label, L2 norm, sum and first three values of every pool row the last
-    /// token wrote: the same summary llama.cpp's eval callback prints.
-    func rowSummaries() -> [(label: String, norm: Float, sum: Float, first: [Float])] {
-        let base = state.pool.contents().bindMemory(to: Float.self, capacity: rowCursor * hidden)
-        return (0..<rowCursor).map { index in
-            var squares: Float = 0
-            var sum: Float = 0
-            for i in 0..<hidden {
-                let value = base[index * hidden + i]
-                squares += value * value
-                sum += value
-            }
-            let first = (0..<3).map { base[index * hidden + $0] }
-            return (rowLabels[index], squares.squareRoot(), sum, first)
-        }
-    }
-
-    func row(_ index: Int) -> Operand { .init(state.pool, offset: index * hidden * 4) }
+    func row(_ index: Int) -> Operand { .init(state.pool, offset: index * state.slabFloats * 4) }
 
     func scratch(_ buffer: MTLBuffer) -> Operand { .init(buffer) }
 
-    func rmsInto(_ x: Int, _ weight: Inkling2GGUFTensor, _ e: MTLComputeCommandEncoder)
-        throws -> Int
-    {
-        let out = try rows(1)
+    func rmsInto(
+        _ x: Int, _ weight: Inkling2GGUFTensor, into out: Int? = nil,
+        _ e: MTLComputeCommandEncoder
+    ) throws -> Int {
+        let target = try out ?? rows(1)
         try ops.rmsNorm(
-            row(x), weight: weight.operand, out: row(out), width: hidden,
+            row(x), weight: weight.operand, out: row(target), width: hidden, count: tokens,
             epsilon: manifest.rmsEpsilon, encoder: e)
-        return out
+        return target
     }
 
     func mix(
@@ -145,20 +169,22 @@ final class Inkling2GGUFDecoder {
     ) throws -> Int {
         let out = try rows(count)
         try ops.depthMix(
-            pool: state.pool, rows: states, queries: query, queryCount: count, out: row(out),
-            width: hidden, norm: norm, encoder: e)
+            pool: .init(state.pool), rows: states, queries: query, queryCount: count,
+            out: row(out), width: hidden, tokens: tokens, slab: state.slabFloats, norm: norm,
+            encoder: e)
         return out
     }
 
-    private func encodeToken(_ e: MTLComputeCommandEncoder) throws {
-        rowCursor = 0
-        rowLabels = []
-        labelPrefix = "embed"
+    // MARK: - Graph
+
+    private func encodeChunk(_ e: MTLComputeCommandEncoder) throws {
         let m = manifest
+        beginVisit(live: [])
         let embedded = try rows(1)
         try ops.embed(
-            weights.tokenEmbedding, token: scratch(state.token), out: row(embedded), encoder: e)
-        var cur = try rmsInto(embedded, weights.tokenNorm, e)
+            weights.tokenEmbedding, token: scratch(state.tokens), out: row(embedded),
+            tokens: tokens, encoder: e)
+        var cur = try rmsInto(embedded, weights.tokenNorm, into: try persistentSlab(), e)
         var blocks: [Int] = []
         var preludeBlocks: [Int] = []
         var preludeCur = cur
@@ -169,47 +195,50 @@ final class Inkling2GGUFDecoder {
         for visit in 0..<m.unrolledLayers {
             let stored = m.storedLayer(forUnrolled: visit)
             let layer = weights.layers[stored]
-            var messages: [Int?] = [nil, nil, nil, nil]
-            if core > 0, stored >= m.loopStart, stored < m.loopEnd {
-                let pass = (visit - m.loopStart) / core
-                if stored == m.loopStart {
-                    if pass == 0 {
-                        preludeBlocks = blocks
-                        preludeCur = cur
-                    } else {
-                        bank = Array(blocks[(preludeBlocks.count + 1)...])
-                        bankLast = cur
-                        blocks = preludeBlocks
-                        cur = preludeCur
-                    }
-                }
-                if pass > 0, let attnQuery = weights.loopResQuery,
-                    let kvQuery = weights.loopKVResQuery
-                {
-                    let offset = 2 * (stored - m.loopStart) * hidden * 4
-                    let attn = Operand(
-                        attnQuery.operand.buffer, offset: attnQuery.operand.offset + offset)
-                    let kv = Operand(
-                        kvQuery.operand.buffer, offset: kvQuery.operand.offset + offset)
-                    var mAttn = 0
-                    var mKV = 0
-                    try ops.concurrent(e) {
-                        mAttn = try mix(bank + [bankLast], query: attn, count: 2, e)
-                        mKV = try mix(bank + [bankLast], query: kv, count: 2, e)
-                    }
-                    messages = [mAttn, mKV, mKV + 1, mAttn + 1]
-                }
+            // Each pass of the looped core restarts from the prelude state and
+            // reads the previous pass's blocks through messages.
+            if core > 0, stored == m.loopStart, visit > m.loopStart {
+                bank = Array(blocks[(preludeBlocks.count + 1)...])
+                bankLast = cur
+                blocks = preludeBlocks
+                cur = preludeCur
+            } else if core > 0, stored == m.loopStart {
+                preludeBlocks = blocks
+                preludeCur = cur
             }
-            labelPrefix = "v\(visit)"
+            beginVisit(live: Set(blocks + preludeBlocks + bank + [cur, preludeCur, bankLast]))
+            var messages: [Int?] = [nil, nil, nil, nil]
+            if core > 0, stored >= m.loopStart, stored < m.loopEnd,
+                (visit - m.loopStart) / core > 0, let attnQuery = weights.loopResQuery,
+                let kvQuery = weights.loopKVResQuery
+            {
+                let offset = 2 * (stored - m.loopStart) * hidden * 4
+                let attn = Operand(
+                    attnQuery.operand.buffer, offset: attnQuery.operand.offset + offset)
+                let kv = Operand(kvQuery.operand.buffer, offset: kvQuery.operand.offset + offset)
+                var mAttn = 0
+                var mKV = 0
+                try ops.concurrent(e) {
+                    mAttn = try mix(bank + [bankLast], query: attn, count: 2, e)
+                    mKV = try mix(bank + [bankLast], query: kv, count: 2, e)
+                }
+                messages = [mAttn, mKV, mKV + 1, mAttn + 1]
+            }
             cur = try encodeVisit(
                 visit: visit, layer: layer, cur: cur, blocks: &blocks, messages: messages, e)
         }
 
-        labelPrefix = "final"
-        let mixed = try mix(blocks + [cur], query: weights.outputResQuery.operand, count: 1, e)
-        let normed = try rmsInto(mixed, weights.outputNorm, e)
+        // Only the chunk's last position needs logits: the final mix reads the
+        // slabs through a pool view offset to that token.
+        beginVisit(live: Set(blocks + [cur]))
+        let mixedSlab = try rows(1)
+        try ops.depthMix(
+            pool: .init(state.pool, offset: (tokens - 1) * hidden * 4), rows: blocks + [cur],
+            queries: weights.outputResQuery.operand, queryCount: 1, out: row(mixedSlab),
+            width: hidden, tokens: 1, slab: state.slabFloats,
+            norm: (weights.outputNorm.operand, m.rmsEpsilon), encoder: e)
         if !ops.skipped.contains("head") {
-            try ops.gemv(weights.output, x: row(normed), y: scratch(state.logits), encoder: e)
+            try ops.gemv(weights.output, x: row(mixedSlab), y: scratch(state.logits), encoder: e)
         }
         try ops.argmax(
             logits: scratch(state.logits), count: m.vocabulary,
