@@ -208,7 +208,14 @@ extension Inkling2GGUFParityTests {
         let decoder = try Inkling2GGUFDecoder(
             url: URL(fileURLWithPath: path), maxContext: 1_024, maxChunk: 512)
         decoder.weights.prefault()
-        for length in [64, 512] {
+        if let skip = ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_SKIP"] {
+            decoder.ops.skipped = Set(skip.split(separator: ",").map(String.init))
+        }
+        let lengths =
+            ProcessInfo.processInfo.environment["TINYTITAN_INKLING2_PP"].map {
+                $0.split(separator: ",").compactMap { Int($0) }
+            } ?? [64, 512]
+        for length in lengths {
             // Ordinary text-range token ids; the content does not change the cost.
             let prompt = (0..<length).map { 300 + ($0 * 7_919) % 150_000 }
             var samples: [(wall: Double, gpu: Double)] = []
@@ -228,5 +235,31 @@ extension Inkling2GGUFParityTests {
                         Double(length) / median.wall, median.wall * 1e3, median.gpu * 1e3
                     ).utf8))
         }
+    }
+}
+
+extension Inkling2GGUFParityTests {
+    /// The GGUF-derived tokenizer (GPT-4o pre-tokenizer, the GGUF's own BPE)
+    /// encodes every reference prompt to exactly llama.cpp's ids and decodes
+    /// them back to the text.
+    @Test(.enabled(if: modelPath != nil))
+    func tokenizerMatchesLlamaCpp() async throws {
+        let path = try #require(Self.modelPath)
+        let url = URL(fileURLWithPath: path)
+        let reference = try Self.reference(for: path)
+        let tokenizer = try await Inkling2GGUFTokenizer.load(
+            gguf: url, model: GGUFModelReader.read(modelAt: url))
+        for item in reference.cases {
+            #expect(
+                tokenizer.encode(item.prompt) == item.prompt_ids, "\(item.prompt.debugDescription)")
+            #expect(tokenizer.decode(item.prompt_ids) == item.prompt)
+        }
+        // The reference continuations decode to llama.cpp's text.
+        for item in reference.cases {
+            #expect(
+                tokenizer.decode(item.steps.map(\.id)) == item.text,
+                "\(item.prompt.debugDescription)")
+        }
+        #expect(!tokenizer.stopIDs.isEmpty)
     }
 }

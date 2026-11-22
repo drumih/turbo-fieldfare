@@ -20,27 +20,36 @@ final class GGUFGemmTiled {
         var useScale: UInt32
     }
 
-    static let supported: Set<GGUFType> = [.q8_0, .nvfp4, .f32, .bf16]
+    static let supported: Set<GGUFType> = [
+        .q8_0, .nvfp4, .f32, .bf16, .iq3XXS, .q4K, .q5K, .q6K, .iq1S, .iq2XXS, .iq2XS, .iq2S,
+        .q2_0, .mxfp4,
+    ]
     private static let tileRows = 64
     private static let tileTokens = 32
 
     private var pipelines: [GGUFType: MTLComputePipelineState] = [:]
     private var narrowPipelines: [GGUFType: MTLComputePipelineState] = [:]
+    /// The IQ grids the block decoders read (`GGUFBlockTables`).
+    let tables: MTLBuffer
     private let group: MTLComputePipelineState
     private let clear: MTLComputePipelineState
 
     init(context: MetalContext) throws {
-        for (type, name) in [
-            (GGUFType.q8_0, "gemm_tiled_q8_0"), (.nvfp4, "gemm_tiled_nvfp4"),
-            (.f32, "gemm_tiled_f32"), (.bf16, "gemm_tiled_bf16"),
-        ] {
-            pipelines[type] = try context.pipeline(name)
+        let wide: [(GGUFType, String)] = [
+            (.q8_0, "q8_0"), (.nvfp4, "nvfp4"), (.f32, "f32"), (.bf16, "bf16"),
+            (.iq3XXS, "iq3_xxs"), (.q4K, "q4_k"), (.q5K, "q5_k"), (.q6K, "q6_k"),
+            (.iq1S, "iq1_s"), (.iq2XXS, "iq2_xxs"), (.iq2XS, "iq2_xs"), (.iq2S, "iq2_s"),
+            (.q2_0, "q2_0"), (.mxfp4, "mxfp4"),
+        ]
+        for (type, name) in wide { pipelines[type] = try context.pipeline("gemm_tiled_\(name)") }
+        let narrow: [(GGUFType, String)] = [
+            (.q8_0, "q8_0"), (.nvfp4, "nvfp4"), (.iq1S, "iq1_s"), (.iq2XXS, "iq2_xxs"),
+            (.iq2XS, "iq2_xs"), (.iq2S, "iq2_s"), (.q2_0, "q2_0"), (.mxfp4, "mxfp4"),
+        ]
+        for (type, name) in narrow {
+            narrowPipelines[type] = try context.pipeline("gemm_tiled_\(name)_n8")
         }
-        for (type, name) in [
-            (GGUFType.q8_0, "gemm_tiled_q8_0_n8"), (.nvfp4, "gemm_tiled_nvfp4_n8"),
-        ] {
-            narrowPipelines[type] = try context.pipeline(name)
-        }
+        tables = try GGUFBlockTables.buffer(device: context.device)
         group = try context.pipeline("moe_group_pairs")
         clear = try context.pipeline("clear_counts")
     }
@@ -56,10 +65,12 @@ final class GGUFGemmTiled {
     private func pipeline(
         _ type: GGUFType, columns: Int, tileTokens: Int = 32
     ) throws -> MTLComputePipelineState {
-        guard let state = tileTokens == 8 ? narrowPipelines[type] : pipelines[type] else {
+        // Types without a narrow kernel fall back to the 32-token tile.
+        guard let state = (tileTokens == 8 ? narrowPipelines[type] : nil) ?? pipelines[type]
+        else {
             throw GGUFDequantError.unsupportedType(type.name)
         }
-        guard columns % 64 == 0 else {
+        guard columns % 64 == 0, columns % Int(type.blockSize) == 0 else {
             throw MetalError.invalidState("tiled GEMM: \(columns) columns for \(type.name)")
         }
         return state
@@ -143,6 +154,7 @@ final class GGUFGemmTiled {
         encoder.setBuffer(counts.buffer, offset: counts.offset, index: 4)
         encoder.setBuffer(scales.buffer, offset: scales.offset, index: 5)
         encoder.setBytes(&args, length: MemoryLayout<Args>.stride, index: 6)
+        encoder.setBuffer(tables, offset: 0, index: 7)
     }
 
     private func dispatch(

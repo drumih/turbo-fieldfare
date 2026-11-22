@@ -117,6 +117,12 @@ public func run(
             && options.presencePenalty == 0
             && options.repetitionPenalty == 1
         let prompt = try buildPrompt(args: args)
+        // An Inkling2 GGUF runs in place on its native decoder.
+        if let gguf = Inkling2GGUFSession.modelFile(at: modelURL) {
+            return await runInkling2GGUF(
+                args: args, model: gguf, prompt: prompt, options: options, stdout: stdout,
+                stderr: stderr)
+        }
         // K2-Horizon has no runner graph; the CLI drives the probe runtime
         // instead. Branch before the runner-specific chunk resolution.
         if (try? ManifestReader.peekFamily(directoryURL: modelURL)) == .k2Horizon {

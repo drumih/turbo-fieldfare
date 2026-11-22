@@ -140,5 +140,39 @@ int main(void) {
         dequantize_row_mxfp4((const block_mxfp4 *)buf, y, 64);
         emit("mxfp4", buf, sizeof buf, y, 64);
     }
+    { // q5_K: 2 blocks, d at 0, dmin at 2, scales[4..15], qh[16..47], qs[48..175]
+        uint8_t buf[352];
+        for (int i = 0; i < 352; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.004f);
+        set_d(buf + 0, 2, 0.0015f);
+        set_d(buf + 176, 0, -0.005f);
+        set_d(buf + 176, 2, 0.0009f);
+        dequantize_row_q5_K((const block_q5_K *)buf, y, 512);
+        emit("q5_K", buf, sizeof buf, y, 512);
+    }
+    { // iq2_xxs: 2 blocks, d at 0, qs (uint16 x 32) at 2
+        uint8_t buf[132];
+        for (int i = 0; i < 132; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.02f);
+        set_d(buf + 66, 0, -0.015f);
+        dequantize_row_iq2_xxs((const block_iq2_xxs *)buf, y, 512);
+        emit("iq2_xxs", buf, sizeof buf, y, 512);
+    }
+    { // iq2_xs: 2 blocks, d at 0, qs at 2, scales at 66
+        uint8_t buf[148];
+        for (int i = 0; i < 148; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.02f);
+        set_d(buf + 74, 0, -0.012f);
+        dequantize_row_iq2_xs((const block_iq2_xs *)buf, y, 512);
+        emit("iq2_xs", buf, sizeof buf, y, 512);
+    }
+    { // iq1_s: 2 blocks, d at 0, qs at 2, qh (uint16 x 8) at 34
+        uint8_t buf[100];
+        for (int i = 0; i < 100; i++) buf[i] = pat(i);
+        set_d(buf + 0, 0, 0.03f);
+        set_d(buf + 50, 0, -0.02f);
+        dequantize_row_iq1_s((const block_iq1_s *)buf, y, 512);
+        emit("iq1_s", buf, sizeof buf, y, 512);
+    }
     return 0;
 }

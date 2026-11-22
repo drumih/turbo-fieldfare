@@ -30,12 +30,12 @@ final class Inkling2GGUFDecoder {
         let context = try context ?? MetalContext()
         self.context = context
         manifest = try Inkling2GGUFManifest(url: url)
-        let supported: Set<GGUFType> = [.q8_0, .nvfp4, .f32, .bf16]
+        let supported = Inkling2GGUFOps.supportedTypes
         for layer in manifest.layers {
             let types = [layer.gateUpType, layer.downType] + Array(layer.projectionTypes.values)
             if let unsupported = types.first(where: { !supported.contains($0) }) {
                 throw GGUFDequantError.unsupportedType(
-                    "\(unsupported.name) in layer \(layer.index) (this decoder runs NVFP4/Q8_0 files)"
+                    "\(unsupported.name) in layer \(layer.index)"
                 )
             }
         }
@@ -43,6 +43,12 @@ final class Inkling2GGUFDecoder {
             throw MetalError.invalidState("chunk \(maxChunk) for context \(maxContext)")
         }
         weights = try Inkling2GGUFWeights(manifest: manifest, device: context.device)
+        guard [.q8_0, .iq4XS].contains(weights.tokenEmbedding.type),
+            supported.contains(weights.output.type)
+        else {
+            throw GGUFDequantError.unsupportedType(
+                "embedding \(weights.tokenEmbedding.type.name) / head \(weights.output.type.name)")
+        }
         state = try Inkling2GGUFState(
             manifest: manifest, device: context.device, maxContext: maxContext,
             maxChunk: maxChunk)

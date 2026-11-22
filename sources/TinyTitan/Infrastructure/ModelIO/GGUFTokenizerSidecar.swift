@@ -6,6 +6,7 @@ package enum GGUFTokenizerError: Error, Equatable, CustomStringConvertible {
     case tokenTypeCountMismatch(tokens: Int, types: Int)
     case invalidMerge(String)
     case emptyVocabulary
+    case unsupportedPreTokenizer(String)
 
     package var description: String {
         switch self {
@@ -18,6 +19,8 @@ package enum GGUFTokenizerError: Error, Equatable, CustomStringConvertible {
             return "GGUF merge \(merge.debugDescription) is not two space-separated pieces"
         case .emptyVocabulary:
             return "GGUF tokenizer has an empty vocabulary"
+        case .unsupportedPreTokenizer(let name):
+            return "GGUF tokenizer.ggml.pre \(name.debugDescription) has no pre-tokenizer here"
         }
     }
 }
@@ -83,7 +86,8 @@ package enum GGUFTokenizerSidecar {
         out += "],\"normalizer\":null,\"pre_tokenizer\":"
         out +=
             #"{"type":"Sequence","pretokenizers":[{"type":"Split","pattern":{"Regex":"#
-            + escape(qwen35Pattern) + #"},"behavior":"Isolated","invert":false},"#
+            + escape(try preTokenizerPattern(for: model))
+            + #"},"behavior":"Isolated","invert":false},"#
             + #"{"type":"ByteLevel","add_prefix_space":false,"trim_offsets":true,"use_regex":false}]},"#
         out += #""post_processor":null,"#
         out +=
@@ -183,6 +187,24 @@ package enum GGUFTokenizerSidecar {
         }
         return out + "\""
     }
+
+    /// The split regex for the GGUF's `tokenizer.ggml.pre`, as llama.cpp maps
+    /// it in `llama-vocab.cpp`. A missing name keeps the historical Qwen 3.5
+    /// pattern (the Qwen3.8 GGUFs this was written for); an unknown one is an
+    /// error rather than a silently different split.
+    static func preTokenizerPattern(for model: GGUFModel) throws -> String {
+        switch model.metadata["tokenizer.ggml.pre"]?.string {
+        case nil, "qwen35": return qwen35Pattern
+        case "gpt-4o", "inkling2": return gpt4oPattern
+        case let other?: throw GGUFTokenizerError.unsupportedPreTokenizer(other)
+        }
+    }
+
+    /// `LLAMA_VOCAB_PRE_TYPE_GPT4O` (llama.cpp maps `inkling2` to it, with no
+    /// BOS): the original `tokenizer.json` regex llama.cpp quotes, which is the
+    /// form Hugging Face tokenizers run.
+    static let gpt4oPattern =
+        #"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"#
 
     /// `LLAMA_VOCAB_PRE_TYPE_QWEN35` from llama.cpp's `llama-vocab.cpp`, whose
     /// comment names it as the original regex from the checkpoint's

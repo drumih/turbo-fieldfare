@@ -34,7 +34,8 @@ constant uint GEMM_BK = 64u;
 
 // Sixteen consecutive weights of row `row` starting at column `c` (c % 16 == 0).
 struct GemmQ8_0 {
-    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out) {
+    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out,
+                       device const uchar* tables) {
         device const uchar* b = w + row * rowBytes + (c / 32u) * 34u;
         const float d = float(as_type<half>(*(device const ushort*)b));
         device const char* qs = (device const char*)(b + 2u) + (c % 32u);
@@ -54,7 +55,8 @@ static inline half gemm_e2m1(uint code) {
 }
 
 struct GemmNVFP4 {
-    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out) {
+    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out,
+                       device const uchar* tables) {
         // One 16-value sub-block: value j in the low nibble of byte j (j < 8)
         // and value j in the high nibble of byte j - 8. Blocks are 36 bytes,
         // so the two quant words are 4-byte aligned.
@@ -78,7 +80,8 @@ struct GemmNVFP4 {
 };
 
 struct GemmF32 {
-    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out) {
+    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out,
+                       device const uchar* tables) {
         device const float* r = (device const float*)(w + row * rowBytes) + c;
         for (uint j = 0u; j < 16u; ++j) out[j] = half(r[j]);
     }
@@ -86,7 +89,8 @@ struct GemmF32 {
 };
 
 struct GemmBF16 {
-    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out) {
+    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread half* out,
+                       device const uchar* tables) {
         device const ushort* r = (device const ushort*)(w + row * rowBytes) + c;
         for (uint j = 0u; j < 16u; ++j) out[j] = half(as_type<float>(uint(r[j]) << 16u));
     }
@@ -102,7 +106,7 @@ template <typename Decoder, uint BN>
 static void gguf_gemm_tiled_impl(
     device const uchar* weights, device const float* x, device float* y,
     device const uint* lists, device const uint* counts, device const float* scales,
-    constant GGUFGemmArgs& args, uint3 tile, uint sg, uint tid,
+    constant GGUFGemmArgs& args, device const uchar* tables, uint3 tile, uint sg, uint tid,
     threadgroup half* sa, threadgroup half* sb, threadgroup float* sc)
 {
     const uint rowBase = tile.x * GEMM_BM;
@@ -145,7 +149,7 @@ static void gguf_gemm_tiled_impl(
     for (uint k = 0u; k < args.columns; k += GEMM_BK) {
         for (uint part = 0u; part < 2u; ++part) {
             half wv[16];
-            Decoder::decode(matrix, rowBytes, loadRow, k + (tid % 2u) * 16u + part * 32u, wv);
+            Decoder::decode(matrix, rowBytes, loadRow, k + (tid % 2u) * 16u + part * 32u, wv, tables);
             for (uint j = 0u; j < 4u; ++j) {
                 sa4[part * 8u + j] = half4(wv[4u * j], wv[4u * j + 1u], wv[4u * j + 2u], wv[4u * j + 3u]);
             }
@@ -203,6 +207,7 @@ kernel void name(                                                               
     device const uint* counts [[buffer(4)]],                                         \
     device const float* scales [[buffer(5)]],                                        \
     constant GGUFGemmArgs& args [[buffer(6)]],                                       \
+    device const uchar* tables [[buffer(7)]],                                        \
     uint3 tile [[threadgroup_position_in_grid]],                                     \
     uint sg [[simdgroup_index_in_threadgroup]],                                      \
     uint tid [[thread_index_in_threadgroup]])                                        \
@@ -211,7 +216,7 @@ kernel void name(                                                               
     threadgroup half sb[bn * GEMM_BK];                                               \
     threadgroup float sc[GEMM_BM * bn];                                              \
     gguf_gemm_tiled_impl<decoder, bn>(                                               \
-        weights, x, y, lists, counts, scales, args, tile, sg, tid, sa, sb, sc);      \
+        weights, x, y, lists, counts, scales, args, tables, tile, sg, tid, sa, sb, sc); \
 }
 
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0, GemmQ8_0, 32u)
@@ -220,6 +225,24 @@ GGUF_GEMM_TILED_KERNEL(gemm_tiled_f32, GemmF32, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_bf16, GemmBF16, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0_n8, GemmQ8_0, 8u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4_n8, GemmNVFP4, 8u)
+// The block decoders of gguf_block_decoders.metal (Inkling2 UD-Q2_K_XL types):
+// projections in 32-token tiles, routed experts in both widths.
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq3_xxs, GemmIQ3XXS, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q4_k, GemmQ4K, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q5_k, GemmQ5K, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q6_k, GemmQ6K, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq1_s, GemmIQ1S, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xxs, GemmIQ2XXS, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xs, GemmIQ2XS, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_s, GemmIQ2S, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q2_0, GemmQ2_0, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_mxfp4, GemmMXFP4, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq1_s_n8, GemmIQ1S, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xxs_n8, GemmIQ2XXS, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xs_n8, GemmIQ2XS, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_s_n8, GemmIQ2S, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q2_0_n8, GemmQ2_0, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_mxfp4_n8, GemmMXFP4, 8u)
 
 // Groups (token, slot) pairs by expert: lists[e][i] = token * slots + slot for
 // every pair routed to e, counts[e] how many. One thread per pair; the order

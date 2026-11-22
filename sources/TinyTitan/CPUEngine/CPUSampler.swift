@@ -9,10 +9,12 @@ import Foundation
 /// runs. But a CPU-served model is a served model, and a client that sends a
 /// temperature expects it to mean something.
 ///
-/// Deliberately the simple algorithms. Sampling 248,320 logits costs a
-/// fraction of the 1.9 GB of weight reads that produced them, so the clever
-/// version would save nothing measurable and could get the distribution
-/// wrong.
+/// Deliberately the simple algorithms, with one exception: the candidates are
+/// ranked by sorting contiguous (logit, index) pairs with an index tie-break,
+/// which is exactly the order a stable index sort by logit gives, so every draw
+/// is unchanged. Sorting indices through a closure over the logits measured
+/// about 25 ms per token over Inkling2's 200,058 logits, 40% of a 60 ms GPU
+/// decode step there.
 public struct CPUSampler: Sendable {
     public var temperature: Float
     public var topP: Float
@@ -73,13 +75,7 @@ public struct CPUSampler: Sendable {
         // Top-k first, because it bounds the sort; top-p then trims what is
         // left by mass. Both are no-ops at their defaults.
         let limit = topK > 0 ? min(topK, logits.count) : logits.count
-        var order = Array(logits.indices)
-        if limit < logits.count {
-            order.sort { logits[$0] > logits[$1] }
-            order = Array(order.prefix(limit))
-        } else {
-            order.sort { logits[$0] > logits[$1] }
-        }
+        let order = Self.ranked(logits).prefix(limit).map(\.index)
         let peak = logits[order[0]]
         var weights = [Float]()
         weights.reserveCapacity(order.count)
@@ -115,6 +111,16 @@ public struct CPUSampler: Sendable {
         return order[0]
     }
 
+    /// Every index by descending logit, ties by ascending index: the order of a
+    /// stable sort of the indices by logit, from a sort over contiguous pairs.
+    static func ranked(_ logits: [Float]) -> [(logit: Float, index: Int)] {
+        var pairs = [(logit: Float, index: Int)]()
+        pairs.reserveCapacity(logits.count)
+        for (index, logit) in logits.enumerated() { pairs.append((logit, index)) }
+        pairs.sort { $0.logit > $1.logit || ($0.logit == $1.logit && $0.index < $1.index) }
+        return pairs
+    }
+
     /// The penalties, applied the way the GPU sampler applies them
     /// (`Sampler.applyPenaltiesInPlace`, minus its softcap branch because this
     /// engine has no softcap): a logit the history already contains is divided
@@ -143,8 +149,12 @@ public struct CPUSampler: Sendable {
     /// engine-agreement work (TT-002). The GPU path prints the same line from
     /// `sampleOnce`; a greedy argmax alone hides how close the decision was.
     /// Lines arrive in generation order, so the Nth is generated token N.
+    /// Read once: the environment is a fresh dictionary on every access.
+    private static let traceEnabled =
+        ProcessInfo.processInfo.environment["TINYTITAN_LOGIT_TRACE"] == "1"
+
     private func trace(_ logits: [Float], chosen: Int) {
-        guard ProcessInfo.processInfo.environment["TINYTITAN_LOGIT_TRACE"] == "1" else { return }
+        guard Self.traceEnabled else { return }
         var first = -Float.greatestFiniteMagnitude
         var second = first
         var firstID = 0

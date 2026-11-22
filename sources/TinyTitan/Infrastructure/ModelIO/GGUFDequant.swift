@@ -107,6 +107,14 @@ package enum GGUFDequant {
             decodeNVFP4(bytes, offset: offset, into: &values)
         case .mxfp4:
             decodeMXFP4(bytes, offset: offset, into: &values)
+        case .q5K:
+            decodeQ5K(bytes, offset: offset, into: &values)
+        case .iq2XXS:
+            decodeIQ2XXS(bytes, offset: offset, into: &values)
+        case .iq2XS:
+            decodeIQ2XS(bytes, offset: offset, into: &values)
+        case .iq1S:
+            decodeIQ1S(bytes, offset: offset, into: &values)
         default:
             throw GGUFDequantError.unsupportedType(type.name)
         }
@@ -235,7 +243,7 @@ package enum GGUFDequant {
         }
     }
 
-    private static func scaleMinK4(
+    static func scaleMinK4(
         _ bytes: UnsafeRawBufferPointer, offset: Int, index: Int,
         sc: inout Int, m: inout Int
     ) {
@@ -415,15 +423,15 @@ package enum GGUFDequant {
         -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     ]
 
-    private static func u16(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt16 {
+    static func u16(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt16 {
         UInt16(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
     }
 
-    private static func u32(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {
+    static func u32(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> UInt32 {
         UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
     }
 
-    private static func fp16(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> Float {
+    static func fp16(_ bytes: UnsafeRawBufferPointer, _ offset: Int) -> Float {
         Float(Float16(bitPattern: u16(bytes, offset)))
     }
 }

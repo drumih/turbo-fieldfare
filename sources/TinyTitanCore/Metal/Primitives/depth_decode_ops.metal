@@ -76,20 +76,28 @@ struct DepthGemvArgs {
     uint columns;
 };
 
-// y[r] = W[r] . x for an f32 (isBF16 = 0) or bf16 row-major matrix; one SIMD
-// group per row, four per threadgroup (decode; prefill uses the tiled GEMM).
+// y[t][r] = W[r] . x[t] for an f32 (isBF16 = 0) or bf16 row-major matrix; one
+// SIMD group per (row, token), four rows per threadgroup, a flat grid of
+// ceil(rows / 4) threadgroups per token. Used at decode and, at prefill, for
+// the small matrices (router, sinks, conv taps, loop controllers) whose few
+// row tiles would leave the tiled GEMM a handful of threadgroups; the matrix
+// stays in cache across the chunk's tokens.
 kernel void dense_gemv_f32_bf16(
     device const uchar* weights [[buffer(0)]],
-    device const float* x [[buffer(1)]],
-    device float* y [[buffer(2)]],
+    device const float* xAll [[buffer(1)]],
+    device float* yAll [[buffer(2)]],
     constant DepthGemvArgs& args [[buffer(3)]],
     constant uint& isBF16 [[buffer(4)]],
     uint groupIndex [[threadgroup_position_in_grid]],
     uint sg [[simdgroup_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]])
 {
-    const uint row = groupIndex * 4u + sg;
+    const uint groupsPerToken = (args.rows + 3u) / 4u;
+    const uint token = groupIndex / groupsPerToken;
+    const uint row = (groupIndex % groupsPerToken) * 4u + sg;
     if (row >= args.rows) return;
+    device const float* x = xAll + ulong(token) * args.columns;
+    device float* y = yAll + ulong(token) * args.rows;
     float sum = 0.0f;
     if (isBF16 != 0u) {
         device const ushort* w = (device const ushort*)weights + ulong(row) * args.columns;

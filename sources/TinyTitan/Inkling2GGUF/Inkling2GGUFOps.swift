@@ -34,6 +34,9 @@ final class Inkling2GGUFOps {
     }
 
     let gemvIds: GGUFGemvIds
+    /// The block-decoder GEMVs for the types `gemvIds` has no kernel for
+    /// (the UD-Q2_K_XL file's IQ/K-quant/Q2_0/MXFP4 tensors).
+    let gemvBlocks: GGUFGemvBlocks
     let gemm: GGUFGemmTiled
     /// Profiling ablation: op categories left out of the encoded token, so the
     /// GPU-time difference attributes cost. Tokens produced with any category
@@ -47,8 +50,10 @@ final class Inkling2GGUFOps {
     init(context: MetalContext) throws {
         gemvIds = try GGUFGemvIds(context: context)
         gemm = try GGUFGemmTiled(context: context)
+        gemvBlocks = try GGUFGemvBlocks(context: context, tables: gemm.tables)
         for name in [
-            "embed_q8_0_row", "rms_norm_rows", "dense_gemv_f32_bf16", "depth_mix",
+            "embed_q8_0_row", "embed_iq4_xs_row", "rms_norm_rows", "dense_gemv_f32_bf16",
+            "depth_mix",
             "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
             "relative_attention_decode", "sigmoid_topk", "situ_activation",
             "argmax_partial", "argmax_final",
@@ -140,7 +145,11 @@ final class Inkling2GGUFOps {
     ) throws {
         let category = [.f32, .bf16].contains(weight.type) ? "smallGemv" : "projection"
         if skipped.contains(category) { return }
-        if tokens > 1 {
+        // Small f32/bf16 matrices stay on the GEMV at a chunk too (one SIMD
+        // group per row and token): their few row tiles would starve the
+        // tiled GEMM (a 128-row router is 2 row tiles).
+        let smallDense = [.f32, .bf16].contains(weight.type) && weight.rows < 512
+        if tokens > 1, !smallDense {
             try requireSequential("prefill GEMM")
             order(encoder)
             try gemm.encodeDense(
@@ -158,10 +167,10 @@ final class Inkling2GGUFOps {
             encoder.setBytes(&shape, length: 8, index: 3)
             var bf16: UInt32 = weight.type == .bf16 ? 1 : 0
             encoder.setBytes(&bf16, length: 4, index: 4)
-            groups((weight.rows + 3) / 4, threads: 128, encoder)
+            groups((weight.rows + 3) / 4, tokens: tokens, threads: 128, encoder)
         default:
             order(encoder)
-            try gemvIds.encode(
+            try gemvSlots(
                 .init(
                     type: weight.type, rows: weight.rows, columns: weight.columns, slots: 1,
                     expertStride: 0, xSlotStride: 0),
@@ -170,18 +179,49 @@ final class Inkling2GGUFOps {
         }
     }
 
+    /// The decode GEMV over `shape.slots` expert slots, on the dedicated
+    /// NVFP4/Q8_0 kernels where one exists and the block decoders otherwise.
+    func gemvSlots(
+        _ shape: GGUFGemvIds.Shape, weights: Operand, x: Operand, y: Operand, ids: Operand,
+        scales: Operand?, encoder: MTLComputeCommandEncoder
+    ) throws {
+        if GGUFGemvIds.supported.contains(shape.type) {
+            try gemvIds.encode(
+                shape, weights: weights, x: x, y: y, ids: ids, scales: scales, encoder: encoder)
+        } else {
+            try gemvBlocks.encode(
+                shape, weights: weights, x: x, y: y, ids: ids, scales: scales, encoder: encoder)
+        }
+    }
+
+    /// Every weight type a decode step and a prefill chunk can run.
+    static let supportedTypes = GGUFGemmTiled.supported.intersection(
+        GGUFGemvIds.supported.union(GGUFGemvBlocks.kernels.keys).union([.f32, .bf16]))
+
     func embed(
         _ table: Inkling2GGUFTensor, token: Operand, out: Operand, tokens: Int = 1,
         encoder: MTLComputeCommandEncoder
     ) throws {
-        guard table.type == .q8_0 else { throw GGUFDequantError.unsupportedType(table.type.name) }
-        try pipeline("embed_q8_0_row", encoder)
+        var columns = UInt32(table.columns)
+        switch table.type {
+        case .q8_0:
+            try pipeline("embed_q8_0_row", encoder)
+        case .iq4XS where table.columns % 256 == 0:
+            try pipeline("embed_iq4_xs_row", encoder)
+        default:
+            throw GGUFDequantError.unsupportedType("\(table.type.name) token embedding")
+        }
         set(table.operand, 0, encoder)
         set(token, 1, encoder)
         set(out, 2, encoder)
-        var columns = UInt32(table.columns)
         encoder.setBytes(&columns, length: 4, index: 3)
-        threads(table.columns, tokens: tokens, encoder)
+        if table.type == .iq4XS {
+            // One thread per 16 values of each token's row.
+            encoder.setBuffer(gemm.tables, offset: 0, index: 4)
+            threads(table.columns / 16, tokens: tokens, encoder)
+        } else {
+            threads(table.columns, tokens: tokens, encoder)
+        }
     }
 
     /// RMS-normalises `count` vectors of `width` (strides in floats).

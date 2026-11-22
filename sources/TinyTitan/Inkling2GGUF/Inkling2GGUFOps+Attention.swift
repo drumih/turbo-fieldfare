@@ -191,7 +191,7 @@ extension Inkling2GGUFOps {
         if !skipped.contains("experts") {
             if tokens == 1 {
                 order(encoder)
-                try gemvIds.encode(
+                try gemvSlots(
                     .init(
                         type: gateUp.type, rows: 2 * feedForward, columns: hidden, slots: used,
                         expertStride: gateUpStride, xSlotStride: 0),
@@ -216,7 +216,7 @@ extension Inkling2GGUFOps {
         if skipped.contains("experts") { return }
         order(encoder)
         if tokens == 1 {
-            try gemvIds.encode(
+            try gemvSlots(
                 .init(
                     type: down.type, rows: hidden, columns: feedForward, slots: used,
                     expertStride: downStride, xSlotStride: feedForward),
