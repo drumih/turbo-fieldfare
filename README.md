@@ -15,8 +15,13 @@ on the GPU or, optionally, the Apple Neural Engine. It ships a CLI, an
 installer/repacker, and a loopback OpenAI-compatible server with no MLX and no
 GGUF dependency.
 
-**Who it is for.** People on an M-series Mac who want to run a 35B — or a
-122B/125B — model locally on a machine that could never hold it in RAM, and
+**Who it is for.** Every M-series Mac, not only the small ones. With RAM to
+spare, TinyTitan keeps more of the model resident and runs as a fast local
+engine built to match or beat the established Apple Silicon engines on the
+models it supports. Measured head to head against llama.cpp's Metal build, it
+is **1.26–1.40× faster** on decode and prefill (Inkling 2 Mini, 24 GB M3, both
+GGUF quantizations). On a Mac with less RAM, the same engine runs a 35B — or a
+122B/125B — model that the machine could never hold in memory. It also serves
 developers who want a loopback OpenAI- or Anthropic-compatible endpoint for
 Codex, Claude Code, Qwen Code, OpenCode, Zed or the official SDKs. It is a
 terminal-first tool: the engine and its server are the product, and the
