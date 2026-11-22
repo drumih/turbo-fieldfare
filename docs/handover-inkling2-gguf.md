@@ -11,36 +11,47 @@
 > chip where it measurably pays: GPU for the token graph, CPU/AMX for small
 > f32 ops and expert prefetch, ANE for prefill. Work only from measured,
 > paired results and parity checks. **Both files run natively with greedy
-> parity (96/96 token by token and chunked) through the CLI. Neither is at
-> 1.25× yet** — the latest paired numbers are in "Where it stands" below.
-> The target is relative: measured on 2026-11-22, llama.cpp decodes Q2_K_XL at
-> 16.4 tok/s, so 1.25× is ~20.5 tok/s, above the brief's absolute 17.
+> parity (96/96 token by token and chunked), from the CLI and the loopback
+> server. Decode clears 1.25× llama.cpp on both files; prefill does not**
+> (pp64 1.01–1.08×, pp512 ~1.0×) — see "Where it stands" and the plan.
 
 ## Where it stands (2026-11-22, 24 GB M3, 3 interleaved rounds each, tok/s)
 
 | | Q4_K_XL native | llama.cpp | ratio | Q2_K_XL native | llama.cpp | ratio |
 | --- | --- | --- | --- | --- | --- | --- |
-| decode tg64 | 16.15–16.60 | 13.78–14.28 | 1.16–1.20× | 18.61–19.48 | 16.66–16.89 | 1.12–1.16× |
-| prefill pp64 | 95.4–96.9 | 87.2–93.0 | 1.04–1.09× | 99.3–99.5 | 85.8–89.3 | 1.11–1.16× |
-| prefill pp512 | 110.7–111.3 | 112.1–123.0 | 0.90–0.99× | 111.9–112.4 | 121.9–122.6 | 0.91–0.92× |
+| decode tg64 | 18.99–19.17 | 14.18–14.48 | **1.32–1.35×** | 21.16–21.23 | 16.62–16.63 | **1.27–1.28×** |
+| prefill pp64 | 97.5–97.6 | 90.7–92.5 | 1.05–1.08× | 93.3–99.5 | 91.9–92.7 | 1.01–1.08× |
+| prefill pp512 | 122.0 ¹ | 119.0–122.3 | ~1.0× | 120.9 ¹ | 122.4–124.6 | ~0.98× |
+
+¹ After `e4ec3485` (128-row tiles), single runs; the paired rounds just before
+it measured 113.5–115.7.
 
 llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
 -n 64 -r 3` (Homebrew's `llama-bench` has no `inkling2` architecture). Native:
 `TINYTITAN_INKLING2_GGUF=<gguf> TINYTITAN_KERNEL_BENCH=1 swift test -c release
 --no-parallel --filter "Inkling2GGUFParityTests/(decodeThroughput|prefillThroughput)"`.
 
-**Where the Q2_K_XL step goes** (`TINYTITAN_INKLING2_SKIP`, `a396f6cc`): GPU
-~50 ms = projections ~18 ms, experts ~18 ms, the rest ~14 (controllers ~6,
-small f32/bf16 GEMVs ~5, mixes ~3, head ~1). An earlier note here blamed a
-fixed per-token cost; the ablation showed the generic block GEMV instead
-(Q6_K ran at 20 GB/s), and fixing it took decode from 0.97× to 1.12–1.16×.
-What is left in the block GEMV: the 1–2-bit expert types sit at a ~0.21–0.24
-ms floor per 8-slot 2304×2304 (34–58 GB/s against NVFP4's 87) whatever their
-bytes — not bandwidth, not per-value ALU (scale-after-dot gained 5%), not lane
-balance (a flat item list was 25% slower). Untried: the IQ grid in
-threadgroup memory (llama's arrangement) with more rows per threadgroup to
-amortise the copy. K-quant projections run 44–67 GB/s against Q8_0's 79
-(≤1 ms to gain).
+**What got decode there** (each paired, parity-checked):
+- the block decode GEMV (`a396f6cc`): Q6_K window rewrite (20 → 76 GB/s),
+  four rows per SIMD group, scale-after-dot for the low-bit types;
+- the loop controllers and small matrices (`d88987b9`): `control_down`
+  replaces join + a 16-threadgroup GEMV (~60 µs × 96 controllers per token),
+  the attention-side controllers share barriers, and f32/bf16 matrices under
+  256 rows get a threadgroup per row.
+
+**Why prefill is not there.** The routed experts are most of a chunk
+(pp512: ~2.15 s of ~4.4 s; pp64: ~0.40 s of ~0.65 s), and the tiled expert
+GEMM costs the same for every weight type: it is bound by its own pipeline,
+not by weight bytes or decode (`GGUFBlockKernelsTests/routedChunkBenchmark`).
+128-row 32-token tiles took a routed layer at T=512 from 33.6 to 29.2 ms;
+every 8-token-tile variant tried at T=64 was slower (BK 128, 32 or 128 rows),
+and a register expert kernel without threadgroup staging was 6× slower (each
+row group re-reads the tokens' activations).
+
+**Ablation trap:** skipping any category upstream of the router (`router`,
+`smallGemv`, `rms`, `control`, `mix`, `attention`) changes which experts run,
+so its "saving" is mostly routing, not the category. Only `experts`,
+`projection` and `head` attribute cleanly.
 
 ## What the two files actually contain (measured 2026-11-21)
 
@@ -205,15 +216,19 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 
 ## What is missing — the plan
 
-1. **Decode fixed cost, both files.** Attribute the ~60 ms step with
-   `TINYTITAN_INKLING2_SKIP` on Q2_K_XL, where weights are the smaller share,
-   and cut what is not bandwidth: fewer, fatter dispatches across a visit,
-   barrier count, the depth mixes and attention at one token. Q4_K_XL needs
-   ≥17.5 tok/s (1.25 × 14), Q2_K_XL ≥20.5 (1.25 × 16.4).
-2. **pp512, both files:** expert tile throughput and attention; then the
-   dense projections on the ANE (probe: 6–8 TF/s).
-3. **Server route:** an Inkling2 GGUF backend over `Inkling2GGUFSession`, as
-   `Inkling2ServerBackend` does for the safetensors build.
+1. **Prefill to 1.25×** (pp64 ≥ ~115 tok/s, pp512 ≥ ~153). The lever is the
+   routed expert GEMM's own pipeline. Untried: double-buffered K steps with
+   the decode of step k+1 overlapping the MMAs of step k (an earlier
+   software-pipelining attempt on the 64-row tile gained nothing; retry on the
+   128-row one), and llama.cpp's `mul_mm_id` compared kernel for kernel. The
+   ANE can take the dense projections (~0.44 s of pp512 on Q4, probe 6–8
+   TF/s) but not the experts (static graphs; ~49 GB of fp16 weights).
+2. **Decode headroom:** the 1–2-bit expert GEMVs sit at a ~0.22 ms floor
+   (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
+   memory, with more rows per threadgroup to amortise the copy.
+3. **Server:** `TinyTitanServer --model <gguf>` serves through
+   `Inkling2GGUFServerBackend` (`6f5b3b09`): text only — no tool calls, no
+   stop strings, one sequence at a time, no prompt cache.
 4. **Prefill (batched, 2026-11-22).** One graph for decode and prefill: a
    chunk of up to `maxChunk` tokens runs in one command buffer; decode is a
    one-token chunk on the tuned GEMVs. New: `gguf_gemm_tiled.metal`
