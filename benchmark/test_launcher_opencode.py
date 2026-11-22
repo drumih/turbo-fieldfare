@@ -46,6 +46,13 @@ def default_model() -> str:
     return source()["model"].split("/", 1)[1]
 
 
+# Models a server serves from a file the installer does not produce: run as
+# `TinyTitanServer --model <file.gguf>`, so they are not launcher-menu rows. Each
+# carries its own window: the Inkling 2 GGUF route caps context at 16,384
+# (`Inkling2GGUFServerBackend.contextCap`), and OpenCode must not plan for more.
+GGUF_ROUTES = {"inkling-2-mini": {"context": 16384, "output": 4096}}
+
+
 def installer_menu_rows() -> int:
     """The number of models `tools/install_models.sh --choose` offers.
 
@@ -83,11 +90,12 @@ class SourceOfTruthTests(unittest.TestCase):
         self.assertEqual(block["npm"], "@ai-sdk/openai-compatible")
         self.assertEqual(block["options"]["baseURL"], URL)
         self.assertIs(block["options"]["timeout"], False)
-        self.assertEqual(len(block["models"]), installer_menu_rows())
+        self.assertEqual(len(block["models"]), installer_menu_rows() + len(GGUF_ROUTES))
         self.assertIn(default_model(), block["models"])
         for model_id, model in block["models"].items():
             with self.subTest(model=model_id):
-                self.assertEqual(model["limit"], {"context": 262144, "output": 32768})
+                expected = GGUF_ROUTES.get(model_id, {"context": 262144, "output": 32768})
+                self.assertEqual(model["limit"], expected)
                 for variant in model["variants"].values():
                     self.assertTrue("reasoningEffort" in variant or variant == {"disabled": True})
 

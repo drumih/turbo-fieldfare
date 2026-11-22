@@ -658,6 +658,42 @@
               "disabled": true
             }
           }
+        },
+        "inkling-2-mini": {
+          "name": "Inkling 2 Mini (GGUF)",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 16384,
+            "output": 4096
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
         }
       }
     }

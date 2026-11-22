@@ -5,7 +5,9 @@ provider `tinytitan` ("TinyTitan"), with the shipped Ornith 1.5 35B-A3B 4-bit as
 the default model. It lists **every model the installer supports** — all
 eighteen `install_models.sh` rows, every family and width — so OpenCode shows
 the full list even where only one install is on disk; a model whose install is
-missing serves a 404 until it is installed. It is a config file, not a package:
+missing serves a 404 until it is installed. It also lists **Inkling 2 Mini**
+(`inkling-2-mini`), which the server runs straight from its GGUF file; see
+[Inkling 2 Mini](#inkling-2-mini) below. It is a config file, not a package:
 copy it, or merge its `provider` block, into `~/.config/opencode/opencode.json`.
 It is not at the repository root on purpose — a root `opencode.json` would
 change the default model of everyone who runs OpenCode inside this checkout.
@@ -57,9 +59,25 @@ own `--reasoning` (default off) applies.
 | --- | --- | --- |
 | Qwen3.8-Flash-Next | `off`, `low`, `medium`, `xhigh` | Exactly the levels its chat template renders; `on` would equal `xhigh` |
 | Ornith 1.5, Qwen 3.6, Qwen 3.5 dense | `off`, `on` | Binary `enable_thinking` templates; an effort level maps to `on` |
+| Inkling 2 Mini | `off`, `low`, `medium`, `high`, `xhigh` | The template's effort levels; `high` is its default |
 
 ## Context beyond 256K
 
 262144 needs no flag: it is the default. Larger windows need YaRN on the server
 (`--rope-scaling yarn --max-context 524288|1048576|2097152`) and a matching
 `limit.context` here.
+
+## Inkling 2 Mini
+
+The GGUF is not an installer row and is not picked up by `--models-dir`: serve it
+on its own, from the file, and OpenCode reaches it at the same address.
+
+```bash
+.build/release/TinyTitanServer --model /path/to/Inkling-2-Mini-UD-Q4_K_XL.gguf
+opencode -m tinytitan/inkling-2-mini
+```
+
+Its entry declares a **16,384-token** window, because the server's GGUF route caps
+context there for now; OpenCode compacts the session before it reaches it.
+`limit.output` is 4096, which leaves the rest of the window for OpenCode's
+system prompt and tool definitions.
