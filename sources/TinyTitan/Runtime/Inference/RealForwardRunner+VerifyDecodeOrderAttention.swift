@@ -68,7 +68,7 @@ extension RealForwardRunner {
         let q = try model.qProj(layer: L)
         let k = try model.kProj(layer: L)
         let v = try model.vProj(layer: L)
-        let formats = gatedQKVFormats(q: q, k: k, v: v)
+        let formats = try gatedQKVFormats(q: q, k: k, v: v)
         try multiRowGEMV.encode(
             commandBuffer: cb,
             segments: [

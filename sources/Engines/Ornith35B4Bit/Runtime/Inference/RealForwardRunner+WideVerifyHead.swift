@@ -108,7 +108,7 @@ extension RealForwardRunner {
                         formats: [primaryGEMVFormat(try model.linearOutProj(layer: L))],
                         columns: cfg.linearAttention.valueDim))
             } else if cfg.attnOutputGate, cfg.fullAttentionLayerMask[L] == 1 {
-                let formats = gatedQKVFormats(
+                let formats = try gatedQKVFormats(
                     q: try model.qProj(layer: L), k: try model.kProj(layer: L),
                     v: try model.vProj(layer: L))
                 shapes.insert(Shape(formats: formats, columns: D))

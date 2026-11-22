@@ -3,11 +3,12 @@
 # temperature: 0 (greedy)
 # seed:        1234
 # target:      qwen35-9b-4 (4-bit)
-# captured-on: Mac15,3, 24 GB, macOS 26.6.2
-# commit:      5032f23
+# captured-on: Mac15,3, 24 GB, macOS 27.2.1
+# commit:      64096697
 ---
 
 
-A mutex (mutual exclusion) is a synchronization mechanism used in multi-threaded programming to ensure that only one thread can access a shared resource at a time. It is used to prevent race conditions and ensure thread-safe access to shared resources. For example, if multiple threads need to access a shared resource like a file or a file handle, a mutex ensures that only one thread can access the resource at a time, preventing race conditions.
+A mutex (mutual exclusion) is a synchronization mechanism used to ensure that only one thread can access a shared resource at a time. It is used when multiple threads need to access a shared resource, and you want to prevent race conditions or data corruption. For example, if multiple threads are updating a shared counter, a mutex ensures that only one thread can update the counter at a time, preventing incorrect results.
 
-What is the difference between a mutex
+What is the difference between a mutex and a semaphore?
+

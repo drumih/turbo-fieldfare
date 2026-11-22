@@ -48,14 +48,20 @@ extension RealForwardRunner {
 
     /// The gated full attention's q/k/v as `encodeGatedFullQKVProjection`
     /// reads them: the fused int4 kernel when all three qualify, else the
-    /// primary GEMV per projection.
-    func gatedQKVFormats(q: TensorView, k: TensorView, v: TensorView) -> [MultiRowGEMV.Format] {
+    /// role GEMV per projection, each at its own role's width (TT-117).
+    func gatedQKVFormats(
+        q: TensorView, k: TensorView, v: TensorView
+    ) throws -> [MultiRowGEMV.Format] {
         let fused = FusedKernelPolicy.mayUseFusedQKV(
             qoProjectionWeightBits: model.qoProjectionWeightBits,
             kvProjectionWeightBits: model.kvProjectionWeightBits,
             qDType: Int(q.dtype), kDType: Int(k.dtype), vDType: Int(v.dtype))
         if fused { return [.int4, .int4, .int4] }
-        return [q, k, v].map(primaryGEMVFormat)
+        return [
+            try roleGEMVFormat(q, weightBits: model.qoProjectionWeightBits),
+            try roleGEMVFormat(k, weightBits: model.kvProjectionWeightBits),
+            try roleGEMVFormat(v, weightBits: model.kvProjectionWeightBits),
+        ]
     }
 
     /// `encodePrimaryGEMV(projection:)` for `rows` activation rows, weights

@@ -181,17 +181,26 @@ extension RealForwardRunner {
                 kvRows: kvDimension,
                 n: hiddenDimension)
         } else {
-            try encodePrimaryGEMV(
+            // Each projection at its own role's width (TT-117). The dense
+            // Qwen 3.5 4-bit installs keep k/v at 8 bits with q/o at 4, and the
+            // primary GEMV reads at the attention slot's width: it read the
+            // 8-bit k/v as packed nibbles, so every key and value a decode step
+            // wrote was wrong while prefill's were right, and the model lost
+            // sight of the tokens it had just generated.
+            try encodeRoleGEMV(
                 commandBuffer: cb, projection: q,
+                weightBits: model.qoProjectionWeightBits,
                 x: normed, y: qOutput,
                 m: 2 * qDimension, n: hiddenDimension)
-            try encodePrimaryGEMV(
+            try encodeRoleGEMV(
                 commandBuffer: cb, projection: k,
+                weightBits: model.kvProjectionWeightBits,
                 x: normed, y: kOutput.buffer,
                 yOffset: kOutput.offset,
                 m: kvDimension, n: hiddenDimension)
-            try encodePrimaryGEMV(
+            try encodeRoleGEMV(
                 commandBuffer: cb, projection: v,
+                weightBits: model.kvProjectionWeightBits,
                 x: normed, y: vOutput.buffer,
                 yOffset: vOutput.offset,
                 m: kvDimension, n: hiddenDimension)
@@ -226,8 +235,9 @@ extension RealForwardRunner {
         try encodeGatedFullAttentionAndGate(
             &cb, kv: kv, layer: L, position: position, slot: slot,
             seqLen: seqLen, selection: selection)
-        try encodePrimaryGEMV(
+        try encodeRoleGEMV(
             commandBuffer: cb, projection: o,
+            weightBits: model.qoProjectionWeightBits,
             x: attnOut, y: oOut, m: D, n: qDim)
         try rotate(&cb, role: "qsa.oproj")
     }
