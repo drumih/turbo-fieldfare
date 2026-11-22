@@ -226,16 +226,11 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         // tokenizer carries the think-block and stop token IDs for its own
         // mode, so decode follows the switch as well as the render.
         let renderTokenizer = try await resolvedTokenizer(for: request.reasoning)
-        let promptIDs: [Int32]
-        if let renderedPromptIDs = request.renderedPromptIDs {
-            // A raw completion: the facade tokenized the caller's text with
-            // BOS and the chat template is not applied (the GPU session's
-            // contract for `renderedPromptIDs`).
-            promptIDs = renderedPromptIDs
-        } else {
-            let rendered = try renderTokenizer.applyChatTemplate(request.messages)
-            promptIDs = renderTokenizer.encode(rendered, addBOS: false)
-        }
+        let usesTools =
+            request.renderedPromptIDs == nil
+            && ServerModelSession.usesToolTemplate(messages: request.messages, tools: request.tools)
+        let promptIDs = try Self.promptIDs(
+            request, tokenizer: renderTokenizer, usesTools: usesTools)
         let prompt = promptIDs.map(Int.init)
         guard prompt.count < context else {
             throw CPUBackendError.promptTooLong(prompt.count, context)
@@ -270,12 +265,12 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         let decodeStart = Date()
         var history = promptIDs
 
-        // The same decoder the GPU path runs, so a thought is split the same
-        // way on either engine. This path renders no tool template, so the
-        // decoder only ever splits thoughts -- including one the model opens
-        // itself while the switch is off.
+        // The same decoder the GPU path runs, so a thought and a tool call are
+        // split the same way on either engine -- including a thought the model
+        // opens itself while the switch is off.
         let decoder = TinyTitanCore.StructuredAssistantDecoder.forGeneration(
-            tokenizer: renderTokenizer, promptIDs: promptIDs, allowedTools: nil)
+            tokenizer: renderTokenizer, promptIDs: promptIDs,
+            allowedTools: usesTools ? Set(request.tools.map(\.name)) : nil)
         var detokenizer = GFDetokenizer(tokenizer: renderTokenizer)
         var output = AssistantOutput(stops: configuration.stopStrings, onEvent: onEvent)
         var produced = 0
@@ -315,8 +310,8 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         output.finish()
         return ServerCompletion(
             content: output.content,
-            toolCalls: [],
-            finishReason: reason,
+            toolCalls: output.calls,
+            finishReason: output.calls.isEmpty ? reason : "tool_calls",
             usage: OpenAIUsage(
                 promptTokens: prompt.count,
                 completionTokens: produced,
@@ -333,6 +328,20 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
                 ? 0 : output.reasoning.count,
             prefillSeconds: prefillSeconds,
             decodeSeconds: Date().timeIntervalSince(decodeStart))
+    }
+
+    /// The prompt `generate` runs. A raw completion is the facade's tokens
+    /// with BOS and no chat template (the GPU session's contract for
+    /// `renderedPromptIDs`); a chat is rendered as the GPU session renders it,
+    /// tools included: a request that offers tools or replays a tool turn
+    /// gets the tool template.
+    static func promptIDs(
+        _ request: ValidatedChatRequest, tokenizer: GFTokenizer, usesTools: Bool
+    ) throws -> [Int32] {
+        if let renderedPromptIDs = request.renderedPromptIDs { return renderedPromptIDs }
+        return try ServerModelSession.encodePrompt(
+            tokenizer: tokenizer, messages: request.messages, tools: request.tools,
+            usesToolTemplate: usesTools)
     }
 
     /// One sampled token as decoder events.
@@ -389,7 +398,10 @@ extension CPUModelBackend: PromptTokenCounting {
         _ request: ValidatedChatRequest,
         tokenizer: GFTokenizer
     ) throws -> Int {
-        let rendered = try tokenizer.applyChatTemplate(request.messages)
-        return tokenizer.encode(rendered, addBOS: false).count
+        try ServerModelSession.encodePrompt(
+            tokenizer: tokenizer, messages: request.messages, tools: request.tools,
+            usesToolTemplate: ServerModelSession.usesToolTemplate(
+                messages: request.messages, tools: request.tools)
+        ).count
     }
 }

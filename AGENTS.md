@@ -49,6 +49,18 @@ surface to build, keep in step with every engine feature, and support, and it wa
 removed for exactly that reason. Do not add one back, and do not take on work that
 only a GUI needs.
 
+**Every served model supports the whole API except vision — this is a rule.**
+A model route the server offers, on either engine, must serve all of it:
+plain and streamed chat with usage, tool calls (plain and streamed), the
+follow-up turn that reads a tool result, stop strings, `response_format` JSON
+schemas, thinking control, and the Anthropic `/v1/messages` and OpenAI
+`/v1/responses` surfaces with tools. Image and audio input are the only
+exceptions. A route that lacks any of these is not supported — not a preview
+with a limits list — and the gap is fixed, not documented. The check is
+`tools/api-feature-check.py --port <port>` against a server the operator
+started; all ten rows must pass for every route a change touches, before a
+model is added, and before a release claims the route.
+
 The DeepSeek Harness integration is **a plugin we publish, not a harness we
 install**: `plugins/dsh-tinytitan` is installed into
 the user's own DSH profile (`dsh plugin --profile <name> add …`), and this project

@@ -227,6 +227,12 @@ The project's bar, in this order:
    resolves the key, the stem and both widths.
 5. **A first measured row** (TTFT, decode) from the model's own install, with
    the machine and commit stated.
+6. **The whole API but vision** (the AGENTS.md rule): start the server on the
+   install and run `tools/api-feature-check.py --port <port>`. All ten rows —
+   chat, streaming, tool calls plain and streamed, the tool-result turn, stop
+   strings, a strict JSON schema, thinking, Anthropic Messages and Responses
+   with tools — must pass, on every engine the model is served on. A failing
+   row is a gap to fix, not a limit to document.
 
 ## 5. Document it where a user will look
 
@@ -298,5 +304,6 @@ moved or swapped directory.
 - [ ] Conversion and install, one width at a time, snapshots deleted after
       (a 122B install additionally uses `--consume-snapshot`)
 - [ ] Continuations, golden target, receipt, catalog, launcher keys
+- [ ] `tools/api-feature-check.py` 10/10 on every engine the model is served on
 - [ ] README, wiki pages, tracker, roadmap — with deviations and status
 - [ ] Committed, pushed, and the receipts re-issued if the checkout moved

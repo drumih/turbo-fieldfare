@@ -240,8 +240,18 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
    (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
    memory, with more rows per threadgroup to amortise the copy.
 3. **Server:** `TinyTitanServer --model <gguf>` serves through
-   `Inkling2GGUFServerBackend` (`6f5b3b09`): text only — no tool calls, no
-   stop strings, one sequence at a time, no prompt cache.
+   `Inkling2GGUFServerBackend`. Since 2026-11-22 it serves the whole API but
+   vision (the AGENTS.md rule): the prompt is rendered as the bundled
+   `chat_template.jinja` renders it (`Inkling2GGUFChatFormat`: `tool_declare`,
+   the `Thinking effort level` message, tool calls as
+   `<|content_invoke_tool_json|>{"name","args"}`, turns closed by
+   `<|content_model_end_sampling|>`), and the output is split by control
+   token (`Inkling2GGUFOutputParser`) into text, thinking and tool calls.
+   Stop strings, strict JSON schemas and thinking levels work;
+   `tools/api-feature-check.py` passes 10/10 on the Q4 file. Open: one
+   sequence at a time, no prompt cache, and the 16K context cap — the model
+   declares 1M (`model_max_length`, 20 of 24 layers on a 1,024 window), so the
+   cap is a sizing choice awaiting a long-context quality check.
 
 4. **Prefill (batched, 2026-11-22).** One graph for decode and prefill: a
    chunk of up to `maxChunk` tokens runs in one command buffer; decode is a

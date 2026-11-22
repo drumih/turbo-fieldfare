@@ -283,6 +283,32 @@ import Testing
         return (completion, sink.all, spoken)
     }
 
+    /// A request that offers tools renders through the tool template on the CPU
+    /// engine, as it does on the GPU: the CPU path used to drop `tools` and
+    /// render the plain chat, so the model never saw a tool and no call could
+    /// come back (all four tool rows of `tools/api-feature-check.py` failed on
+    /// `--cpu`). The count is what `generate` encodes, so it pins the render.
+    @Test func aRequestWithToolsRendersTheToolTemplate() async throws {
+        let fixture = try TokenizerFixture.folder()
+        let tok = try await GFTokenizer.load(from: fixture, thinkingMode: .off)
+        let messages = [GFTokenizer.Message(role: .user, content: "weather?")]
+        let tool = GFTokenizer.FunctionDefinition(
+            name: "get_weather", description: "Look up the weather",
+            parameters: .object(["type": .string("object")]))
+        func validated(tools: [GFTokenizer.FunctionDefinition]) -> ValidatedChatRequest {
+            ValidatedChatRequest(
+                messages: messages, tools: tools, stream: false, includeUsage: false,
+                generationConfig: GenerationConfig(maxNewTokens: 8, temperature: 0),
+                maximumCompletionTokens: 8)
+        }
+        let plain = try CPUModelBackend.promptTokenCount(validated(tools: []), tokenizer: tok)
+        let withTools = try CPUModelBackend.promptTokenCount(
+            validated(tools: [tool]), tokenizer: tok)
+        #expect(plain == tok.encode(try tok.applyChatTemplate(messages), addBOS: false).count)
+        #expect(withTools == (try tok.encodeToolChat(messages: messages, tools: [tool])).count)
+        #expect(withTools > plain)
+    }
+
     /// A client stop string that ends the answer is named on the completion,
     /// as the GPU path names it, so a Messages client is told `stop_sequence`
     /// and which one. The CPU path used to end the turn and forget which.

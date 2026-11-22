@@ -53,14 +53,20 @@ do {
     let signals = ServerTerminationSignals()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
     if let gguf = Inkling2GGUFSession.modelFile(at: modelURL) {
+        let level = arguments.requestedReasoningLevel
         let backend = try await Inkling2GGUFServerBackend(
-            gguf: gguf, maxContext: arguments.maxContext)
+            gguf: gguf, maxContext: arguments.maxContext, reasoning: level)
         let coordinator = ServerCoordinator(queueLimit: arguments.queueLimit, width: 1)
+        let loaded = Inkling2GGUFServerBackend.requestReasoning(for: level)
         let server = TinyTitanHTTPServer(
             modelID: "inkling-2-mini",
             queueLimit: arguments.queueLimit,
             maxConcurrentSequences: 1,
             backend: backend,
+            reasoningProfile: ServerReasoningProfile(
+                family: "inkling2", thinkingMode: loaded.thinkingMode,
+                reasoningEffort: loaded.effort,
+                reasoningControl: Inkling2GGUFServerBackend.reasoningControl),
             coordinator: coordinator)
         _ = try await server.start(port: arguments.port)
         print(

@@ -126,7 +126,7 @@ extension ServerModelSession {
         Self.usesToolTemplate(messages: messages, tools: tools)
     }
 
-    static func usesToolTemplate(
+    package static func usesToolTemplate(
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition]
     ) -> Bool {
@@ -236,7 +236,7 @@ extension ServerModelSession {
             usesToolTemplate: usesToolTemplate)
     }
 
-    static func encodePrompt(
+    package static func encodePrompt(
         tokenizer: GFTokenizer,
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition],
