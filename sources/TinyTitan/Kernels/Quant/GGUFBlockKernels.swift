@@ -52,7 +52,7 @@ enum GGUFBlockTables {
 
 /// Expert-indexed GEMVs over the block decoders (`gemv_blocks_*`) for the GGUF
 /// types without a dedicated decode kernel: the same contract as
-/// `GGUFGemvIds.encode`, two rows per SIMD group, 16-value windows per lane.
+/// `GGUFGemvIds.encode`, `rowsPerSIMDGroup` rows per SIMD group, 16-value windows per lane.
 final class GGUFGemvBlocks {
     typealias Operand = GGUFGemvIds.Operand
 
@@ -70,6 +70,9 @@ final class GGUFGemvBlocks {
         .mxfp4: "gemv_blocks_mxfp4", .q4K: "gemv_blocks_q4_k", .q5K: "gemv_blocks_q5_k",
         .q6K: "gemv_blocks_q6_k", .iq4XS: "gemv_blocks_iq4_xs",
     ]
+
+    /// `GGUF_GEMV_BLOCK_ROWS` in gguf_block_decoders.metal.
+    static let rowsPerSIMDGroup = 4
 
     private var pipelines: [GGUFType: MTLComputePipelineState] = [:]
     let tables: MTLBuffer
@@ -106,7 +109,9 @@ final class GGUFGemvBlocks {
         encoder.setBytes(&args, length: MemoryLayout<Args>.stride, index: 5)
         encoder.setBuffer(tables, offset: 0, index: 6)
         encoder.dispatchThreadgroups(
-            MTLSize(width: (shape.rows + 3) / 4 * shape.slots, height: 1, depth: 1),
+            MTLSize(
+                width: (shape.rows + 2 * Self.rowsPerSIMDGroup - 1) / (2 * Self.rowsPerSIMDGroup)
+                    * shape.slots, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
     }
 }

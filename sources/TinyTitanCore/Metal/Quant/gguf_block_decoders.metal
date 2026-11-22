@@ -30,8 +30,10 @@ static inline uint gguf_u32_at(device const uchar* p) {
     return uint(p[0]) | (uint(p[1]) << 8u) | (uint(p[2]) << 16u) | (uint(p[3]) << 24u);
 }
 
-static inline uint gguf_grid_byte(device const uchar* tables, uint table, uint entry, uint j) {
-    return uint(tables[table + entry * 8u + j]);
+// One 8-value grid entry as a single 64-bit load (table offsets are multiples
+// of 8): eight byte loads per entry measured ~45 GB/s in the decode GEMV.
+static inline ulong gguf_grid64(device const uchar* tables, uint table, uint entry) {
+    return ((device const ulong*)(tables + table))[entry];
 }
 
 // IQ2_XXS (66 bytes / 256): d, then per 32 values 4 grid indices and a word of
@@ -48,8 +50,9 @@ struct GemmIQ2XXS {
         for (uint h = 0u; h < 2u; ++h) {
             const uint l = ((v % 32u) / 8u) + h;
             const uint signs = tables[GGUF_TABLE_KSIGNS + ((aux >> (7u * l)) & 127u)];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2XXS, group[l]);
             for (uint j = 0u; j < 8u; ++j) {
-                const float q = float(gguf_grid_byte(tables, GGUF_TABLE_IQ2XXS, group[l], j));
+                const float q = float(uint(grid >> (8u * j)) & 0xFFu);
                 out[8u * h + j] = T(db * q * ((signs >> j) & 1u ? -1.0f : 1.0f));
             }
         }
@@ -72,8 +75,9 @@ struct GemmIQ2XS {
             const uint l = ((v % 32u) / 8u) + h;
             const uint q = gguf_u16_at(b + 2u + (4u * ib + l) * 2u);
             const uint signs = tables[GGUF_TABLE_KSIGNS + (q >> 9u)];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2XS, q & 511u);
             for (uint j = 0u; j < 8u; ++j) {
-                const float g = float(gguf_grid_byte(tables, GGUF_TABLE_IQ2XS, q & 511u, j));
+                const float g = float(uint(grid >> (8u * j)) & 0xFFu);
                 out[8u * h + j] = T(db * g * ((signs >> j) & 1u ? -1.0f : 1.0f));
             }
         }
@@ -97,8 +101,9 @@ struct GemmIQ2S {
             const uint l = ((v % 32u) / 8u) + h;
             const uint index = uint(b[2u + sub * 4u + l]) | ((uint(b[66u + sub]) << (8u - 2u * l)) & 0x300u);
             const uint signs = b[2u + 32u + sub * 4u + l];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2S, index);
             for (uint j = 0u; j < 8u; ++j) {
-                const float g = float(gguf_grid_byte(tables, GGUF_TABLE_IQ2S, index, j));
+                const float g = float(uint(grid >> (8u * j)) & 0xFFu);
                 out[8u * h + j] = T(db * g * ((signs >> j) & 1u ? -1.0f : 1.0f));
             }
         }
@@ -121,8 +126,9 @@ struct GemmIQ1S {
         for (uint h = 0u; h < 2u; ++h) {
             const uint l = ((v % 32u) / 8u) + h;
             const uint index = uint(b[2u + ib * 4u + l]) | (((qh >> (3u * l)) & 7u) << 8u);
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ1S, index);
             for (uint j = 0u; j < 8u; ++j) {
-                const float g = float(char(tables[GGUF_TABLE_IQ1S + index * 8u + j]));
+                const float g = float(char(uchar(grid >> (8u * j))));
                 out[8u * h + j] = T(dl * (g + delta));
             }
         }
@@ -145,9 +151,10 @@ struct GemmIQ3XXS {
         for (uint h = 0u; h < 2u; ++h) {
             const uint l = ((v % 32u) / 8u) + h;
             const uint signs = tables[GGUF_TABLE_KSIGNS + ((aux >> (7u * l)) & 127u)];
+            device const uint* grid3 = (device const uint*)(tables + GGUF_TABLE_IQ3XXS);
+            const uint grids[2] = {grid3[qs[2u * l]], grid3[qs[2u * l + 1u]]};
             for (uint j = 0u; j < 8u; ++j) {
-                const uint entry = qs[2u * l + j / 4u];
-                const float g = float(tables[GGUF_TABLE_IQ3XXS + entry * 4u + (j % 4u)]);
+                const float g = float((grids[j / 4u] >> (8u * (j % 4u))) & 0xFFu);
                 out[8u * h + j] = T(db * g * ((signs >> j) & 1u ? -1.0f : 1.0f));
             }
         }
@@ -264,16 +271,16 @@ struct GemmQ6K {
         const uint n = v / 128u;
         const uint quadrant = (v % 128u) / 32u;
         const uint l0 = v % 32u;
-        device const uchar* ql = b + 64u * n;
-        device const uchar* qh = b + 128u + 32u * n;
+        // Quadrants 1 and 3 read the second 32 low bytes; 2 and 3 the high nibbles.
+        device const uchar* ql = b + 64u * n + 32u * (quadrant & 1u) + l0;
+        device const uchar* qh = b + 128u + 32u * n + l0;
+        const uint lowShift = 4u * (quadrant >> 1u);
+        const uint highShift = 2u * quadrant;
         const float d = gguf_half_at(b + 208u)
             * float(char(b[192u + 8u * n + l0 / 16u + 2u * quadrant]));
         for (uint i = 0u; i < 16u; ++i) {
-            const uint l = l0 + i;
-            const uint low = quadrant == 0u ? (ql[l] & 0x0Fu)
-                : quadrant == 1u ? (ql[l + 32u] & 0x0Fu)
-                : quadrant == 2u ? (ql[l] >> 4u) : (ql[l + 32u] >> 4u);
-            const int q = int(low | (((uint(qh[l]) >> (2u * quadrant)) & 3u) << 4u)) - 32;
+            const uint low = (uint(ql[i]) >> lowShift) & 0x0Fu;
+            const int q = int(low | (((uint(qh[i]) >> highShift) & 3u) << 4u)) - 32;
             out[i] = T(d * float(q));
         }
     }
@@ -302,48 +309,207 @@ struct GemmIQ4XS {
     static uint rowBytes(uint columns) { return columns / 256u * 136u; }
 };
 
+// The decode GEMV's 16-value dot product. By default the window is decoded to
+// fp32 and dotted; the hot low-bit types specialise it to dot the raw grid or
+// quant values and apply the group scale once (and flip signs on x rather
+// than multiplying), ggml's mul_mv arrangement. Both are fp32 throughout.
+template <typename Decoder>
+struct GGUFDot16 {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        float wv[16];
+        Decoder::decode(w, rowBytes, row, c, wv, tables);
+        float acc = 0.0f;
+        for (uint i = 0u; i < 16u; ++i) acc = fma(wv[i], x[i], acc);
+        return acc;
+    }
+};
+
+static inline float gguf_signed(float x, uint signs, uint j) {
+    return ((signs >> j) & 1u) != 0u ? -x : x;
+}
+
+template <>
+struct GGUFDot16<GemmIQ2XXS> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 256u) * 66u;
+        const uint v = c % 256u;
+        device const uchar* group = b + 2u + (v / 32u) * 8u;
+        const uint aux = gguf_u32_at(group + 4u);
+        float acc = 0.0f;
+        for (uint h = 0u; h < 2u; ++h) {
+            const uint l = ((v % 32u) / 8u) + h;
+            const uint signs = tables[GGUF_TABLE_KSIGNS + ((aux >> (7u * l)) & 127u)];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2XXS, group[l]);
+            for (uint j = 0u; j < 8u; ++j) {
+                acc = fma(gguf_signed(x[8u * h + j], signs, j), float(uint(grid >> (8u * j)) & 0xFFu), acc);
+            }
+        }
+        return gguf_half_at(b) * (0.5f + float(aux >> 28u)) * 0.25f * acc;
+    }
+};
+
+template <>
+struct GGUFDot16<GemmIQ2XS> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 256u) * 74u;
+        const uint v = c % 256u;
+        const uint ib = v / 32u;
+        const uint scale = (v % 32u) < 16u ? (b[66u + ib] & 0x0Fu) : (b[66u + ib] >> 4u);
+        float acc = 0.0f;
+        for (uint h = 0u; h < 2u; ++h) {
+            const uint l = ((v % 32u) / 8u) + h;
+            const uint q = gguf_u16_at(b + 2u + (4u * ib + l) * 2u);
+            const uint signs = tables[GGUF_TABLE_KSIGNS + (q >> 9u)];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2XS, q & 511u);
+            for (uint j = 0u; j < 8u; ++j) {
+                acc = fma(gguf_signed(x[8u * h + j], signs, j), float(uint(grid >> (8u * j)) & 0xFFu), acc);
+            }
+        }
+        return gguf_half_at(b) * (0.5f + float(scale)) * 0.25f * acc;
+    }
+};
+
+template <>
+struct GGUFDot16<GemmIQ2S> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 256u) * 82u;
+        const uint v = c % 256u;
+        const uint sub = v / 32u;
+        const uint packed = b[74u + sub];
+        const uint scale = (v % 32u) < 16u ? (packed & 0x0Fu) : (packed >> 4u);
+        float acc = 0.0f;
+        for (uint h = 0u; h < 2u; ++h) {
+            const uint l = ((v % 32u) / 8u) + h;
+            const uint index = uint(b[2u + sub * 4u + l]) | ((uint(b[66u + sub]) << (8u - 2u * l)) & 0x300u);
+            const uint signs = b[2u + 32u + sub * 4u + l];
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ2S, index);
+            for (uint j = 0u; j < 8u; ++j) {
+                acc = fma(gguf_signed(x[8u * h + j], signs, j), float(uint(grid >> (8u * j)) & 0xFFu), acc);
+            }
+        }
+        return gguf_half_at(b) * (0.5f + float(scale)) * 0.25f * acc;
+    }
+};
+
+template <>
+struct GGUFDot16<GemmIQ1S> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 256u) * 50u;
+        const uint v = c % 256u;
+        const uint ib = v / 32u;
+        const uint qh = gguf_u16_at(b + 34u + ib * 2u);
+        float acc = 0.0f;
+        float sum = 0.0f;
+        for (uint h = 0u; h < 2u; ++h) {
+            const uint l = ((v % 32u) / 8u) + h;
+            const uint index = uint(b[2u + ib * 4u + l]) | (((qh >> (3u * l)) & 7u) << 8u);
+            const ulong grid = gguf_grid64(tables, GGUF_TABLE_IQ1S, index);
+            for (uint j = 0u; j < 8u; ++j) {
+                acc = fma(x[8u * h + j], float(char(uchar(grid >> (8u * j)))), acc);
+                sum += x[8u * h + j];
+            }
+        }
+        const float delta = (qh & 0x8000u) != 0u ? -0.125f : 0.125f;
+        return gguf_half_at(b) * float(2u * ((qh >> 12u) & 7u) + 1u) * fma(delta, sum, acc);
+    }
+};
+
+template <>
+struct GGUFDot16<GemmIQ3XXS> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 256u) * 98u;
+        const uint v = c % 256u;
+        const uint ib = v / 32u;
+        const uint aux = gguf_u32_at(b + 2u + 64u + ib * 4u);
+        device const uchar* qs = b + 2u + ib * 8u;
+        device const uint* grid3 = (device const uint*)(tables + GGUF_TABLE_IQ3XXS);
+        float acc = 0.0f;
+        for (uint h = 0u; h < 2u; ++h) {
+            const uint l = ((v % 32u) / 8u) + h;
+            const uint signs = tables[GGUF_TABLE_KSIGNS + ((aux >> (7u * l)) & 127u)];
+            const uint grids[2] = {grid3[qs[2u * l]], grid3[qs[2u * l + 1u]]};
+            for (uint j = 0u; j < 8u; ++j) {
+                acc = fma(gguf_signed(x[8u * h + j], signs, j), float((grids[j / 4u] >> (8u * (j % 4u))) & 0xFFu), acc);
+            }
+        }
+        return gguf_half_at(b) * (0.5f + float(aux >> 28u)) * 0.5f * acc;
+    }
+};
+
+template <>
+struct GGUFDot16<GemmQ2_0> {
+    static float dot(device const uchar* w, uint rowBytes, uint row, uint c, thread const float* x,
+                     device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 64u) * 18u;
+        device const uchar* q = b + 2u + (c % 64u) / 4u;
+        float acc = 0.0f;
+        float sum = 0.0f;
+        for (uint i = 0u; i < 16u; ++i) {
+            acc = fma(x[i], float((uint(q[i / 4u]) >> (2u * (i % 4u))) & 3u), acc);
+            sum += x[i];
+        }
+        return gguf_half_at(b) * (acc - sum);
+    }
+};
+
 // Expert-indexed GEMV over any of the block decoders above (decode path for
 // the formats without a dedicated kernel): two SIMD groups per threadgroup,
 // two rows per SIMD group, each lane decoding 16-value windows of both rows
 // and reusing its activations. Same contract as nvfp4_gemv_ids
 // (GGUFGemvIdsArgs); a flat grid of row tiles x slots.
-template <typename Decoder>
+template <typename Decoder, uint R>
 static void gguf_gemv_blocks_impl(
     device const uchar* weights, device const float* x, device float* y,
     device const int* ids, device const float* scales, constant GGUFGemvIdsArgs& args,
     device const uchar* tables, uint groupIndex, uint sg, uint lane)
 {
-    const uint rowTiles = (args.rows + 3u) / 4u;
+    const uint rowTiles = (args.rows + 2u * R - 1u) / (2u * R);
     const uint slot = groupIndex / rowTiles;
-    const uint firstRow = ((groupIndex % rowTiles) * 2u + sg) * 2u;
+    const uint firstRow = ((groupIndex % rowTiles) * 2u + sg) * R;
     if (firstRow >= args.rows) return;
     const int expert = ids[slot];
     device const uchar* matrix = weights + ulong(expert) * args.expertStride;
     device const float* xs = x + slot * args.xSlotStride;
     const uint rowBytes = Decoder::rowBytes(args.columns);
-    const uint rows[2] = {firstRow, min(firstRow + 1u, args.rows - 1u)};
-    float sums[2] = {0.0f, 0.0f};
+    uint rows[R];
+    float sums[R];
+    for (uint r = 0u; r < R; ++r) {
+        rows[r] = min(firstRow + r, args.rows - 1u);
+        sums[r] = 0.0f;
+    }
+    // Each lane walks 16-value windows, its activations reused across the R
+    // rows. (One flat list of row x window items, which balances the ragged
+    // last pass of 2,304 and 1,152 columns, measured ~25% slower.)
     for (uint chunk = lane; chunk < args.columns / 16u; chunk += 32u) {
         device const float4* x4 = (device const float4*)(xs + chunk * 16u);
-        const float4 xv[4] = {x4[0], x4[1], x4[2], x4[3]};
-        for (uint r = 0u; r < 2u; ++r) {
-            // fp32 weights: the decode GEMV keeps the host decode's precision.
-            float wv[16];
-            Decoder::decode(matrix, rowBytes, rows[r], chunk * 16u, wv, tables);
-            float acc = 0.0f;
-            for (uint i = 0u; i < 4u; ++i) {
-                acc += dot(xv[i], float4(wv[4u * i], wv[4u * i + 1u], wv[4u * i + 2u], wv[4u * i + 3u]));
-            }
-            sums[r] += acc;
+        float xv[16];
+        for (uint i = 0u; i < 4u; ++i) {
+            const float4 part = x4[i];
+            xv[4u * i] = part.x;
+            xv[4u * i + 1u] = part.y;
+            xv[4u * i + 2u] = part.z;
+            xv[4u * i + 3u] = part.w;
+        }
+        for (uint r = 0u; r < R; ++r) {
+            sums[r] += GGUFDot16<Decoder>::dot(matrix, rowBytes, rows[r], chunk * 16u, xv, tables);
         }
     }
     const float scale = args.useScale != 0u ? scales[expert] : 1.0f;
     device float* out = y + slot * args.rows;
-    for (uint r = 0u; r < 2u; ++r) {
+    for (uint r = 0u; r < R; ++r) {
         const float total = simd_sum(sums[r]);
         if (lane == 0u && firstRow + r < args.rows) out[firstRow + r] = total * scale;
     }
 }
+
+// Rows per SIMD group (two SIMD groups per threadgroup).
+constant constexpr uint GGUF_GEMV_BLOCK_ROWS = 4u;
 
 #define GGUF_GEMV_BLOCKS_KERNEL(name, decoder)                                       \
 kernel void name(                                                                    \
@@ -358,7 +524,7 @@ kernel void name(                                                               
     uint sg [[simdgroup_index_in_threadgroup]],                                      \
     uint lane [[thread_index_in_simdgroup]])                                         \
 {                                                                                    \
-    gguf_gemv_blocks_impl<decoder>(                                                  \
+    gguf_gemv_blocks_impl<decoder, GGUF_GEMV_BLOCK_ROWS>(                            \
         weights, x, y, ids, scales, args, tables, groupIndex, sg, lane);             \
 }
 

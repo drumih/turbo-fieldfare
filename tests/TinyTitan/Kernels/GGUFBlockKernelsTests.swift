@@ -242,3 +242,129 @@ import Testing
         }
     }
 }
+
+extension GGUFBlockKernelsTests {
+    private static var benchmarkEnabled: Bool {
+        ProcessInfo.processInfo.environment["TINYTITAN_KERNEL_BENCH"] == "1"
+    }
+
+    /// Effective GB/s of the decode block GEMV per type, on one routed layer's
+    /// shapes: eight slots over 128 experts of 2,304 x 2,304 (gate_up-sized)
+    /// or 2,304 x 1,152 (down),
+    /// so the reads are not cache-resident. Compare with the dedicated
+    /// NVFP4/Q8_0 kernels' ~87 GB/s (`GGUFGemvIdsTests/routedLayerBenchmark`).
+    /// Opt-in: `TINYTITAN_KERNEL_BENCH=1`.
+    @Test(
+        .enabled(if: benchmarkEnabled),
+        arguments: gemvTypes.map { ($0, 2_304) } + [GGUFType.q2_0, .mxfp4].map { ($0, 1_152) })
+    func blockGemvBandwidth(type: GGUFType, columns: Int) throws {
+        let context = try MetalContext()
+        let gemv = try GGUFGemvBlocks(
+            context: context, tables: try GGUFBlockTables.buffer(device: context.device))
+        let device = context.device
+        let (experts, rows, slots) = (128, 2_304, 8)
+        let stride = rows * columns / Int(type.blockSize) * Int(type.blockBytes)
+        let one = Self.blocks(type: type, rows: rows, columns: columns)
+        let weights = try #require(device.makeBuffer(length: stride * experts))
+        for expert in 0..<experts {
+            one.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                weights.contents().advanced(by: expert * stride).copyMemory(
+                    from: base, byteCount: stride)
+            }
+        }
+        let x = try Self.buffer(device, Self.activation(columns, seed: 0))
+        let y = try #require(device.makeBuffer(length: slots * rows * 4))
+        var samples: [Double] = []
+        for round in 0..<9 {
+            let ids = (0..<slots).map { Int32(($0 * 13 + round * 37) % experts) }
+            let idBuffer = try Self.buffer(device, ids)
+            let commandBuffer = try #require(context.queue.makeCommandBuffer())
+            let encoder = try #require(commandBuffer.makeComputeCommandEncoder())
+            for _ in 0..<20 {
+                try gemv.encode(
+                    .init(
+                        type: type, rows: rows, columns: columns, slots: slots,
+                        expertStride: stride, xSlotStride: 0),
+                    weights: .init(weights), x: .init(x), y: .init(y), ids: .init(idBuffer),
+                    scales: nil, encoder: encoder)
+            }
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            samples.append((commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) / 20)
+        }
+        let median = samples.sorted()[4]
+        let gbps = Double(stride * slots) / median / 1e9
+        print(
+            String(
+                format: "block GEMV %@ %dx%d x%d slots: %.3f ms, %.1f GB/s", type.name, rows,
+                columns, slots, median * 1e3, gbps))
+        #expect(median > 0)
+    }
+}
+
+extension GGUFBlockKernelsTests {
+    /// GPU ms of one dense projection GEMV (one slot) at Inkling2's shapes, the
+    /// block kernels against the dedicated Q8_0 one, as the decode runs them:
+    /// 48 projections of one shape spread over distinct weights in one buffer.
+    @Test(
+        .enabled(if: benchmarkEnabled), arguments: [(3_072, 2_304), (1_024, 2_304), (2_304, 3_072)])
+    func denseProjectionBenchmark(rows: Int, columns: Int) throws {
+        let context = try MetalContext()
+        let blocks = try GGUFGemvBlocks(
+            context: context, tables: try GGUFBlockTables.buffer(device: context.device))
+        let ids = try GGUFGemvIds(context: context)
+        let device = context.device
+        let copies = 48
+        let zero = try Self.buffer(device, [Int32(0)])
+        let x = try Self.buffer(device, Self.activation(columns, seed: 0))
+        let y = try #require(device.makeBuffer(length: rows * 4))
+        for type in [GGUFType.q8_0, .q6K, .q5K, .q4K, .iq3XXS] {
+            let stride = rows * columns / Int(type.blockSize) * Int(type.blockBytes)
+            let one =
+                type == .q8_0
+                ? GGUFGemmTiledTests.matrix(type: .q8_0, rows: rows, columns: columns)
+                : Self.blocks(type: type, rows: rows, columns: columns)
+            let weights = try #require(device.makeBuffer(length: stride * copies))
+            for copy in 0..<copies {
+                one.withUnsafeBytes { raw in
+                    guard let base = raw.baseAddress else { return }
+                    weights.contents().advanced(by: copy * stride).copyMemory(
+                        from: base, byteCount: stride)
+                }
+            }
+            var samples: [Double] = []
+            for _ in 0..<7 {
+                let commandBuffer = try #require(context.queue.makeCommandBuffer())
+                let encoder = try #require(commandBuffer.makeComputeCommandEncoder())
+                for copy in 0..<copies {
+                    let shape = GGUFGemvIds.Shape(
+                        type: type, rows: rows, columns: columns, slots: 1, expertStride: 0,
+                        xSlotStride: 0)
+                    let operand = GGUFGemvIds.Operand(weights, offset: copy * stride)
+                    if type == .q8_0 {
+                        try ids.encode(
+                            shape, weights: operand, x: .init(x), y: .init(y), ids: .init(zero),
+                            scales: nil, encoder: encoder)
+                    } else {
+                        try blocks.encode(
+                            shape, weights: operand, x: .init(x), y: .init(y), ids: .init(zero),
+                            scales: nil, encoder: encoder)
+                    }
+                }
+                encoder.endEncoding()
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+                samples.append(
+                    (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) / Double(copies))
+            }
+            let median = samples.sorted()[3]
+            print(
+                String(
+                    format: "dense %@ %dx%d: %.4f ms, %.1f GB/s", type.name, rows, columns,
+                    median * 1e3, Double(stride) / median / 1e9))
+            #expect(median > 0)
+        }
+    }
+}
