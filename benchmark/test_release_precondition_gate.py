@@ -330,7 +330,7 @@ class PreconditionWiringTests(unittest.TestCase):
     def _block(self) -> str:
         text = SCRIPT.read_text()
         start = text.index('step "preconditions"')
-        end = text.index("# --- CI green on the commit being tagged")
+        end = text.index("# --- compile/test CI green on the commit being tagged")
         return text[start:end]
 
     def test_the_preconditions_run_both_verdicts(self) -> None:

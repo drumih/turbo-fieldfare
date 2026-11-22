@@ -23,7 +23,12 @@
 # The seventh was found by the CI scan on 2026-11-10 (commit e83df77d):
 #   * `presence_penalty=0`        — a sampling parameter quoted in
 #     `docs/qwen38-mtp-investigation-2026-11-09.md`, the run's own setting
-# All seven are matched by `generic-api-key` only because they look like long
+# The eighth was found by the CI scan on 2026-11-22 (commit 62a67deb):
+#   * `Inkling2GGUFTensor`        — a Swift type name, the declared type of
+#     `tokenEmbedding` and `tokenNorm` in
+#     `sources/TinyTitan/Inkling2GGUF/Inkling2GGUFWeights.swift`; the property
+#     names start with `token`, which is what the rule keys on.
+# All eight are matched by `generic-api-key` only because they look like long
 # opaque tokens. The values are literal, not shape-based, so no future secret
 # that happens to be shaped like a path, a model id or a counter is hidden.
 
@@ -41,4 +46,5 @@ regexes = [
   '''^ornith-1\.5_35B_A3B-bf16dense$''',
   '''^ornith15-bf16dense$''',
   '''^presence_penalty=0$''',
+  '''^Inkling2GGUFTensor$''',
 ]
