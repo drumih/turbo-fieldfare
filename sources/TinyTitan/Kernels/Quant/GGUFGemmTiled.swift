@@ -28,6 +28,8 @@ final class GGUFGemmTiled {
     /// 8-token ones (gguf_gemm_tiled.metal).
     static let wideTileRows = 128
     static let narrowTileRows = 64
+    /// `GEMM_NARROW_BK`: the 8-token kernels need columns % depth == 0.
+    static let narrowTileDepth = 64
 
     private var pipelines: [GGUFType: MTLComputePipelineState] = [:]
     private var narrowPipelines: [GGUFType: MTLComputePipelineState] = [:]
@@ -104,9 +106,11 @@ final class GGUFGemmTiled {
         lists: Operand, counts: Operand, scales: Operand?, listStride: Int? = nil,
         tileTokens: Int = 32, encoder: MTLComputeCommandEncoder
     ) throws {
-        let narrow = tileTokens == 8 && narrowPipelines[type] != nil
+        let narrow =
+            tileTokens == 8 && narrowPipelines[type] != nil
+            && columns % Self.narrowTileDepth == 0
         encoder.setComputePipelineState(
-            try pipeline(type, columns: columns, tileTokens: tileTokens))
+            try pipeline(type, columns: columns, tileTokens: narrow ? 8 : 32))
         var args = Args(
             rows: UInt32(rows), columns: UInt32(columns), tokens: 0,
             expertStride: UInt64(expertStride),

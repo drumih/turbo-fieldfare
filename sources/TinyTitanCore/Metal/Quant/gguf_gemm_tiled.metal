@@ -33,8 +33,14 @@ constant uint GEMM_BN = 32u;
 constant uint GEMM_BK = 64u;
 // Row tile of the 32-token kernels (GGUFGemmTiled.wideTileRows).
 constant constexpr uint GEMM_WIDE_ROWS = 128u;
-// Row tile of the 8-token kernels (GGUFGemmTiled.narrowTileRows).
+// Row tile of the 8-token kernels (GGUFGemmTiled.narrowTileRows): 64 is the
+// measured optimum at T=64 (32 rows 11.2-11.7 ms, 128 rows 13.7, 64 rows
+// 10.3-11.1 per routed layer).
 constant constexpr uint GEMM_NARROW_ROWS = 64u;
+// K step of the 8-token kernels (GGUFGemmTiled.narrowTileDepth). 128 measured
+// slower (11.1 -> 13.4-15.3 ms per routed layer at T=64): the larger
+// threadgroup footprint costs more occupancy than the halved barriers save.
+constant constexpr uint GEMM_NARROW_BK = 64u;
 
 // Sixteen consecutive weights of row `row` starting at column `c` (c % 16 == 0).
 struct GemmQ8_0 {
@@ -114,7 +120,7 @@ struct GemmBF16 {
 //                  measured slower: 11.1 -> 13.7 ms per routed layer at T=64.)
 // The output tile is staged in sa's memory once the K loop is done (BM * BN
 // floats fit in BM * BK halves because BN <= BK / 2).
-template <typename Decoder, uint BN, uint BM>
+template <typename Decoder, uint BN, uint BM, uint BK>
 static void gguf_gemm_tiled_impl(
     device const uchar* weights, device const float* x, device float* y,
     device const uint* lists, device const uint* counts, device const float* scales,
@@ -133,12 +139,12 @@ static void gguf_gemm_tiled_impl(
     // windows (tid % THREADS_PER_ROW) * 16 + part * 16 * THREADS_PER_ROW;
     // activation token tid / (128 / BN), BN / 2 columns (BN / 8 float4s).
     constexpr uint THREADS_PER_ROW = 128u / BM;
-    constexpr uint PARTS = GEMM_BK / 16u / THREADS_PER_ROW;
+    constexpr uint PARTS = BK / 16u / THREADS_PER_ROW;
     constexpr uint THREADS_PER_TOKEN = 128u / BN;
-    constexpr uint X4_PER_THREAD = BN / 8u;
+    constexpr uint X4_PER_THREAD = BK * BN / 512u;
     constexpr uint ROW_TILES = (BM == 128u || BN == 32u) ? 4u : 2u;
     constexpr uint TOKEN_TILES = BM == 128u ? BN / 8u : (BN == 32u ? 2u : 1u);
-    static_assert(BN * 2u <= GEMM_BK, "the output tile is staged in sa");
+    static_assert(BN * 2u <= BK, "the output tile is staged in sa");
     const uint loadRow = min(rowBase + tid / THREADS_PER_ROW, args.rows - 1u);
     const uint loadToken = tokenBase + tid / THREADS_PER_TOKEN;
     const bool tokenValid = loadToken < tokenCount;
@@ -151,9 +157,9 @@ static void gguf_gemm_tiled_impl(
     device const float4* xs = (device const float4*)(
         x + ulong(xRow) * args.columns + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
     threadgroup half4* sa4 = (threadgroup half4*)(
-        sa + (tid / THREADS_PER_ROW) * GEMM_BK + (tid % THREADS_PER_ROW) * 16u);
+        sa + (tid / THREADS_PER_ROW) * BK + (tid % THREADS_PER_ROW) * 16u);
     threadgroup half4* sb4 = (threadgroup half4*)(
-        sb + (tid / THREADS_PER_TOKEN) * GEMM_BK + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
+        sb + (tid / THREADS_PER_TOKEN) * BK + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
 
     simdgroup_float8x8 acc[ROW_TILES * TOKEN_TILES];
     for (uint i = 0u; i < ROW_TILES * TOKEN_TILES; ++i) {
@@ -162,7 +168,7 @@ static void gguf_gemm_tiled_impl(
     const uint sgRow = BM == 128u ? sg * 32u : (BN == 32u ? (sg % 2u) * 32u : sg * 16u);
     const uint sgToken = BM == 128u ? 0u : (BN == 32u ? (sg / 2u) * 16u : 0u);
 
-    for (uint k = 0u; k < args.columns; k += GEMM_BK) {
+    for (uint k = 0u; k < args.columns; k += BK) {
         for (uint part = 0u; part < PARTS; ++part) {
             half wv[16];
             Decoder::decode(
@@ -177,15 +183,15 @@ static void gguf_gemm_tiled_impl(
             sb4[j] = tokenValid ? half4(xs[k / 4u + j]) : half4(0.0h);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (uint kk = 0u; kk < GEMM_BK; kk += 8u) {
+        for (uint kk = 0u; kk < BK; kk += 8u) {
             simdgroup_half8x8 ma[ROW_TILES];
             simdgroup_half8x8 mb[TOKEN_TILES];
             for (uint i = 0u; i < ROW_TILES; ++i) {
-                simdgroup_load(ma[i], sa + (sgRow + 8u * i) * GEMM_BK + kk, GEMM_BK);
+                simdgroup_load(ma[i], sa + (sgRow + 8u * i) * BK + kk, BK);
             }
             for (uint i = 0u; i < TOKEN_TILES; ++i) {
                 // B is X^T: element (kk + a, token b) = sb[(token) * BK + kk + a].
-                simdgroup_load(mb[i], sb + (sgToken + 8u * i) * GEMM_BK + kk, GEMM_BK, ulong2(0, 0), true);
+                simdgroup_load(mb[i], sb + (sgToken + 8u * i) * BK + kk, BK, ulong2(0, 0), true);
             }
             for (uint i = 0u; i < ROW_TILES; ++i) {
                 for (uint j = 0u; j < TOKEN_TILES; ++j) {
@@ -218,7 +224,7 @@ static void gguf_gemm_tiled_impl(
     }
 }
 
-#define GGUF_GEMM_TILED_KERNEL_BM(name, decoder, bn, bm)                             \
+#define GGUF_GEMM_TILED_KERNEL_BM(name, decoder, bn, bm, bk)                         \
 kernel void name(                                                                    \
     device const uchar* weights [[buffer(0)]],                                       \
     device const float* x [[buffer(1)]],                                             \
@@ -232,15 +238,17 @@ kernel void name(                                                               
     uint sg [[simdgroup_index_in_threadgroup]],                                      \
     uint tid [[thread_index_in_threadgroup]])                                        \
 {                                                                                    \
-    threadgroup half sa[bm * GEMM_BK];                                               \
-    threadgroup half sb[bn * GEMM_BK];                                               \
-    gguf_gemm_tiled_impl<decoder, bn, bm>(                                           \
+    threadgroup half sa[bm * bk];                                                    \
+    threadgroup half sb[bn * bk];                                                    \
+    gguf_gemm_tiled_impl<decoder, bn, bm, bk>(                                       \
         weights, x, y, lists, counts, scales, args, tables, tile, sg, tid, sa, sb);  \
 }
 
 // 32-token kernels take 128-row tiles; 8-token kernels 64-row tiles.
 #define GGUF_GEMM_TILED_KERNEL(name, decoder, bn) \
-    GGUF_GEMM_TILED_KERNEL_BM(name, decoder, bn, (bn == 32u ? GEMM_WIDE_ROWS : GEMM_NARROW_ROWS))
+    GGUF_GEMM_TILED_KERNEL_BM(                    \
+        name, decoder, bn, (bn == 32u ? GEMM_WIDE_ROWS : GEMM_NARROW_ROWS), \
+        (bn == 32u ? GEMM_BK : GEMM_NARROW_BK))
 
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0, GemmQ8_0, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4, GemmNVFP4, 32u)
