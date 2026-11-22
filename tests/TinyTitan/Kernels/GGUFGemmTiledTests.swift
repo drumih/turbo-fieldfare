@@ -120,8 +120,8 @@ import Testing
             matrixOf: { _ in 0 }, scaleOf: { _ in 1 }, outputs: tokens, label: type.name)
     }
 
-    @Test(arguments: [GGUFType.q8_0, .nvfp4])
-    func expertGroupedMatchesHostDecode(type: GGUFType) throws {
+    @Test(arguments: [(GGUFType.q8_0, 32), (.nvfp4, 32), (.q8_0, 8), (.nvfp4, 8)])
+    func expertGroupedMatchesHostDecode(type: GGUFType, tileTokens: Int) throws {
         let context = try MetalContext()
         let gemm = try GGUFGemmTiled(context: context)
         let device = context.device
@@ -135,7 +135,6 @@ import Testing
         let lists = try #require(device.makeBuffer(length: experts * pairs * 4))
         let counts = try #require(device.makeBuffer(length: experts * 4))
         let idBuffer = try Self.buffer(device, ids)
-        let sizes = try #require(device.makeBuffer(length: 12))
         for shared in [true, false] {
             // Shared: one input per token (gate_up); per pair: one per pair (down).
             let x = Self.activations((shared ? tokens : pairs) * columns, seed: shared ? 1 : 2)
@@ -146,17 +145,14 @@ import Testing
                     counts: .init(counts), listStride: pairs,
                     barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
                 encoder.memoryBarrier(scope: .buffers)
-                gemm.encodeDispatchSizes(
-                    counts: .init(counts), experts: experts, rowsOfShapes: [rows],
-                    sizes: .init(sizes), encoder: encoder)
-                encoder.memoryBarrier(scope: .buffers)
                 try gemm.encodeExperts(
                     type: type, weights: .init(try Self.buffer(device, bytes)), rows: rows,
                     columns: columns, experts: experts, expertStride: stride,
                     maxPairsPerExpert: pairs, xDivisor: shared ? slots : 1,
                     x: .init(try Self.buffer(device, x)), y: .init(y), lists: .init(lists),
                     counts: .init(counts), scales: .init(try Self.buffer(device, scales)),
-                    indirectSizes: shared ? nil : .init(sizes), encoder: encoder)
+                    tileTokens: tileTokens,
+                    encoder: encoder)
             }
             let got = UnsafeBufferPointer(
                 start: y.contents().bindMemory(to: Float.self, capacity: pairs * rows),
@@ -165,13 +161,14 @@ import Testing
                 got, decoded: decoded, rows: rows, columns: columns, x: x,
                 xRow: { shared ? $0 / slots : $0 }, matrixOf: { Int(ids[$0]) },
                 scaleOf: { Double(scales[Int(ids[$0])]) }, outputs: pairs,
-                label: "\(type.name) experts shared=\(shared)")
+                label: "\(type.name) experts tile=\(tileTokens) shared=\(shared)")
         }
     }
 
     /// GPU time of the dense Q/K/V/gate/rel projection (8,576 x 2,304 Q8_0) and
-    /// of one routed layer (8 of 128 NVFP4 experts per token, gate_up and down)
-    /// for a chunk of T tokens. Compare with the ANE probe's 1.21-1.50 ms (T=256).
+    /// of one routed layer (8 distinct of 128 NVFP4 experts per token, gate_up and
+    /// down, the grid bounded by T pairs per expert as in the decoder) for a chunk
+    /// of T tokens. Compare with the ANE probe's 1.21-1.50 ms (T=256).
     @Test(.enabled(if: benchmarkEnabled), arguments: [64, 256, 512])
     func prefillChunkBenchmark(tokens: Int) throws {
         let context = try MetalContext()
@@ -215,7 +212,7 @@ import Testing
             }
         }
         let pairs = tokens * slots
-        let sizes = try #require(device.makeBuffer(length: 24))
+        let expertTile = GGUFGemmTiled.expertTileTokens(pairs: pairs, experts: experts)
         let ids = try Self.buffer(
             device, (0..<pairs).map { Int32(($0 * 37 + ($0 / slots) * 11) % experts) })
         let lists = try #require(device.makeBuffer(length: experts * pairs * 4))
@@ -229,29 +226,19 @@ import Testing
                 counts: .init(counts), listStride: pairs,
                 barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
             encoder.memoryBarrier(scope: .buffers)
-            gemm.encodeDispatchSizes(
-                counts: .init(counts), experts: experts, rowsOfShapes: [2 * feedForward, columns],
-                sizes: .init(sizes), encoder: encoder)
-            encoder.memoryBarrier(scope: .buffers)
             try gemm.encodeExperts(
                 type: .nvfp4, weights: .init(gateUp), rows: 2 * feedForward, columns: columns,
-                experts: experts, expertStride: gateUpStride, maxPairsPerExpert: pairs,
+                experts: experts, expertStride: gateUpStride, maxPairsPerExpert: tokens,
                 xDivisor: slots, x: .init(x), y: .init(gateUpOut), lists: .init(lists),
-                counts: .init(counts), scales: nil, indirectSizes: .init(sizes), encoder: encoder)
+                counts: .init(counts), scales: nil, listStride: pairs, tileTokens: expertTile,
+                encoder: encoder)
             try gemm.encodeExperts(
                 type: .nvfp4, weights: .init(down), rows: columns, columns: feedForward,
-                experts: experts, expertStride: downStride, maxPairsPerExpert: pairs,
+                experts: experts, expertStride: downStride, maxPairsPerExpert: tokens,
                 xDivisor: 1, x: .init(act), y: .init(downOut), lists: .init(lists),
-                counts: .init(counts), scales: nil, indirectSizes: .init(sizes, offset: 12),
+                counts: .init(counts), scales: nil, listStride: pairs, tileTokens: expertTile,
                 encoder: encoder)
         }
-        let written = sizes.contents().bindMemory(to: UInt32.self, capacity: 6)
-        let countValues = counts.contents().bindMemory(to: UInt32.self, capacity: experts)
-        let largest = (0..<experts).map { countValues[$0] }.max() ?? 0
-        FileHandle.standardError.write(
-            Data(
-                "T=\(tokens) sizes \((0..<6).map { written[$0] }) largest expert \(largest)\n".utf8)
-        )
         let denseFlops = 2.0 * Double(tokens * rows * columns)
         let moeFlops = 2.0 * Double(pairs) * Double(3 * feedForward * columns)
         #expect(denseSeconds > 0 && moeSeconds > 0)
@@ -263,5 +250,57 @@ import Testing
                     tokens, denseSeconds * 1e3, denseFlops / denseSeconds / 1e12, moeSeconds * 1e3,
                     moeFlops / moeSeconds / 1e12, moeSeconds / Double(tokens) * 1e6
                 ).utf8))
+    }
+}
+
+extension GGUFGemmTiledTests {
+    /// The 8- and 32-token tiles accumulate every output cell over K in the
+    /// same order, so on the same lists they must agree bit for bit — at the
+    /// real routed shapes, with experts holding 1 to 40 pairs.
+    @Test(arguments: [(GGUFType.nvfp4, 2_304), (.nvfp4, 1_152), (.q8_0, 2_304)])
+    func narrowAndWideTilesAgreeExactly(type: GGUFType, columns: Int) throws {
+        let context = try MetalContext()
+        let gemm = try GGUFGemmTiled(context: context)
+        let device = context.device
+        let (rows, experts, tokens, slots) = (2_304, 16, 64, 8)
+        let stride = rows * columns / Int(type.blockSize) * Int(type.blockBytes)
+        let weights = try Self.buffer(
+            device, Self.matrix(type: type, rows: rows * experts, columns: columns))
+        let pairs = tokens * slots
+        // Skewed routing: expert e gets a share growing with e.
+        let ids = (0..<pairs).map {
+            Int32(Int(Double(experts) * sqrt(Double(($0 * 7_919) % pairs) / Double(pairs))))
+        }
+        let x = try Self.buffer(device, Self.activations(tokens * columns, seed: 5))
+        let lists = try #require(device.makeBuffer(length: experts * pairs * 4))
+        let counts = try #require(device.makeBuffer(length: experts * 4))
+        var outputs: [[Float]] = []
+        for tile in [8, 32] {
+            let y = try #require(device.makeBuffer(length: pairs * rows * 4))
+            try Self.run(context) { encoder in
+                gemm.encodeGrouping(
+                    ids: .init(try Self.buffer(device, ids)), pairs: pairs, experts: experts,
+                    lists: .init(lists), counts: .init(counts), listStride: pairs,
+                    barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
+                encoder.memoryBarrier(scope: .buffers)
+                try gemm.encodeExperts(
+                    type: type, weights: .init(weights), rows: rows, columns: columns,
+                    experts: experts, expertStride: stride, maxPairsPerExpert: pairs,
+                    xDivisor: slots, x: .init(x), y: .init(y), lists: .init(lists),
+                    counts: .init(counts), scales: nil, tileTokens: tile, encoder: encoder)
+            }
+            outputs.append(
+                Array(
+                    UnsafeBufferPointer(
+                        start: y.contents().bindMemory(to: Float.self, capacity: pairs * rows),
+                        count: pairs * rows)))
+        }
+        let differing = zip(outputs[0], outputs[1]).enumerated().filter {
+            $0.element.0 != $0.element.1
+        }
+        #expect(
+            differing.isEmpty,
+            "\(differing.count) cells differ; first at \(differing.first.map { "pair \($0.offset / rows) row \($0.offset % rows): \($0.element.0) vs \($0.element.1)" } ?? "")"
+        )
     }
 }

@@ -93,7 +93,12 @@ struct GemmBF16 {
     static uint rowBytes(uint columns) { return columns * 2u; }
 };
 
-template <typename Decoder>
+// BN is the token tile: 32 for dense chunks and well-filled experts, 8 when
+// experts get only a few tokens each (the 32-wide tile would spend 3/4 of its
+// multiplies on padding). Four SIMD groups cover 64 rows either way: with
+// BN = 32 each takes 32 rows x 16 tokens (4 x 2 accumulators), with BN = 8 each
+// takes 16 rows x 8 tokens (2 x 1).
+template <typename Decoder, uint BN>
 static void gguf_gemm_tiled_impl(
     device const uchar* weights, device const float* x, device float* y,
     device const uint* lists, device const uint* counts, device const float* scales,
@@ -101,7 +106,7 @@ static void gguf_gemm_tiled_impl(
     threadgroup half* sa, threadgroup half* sb, threadgroup float* sc)
 {
     const uint rowBase = tile.x * GEMM_BM;
-    const uint tokenBase = tile.y * GEMM_BN;
+    const uint tokenBase = tile.y * BN;
     const uint expert = args.indirect != 0u ? tile.z : 0u;
     const uint tokenCount = args.indirect != 0u ? counts[expert] : args.tokens;
     if (rowBase >= args.rows || tokenBase >= tokenCount) return;
@@ -109,10 +114,14 @@ static void gguf_gemm_tiled_impl(
     const uint rowBytes = Decoder::rowBytes(args.columns);
 
     // This thread's loads per K step: weight row (tid / 2), columns
-    // (tid % 2) * 16 and that + 32; activation token (tid / 4), 16 columns at
-    // (tid % 4) * 16.
+    // (tid % 2) * 16 and that + 32; activation token tid / (128 / BN), BN / 2
+    // columns (BN / 8 float4s) after it.
+    constexpr uint THREADS_PER_TOKEN = 128u / BN;
+    constexpr uint X4_PER_THREAD = BN / 8u;
+    constexpr uint ROW_TILES = BN == 32u ? 4u : 2u;
+    constexpr uint TOKEN_TILES = BN == 32u ? 2u : 1u;
     const uint loadRow = min(rowBase + tid / 2u, args.rows - 1u);
-    const uint loadToken = tokenBase + tid / 4u;
+    const uint loadToken = tokenBase + tid / THREADS_PER_TOKEN;
     const bool tokenValid = loadToken < tokenCount;
     uint xRow = 0u;
     if (tokenValid) {
@@ -120,14 +129,18 @@ static void gguf_gemm_tiled_impl(
             ? lists[expert * args.listStride + loadToken] / args.xDivisor
             : loadToken;
     }
-    device const float4* xs = (device const float4*)(x + ulong(xRow) * args.columns + (tid % 4u) * 16u);
+    device const float4* xs = (device const float4*)(
+        x + ulong(xRow) * args.columns + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
     threadgroup half4* sa4 = (threadgroup half4*)(sa + (tid / 2u) * GEMM_BK + (tid % 2u) * 16u);
-    threadgroup half4* sb4 = (threadgroup half4*)(sb + (tid / 4u) * GEMM_BK + (tid % 4u) * 16u);
+    threadgroup half4* sb4 = (threadgroup half4*)(
+        sb + (tid / THREADS_PER_TOKEN) * GEMM_BK + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
 
-    simdgroup_float8x8 acc[8];
-    for (uint i = 0u; i < 8u; ++i) acc[i] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
-    const uint sgRow = (sg % 2u) * 32u;
-    const uint sgToken = (sg / 2u) * 16u;
+    simdgroup_float8x8 acc[ROW_TILES * TOKEN_TILES];
+    for (uint i = 0u; i < ROW_TILES * TOKEN_TILES; ++i) {
+        acc[i] = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+    }
+    const uint sgRow = BN == 32u ? (sg % 2u) * 32u : sg * 16u;
+    const uint sgToken = BN == 32u ? (sg / 2u) * 16u : 0u;
 
     for (uint k = 0u; k < args.columns; k += GEMM_BK) {
         for (uint part = 0u; part < 2u; ++part) {
@@ -137,50 +150,51 @@ static void gguf_gemm_tiled_impl(
                 sa4[part * 8u + j] = half4(wv[4u * j], wv[4u * j + 1u], wv[4u * j + 2u], wv[4u * j + 3u]);
             }
         }
-        for (uint j = 0u; j < 4u; ++j) {
+        for (uint j = 0u; j < X4_PER_THREAD; ++j) {
             sb4[j] = tokenValid ? half4(xs[k / 4u + j]) : half4(0.0h);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint kk = 0u; kk < GEMM_BK; kk += 8u) {
-            simdgroup_half8x8 ma[4];
-            simdgroup_half8x8 mb[2];
-            for (uint i = 0u; i < 4u; ++i) {
+            simdgroup_half8x8 ma[ROW_TILES];
+            simdgroup_half8x8 mb[TOKEN_TILES];
+            for (uint i = 0u; i < ROW_TILES; ++i) {
                 simdgroup_load(ma[i], sa + (sgRow + 8u * i) * GEMM_BK + kk, GEMM_BK);
             }
-            for (uint i = 0u; i < 2u; ++i) {
+            for (uint i = 0u; i < TOKEN_TILES; ++i) {
                 // B is X^T: element (kk + a, token b) = sb[(token) * BK + kk + a].
                 simdgroup_load(mb[i], sb + (sgToken + 8u * i) * GEMM_BK + kk, GEMM_BK, ulong2(0, 0), true);
             }
-            for (uint i = 0u; i < 4u; ++i) {
-                for (uint j = 0u; j < 2u; ++j) {
-                    simdgroup_multiply_accumulate(acc[i * 2u + j], ma[i], mb[j], acc[i * 2u + j]);
+            for (uint i = 0u; i < ROW_TILES; ++i) {
+                for (uint j = 0u; j < TOKEN_TILES; ++j) {
+                    simdgroup_multiply_accumulate(
+                        acc[i * TOKEN_TILES + j], ma[i], mb[j], acc[i * TOKEN_TILES + j]);
                 }
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    // Stage the 64 x 32 tile (row-major rows x tokens), then write valid cells.
-    for (uint i = 0u; i < 4u; ++i) {
-        for (uint j = 0u; j < 2u; ++j) {
+    // Stage the 64 x BN tile (row-major rows x tokens), then write valid cells.
+    for (uint i = 0u; i < ROW_TILES; ++i) {
+        for (uint j = 0u; j < TOKEN_TILES; ++j) {
             simdgroup_store(
-                acc[i * 2u + j], sc + (sgRow + 8u * i) * GEMM_BN + sgToken + 8u * j, GEMM_BN);
+                acc[i * TOKEN_TILES + j], sc + (sgRow + 8u * i) * BN + sgToken + 8u * j, BN);
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     const float scale = args.useScale != 0u ? scales[expert] : 1.0f;
-    for (uint cell = tid; cell < GEMM_BM * GEMM_BN; cell += 128u) {
-        const uint r = cell / GEMM_BN;
-        const uint t = cell % GEMM_BN;
+    for (uint cell = tid; cell < GEMM_BM * BN; cell += 128u) {
+        const uint r = cell / BN;
+        const uint t = cell % BN;
         const uint row = rowBase + r;
         const uint token = tokenBase + t;
         if (row >= args.rows || token >= tokenCount) continue;
         const uint yRow = args.indirect != 0u ? lists[expert * args.listStride + token] : token;
-        y[ulong(yRow) * args.rows + row] = sc[r * GEMM_BN + t] * scale;
+        y[ulong(yRow) * args.rows + row] = sc[r * BN + t] * scale;
     }
 }
 
-#define GGUF_GEMM_TILED_KERNEL(name, decoder)                                        \
+#define GGUF_GEMM_TILED_KERNEL(name, decoder, bn)                                    \
 kernel void name(                                                                    \
     device const uchar* weights [[buffer(0)]],                                       \
     device const float* x [[buffer(1)]],                                             \
@@ -194,16 +208,18 @@ kernel void name(                                                               
     uint tid [[thread_index_in_threadgroup]])                                        \
 {                                                                                    \
     threadgroup half sa[GEMM_BM * GEMM_BK];                                          \
-    threadgroup half sb[GEMM_BN * GEMM_BK];                                          \
-    threadgroup float sc[GEMM_BM * GEMM_BN];                                         \
-    gguf_gemm_tiled_impl<decoder>(                                                   \
+    threadgroup half sb[bn * GEMM_BK];                                               \
+    threadgroup float sc[GEMM_BM * bn];                                              \
+    gguf_gemm_tiled_impl<decoder, bn>(                                               \
         weights, x, y, lists, counts, scales, args, tile, sg, tid, sa, sb, sc);      \
 }
 
-GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0, GemmQ8_0)
-GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4, GemmNVFP4)
-GGUF_GEMM_TILED_KERNEL(gemm_tiled_f32, GemmF32)
-GGUF_GEMM_TILED_KERNEL(gemm_tiled_bf16, GemmBF16)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0, GemmQ8_0, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4, GemmNVFP4, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_f32, GemmF32, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_bf16, GemmBF16, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0_n8, GemmQ8_0, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4_n8, GemmNVFP4, 8u)
 
 // Groups (token, slot) pairs by expert: lists[e][i] = token * slots + slot for
 // every pair routed to e, counts[e] how many. One thread per pair; the order
@@ -229,27 +245,4 @@ kernel void clear_counts(
     uint i [[thread_position_in_grid]])
 {
     if (i < n) counts[i] = 0u;
-}
-
-// Indirect dispatch sizes for the expert-grouped GEMMs: the token-tile count is
-// the largest expert's pair count over 32, so no threadgroup is launched for a
-// tile no expert has. Writes (rowTiles[i], tiles, experts) for each of `shapes`.
-kernel void moe_dispatch_sizes(
-    device const uint* counts [[buffer(0)]],
-    device uint* sizes [[buffer(1)]],
-    constant uint& experts [[buffer(2)]],
-    constant uint4& rowTiles [[buffer(3)]],  // up to four GEMM shapes
-    constant uint& shapes [[buffer(4)]],
-    uint lane [[thread_index_in_simdgroup]])
-{
-    uint largest = 0u;
-    for (uint e = lane; e < experts; e += 32u) largest = max(largest, counts[e]);
-    largest = simd_max(largest);
-    if (lane != 0u) return;
-    const uint tiles = max(1u, (largest + 31u) / 32u);
-    for (uint i = 0u; i < shapes; ++i) {
-        sizes[3u * i + 0u] = rowTiles[i];
-        sizes[3u * i + 1u] = tiles;
-        sizes[3u * i + 2u] = experts;
-    }
 }

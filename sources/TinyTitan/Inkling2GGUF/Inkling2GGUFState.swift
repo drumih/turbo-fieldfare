@@ -49,7 +49,6 @@ final class Inkling2GGUFState {
     let down: MTLBuffer
     let expertLists: MTLBuffer
     let expertCounts: MTLBuffer
-    let expertGridSizes: MTLBuffer
     let logits: MTLBuffer
     let argmaxPartials: MTLBuffer
     static let argmaxGroups = 256
@@ -113,7 +112,6 @@ final class Inkling2GGUFState {
         down = try buffer(pairs * m.hidden * 4, "down")
         expertLists = try buffer(m.expertCount * pairs * 4, "expert lists")
         expertCounts = try buffer(m.expertCount * 4, "expert counts")
-        expertGridSizes = try buffer(24, "expert grid sizes")
         logits = try buffer(m.paddedVocabulary * 4, "logits")
         argmaxPartials = try buffer(Self.argmaxGroups * 8, "argmax partials")
     }

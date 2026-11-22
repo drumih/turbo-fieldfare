@@ -221,10 +221,7 @@ extension Inkling2GGUFDecoder {
         let situArgs = Inkling2GGUFOps.SituArgs(
             feedForward: UInt32(feedForward), slots: UInt32(used * tokens), beta: m.situBeta,
             linearBeta: m.situLinearBeta)
-        let grouping = (
-            lists: scratch(s.expertLists), counts: scratch(s.expertCounts),
-            sizes: scratch(s.expertGridSizes)
-        )
+        let grouping = (lists: scratch(s.expertLists), counts: scratch(s.expertCounts))
         try ops.experts(
             gateUp: layer.gateUp, down: layer.down, gateUpScale: layer.gateUpScale?.operand,
             downScale: layer.downScale?.operand, experts: m.expertCount, used: used,

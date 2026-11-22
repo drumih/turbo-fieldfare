@@ -172,18 +172,22 @@ extension Inkling2GGUFOps {
 
     /// The routed expert GEMVs at one token; at a chunk, the pairs are grouped
     /// by expert once and both GEMMs read each used expert's weights once per
-    /// 32 of its pairs. `pairs` = tokens x used; outputs are pair-major.
+    /// token tile of its pairs. `pairs` = tokens x used; outputs are pair-major.
+    /// Top-k routing picks distinct experts per token, so no expert holds more
+    /// than `tokens` pairs: that bounds the grid on the CPU (empty tiles exit),
+    /// where a GPU-written indirect grid raced with the dispatch producing it.
     func experts(
         gateUp: Inkling2GGUFTensor, down: Inkling2GGUFTensor, gateUpScale: Operand?,
         downScale: Operand?, experts: Int, used: Int, feedForward: Int, hidden: Int,
         tokens: Int, input: Operand, ids: Operand, gateUpOut: Operand, activation: Operand,
-        downOut: Operand, grouping: (lists: Operand, counts: Operand, sizes: Operand),
+        downOut: Operand, grouping: (lists: Operand, counts: Operand),
         situ situArgs: SituArgs, encoder: MTLComputeCommandEncoder
     ) throws {
         try requireSequential("experts")
         let gateUpStride = gateUp.byteCount / experts
         let downStride = down.byteCount / experts
         let pairs = tokens * used
+        let tile = GGUFGemmTiled.expertTileTokens(pairs: pairs, experts: experts)
         if !skipped.contains("experts") {
             if tokens == 1 {
                 order(encoder)
@@ -200,17 +204,12 @@ extension Inkling2GGUFOps {
                     counts: grouping.counts, listStride: pairs,
                     barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
                 order(encoder)
-                gemm.encodeDispatchSizes(
-                    counts: grouping.counts, experts: experts,
-                    rowsOfShapes: [2 * feedForward, hidden],
-                    sizes: grouping.sizes, encoder: encoder)
-                order(encoder)
                 try gemm.encodeExperts(
                     type: gateUp.type, weights: gateUp.operand, rows: 2 * feedForward,
                     columns: hidden, experts: experts, expertStride: gateUpStride,
-                    maxPairsPerExpert: pairs, xDivisor: used, x: input, y: gateUpOut,
+                    maxPairsPerExpert: tokens, xDivisor: used, x: input, y: gateUpOut,
                     lists: grouping.lists, counts: grouping.counts, scales: gateUpScale,
-                    indirectSizes: grouping.sizes, encoder: encoder)
+                    listStride: pairs, tileTokens: tile, encoder: encoder)
             }
         }
         try situ(gateUp: gateUpOut, act: activation, args: situArgs, encoder: encoder)
@@ -226,11 +225,10 @@ extension Inkling2GGUFOps {
         } else {
             try gemm.encodeExperts(
                 type: down.type, weights: down.operand, rows: hidden, columns: feedForward,
-                experts: experts, expertStride: downStride, maxPairsPerExpert: pairs,
+                experts: experts, expertStride: downStride, maxPairsPerExpert: tokens,
                 xDivisor: 1, x: activation, y: downOut, lists: grouping.lists,
-                counts: grouping.counts, scales: downScale,
-                indirectSizes: .init(grouping.sizes.buffer, offset: grouping.sizes.offset + 12),
-                encoder: encoder)
+                counts: grouping.counts, scales: downScale, listStride: pairs,
+                tileTokens: tile, encoder: encoder)
         }
     }
 
