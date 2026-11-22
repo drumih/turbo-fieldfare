@@ -140,6 +140,8 @@ kernel void depth_mix(
     uint lane [[thread_index_in_simdgroup]])
 {
     threadgroup float scratch[32];
+    threadgroup float partialSq[32][32];   // [state][SIMD group]
+    threadgroup float partialDot[32][32];
     threadgroup float inv[32];
     threadgroup float score[32];
     // A flat grid of (query, token) pairs: the SIMD-group attributes are
@@ -148,6 +150,10 @@ kernel void depth_mix(
     const uint token = groupIndex / args.queryCount;
     const uint simdgroups = (threads + 31u) / 32u;
     device const float* q = queries + query * args.width;
+    // Per-state partial sums go to threadgroup memory without a barrier; one
+    // barrier then totals every state, adding the SIMD groups in order as
+    // depth_threadgroup_sum does (two barriers in place of four per state;
+    // the output expression is the original's, term for term).
     for (uint s = 0u; s < args.stateCount; ++s) {
         device const float* xs = pool + ulong(rowsOf[s]) * args.slab + token * args.width;
         float sq = 0.0f;
@@ -156,9 +162,22 @@ kernel void depth_mix(
             sq += xs[i] * xs[i];
             dot += xs[i] * q[i];
         }
-        const float sqTotal = depth_threadgroup_sum(sq, scratch, sg, lane, simdgroups);
-        const float dotTotal = depth_threadgroup_sum(dot, scratch, sg, lane, simdgroups);
-        if (tid == 0u) {
+        sq = simd_sum(sq);
+        dot = simd_sum(dot);
+        if (lane == 0u) {
+            partialSq[s][sg] = sq;
+            partialDot[s][sg] = dot;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid == 0u) {
+        for (uint s = 0u; s < args.stateCount; ++s) {
+            float sqTotal = 0.0f;
+            float dotTotal = 0.0f;
+            for (uint i = 0u; i < simdgroups; ++i) {
+                sqTotal += partialSq[s][i];
+                dotTotal += partialDot[s][i];
+            }
             const float r = rsqrt(sqTotal / float(args.width) + args.epsilon);
             inv[s] = r;
             score[s] = dotTotal * r * rsqrt(float(args.width));
