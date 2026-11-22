@@ -12,19 +12,20 @@
 > f32 ops and expert prefetch, ANE for prefill. Work only from measured,
 > paired results and parity checks. **Both files run natively with greedy
 > parity (96/96 token by token and chunked), from the CLI and the loopback
-> server. Decode clears 1.25× llama.cpp on both files; prefill does not**
-> (pp64 1.01–1.08×, pp512 ~1.0×) — see "Where it stands" and the plan.
+> server. Decode clears 1.25× llama.cpp on both files and 512-token prefill
+> on Q4_K_XL; Q2_K_XL pp512 sits at 1.22–1.25× and 64-token prefill at
+> 1.12–1.19× on both** — see "Where it stands" and the plan.
 
-## Where it stands (2026-11-22, 24 GB M3, 3 interleaved rounds each, tok/s)
+## Where it stands (2026-11-22, 24 GB M3, 3 interleaved rounds each, tok/s, `3aed86af`)
 
 | | Q4_K_XL native | llama.cpp | ratio | Q2_K_XL native | llama.cpp | ratio |
 | --- | --- | --- | --- | --- | --- | --- |
-| decode tg64 | 18.99–19.17 | 14.18–14.48 | **1.32–1.35×** | 21.16–21.23 | 16.62–16.63 | **1.27–1.28×** |
-| prefill pp64 | 97.5–97.6 | 90.7–92.5 | 1.05–1.08× | 93.3–99.5 | 91.9–92.7 | 1.01–1.08× |
-| prefill pp512 | 122.0 ¹ | 119.0–122.3 | ~1.0× | 120.9 ¹ | 122.4–124.6 | ~0.98× |
+| decode tg64 | 18.67–19.26 | 14.19–14.31 | **1.32–1.35×** | 19.56 ¹–21.37 | 16.63–16.89 | **1.27–1.28×** ¹ |
+| prefill pp64 | 103.3–104.0 | 90.1–92.5 | 1.12–1.15× | 102.4–106.5 | 85.7–92.7 | 1.15–1.19× |
+| prefill pp512 | 154.5–156.3 | 122.1–123.7 | **1.25–1.27×** | 149.1–153.2 | 122.4–123.0 | 1.22–1.25× |
 
-¹ After `e4ec3485` (128-row tiles), single runs; the paired rounds just before
-it measured 113.5–115.7.
+¹ One Q2_K_XL decode round stalled (median 52.0 ms against 46.8 in the
+others, 1.18×); the other two are 1.27–1.28×.
 
 llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
 -n 64 -r 3` (Homebrew's `llama-bench` has no `inkling2` architecture). Native:
@@ -39,14 +40,23 @@ llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
   the attention-side controllers share barriers, and f32/bf16 matrices under
   256 rows get a threadgroup per row.
 
-**Why prefill is not there.** The routed experts are most of a chunk
-(pp512: ~2.15 s of ~4.4 s; pp64: ~0.40 s of ~0.65 s), and the tiled expert
-GEMM costs the same for every weight type: it is bound by its own pipeline,
-not by weight bytes or decode (`GGUFBlockKernelsTests/routedChunkBenchmark`).
-128-row 32-token tiles took a routed layer at T=512 from 33.6 to 29.2 ms;
-every 8-token-tile variant tried at T=64 was slower (BK 128, 32 or 128 rows),
-and a register expert kernel without threadgroup staging was 6× slower (each
-row group re-reads the tokens' activations).
+**What got prefill there** (each paired, parity-checked):
+- tiled chunk attention (`141049d1`, `bbec7c24`): a threadgroup per (head,
+  16 queries), 32-key blocks on fp32 simdgroup MMA, O in registers with the
+  rescale as a diagonal MMA, the softmax over all threads, keys past the
+  block's newest query skipped unless the ring wrapped. 16.8 → 4.75 ms per
+  512-token visit; pinned to a CPU reference within 4e-8;
+- the GEMM: 128-row 32-token tiles (`e4ec3485`, 16 MMAs per 8 loads), the
+  operand tiles as contiguous 8 × 8 blocks (llama.cpp's layout, stride-8
+  loads), and 64-row dense tiles when the 128-row grid is small (`3aed86af`).
+
+**What is left at pp64.** The routed experts are ~0.40 s of ~0.60 s. The
+8-token tile costs ~11 ms per routed layer whatever the weight type, and
+every alternative measured slower: 8-token tiles of 32 or 128 rows or BK 128,
+a register kernel (6×), a staged-activation kernel (5×), register prefetch
+in the K loop; a looping grid sized from the average helped evenly routed
+benchmarks but lost 4% on the real, skewed routing. (The M3 has no Metal-4
+tensor ops, so llama.cpp runs the same simdgroup arrangement here.)
 
 **Ablation trap:** skipping any category upstream of the router (`router`,
 `smallGemv`, `rms`, `control`, `mix`, `attention`) changes which experts run,
@@ -216,20 +226,19 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 
 ## What is missing — the plan
 
-1. **Prefill to 1.25×** (pp64 ≥ ~115 tok/s, pp512 ≥ ~153). The lever is the
-   routed expert GEMM's own pipeline. Tried and rejected: register prefetch
-   of step k+1 during step k's MMAs (slower on both row tiles: 29.2 → 32.1
-   ms at T=512), and a second threadgroup buffer does not fit at 128 rows.
-   Untried: llama.cpp's `mul_mm_id` compared kernel for kernel. The ANE can
-   take the dense projections (~0.44 s of pp512 on Q4, probe 6–8 TF/s) but
-   not the experts (static graphs; ~49 GB of fp16 weights), so even ideal
-   offload leaves pp512 near 1.1×.
+1. **pp64 to 1.25×** (≥ ~115 tok/s; now 102–107) and Q2_K_XL pp512 the last
+   few percent. The lever is the 8-token expert tile at ~4 pairs per expert;
+   the variants above are measured and rejected. Untried: splitting K across
+   two threadgroups per expert tile (more parallel work per expert at small
+   chunks, a reduction after), and fusing gate_up's SiTU into the down GEMM's
+   activation load.
 2. **Decode headroom:** the 1–2-bit expert GEMVs sit at a ~0.22 ms floor
    (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
    memory, with more rows per threadgroup to amortise the copy.
 3. **Server:** `TinyTitanServer --model <gguf>` serves through
    `Inkling2GGUFServerBackend` (`6f5b3b09`): text only — no tool calls, no
    stop strings, one sequence at a time, no prompt cache.
+
 4. **Prefill (batched, 2026-11-22).** One graph for decode and prefill: a
    chunk of up to `maxChunk` tokens runs in one command buffer; decode is a
    one-token chunk on the tuned GEMVs. New: `gguf_gemm_tiled.metal`
