@@ -27,12 +27,16 @@ final class GGUFGemmTiled {
     /// Row tiles: `GEMM_WIDE_ROWS` for the 32-token kernels, 64 for the
     /// 8-token ones (gguf_gemm_tiled.metal).
     static let wideTileRows = 128
+    /// Below this many 128-row threadgroups a dense GEMM takes 64-row tiles.
+    static let smallGridThreshold = 128
     static let narrowTileRows = 64
     /// `GEMM_NARROW_BK`: the 8-token kernels need columns % depth == 0.
     static let narrowTileDepth = 64
 
     private var pipelines: [GGUFType: MTLComputePipelineState] = [:]
     private var narrowPipelines: [GGUFType: MTLComputePipelineState] = [:]
+    /// 64-row 32-token dense kernels, for grids the 128-row tile leaves small.
+    private var smallGridPipelines: [GGUFType: MTLComputePipelineState] = [:]
     /// The IQ grids the block decoders read (`GGUFBlockTables`).
     let tables: MTLBuffer
     private let group: MTLComputePipelineState
@@ -52,6 +56,12 @@ final class GGUFGemmTiled {
         ]
         for (type, name) in narrow {
             narrowPipelines[type] = try context.pipeline("gemm_tiled_\(name)_n8")
+        }
+        for (type, name) in [
+            (GGUFType.q8_0, "q8_0"), (.iq3XXS, "iq3_xxs"), (.q4K, "q4_k"), (.q5K, "q5_k"),
+            (.q6K, "q6_k"),
+        ] {
+            smallGridPipelines[type] = try context.pipeline("gemm_tiled_\(name)_m64")
         }
         tables = try GGUFBlockTables.buffer(device: context.device)
         group = try context.pipeline("moe_group_pairs")
@@ -85,14 +95,17 @@ final class GGUFGemmTiled {
         type: GGUFType, weights: Operand, rows: Int, columns: Int, tokens: Int, x: Operand,
         y: Operand, encoder: MTLComputeCommandEncoder
     ) throws {
-        encoder.setComputePipelineState(try pipeline(type, columns: columns))
+        let tokenTiles = (tokens + 31) / 32
+        let wideGroups = (rows + Self.wideTileRows - 1) / Self.wideTileRows * tokenTiles
+        let small = wideGroups < Self.smallGridThreshold ? smallGridPipelines[type] : nil
+        encoder.setComputePipelineState(try small ?? pipeline(type, columns: columns))
         var args = Args(
             rows: UInt32(rows), columns: UInt32(columns), tokens: UInt32(tokens),
             expertStride: 0, listStride: 0, xDivisor: 1, indirect: 0, useScale: 0)
         bind(weights: weights, x: x, y: y, lists: x, counts: x, scales: x, args: &args, encoder)
         dispatch(
-            rows: rows, tileRows: Self.wideTileRows, tokenTiles: (tokens + 31) / 32, experts: 1,
-            encoder)
+            rows: rows, tileRows: small == nil ? Self.wideTileRows : 64, tokenTiles: tokenTiles,
+            experts: 1, encoder)
     }
 
     /// Expert-grouped GEMM: for every pair `p` in expert `e`'s list,
@@ -119,6 +132,11 @@ final class GGUFGemmTiled {
         bind(
             weights: weights, x: x, y: y, lists: lists, counts: counts, scales: scales ?? counts,
             args: &args, encoder)
+        // The grid covers the worst case (every token on one expert); empty
+        // tiles exit. A grid sized from the average with threadgroups looping
+        // over further tiles saved ~8% on evenly routed benchmarks but lost
+        // 4% at pp512 on the real, skewed routing (a popular expert's tiles
+        // serialise in one threadgroup).
         let tokensPerTile = narrow ? 8 : 32
         dispatch(
             rows: rows, tileRows: narrow ? Self.narrowTileRows : Self.wideTileRows,

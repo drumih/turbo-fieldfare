@@ -277,6 +277,13 @@ GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq3_xxs, GemmIQ3XXS, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q4_k, GemmQ4K, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q5_k, GemmQ5K, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q6_k, GemmQ6K, 32u)
+// 64-row 32-token tiles for dense projections at small chunks, where the
+// 128-row grid would leave the GPU short of threadgroups.
+GGUF_GEMM_TILED_KERNEL_BM(gemm_tiled_q8_0_m64, GemmQ8_0, 32u, 64u, GEMM_BK)
+GGUF_GEMM_TILED_KERNEL_BM(gemm_tiled_iq3_xxs_m64, GemmIQ3XXS, 32u, 64u, GEMM_BK)
+GGUF_GEMM_TILED_KERNEL_BM(gemm_tiled_q4_k_m64, GemmQ4K, 32u, 64u, GEMM_BK)
+GGUF_GEMM_TILED_KERNEL_BM(gemm_tiled_q5_k_m64, GemmQ5K, 32u, 64u, GEMM_BK)
+GGUF_GEMM_TILED_KERNEL_BM(gemm_tiled_q6_k_m64, GemmQ6K, 32u, 64u, GEMM_BK)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq1_s, GemmIQ1S, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xxs, GemmIQ2XXS, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq2_xs, GemmIQ2XS, 32u)
