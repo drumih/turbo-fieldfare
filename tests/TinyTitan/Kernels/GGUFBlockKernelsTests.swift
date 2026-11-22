@@ -414,3 +414,83 @@ extension GGUFBlockKernelsTests {
                 tokens, median * 1e3, 2.0 * Double(rows * columns * tokens) / median / 1e9))
     }
 }
+
+extension GGUFBlockKernelsTests {
+    /// GPU ms of one routed layer at a chunk (8 distinct of 128 experts per
+    /// token; gate_up 2,304 -> 2 x 1,152, down 1,152 -> 2,304) for Q2_K_XL's
+    /// and Q4_K_XL's type pairs, with the weight bytes the experts hold, so a
+    /// tile that is decode- rather than bandwidth-bound shows as low GB/s.
+    @Test(
+        .enabled(if: benchmarkEnabled),
+        arguments: [
+            (GGUFType.nvfp4, GGUFType.nvfp4), (.iq2S, .q2_0), (.iq1S, .q2_0), (.iq2XXS, .nvfp4),
+        ], [64, 512])
+    func routedChunkBenchmark(types: (GGUFType, GGUFType), tokens: Int) throws {
+        let context = try MetalContext()
+        let gemm = try GGUFGemmTiled(context: context)
+        let device = context.device
+        let (experts, hidden, feedForward, slots) = (128, 2_304, 1_152, 8)
+        func expertBuffer(_ type: GGUFType, rows: Int, columns: Int) throws -> (MTLBuffer, Int) {
+            let stride = rows * columns / Int(type.blockSize) * Int(type.blockBytes)
+            let one = Self.blocks(type: type, rows: rows, columns: columns)
+            let buffer = try #require(device.makeBuffer(length: stride * experts))
+            one.withUnsafeBytes { raw in
+                guard let base = raw.baseAddress else { return }
+                for e in 0..<experts {
+                    buffer.contents().advanced(by: e * stride).copyMemory(
+                        from: base, byteCount: stride)
+                }
+            }
+            return (buffer, stride)
+        }
+        let (gateUp, gateUpStride) = try expertBuffer(
+            types.0, rows: 2 * feedForward, columns: hidden)
+        let (down, downStride) = try expertBuffer(types.1, rows: hidden, columns: feedForward)
+        let pairs = tokens * slots
+        let ids = try Self.buffer(
+            device, (0..<pairs).map { Int32(($0 % slots) * 16 + (($0 / slots) * 5) % 16) })
+        let tile = GGUFGemmTiled.expertTileTokens(pairs: pairs, experts: experts)
+        let lists = try #require(device.makeBuffer(length: experts * pairs * 4))
+        let counts = try #require(device.makeBuffer(length: experts * 4))
+        let x = try Self.buffer(device, Self.activation(tokens * hidden, seed: 2))
+        let act = try Self.buffer(device, Self.activation(pairs * feedForward, seed: 3))
+        let gateUpOut = try #require(device.makeBuffer(length: pairs * 2 * feedForward * 4))
+        let downOut = try #require(device.makeBuffer(length: pairs * hidden * 4))
+        var samples: [Double] = []
+        for _ in 0..<7 {
+            let commandBuffer = try #require(context.queue.makeCommandBuffer())
+            let encoder = try #require(commandBuffer.makeComputeCommandEncoder())
+            gemm.encodeGrouping(
+                ids: .init(ids), pairs: pairs, experts: experts, lists: .init(lists),
+                counts: .init(counts), listStride: pairs,
+                barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
+            encoder.memoryBarrier(scope: .buffers)
+            try gemm.encodeExperts(
+                type: types.0, weights: .init(gateUp), rows: 2 * feedForward, columns: hidden,
+                experts: experts, expertStride: gateUpStride, maxPairsPerExpert: tokens,
+                xDivisor: slots, x: .init(x), y: .init(gateUpOut), lists: .init(lists),
+                counts: .init(counts), scales: nil, listStride: pairs, tileTokens: tile,
+                encoder: encoder)
+            encoder.memoryBarrier(scope: .buffers)
+            try gemm.encodeExperts(
+                type: types.1, weights: .init(down), rows: hidden, columns: feedForward,
+                experts: experts, expertStride: downStride, maxPairsPerExpert: tokens,
+                xDivisor: 1, x: .init(act), y: .init(downOut), lists: .init(lists),
+                counts: .init(counts), scales: nil, listStride: pairs, tileTokens: tile,
+                encoder: encoder)
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            samples.append(commandBuffer.gpuEndTime - commandBuffer.gpuStartTime)
+        }
+        let median = samples.sorted()[3]
+        let bytes = Double((gateUpStride + downStride) * experts)
+        print(
+            String(
+                format:
+                    "routed %@/%@ T=%d tile=%d: %.3f ms, %.1f GB/s of expert weights, x48 = %.0f ms",
+                types.0.name, types.1.name, tokens, tile, median * 1e3, bytes / median / 1e9,
+                median * 48e3))
+        #expect(median > 0)
+    }
+}

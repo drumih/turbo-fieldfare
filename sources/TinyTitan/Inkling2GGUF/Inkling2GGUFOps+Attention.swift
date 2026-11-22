@@ -204,12 +204,11 @@ extension Inkling2GGUFOps {
                     counts: grouping.counts, listStride: pairs,
                     barrier: { encoder.memoryBarrier(scope: .buffers) }, encoder: encoder)
                 order(encoder)
-                try gemm.encodeExperts(
+                try expertsChunk(
                     type: gateUp.type, weights: gateUp.operand, rows: 2 * feedForward,
                     columns: hidden, experts: experts, expertStride: gateUpStride,
-                    maxPairsPerExpert: tokens, xDivisor: used, x: input, y: gateUpOut,
-                    lists: grouping.lists, counts: grouping.counts, scales: gateUpScale,
-                    listStride: pairs, tileTokens: tile, encoder: encoder)
+                    tokens: tokens, xDivisor: used, x: input, y: gateUpOut, grouping: grouping,
+                    scales: gateUpScale, pairs: pairs, tile: tile, encoder: encoder)
             }
         }
         try situ(gateUp: gateUpOut, act: activation, args: situArgs, encoder: encoder)
@@ -223,13 +222,29 @@ extension Inkling2GGUFOps {
                 weights: down.operand, x: activation, y: downOut, ids: ids, scales: downScale,
                 encoder: encoder)
         } else {
-            try gemm.encodeExperts(
+            try expertsChunk(
                 type: down.type, weights: down.operand, rows: hidden, columns: feedForward,
-                experts: experts, expertStride: downStride, maxPairsPerExpert: tokens,
-                xDivisor: 1, x: activation, y: downOut, lists: grouping.lists,
-                counts: grouping.counts, scales: downScale, listStride: pairs,
-                tileTokens: tile, encoder: encoder)
+                experts: experts, expertStride: downStride, tokens: tokens, xDivisor: 1,
+                x: activation, y: downOut, grouping: grouping, scales: downScale,
+                pairs: pairs, tile: tile, encoder: encoder)
         }
+    }
+
+    /// One expert matrix over a chunk's grouped pairs on the tiled GEMM. (A
+    /// register kernel without threadgroup staging, for experts holding few
+    /// pairs, measured 6x slower at pp64: every row group re-read the tokens'
+    /// activations.)
+    private func expertsChunk(
+        type: GGUFType, weights: Operand, rows: Int, columns: Int, experts: Int,
+        expertStride: Int, tokens: Int, xDivisor: Int, x: Operand, y: Operand,
+        grouping: (lists: Operand, counts: Operand), scales: Operand?, pairs: Int, tile: Int,
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        try gemm.encodeExperts(
+            type: type, weights: weights, rows: rows, columns: columns, experts: experts,
+            expertStride: expertStride, maxPairsPerExpert: tokens, xDivisor: xDivisor, x: x,
+            y: y, lists: grouping.lists, counts: grouping.counts, scales: scales,
+            listStride: pairs, tileTokens: tile, encoder: encoder)
     }
 
     func situ(

@@ -24,8 +24,10 @@ final class GGUFGemmTiled {
         .q8_0, .nvfp4, .f32, .bf16, .iq3XXS, .q4K, .q5K, .q6K, .iq1S, .iq2XXS, .iq2XS, .iq2S,
         .q2_0, .mxfp4,
     ]
-    private static let tileRows = 64
-    private static let tileTokens = 32
+    /// Row tiles: `GEMM_WIDE_ROWS` for the 32-token kernels, 64 for the
+    /// 8-token ones (gguf_gemm_tiled.metal).
+    static let wideTileRows = 128
+    static let narrowTileRows = 64
 
     private var pipelines: [GGUFType: MTLComputePipelineState] = [:]
     private var narrowPipelines: [GGUFType: MTLComputePipelineState] = [:]
@@ -86,7 +88,9 @@ final class GGUFGemmTiled {
             rows: UInt32(rows), columns: UInt32(columns), tokens: UInt32(tokens),
             expertStride: 0, listStride: 0, xDivisor: 1, indirect: 0, useScale: 0)
         bind(weights: weights, x: x, y: y, lists: x, counts: x, scales: x, args: &args, encoder)
-        dispatch(rows: rows, tokenTiles: (tokens + 31) / 32, experts: 1, encoder)
+        dispatch(
+            rows: rows, tileRows: Self.wideTileRows, tokenTiles: (tokens + 31) / 32, experts: 1,
+            encoder)
     }
 
     /// Expert-grouped GEMM: for every pair `p` in expert `e`'s list,
@@ -100,6 +104,7 @@ final class GGUFGemmTiled {
         lists: Operand, counts: Operand, scales: Operand?, listStride: Int? = nil,
         tileTokens: Int = 32, encoder: MTLComputeCommandEncoder
     ) throws {
+        let narrow = tileTokens == 8 && narrowPipelines[type] != nil
         encoder.setComputePipelineState(
             try pipeline(type, columns: columns, tileTokens: tileTokens))
         var args = Args(
@@ -110,8 +115,10 @@ final class GGUFGemmTiled {
         bind(
             weights: weights, x: x, y: y, lists: lists, counts: counts, scales: scales ?? counts,
             args: &args, encoder)
+        let tokensPerTile = narrow ? 8 : 32
         dispatch(
-            rows: rows, tokenTiles: (maxPairsPerExpert + tileTokens - 1) / tileTokens,
+            rows: rows, tileRows: narrow ? Self.narrowTileRows : Self.wideTileRows,
+            tokenTiles: (maxPairsPerExpert + tokensPerTile - 1) / tokensPerTile,
             experts: experts, encoder)
     }
 
@@ -158,11 +165,12 @@ final class GGUFGemmTiled {
     }
 
     private func dispatch(
-        rows: Int, tokenTiles: Int, experts: Int, _ encoder: MTLComputeCommandEncoder
+        rows: Int, tileRows: Int, tokenTiles: Int, experts: Int,
+        _ encoder: MTLComputeCommandEncoder
     ) {
         encoder.dispatchThreadgroups(
             MTLSize(
-                width: (rows + Self.tileRows - 1) / Self.tileRows, height: max(tokenTiles, 1),
+                width: (rows + tileRows - 1) / tileRows, height: max(tokenTiles, 1),
                 depth: experts),
             threadsPerThreadgroup: MTLSize(width: 128, height: 1, depth: 1))
     }
