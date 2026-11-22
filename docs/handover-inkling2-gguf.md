@@ -50,13 +50,21 @@ llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
   operand tiles as contiguous 8 × 8 blocks (llama.cpp's layout, stride-8
   loads), and 64-row dense tiles when the 128-row grid is small (`3aed86af`).
 
-**What is left at pp64.** The routed experts are ~0.40 s of ~0.60 s. The
-8-token tile costs ~11 ms per routed layer whatever the weight type, and
-every alternative measured slower: 8-token tiles of 32 or 128 rows or BK 128,
-a register kernel (6×), a staged-activation kernel (5×), register prefetch
-in the K loop; a looping grid sized from the average helped evenly routed
-benchmarks but lost 4% on the real, skewed routing. (The M3 has no Metal-4
-tensor ops, so llama.cpp runs the same simdgroup arrangement here.)
+**What is left at pp64** (after `ef6d205e`: Q2_K_XL 108.1–108.4 tok/s,
+Q4_K_XL 105.1–106.0, single runs, against llama.cpp's 85.7–92.7, so
+1.17–1.26× and 1.13–1.24× depending on llama's round; ≥1.25× against its best
+round needs ~116). Measured limits:
+- the dense projections at T=64 run 2.1–2.3 TF/s, the simdgroup-MMA rate
+  this M3 reaches anywhere (no Metal-4 tensor ops here; llama.cpp uses the
+  same instructions), i.e. compute-bound, not bandwidth-bound;
+- the routed experts (~380 ms of ~600) run the 8-token tile at ~11 ms per
+  layer for ~16 GFLOP (8 padded tokens per expert at ~4 real): decode of the
+  64 x 64 weight tile per K step is fixed, and an MMA tile cannot be narrower
+  than 8 tokens. Measured slower: 8-token tiles of 32 or 128 rows or BK 128, a
+  register kernel (6×), a staged-activation kernel (5×), register prefetch, a
+  looping grid (−4% on real routing), 8-token tiles for dense projections;
+- the rest (~100 ms: mixes, convolutions, controllers, routing, elementwise)
+  would have to roughly halve to close the gap.
 
 **Ablation trap:** skipping any category upstream of the router (`router`,
 `smallGemv`, `rms`, `control`, `mix`, `attention`) changes which experts run,
@@ -226,12 +234,14 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 
 ## What is missing — the plan
 
-1. **pp64 to 1.25×** (≥ ~115 tok/s; now 102–107) and Q2_K_XL pp512 the last
-   few percent. The lever is the 8-token expert tile at ~4 pairs per expert;
-   the variants above are measured and rejected. Untried: splitting K across
-   two threadgroups per expert tile (more parallel work per expert at small
-   chunks, a reduction after), and fusing gate_up's SiTU into the down GEMM's
-   activation load.
+1. **pp64 to 1.25×** (≥ ~116 tok/s against llama's best round; now
+   105–108) and Q2_K_XL pp512 the last few percent. Limits above. Untried:
+   fusing gate_up's SiTU into the down GEMM's activation load, and fusing the
+   depth mixes/convolutions of a visit (the ~100 ms of non-matrix ops). Split-K
+   expert tiles would add parallelism, which T=64 does not lack (~4,600 active
+   threadgroups per routed GEMM). `TINYTITAN_INKLING2_SKIP` with `router` now
+   freezes expert ids after a first full run, but every visit then reuses the
+   last layer's ids, so treat those numbers as rough.
 2. **Decode headroom:** the 1–2-bit expert GEMVs sit at a ~0.22 ms floor
    (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
    memory, with more rows per threadgroup to amortise the copy.
