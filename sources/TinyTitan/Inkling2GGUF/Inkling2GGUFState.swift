@@ -100,7 +100,8 @@ final class Inkling2GGUFState {
         attention = try buffer(t * attentionWidth * 4, "attention")
         dynamicK = try buffer(t * m.convolutionTaps * layer.kvHeads * 4, "dynamic K")
         dynamicV = try buffer(t * m.convolutionTaps * layer.kvHeads * 4, "dynamic V")
-        controlHidden = try buffer(t * m.loopGateRank * 4, "control hidden")
+        // One slice per concurrent attention-side controller (attn, K, V).
+        controlHidden = try buffer(3 * t * m.loopGateRank * 4, "control hidden")
         controlJoined = try buffer(t * 2 * m.hidden * 4, "control input")
         routerLogits = try buffer(t * m.expertCount * 4, "router logits")
         let pairs = t * m.expertsPerToken

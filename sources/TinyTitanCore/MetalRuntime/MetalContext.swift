@@ -130,6 +130,7 @@ public final class MetalContext: @unchecked Sendable {
         "gguf_block_decoders",
         "gguf_gemm_tiled",
         "depth_decode_ops",
+        "depth_decode_dense",
         "depth_decode_attention",
         "ple_iq",
     ]
@@ -152,6 +153,7 @@ public final class MetalContext: @unchecked Sendable {
         "gguf_block_decoders": "Metal/Quant",
         "gguf_gemm_tiled": "Metal/Quant",
         "depth_decode_ops": "Metal/Primitives",
+        "depth_decode_dense": "Metal/Primitives",
         "depth_decode_attention": "Metal/Primitives",
         "ple_iq": "Metal/Prefill",
         "bf16_gemv": "Metal/Quant",

@@ -51,16 +51,33 @@ extension Inkling2GGUFDecoder {
             inputs = sliding ? [mixed, mixed, mixed] : [mixed, mixed + 1, mixed + 2]
         }
         if messages[0] != nil {
-            for j in 0..<3 {
-                guard let message = messages[j] else { continue }
-                let out = try rows(1)
-                try ops.control(
-                    cur: row(inputs[j]), message: row(message), down: layer.loopDown[j],
-                    gain: layer.loopGain[j], forget: layer.loopForget[j],
-                    joined: scratch(s.controlJoined), h: scratch(s.controlHidden), out: row(out),
-                    width: hidden, tokens: tokens, encoder: e)
-                inputs[j] = out
+            // The attention, K and V controllers are independent: their down
+            // projections share one barrier, then their applies another.
+            let controlled = (0..<3).filter { messages[$0] != nil }
+            let outs = try controlled.map { _ in try rows(1) }
+            let sliceBytes = s.maxChunk * manifest.loopGateRank * 4
+            func slice(_ j: Int) -> Operand { .init(s.controlHidden, offset: j * sliceBytes) }
+            func downs() throws {
+                for j in controlled {
+                    guard let message = messages[j] else { continue }
+                    try ops.controlDown(
+                        cur: row(inputs[j]), message: row(message), down: layer.loopDown[j],
+                        h: slice(j), joined: scratch(s.controlJoined), width: hidden,
+                        tokens: tokens, encoder: e)
+                }
             }
+            if tokens == 1 { try ops.concurrent(e, downs) } else { try downs() }
+            func applies() throws {
+                for (k, j) in controlled.enumerated() {
+                    guard let message = messages[j] else { continue }
+                    try ops.controlApply(
+                        cur: row(inputs[j]), message: row(message), h: slice(j),
+                        gain: layer.loopGain[j], forget: layer.loopForget[j], out: row(outs[k]),
+                        width: hidden, tokens: tokens, encoder: e)
+                }
+            }
+            try ops.concurrent(e, applies)
+            for (k, j) in controlled.enumerated() { inputs[j] = outs[k] }
         }
         if sliding, messages[0] != nil {
             var normed: [Int] = []
@@ -180,11 +197,14 @@ extension Inkling2GGUFDecoder {
         if let message {
             let mixed = try mix(blocks + [ffnInput], query: layer.ffnResQuery.operand, count: 1, e)
             let controlled = try rows(1)
-            try ops.control(
+            try ops.controlDown(
                 cur: row(mixed), message: row(message), down: layer.loopDown[3],
-                gain: layer.loopGain[3], forget: layer.loopForget[3],
-                joined: scratch(s.controlJoined), h: scratch(s.controlHidden),
-                out: row(controlled), width: hidden, tokens: tokens, encoder: e)
+                h: scratch(s.controlHidden), joined: scratch(s.controlJoined), width: hidden,
+                tokens: tokens, encoder: e)
+            try ops.controlApply(
+                cur: row(mixed), message: row(message), h: scratch(s.controlHidden),
+                gain: layer.loopGain[3], forget: layer.loopForget[3], out: row(controlled),
+                width: hidden, tokens: tokens, encoder: e)
             moeInput = try rmsInto(controlled, layer.ffnNorm, e)
         } else {
             moeInput = try mix(

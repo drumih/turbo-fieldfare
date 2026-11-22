@@ -368,3 +368,49 @@ extension GGUFBlockKernelsTests {
         }
     }
 }
+
+extension GGUFBlockKernelsTests {
+    /// GPU ms and GFLOP/s of the small-rows f32 GEMM over a chunk at the
+    /// controller (64 x 4,608) and router (128 x 2,304) shapes, through
+    /// `Inkling2GGUFOps.gemv`, against the host result.
+    @Test(arguments: [(64, 4_608, 512), (128, 2_304, 512), (24, 2_304, 37)])
+    func smallRowsChunkGemm(rows: Int, columns: Int, tokens: Int) throws {
+        let context = try MetalContext()
+        let ops = try Inkling2GGUFOps(context: context)
+        let device = context.device
+        let w = Self.activation(rows * columns, seed: 5)
+        let x = Self.activation(tokens * columns, seed: 9)
+        let wb = try Self.buffer(device, w)
+        let tensor = Inkling2GGUFTensor(
+            operand: .init(wb), type: .f32, rows: rows, columns: columns, byteCount: w.count * 4)
+        let xb = try Self.buffer(device, x)
+        let y = try #require(device.makeBuffer(length: tokens * rows * 4))
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            let commandBuffer = try #require(context.queue.makeCommandBuffer())
+            let encoder = try #require(commandBuffer.makeComputeCommandEncoder())
+            for _ in 0..<10 {
+                try ops.gemv(tensor, x: .init(xb), y: .init(y), tokens: tokens, encoder: encoder)
+            }
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            samples.append((commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) / 10)
+        }
+        let got = Self.floats(y, tokens * rows)
+        for t in Swift.stride(from: 0, to: tokens, by: 7) {
+            for r in 0..<rows {
+                var want = 0.0
+                for c in 0..<columns {
+                    want += Double(w[r * columns + c]) * Double(x[t * columns + c])
+                }
+                #expect(abs(Double(got[t * rows + r]) - want) <= 1e-4 * max(1, abs(want)))
+            }
+        }
+        let median = samples.sorted()[2]
+        print(
+            String(
+                format: "small-rows GEMM %dx%d x%d tokens: %.3f ms, %.1f GFLOP/s", rows, columns,
+                tokens, median * 1e3, 2.0 * Double(rows * columns * tokens) / median / 1e9))
+    }
+}

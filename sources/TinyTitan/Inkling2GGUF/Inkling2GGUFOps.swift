@@ -53,8 +53,9 @@ final class Inkling2GGUFOps {
         gemvBlocks = try GGUFGemvBlocks(context: context, tables: gemm.tables)
         for name in [
             "embed_q8_0_row", "embed_iq4_xs_row", "rms_norm_rows", "dense_gemv_f32_bf16",
+            "dense_gemv_wide_rows", "dense_gemm_small_rows", "control_join",
             "depth_mix",
-            "control_join", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
+            "control_down", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
             "relative_attention_decode", "sigmoid_topk", "situ_activation",
             "argmax_partial", "argmax_final",
         ] {
@@ -145,9 +146,8 @@ final class Inkling2GGUFOps {
     ) throws {
         let category = [.f32, .bf16].contains(weight.type) ? "smallGemv" : "projection"
         if skipped.contains(category) { return }
-        // Small f32/bf16 matrices stay on the GEMV at a chunk too (one SIMD
-        // group per row and token): their few row tiles would starve the
-        // tiled GEMM (a 128-row router is 2 row tiles).
+        // Small f32/bf16 matrices stay off the tiled GEMM at a chunk: their
+        // few row tiles would starve it (a 128-row router is 2 row tiles).
         let smallDense = [.f32, .bf16].contains(weight.type) && weight.rows < 512
         if tokens > 1, !smallDense {
             try requireSequential("prefill GEMM")
@@ -157,9 +157,14 @@ final class Inkling2GGUFOps {
                 columns: weight.columns, tokens: tokens, x: x, y: y, encoder: encoder)
             return
         }
+        let small = [.f32, .bf16].contains(weight.type)
         switch weight.type {
+        case _ where small && tokens > 1 && weight.columns % 4 == 0:
+            try smallRowsGemm(weight, x: x, y: y, tokens: tokens, encoder: encoder)
         case .f32, .bf16:
-            try pipeline("dense_gemv_f32_bf16", encoder)
+            // Under 256 rows, a threadgroup per row keeps the GPU filled.
+            let wide = weight.rows < 256 && weight.columns % 4 == 0
+            try pipeline(wide ? "dense_gemv_wide_rows" : "dense_gemv_f32_bf16", encoder)
             set(weight.operand, 0, encoder)
             set(x, 1, encoder)
             set(y, 2, encoder)
@@ -167,7 +172,8 @@ final class Inkling2GGUFOps {
             encoder.setBytes(&shape, length: 8, index: 3)
             var bf16: UInt32 = weight.type == .bf16 ? 1 : 0
             encoder.setBytes(&bf16, length: 4, index: 4)
-            groups((weight.rows + 3) / 4, tokens: tokens, threads: 128, encoder)
+            groups(
+                wide ? weight.rows : (weight.rows + 3) / 4, tokens: tokens, threads: 128, encoder)
         default:
             order(encoder)
             try gemvSlots(
@@ -177,6 +183,30 @@ final class Inkling2GGUFOps {
                 weights: weight.operand, x: x, y: y, ids: .init(zeroID), scales: nil,
                 encoder: encoder)
         }
+    }
+
+    /// y[t] = W . x[t] over a chunk for a small f32/bf16 W (any row count;
+    /// columns % 4 == 0): 8-row x 32-token register tiles, so W is read once
+    /// per token tile instead of once per token.
+    func smallRowsGemm(
+        _ weight: Inkling2GGUFTensor, x: Operand, y: Operand, tokens: Int,
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        guard [.f32, .bf16].contains(weight.type), weight.columns % 4 == 0 else {
+            throw MetalError.invalidState(
+                "small-rows GEMM: \(weight.type.name) x \(weight.columns) columns")
+        }
+        try pipeline("dense_gemm_small_rows", encoder)
+        set(weight.operand, 0, encoder)
+        set(x, 1, encoder)
+        set(y, 2, encoder)
+        var shape = (UInt32(weight.rows), UInt32(weight.columns))
+        encoder.setBytes(&shape, length: 8, index: 3)
+        var bf16: UInt32 = weight.type == .bf16 ? 1 : 0
+        encoder.setBytes(&bf16, length: 4, index: 4)
+        var count = UInt32(tokens)
+        encoder.setBytes(&count, length: 4, index: 5)
+        groups((weight.rows + 7) / 8 * ((tokens + 31) / 32), threads: 128, encoder)
     }
 
     /// The decode GEMV over `shape.slots` expert slots, on the dedicated
@@ -268,23 +298,54 @@ final class Inkling2GGUFOps {
         groups(queryCount, tokens: tokens, threads: 1_024, encoder)
     }
 
-    /// out = loop message controller(cur, message) for every token. `joined`
-    /// holds tokens x 2 * width floats and `h` tokens x rank.
-    func control(
-        cur: Operand, message: Operand, down: Inkling2GGUFTensor, gain: Inkling2GGUFTensor,
-        forget: Inkling2GGUFTensor, joined: Operand, h: Operand, out: Operand, width: Int,
-        tokens: Int, encoder: MTLComputeCommandEncoder
+    /// h = the loop controller's rank-`down.rows` projection of
+    /// [rms(cur), rms(message)] for every token (`h` holds tokens x rank).
+    /// At one token, one dispatch with no internal dependency (it may join a
+    /// group); a chunk joins into `joined` and runs the small-rows GEMM.
+    func controlDown(
+        cur: Operand, message: Operand, down: Inkling2GGUFTensor, h: Operand,
+        joined: Operand? = nil, width: Int, tokens: Int, encoder: MTLComputeCommandEncoder
     ) throws {
-        try requireSequential("control")
         if skipped.contains("control") { return }
+        guard down.type == .f32, down.columns == 2 * width else {
+            throw GGUFDequantError.unsupportedType("loop controller down \(down.type.name)")
+        }
         var args = ControlArgs(width: UInt32(width), rank: UInt32(down.rows), epsilon: 1e-6)
-        try pipeline("control_join", encoder)
+        if tokens > 1 {
+            guard let joined else {
+                throw MetalError.invalidState("a chunk's controller needs the join scratch")
+            }
+            try requireSequential("chunk controller")
+            try pipeline("control_join", encoder)
+            set(cur, 0, encoder)
+            set(message, 1, encoder)
+            set(joined, 2, encoder)
+            encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
+            groups(tokens, threads: 1_024, encoder)
+            try gemv(down, x: joined, y: h, tokens: tokens, encoder: encoder)
+            return
+        }
+        try pipeline("control_down", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
-        set(joined, 2, encoder)
-        encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 3)
-        groups(tokens, threads: 1_024, encoder)
-        try gemv(down, x: joined, y: h, tokens: tokens, encoder: encoder)
+        set(down.operand, 2, encoder)
+        set(h, 3, encoder)
+        encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 4)
+        groups(down.rows, tokens: tokens, threads: 256, encoder)
+    }
+
+    /// out = (1 - tanh(F . h)) * cur + tanh(G . h) * message for every token,
+    /// reading `controlDown`'s h. One dispatch; may join a group. (A chunk path
+    /// of two small-rows GEMMs and a combine matched it to 1e-6 but bought
+    /// nothing measurable at pp512 and moved a near-tie greedy token on
+    /// Q2_K_XL, so it was rejected.)
+    func controlApply(
+        cur: Operand, message: Operand, h: Operand, gain: Inkling2GGUFTensor,
+        forget: Inkling2GGUFTensor, out: Operand, width: Int, tokens: Int,
+        encoder: MTLComputeCommandEncoder
+    ) throws {
+        if skipped.contains("control") { return }
+        var args = ControlArgs(width: UInt32(width), rank: UInt32(gain.columns), epsilon: 1e-6)
         try pipeline("control_apply", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
