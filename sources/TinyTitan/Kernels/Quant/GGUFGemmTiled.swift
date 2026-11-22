@@ -47,10 +47,20 @@ final class GGUFGemmTiled {
     init(context: MetalContext) throws {
         let wide: [(GGUFType, String)] = [
             (.q8_0, "q8_0"), (.nvfp4, "nvfp4"), (.f32, "f32"), (.bf16, "bf16"),
+            (.iq3XXS, "iq3_xxs"), (.q4K, "q4_k"), (.q5K, "q5_k"), (.q6K, "q6_k"),
             (.iq1S, "iq1_s"), (.iq2XXS, "iq2_xxs"), (.iq2XS, "iq2_xs"), (.iq2S, "iq2_s"),
             (.q2_0, "q2_0"), (.mxfp4, "mxfp4"),
         ]
         for (type, name) in wide { pipelines[type] = try context.pipeline("gemm_tiled_\(name)") }
+        // Every supported type must have its 32-token kernel: the small-grid
+        // and 8-token paths cover only some shapes, so a gap here shows up only
+        // on large chunks.
+        guard Set(pipelines.keys) == Self.supported else {
+            throw MetalError.invalidState(
+                "tiled GEMM: no 32-token kernel for "
+                    + Self.supported.subtracting(pipelines.keys).map(\.name).sorted()
+                    .joined(separator: ", "))
+        }
         let narrow: [(GGUFType, String)] = [
             (.q8_0, "q8_0"), (.nvfp4, "nvfp4"), (.iq1S, "iq1_s"), (.iq2XXS, "iq2_xxs"),
             (.iq2XS, "iq2_xs"), (.iq2S, "iq2_s"), (.q2_0, "q2_0"), (.mxfp4, "mxfp4"),

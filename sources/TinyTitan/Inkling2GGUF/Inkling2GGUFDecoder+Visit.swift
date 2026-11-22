@@ -24,10 +24,12 @@ extension Inkling2GGUFDecoder {
             message: messages[3], e)
     }
 
-    /// Mutually independent dispatches: one concurrent group at decode; at
-    /// prefill the tiled GEMMs order themselves, so they run in sequence.
+    /// Mutually independent dispatches (each projection is one dispatch, a
+    /// GEMV at decode and a tiled or small-rows GEMM at a chunk): one
+    /// concurrent group, so the small K/V/rel/sink GEMMs of a chunk share the
+    /// GPU with Q and the gate instead of each running alone.
     private func independent(_ e: MTLComputeCommandEncoder, _ body: () throws -> Void) throws {
-        if tokens == 1 { try ops.concurrent(e, body) } else { try body() }
+        try ops.concurrent(e, body)
     }
 
     /// The three attention inputs (Q, K, V): depth-mixed, loop-controlled and

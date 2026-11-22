@@ -157,12 +157,14 @@ import Testing
         }
     }
 
-    @Test(arguments: gemmTypes)
-    func tiledDenseMatchesHostDecode(type: GGUFType) throws {
+    /// 70 rows x 37 tokens takes the 64-row kernels (a small grid); 3,000 x 200
+    /// (24 x 7 = 168 groups of 128-row tiles) reaches the 128-row 32-token
+    /// kernels. Partial tiles in both directions either way.
+    @Test(arguments: gemmTypes, [(70, 37), (3_000, 200)])
+    func tiledDenseMatchesHostDecode(type: GGUFType, shape: (rows: Int, tokens: Int)) throws {
         let context = try MetalContext()
         let gemm = try GGUFGemmTiled(context: context)
-        // 70 rows and 37 tokens leave partial tiles in both directions.
-        let (rows, columns, tokens) = (70, 512, 37)
+        let (rows, columns, tokens) = (shape.rows, 512, shape.tokens)
         let bytes = Self.blocks(type: type, rows: rows, columns: columns)
         let decoded = try GGUFDequant.decode(type: type, bytes: bytes)
         let x = Self.activation(tokens * columns, seed: 3)
@@ -373,7 +375,9 @@ extension GGUFBlockKernelsTests {
     /// GPU ms and GFLOP/s of the small-rows f32 GEMM over a chunk at the
     /// controller (64 x 4,608) and router (128 x 2,304) shapes, through
     /// `Inkling2GGUFOps.gemv`, against the host result.
-    @Test(arguments: [(64, 4_608, 512), (128, 2_304, 512), (24, 2_304, 37)])
+    @Test(arguments: [
+        (64, 4_608, 512), (128, 2_304, 512), (24, 2_304, 37), (64, 4_608, 64), (128, 2_304, 64),
+    ])
     func smallRowsChunkGemm(rows: Int, columns: Int, tokens: Int) throws {
         let context = try MetalContext()
         let ops = try Inkling2GGUFOps(context: context)
@@ -635,5 +639,43 @@ extension GGUFBlockKernelsTests {
         }
         print("chunk attention ring=\(ring): max |error| \(worst)")
         #expect(worst < 1e-4)
+    }
+}
+
+extension GGUFBlockKernelsTests {
+    /// A chunk's controller apply (rows reused across 16-token blocks) is bit
+    /// identical to the one-token kernel run token by token.
+    @Test func chunkControllerApplyIsBitIdentical() throws {
+        let context = try MetalContext()
+        let ops = try Inkling2GGUFOps(context: context)
+        let device = context.device
+        let (width, rank, tokens) = (2_304, 64, 37)
+        func tensor(_ rows: Int, _ columns: Int, _ seed: Int) throws -> Inkling2GGUFTensor {
+            let v = Self.activation(rows * columns, seed: seed).map { $0 * 0.07 }
+            return Inkling2GGUFTensor(
+                operand: .init(try Self.buffer(device, v)), type: .f32, rows: rows,
+                columns: columns, byteCount: v.count * 4)
+        }
+        let gain = try tensor(width, rank, 2)
+        let forget = try tensor(width, rank, 3)
+        let cur = try Self.buffer(device, Self.activation(tokens * width, seed: 4))
+        let message = try Self.buffer(device, Self.activation(tokens * width, seed: 5))
+        let h = try Self.buffer(device, Self.activation(tokens * rank, seed: 6).map { $0 * 4 })
+        let chunk = try #require(device.makeBuffer(length: tokens * width * 4))
+        let step = try #require(device.makeBuffer(length: tokens * width * 4))
+        try Self.run(context) { encoder in
+            try ops.controlApply(
+                cur: .init(cur), message: .init(message), h: .init(h), gain: gain,
+                forget: forget, out: .init(chunk), width: width, tokens: tokens, encoder: encoder)
+            for t in 0..<tokens {
+                try ops.controlApply(
+                    cur: .init(cur, offset: t * width * 4),
+                    message: .init(message, offset: t * width * 4),
+                    h: .init(h, offset: t * rank * 4), gain: gain, forget: forget,
+                    out: .init(step, offset: t * width * 4), width: width, tokens: 1,
+                    encoder: encoder)
+            }
+        }
+        #expect(Self.floats(chunk, tokens * width) == Self.floats(step, tokens * width))
     }
 }

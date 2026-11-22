@@ -230,3 +230,55 @@ kernel void control_apply(
     const uint at = token * args.width + index;
     if (lane == 0u) out[at] = (1.0f - tanh(f)) * cur[at] + tanh(g) * message[at];
 }
+
+// control_apply for a chunk, bit for bit: one SIMD group per (output index,
+// block of 16 tokens) loads its gain and forget rows once (lanes hold r = lane
+// and lane + 32, the per-token kernel's order) and reuses them for every token
+// of the block, with the same per-lane sums and simd_sum. The per-token kernel
+// re-read both 2,304 x 64 matrices for every token (~75 MB per controller at
+// 64 tokens). Needs rank <= 64; a flat grid of (width / 4) x token blocks,
+// 128 threads.
+constant constexpr uint CONTROL_TOKEN_BLOCK = 16u;
+
+kernel void control_apply_chunk(
+    device const float* cur [[buffer(0)]],
+    device const float* message [[buffer(1)]],
+    device const float* h [[buffer(2)]],
+    device const float* gain [[buffer(3)]],
+    device const float* forget [[buffer(4)]],
+    device float* out [[buffer(5)]],
+    constant DepthControlArgs& args [[buffer(6)]],
+    constant uint& tokens [[buffer(7)]],
+    uint groupIndex [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    const uint groupsPerBlock = (args.width + 3u) / 4u;
+    const uint index = (groupIndex % groupsPerBlock) * 4u + sg;
+    const uint token0 = (groupIndex / groupsPerBlock) * CONTROL_TOKEN_BLOCK;
+    if (index >= args.width) return;
+    const bool has0 = lane < args.rank;
+    const bool has1 = lane + 32u < args.rank;
+    const float g0 = has0 ? gain[index * args.rank + lane] : 0.0f;
+    const float g1 = has1 ? gain[index * args.rank + lane + 32u] : 0.0f;
+    const float f0 = has0 ? forget[index * args.rank + lane] : 0.0f;
+    const float f1 = has1 ? forget[index * args.rank + lane + 32u] : 0.0f;
+    const uint end = min(token0 + CONTROL_TOKEN_BLOCK, tokens);
+    for (uint token = token0; token < end; ++token) {
+        device const float* ht = h + token * args.rank;
+        float g = 0.0f;
+        float f = 0.0f;
+        if (has0) {
+            g += g0 * ht[lane];
+            f += f0 * ht[lane];
+        }
+        if (has1) {
+            g += g1 * ht[lane + 32u];
+            f += f1 * ht[lane + 32u];
+        }
+        g = simd_sum(g);
+        f = simd_sum(f);
+        const uint at = token * args.width + index;
+        if (lane == 0u) out[at] = (1.0f - tanh(f)) * cur[at] + tanh(g) * message[at];
+    }
+}

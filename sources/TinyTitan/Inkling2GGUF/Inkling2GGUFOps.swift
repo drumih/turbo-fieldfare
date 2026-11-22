@@ -53,7 +53,7 @@ final class Inkling2GGUFOps {
         gemvBlocks = try GGUFGemvBlocks(context: context, tables: gemm.tables)
         for name in [
             "embed_q8_0_row", "embed_iq4_xs_row", "rms_norm_rows", "dense_gemv_f32_bf16",
-            "dense_gemv_wide_rows", "dense_gemm_small_rows", "control_join",
+            "dense_gemv_wide_rows", "dense_gemm_small_rows", "control_join", "control_apply_chunk",
             "depth_mix",
             "control_down", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
             "relative_attention_decode", "relative_attention_chunk", "sigmoid_topk",
@@ -97,8 +97,8 @@ final class Inkling2GGUFOps {
 
     /// Encodes `body`'s dispatches after one barrier and without barriers
     /// between them: they must read only data written before the group and
-    /// write disjoint buffers. Multi-dispatch ops (control, route, the MoE,
-    /// argmax, and every prefill GEMM) may not appear inside a group.
+    /// write disjoint buffers. Multi-dispatch ops (route, the MoE, argmax,
+    /// and a chunk's controller down) may not appear inside a group.
     func concurrent(
         _ encoder: MTLComputeCommandEncoder, _ body: () throws -> Void
     ) rethrows {
@@ -151,7 +151,7 @@ final class Inkling2GGUFOps {
         // few row tiles would starve it (a 128-row router is 2 row tiles).
         let smallDense = [.f32, .bf16].contains(weight.type) && weight.rows < 512
         if tokens > 1, !smallDense {
-            try requireSequential("prefill GEMM")
+            // One dispatch, so it may join a concurrent group.
             order(encoder)
             try gemm.encodeDense(
                 type: weight.type, weights: weight.operand, rows: weight.rows,
@@ -348,6 +348,22 @@ final class Inkling2GGUFOps {
     ) throws {
         if skipped.contains("control") { return }
         var args = ControlArgs(width: UInt32(width), rank: UInt32(gain.columns), epsilon: 1e-6)
+        if tokens > 1, gain.columns <= 64 {
+            // A chunk: each SIMD group reuses its gain/forget rows across 16
+            // tokens; same per-lane order and simd_sum, so bit-identical.
+            try pipeline("control_apply_chunk", encoder)
+            set(cur, 0, encoder)
+            set(message, 1, encoder)
+            set(h, 2, encoder)
+            set(gain.operand, 3, encoder)
+            set(forget.operand, 4, encoder)
+            set(out, 5, encoder)
+            encoder.setBytes(&args, length: MemoryLayout<ControlArgs>.stride, index: 6)
+            var count = UInt32(tokens)
+            encoder.setBytes(&count, length: 4, index: 7)
+            groups((width + 3) / 4 * ((tokens + 15) / 16), threads: 128, encoder)
+            return
+        }
         try pipeline("control_apply", encoder)
         set(cur, 0, encoder)
         set(message, 1, encoder)
