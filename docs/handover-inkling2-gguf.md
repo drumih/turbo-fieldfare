@@ -163,8 +163,13 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
    (`q2kxl-reference.json`). The decoder refuses the file until then.
 3. **Front ends:** a tokenizer for the GGUF's `inkling2` BPE vocabulary, then
    the CLI and server routes (today the decoder takes token ids).
-4. **Prefill:** prompts run token by token; batch them (and measure the ANE)
-   once decode is done.
+4. **Prefill:** prompts run token by token. The ANE probe
+   (`docs/inkling2-ane-prefill-probe-2026-11-22.md`) says **go** for the dense
+   projections: 6–8 TF/s on the ANE, ~3× the GPU through Core ML, error
+   3.6e-4 (fp16 level), 100% ANE placement. Prerequisite: a batched GPU
+   prefill (chunk attention + batched expert GEMMs); then run the dense ~30%
+   of the FLOPs on the ANE concurrently. Probe Core ML block-wise int8 for an
+   exact Q8_0 representation before spending 1.29 GB on fp16 copies.
 5. **CPU/AMX:** only where a measurement shows the GPU waiting.
 
 ## Microbenchmark procedure
