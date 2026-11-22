@@ -156,10 +156,16 @@ static void gguf_gemm_tiled_impl(
     }
     device const float4* xs = (device const float4*)(
         x + ulong(xRow) * args.columns + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
-    threadgroup half4* sa4 = (threadgroup half4*)(
-        sa + (tid / THREADS_PER_ROW) * BK + (tid % THREADS_PER_ROW) * 16u);
-    threadgroup half4* sb4 = (threadgroup half4*)(
-        sb + (tid / THREADS_PER_TOKEN) * BK + (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u);
+    // Both tiles are stored as contiguous 8 x 8 blocks (llama.cpp's mul_mm
+    // layout), block (row or token block b, k block kb) at 64 * (kb * blocks + b),
+    // element (r, k) at 8 * r + k inside it, so simdgroup_load reads 128
+    // contiguous bytes with stride 8 instead of eight rows BK apart.
+    const uint aRow = tid / THREADS_PER_ROW;
+    const uint aColumn = (tid % THREADS_PER_ROW) * 16u;
+    threadgroup half* saRow = sa + (aRow / 8u) * 64u + (aRow % 8u) * 8u;
+    const uint bToken = tid / THREADS_PER_TOKEN;
+    const uint bColumn = (tid % THREADS_PER_TOKEN) * X4_PER_THREAD * 4u;
+    threadgroup half* sbRow = sb + (bToken / 8u) * 64u + (bToken % 8u) * 8u;
 
     simdgroup_float8x8 acc[ROW_TILES * TOKEN_TILES];
     for (uint i = 0u; i < ROW_TILES * TOKEN_TILES; ++i) {
@@ -177,24 +183,30 @@ static void gguf_gemm_tiled_impl(
             Decoder::decode(
                 matrix, rowBytes, loadRow,
                 k + (tid % THREADS_PER_ROW) * 16u + part * 16u * THREADS_PER_ROW, wv, tables);
+            const uint c = aColumn + part * 16u * THREADS_PER_ROW;
             for (uint j = 0u; j < 4u; ++j) {
-                sa4[part * 4u * THREADS_PER_ROW + j] =
+                const uint kc = c + 4u * j;
+                *(threadgroup half4*)(saRow + (kc / 8u) * (BM / 8u) * 64u + kc % 8u) =
                     half4(wv[4u * j], wv[4u * j + 1u], wv[4u * j + 2u], wv[4u * j + 3u]);
             }
         }
         for (uint j = 0u; j < X4_PER_THREAD; ++j) {
-            sb4[j] = tokenValid ? half4(xs[k / 4u + j]) : half4(0.0h);
+            const uint kc = bColumn + 4u * j;
+            *(threadgroup half4*)(sbRow + (kc / 8u) * (BN / 8u) * 64u + kc % 8u) =
+                tokenValid ? half4(xs[k / 4u + j]) : half4(0.0h);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         for (uint kk = 0u; kk < BK; kk += 8u) {
             simdgroup_half8x8 ma[ROW_TILES];
             simdgroup_half8x8 mb[TOKEN_TILES];
             for (uint i = 0u; i < ROW_TILES; ++i) {
-                simdgroup_load(ma[i], sa + (sgRow + 8u * i) * BK + kk, BK);
+                simdgroup_load(ma[i], sa + ((kk / 8u) * (BM / 8u) + sgRow / 8u + i) * 64u, 8);
             }
             for (uint i = 0u; i < TOKEN_TILES; ++i) {
-                // B is X^T: element (kk + a, token b) = sb[(token) * BK + kk + a].
-                simdgroup_load(mb[i], sb + (sgToken + 8u * i) * BK + kk, BK, ulong2(0, 0), true);
+                // B is X^T: block element (token b, k a) at 8 * b + a, loaded transposed.
+                simdgroup_load(
+                    mb[i], sb + ((kk / 8u) * (BN / 8u) + sgToken / 8u + i) * 64u, 8, ulong2(0, 0),
+                    true);
             }
             for (uint i = 0u; i < ROW_TILES; ++i) {
                 for (uint j = 0u; j < TOKEN_TILES; ++j) {

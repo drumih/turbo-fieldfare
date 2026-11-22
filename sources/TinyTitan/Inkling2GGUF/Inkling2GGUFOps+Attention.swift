@@ -131,7 +131,9 @@ extension Inkling2GGUFOps {
         step: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("attention") { return }
-        try pipeline("relative_attention_decode", encoder)
+        // A chunk runs the tiled kernel (16 queries x 16-key blocks on MMA).
+        let tiled = args.tokens > 1 && args.headDim == 128
+        try pipeline(tiled ? "relative_attention_chunk" : "relative_attention_decode", encoder)
         set(q, 0, encoder)
         encoder.setBuffer(kCache, offset: 0, index: 1)
         encoder.setBuffer(vCache, offset: 0, index: 2)
@@ -143,6 +145,10 @@ extension Inkling2GGUFOps {
         var copy = args
         encoder.setBytes(&copy, length: MemoryLayout<AttentionArgs>.stride, index: 8)
         set(gate, 9, encoder)
+        if tiled {
+            groups(Int(args.heads) * ((Int(args.tokens) + 15) / 16), threads: 128, encoder)
+            return
+        }
         // relative_attention_decode's partial[8][128] assumes eight SIMD groups.
         groups(Int(args.heads), tokens: Int(args.tokens), threads: 256, encoder)
     }

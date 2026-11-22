@@ -494,3 +494,146 @@ extension GGUFBlockKernelsTests {
         #expect(median > 0)
     }
 }
+
+extension GGUFBlockKernelsTests {
+    /// GPU ms of one chunk's attention (24 query / 8 KV heads of 128, the
+    /// whole chunk from position 0, no window), as the prefill runs it.
+    @Test(.enabled(if: benchmarkEnabled), arguments: [64, 512])
+    func chunkAttentionBenchmark(tokens: Int) throws {
+        let context = try MetalContext()
+        let ops = try Inkling2GGUFOps(context: context)
+        let device = context.device
+        let (heads, kvHeads, dim, capacity) = (24, 8, 128, 4_096)
+        func floats(_ count: Int, _ seed: Int) throws -> MTLBuffer {
+            try Self.buffer(device, Self.activation(count, seed: seed))
+        }
+        let halves = (0..<(capacity * kvHeads * dim)).map {
+            Float16(Float(($0 * 13) % 31) / 31 - 0.5)
+        }
+        let k = try Self.buffer(device, halves)
+        let v = try Self.buffer(device, halves.reversed())
+        let bias = try floats(16 * 1_024, 1)
+        let biasTensor = Inkling2GGUFTensor(
+            operand: .init(bias), type: .f32, rows: 1_024, columns: 16, byteCount: 16 * 1_024 * 4)
+        let q = try floats(tokens * heads * dim, 2)
+        let r = try floats(tokens * heads * 16, 3)
+        let sinks = try floats(tokens * heads, 4)
+        let gate = try floats(tokens * heads * dim, 5)
+        let out = try #require(device.makeBuffer(length: tokens * heads * dim * 4))
+        let step = try Self.buffer(device, [UInt32(0)])
+        let args = Inkling2GGUFOps.AttentionArgs(
+            heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(dim), relative: 16,
+            extent: 1_024, capacity: UInt32(capacity), ring: 0,
+            scale: 1 / Float(dim).squareRoot(), window: UInt32.max, tokens: UInt32(tokens))
+        var samples: [Double] = []
+        for _ in 0..<5 {
+            let commandBuffer = try #require(context.queue.makeCommandBuffer())
+            let encoder = try #require(commandBuffer.makeComputeCommandEncoder())
+            for _ in 0..<4 {
+                try ops.attention(
+                    q: .init(q), kCache: k, vCache: v, r: .init(r), relativeBias: biasTensor,
+                    sinks: .init(sinks), gate: .init(gate), out: .init(out), step: .init(step),
+                    args: args, encoder: encoder)
+            }
+            encoder.endEncoding()
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            samples.append((commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) / 4)
+        }
+        let median = samples.sorted()[2]
+        print(
+            String(
+                format: "chunk attention T=%d: %.3f ms, x48 = %.0f ms", tokens, median * 1e3,
+                median * 48e3))
+        #expect(median > 0)
+    }
+}
+
+extension GGUFBlockKernelsTests {
+    /// The tiled chunk attention against a CPU reference of the decode
+    /// kernel's definition: relative bias within the extent, unscaled bias and
+    /// sink, the sink's extra logit 0, sigmoid gate; a plain cache from
+    /// position 0, and a ring with a window and a non-zero start.
+    @Test(arguments: [false, true])
+    func chunkAttentionMatchesReference(ring: Bool) throws {
+        let context = try MetalContext()
+        let ops = try Inkling2GGUFOps(context: context)
+        let device = context.device
+        let (heads, kvHeads, dim, rank, extent, tokens) = (6, 2, 128, 16, 20, 37)
+        let capacity = ring ? 48 : 128
+        let start = ring ? 30 : 0
+        let window = ring ? 25 : 1 << 30
+        let last = start + tokens - 1
+        let slots = ring ? min(last + 1, capacity) : start + tokens
+        let kv = (0..<(capacity * kvHeads * dim)).map { Float(($0 * 29) % 37) / 37 - 0.5 }
+        let vv = (0..<(capacity * kvHeads * dim)).map { Float(($0 * 17) % 41) / 41 - 0.5 }
+        let qv = Self.activation(tokens * heads * dim, seed: 2)
+        let rv = Self.activation(tokens * heads * rank, seed: 3)
+        let bv = Self.activation(extent * rank, seed: 4)
+        let sv = Self.activation(tokens * heads, seed: 5)
+        let gv = Self.activation(tokens * heads * dim, seed: 6)
+        let kh = kv.map(Float16.init)
+        let vh = vv.map(Float16.init)
+        let out = try #require(device.makeBuffer(length: tokens * heads * dim * 4))
+        let args = Inkling2GGUFOps.AttentionArgs(
+            heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(dim),
+            relative: UInt32(rank), extent: UInt32(extent), capacity: UInt32(capacity),
+            ring: ring ? 1 : 0, scale: 1 / Float(dim).squareRoot(), window: UInt32(window),
+            tokens: UInt32(tokens))
+        try Self.run(context) { encoder in
+            try ops.attention(
+                q: .init(try Self.buffer(device, qv)), kCache: try Self.buffer(device, kh),
+                vCache: try Self.buffer(device, vh), r: .init(try Self.buffer(device, rv)),
+                relativeBias: Inkling2GGUFTensor(
+                    operand: .init(try Self.buffer(device, bv)), type: .f32, rows: extent,
+                    columns: rank, byteCount: bv.count * 4),
+                sinks: .init(try Self.buffer(device, sv)),
+                gate: .init(try Self.buffer(device, gv)), out: .init(out),
+                step: .init(try Self.buffer(device, [UInt32(start)])), args: args,
+                encoder: encoder)
+        }
+        let got = Self.floats(out, tokens * heads * dim)
+        var worst = 0.0
+        for t in 0..<tokens {
+            let position = start + t
+            for h in 0..<heads {
+                let g = h / (heads / kvHeads)
+                var logits: [(Int, Double)] = []
+                for j in 0..<slots {
+                    let held = ring ? last - (last + capacity - j) % capacity : j
+                    guard held <= position, position - held < window else { continue }
+                    let distance = position - held
+                    var dot = 0.0
+                    for e in 0..<dim {
+                        dot +=
+                            Double(qv[(t * heads + h) * dim + e])
+                            * Double(Float(kh[(j * kvHeads + g) * dim + e]))
+                    }
+                    var bias = 0.0
+                    if distance < extent {
+                        for e in 0..<rank {
+                            bias +=
+                                Double(rv[(t * heads + h) * rank + e])
+                                * Double(bv[distance * rank + e])
+                        }
+                    }
+                    logits.append(
+                        (j, dot / Double(dim).squareRoot() + bias - Double(sv[t * heads + h])))
+                }
+                let peak = max(0, logits.map(\.1).max() ?? 0)
+                let denominator = logits.reduce(exp(-peak)) { $0 + exp($1.1 - peak) }
+                for d in 0..<dim {
+                    var acc = 0.0
+                    for (j, l) in logits {
+                        acc += exp(l - peak) * Double(Float(vh[(j * kvHeads + g) * dim + d]))
+                    }
+                    let at = (t * heads + h) * dim + d
+                    let want = acc / denominator / (1 + exp(-Double(gv[at])))
+                    worst = max(worst, abs(Double(got[at]) - want))
+                }
+            }
+        }
+        print("chunk attention ring=\(ring): max |error| \(worst)")
+        #expect(worst < 1e-4)
+    }
+}

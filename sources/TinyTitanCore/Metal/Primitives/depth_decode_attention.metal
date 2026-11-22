@@ -127,6 +127,158 @@ kernel void relative_attention_decode(
     }
 }
 
+// The same attention for a prefill chunk, tiled: one threadgroup per (query
+// head, block of 16 chunk tokens), keys in blocks of 16. S = Q . K^T and
+// O += P . V run on fp32 simdgroup MMA; each query row keeps an online softmax
+// (max starting at the sink logit 0) exactly as relative_attention_decode,
+// with the same bias, sink, window and ring masking. The per-(head, token)
+// kernel re-read every key per query and dotted serially: 16.8 ms per
+// 512-token visit. Needs headDim == 128; 128 threads (four SIMD groups).
+constant constexpr uint ATTN_QB = 16u;   // queries per threadgroup
+constant constexpr uint ATTN_KB = 16u;   // keys per block
+constant constexpr uint ATTN_D = 128u;   // head dimension
+
+kernel void relative_attention_chunk(
+    device const float* q [[buffer(0)]],
+    device const half* kCache [[buffer(1)]],
+    device const half* vCache [[buffer(2)]],
+    device const float* r [[buffer(3)]],
+    device const float* relativeBias [[buffer(4)]],
+    device const float* sinks [[buffer(5)]],
+    device float* out [[buffer(6)]],
+    device const uint* step [[buffer(7)]],
+    constant DepthAttentionArgs& args [[buffer(8)]],
+    device const float* gate [[buffer(9)]],
+    uint groupIndex [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint sg [[simdgroup_index_in_threadgroup]])
+{
+    threadgroup float sRunning[ATTN_QB];
+    threadgroup float sTotal[ATTN_QB];
+    threadgroup float sQ[ATTN_QB * ATTN_D];
+    threadgroup float sKV[ATTN_KB * ATTN_D];   // K block, then V block
+    threadgroup float sO[ATTN_QB * ATTN_D];
+    threadgroup float sS[ATTN_QB * ATTN_KB];   // scores, then probabilities
+    threadgroup float sScale[ATTN_QB];
+    const uint head = groupIndex % args.heads;
+    const uint qBase = (groupIndex / args.heads) * ATTN_QB;
+    const uint kvHead = head / (args.heads / args.kvHeads);
+    const uint rowWidth = args.kvHeads * ATTN_D;
+    const uint qWidth = args.heads * ATTN_D;
+    const uint first = step[0];
+    const uint last = first + args.tokens - 1u;
+    const uint queries = min(ATTN_QB, args.tokens - qBase);
+    const uint newest = first + qBase + queries - 1u;
+    // Keys past the block's newest query are masked, so the scan stops there
+    // unless the ring has wrapped (then slot order is not position order).
+    const bool wrapped = args.ring != 0u && last + 1u > args.capacity;
+    const uint slots = wrapped ? args.capacity : newest + 1u;
+
+    for (uint i = tid; i < ATTN_QB * ATTN_D; i += 128u) {
+        const uint t = i / ATTN_D;
+        sQ[i] = t < queries ? q[(qBase + t) * qWidth + head * ATTN_D + i % ATTN_D] : 0.0f;
+        sO[i] = 0.0f;
+    }
+    // Row state: running max (from the sink's logit 0) and sum per query row.
+    if (tid < ATTN_QB) {
+        sRunning[tid] = 0.0f;
+        sTotal[tid] = 0.0f;
+    }
+    // Each thread scores (row tid / 16 + 8 * pass, key tid % 16): a row's 16
+    // keys are one half of a SIMD group, reduced with xor shuffles.
+    const uint key = tid % ATTN_KB;
+
+    for (uint keyBase = 0u; keyBase < slots; keyBase += ATTN_KB) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = tid; i < ATTN_KB * ATTN_D; i += 128u) {
+            const uint j = keyBase + i / ATTN_D;
+            sKV[i] = j < slots ? float(kCache[ulong(j) * rowWidth + kvHead * ATTN_D + i % ATTN_D]) : 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        {   // S tile (sg / 2, sg % 2) of the 16 x 16 scores.
+            const uint tr = (sg / 2u) * 8u;
+            const uint tc = (sg % 2u) * 8u;
+            simdgroup_float8x8 acc = make_filled_simdgroup_matrix<float, 8, 8>(0.0f);
+            for (uint d = 0u; d < ATTN_D; d += 8u) {
+                simdgroup_float8x8 mq;
+                simdgroup_float8x8 mk;
+                simdgroup_load(mq, sQ + tr * ATTN_D + d, ATTN_D);
+                simdgroup_load(mk, sKV + tc * ATTN_D + d, ATTN_D, ulong2(0, 0), true);
+                simdgroup_multiply_accumulate(acc, mq, mk, acc);
+            }
+            simdgroup_store(acc, sS + tr * ATTN_KB + tc, ATTN_KB);
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint pass = 0u; pass < 2u; ++pass) {
+            const uint row = tid / ATTN_KB + 8u * pass;
+            const uint rowToken = qBase + row;
+            const uint rowPosition = first + rowToken;
+            const uint j = keyBase + key;
+            float logit = -INFINITY;
+            if (row < queries && j < slots) {
+                const uint held = args.ring != 0u
+                    ? last - (last + args.capacity - j) % args.capacity : j;
+                if (held <= rowPosition && rowPosition - held < args.window) {
+                    const uint distance = rowPosition - held;
+                    float bias = 0.0f;
+                    if (distance < args.extent) {
+                        device const float* rh = r + (rowToken * args.heads + head) * args.relative;
+                        device const float* b = relativeBias + distance * args.relative;
+                        for (uint e = 0u; e < args.relative; ++e) bias += rh[e] * b[e];
+                    }
+                    logit = args.scale * sS[row * ATTN_KB + key] + bias
+                        - sinks[rowToken * args.heads + head];
+                }
+            }
+            float rowPeak = logit;
+            for (ushort m = 8u; m >= 1u; m >>= 1u) rowPeak = max(rowPeak, simd_shuffle_xor(rowPeak, m));
+            const float running = sRunning[row];
+            const float peak = max(running, rowPeak);
+            const float pr = exp(logit - peak);
+            float rowSum = pr;
+            for (ushort m = 8u; m >= 1u; m >>= 1u) rowSum += simd_shuffle_xor(rowSum, m);
+            sS[row * ATTN_KB + key] = pr;
+            if (key == 0u) {
+                const float rescale = exp(running - peak);
+                sTotal[row] = sTotal[row] * rescale + rowSum;
+                sRunning[row] = peak;
+                sScale[row] = rescale;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (uint i = tid; i < ATTN_KB * ATTN_D; i += 128u) {
+            const uint j = keyBase + i / ATTN_D;
+            sKV[i] = j < slots ? float(vCache[ulong(j) * rowWidth + kvHead * ATTN_D + i % ATTN_D]) : 0.0f;
+        }
+        for (uint i = tid; i < ATTN_QB * ATTN_D; i += 128u) sO[i] *= sScale[i / ATTN_D];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // O columns sg * 32 ..< + 32: 2 row tiles x 4 column tiles.
+        for (uint rt = 0u; rt < 2u; ++rt) {
+            for (uint ct = 0u; ct < 4u; ++ct) {
+                threadgroup float* o = sO + rt * 8u * ATTN_D + sg * 32u + ct * 8u;
+                simdgroup_float8x8 acc;
+                simdgroup_load(acc, o, ATTN_D);
+                for (uint ks = 0u; ks < ATTN_KB; ks += 8u) {
+                    simdgroup_float8x8 mp;
+                    simdgroup_float8x8 mv;
+                    simdgroup_load(mp, sS + rt * 8u * ATTN_KB + ks, ATTN_KB);
+                    simdgroup_load(mv, sKV + ks * ATTN_D + sg * 32u + ct * 8u, ATTN_D);
+                    simdgroup_multiply_accumulate(acc, mp, mv, acc);
+                }
+                simdgroup_store(acc, o, ATTN_D);
+            }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (tid < ATTN_QB) sScale[tid] = 1.0f / (sTotal[tid] + exp(-sRunning[tid]));  // + the sink's exp(0 - max)
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    for (uint i = tid; i < queries * ATTN_D; i += 128u) {
+        const uint t = i / ATTN_D;
+        const uint at = (qBase + t) * qWidth + head * ATTN_D + i % ATTN_D;
+        out[at] = sO[i] * sScale[t] / (1.0f + exp(-gate[at]));
+    }
+}
+
 struct DepthRouterArgs {
     uint experts;
     uint width;

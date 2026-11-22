@@ -56,7 +56,8 @@ final class Inkling2GGUFOps {
             "dense_gemv_wide_rows", "dense_gemm_small_rows", "control_join",
             "depth_mix",
             "control_down", "control_apply", "short_conv_step", "clip_heads", "kv_finish",
-            "relative_attention_decode", "sigmoid_topk", "situ_activation",
+            "relative_attention_decode", "relative_attention_chunk", "sigmoid_topk",
+            "situ_activation",
             "argmax_partial", "argmax_final",
         ] {
             pipelines[name] = try context.pipeline(name)
