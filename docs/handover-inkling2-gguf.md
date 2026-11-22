@@ -10,9 +10,31 @@
 > Q4_K** (table below) — kernels are chosen per tensor. Use every engine on the
 > chip where it measurably pays: GPU for the token graph, CPU/AMX for small
 > f32 ops and expert prefetch, ANE for prefill. Work only from measured,
-> paired results and parity checks. **`UD-Q4_K_XL` runs natively with greedy
-> parity (96/96) at 15.4–17.2 tok/s, 1.10–1.22× llama.cpp paired — short of
-> the 1.25× target.** `UD-Q2_K_XL` still needs its IQ expert kernels.
+> paired results and parity checks. **Both files run natively with greedy
+> parity (96/96 token by token and chunked) through the CLI. Neither is at
+> 1.25× yet** — the latest paired numbers are in "Where it stands" below.
+> The target is relative: measured on 2026-11-22, llama.cpp decodes Q2_K_XL at
+> 16.4 tok/s, so 1.25× is ~20.5 tok/s, above the brief's absolute 17.
+
+## Where it stands (2026-11-22, 24 GB M3, 3 interleaved rounds each, tok/s)
+
+| | Q4_K_XL native | llama.cpp | ratio | Q2_K_XL native | llama.cpp | ratio |
+| --- | --- | --- | --- | --- | --- | --- |
+| decode tg64 | 16.15–16.60 | 13.78–14.28 | 1.16–1.20× | 15.85–16.08 | 16.38–16.62 | 0.97× |
+| prefill pp64 | 95.4–96.9 | 87.2–93.0 | 1.04–1.09× | 93.4–93.5 | 92.0–92.8 | 1.01× |
+| prefill pp512 | 110.7–111.3 | 112.1–123.0 | 0.90–0.99× | 109.0–109.1 | 122.1–122.4 | 0.89× |
+
+llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
+-n 64 -r 3` (Homebrew's `llama-bench` has no `inkling2` architecture). Native:
+`TINYTITAN_INKLING2_GGUF=<gguf> TINYTITAN_KERNEL_BENCH=1 swift test -c release
+--no-parallel --filter "Inkling2GGUFParityTests/(decodeThroughput|prefillThroughput)"`.
+
+**The finding that sets the next step:** a native decode step costs ~60 ms GPU
+on *both* files, although Q2_K_XL reads about half the bytes. Decode is held
+by per-token fixed cost (48 visits of small dispatches, mixes, attention,
+barriers), not bandwidth — llama.cpp's Q2 time falls with its bytes and ours
+does not. That is the lever for both files; pp512 (experts ~50% of the chunk,
+attention ~14%) is the second.
 
 ## What the two files actually contain (measured 2026-11-21)
 
@@ -151,18 +173,41 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
      `llama-eval-callback` (build it out of tree; it is not in the checkout's
      build).
 
+7. **`UD-Q2_K_XL` and the front ends (2026-11-22).** One set of GPU block
+   decoders (`gguf_block_decoders.metal`, templated on output type: fp32 in
+   the decode GEMV `gemv_blocks_*`, half in the tiled GEMM's tiles) covers
+   IQ1_S, IQ2_XXS, IQ2_XS, IQ2_S, IQ3_XXS, Q2_0, MXFP4, Q4_K, Q5_K, Q6_K and
+   IQ4_XS; the IQ grids are one 31,888-byte table buffer (`GGUFBlockTables`).
+   Host decoders for IQ1_S/IQ2_XXS/IQ2_XS/Q5_K joined the bit-exact vectors;
+   `GGUFBlockKernelsTests` pins every GPU decoder to them. A half-precision
+   decode GEMV failed that test at ~5e-4 relative — the GEMV must stay fp32.
+   - **Parity, Q2_K_XL:** 96/96 token by token and 96/96 chunked against its
+     own llama reference (which differs from Q4's on 4 of 6 prompts).
+   - **Tokenizer:** `GGUFTokenizerSidecar` exports the GGUF vocabulary with
+     the GPT-4o pre-tokenizer for `inkling2`; `tokenizerMatchesLlamaCpp`
+     matches llama's ids and text on all six prompts.
+   - **Session and CLI:** `Inkling2GGUFSession` (render, generate) and the CLI
+     route (`TinyTitanCLI --model <gguf>`; `--prompt` stays raw,
+     `--messages-file` renders Inkling's message format). Live: greedy chat
+     16.1 tok/s on Q2_K_XL. Cold first prefill pays the weight page-in.
+   - **Sampling:** `CPUSampler` ranked 200,058 candidates through an index
+     closure sort (~25 ms/token). A (logit, index) pair sort gives the same
+     order (`CPUSamplerRankingTests`; a seeded run is byte-identical):
+     sampled decode 11.2–11.8 → 13.4 tok/s. The remaining ~12 ms is the sort
+     itself; going further changes the float order of the weight sum, so it
+     needs its own quality decision.
+
 ## What is missing — the plan
 
-1. **Q4_K_XL to ≥1.25× llama.cpp** (≥17.5 tok/s against the 14.0 measured
-   above): about 4–5 ms of the 57 ms token. Next levers, by the ablation:
-   fuse the Q8_0 projections that share an input into one dispatch, the LM
-   head (~6 ms, 492 MB Q8_0), depth mixes (~3 ms). Keep paired runs.
-2. **Q2_K_XL:** expert kernels for IQ1_S, IQ2_XXS, IQ2_XS, IQ2_S, Q2_0 and
-   MXFP4 in the expert-indexed form, plus IQ3_XXS/Q4_K/Q5_K/Q6_K projections
-   and IQ4_XS embedding rows; reference already captured
-   (`q2kxl-reference.json`). The decoder refuses the file until then.
-3. **Front ends:** a tokenizer for the GGUF's `inkling2` BPE vocabulary, then
-   the CLI and server routes (today the decoder takes token ids).
+1. **Decode fixed cost, both files.** Attribute the ~60 ms step with
+   `TINYTITAN_INKLING2_SKIP` on Q2_K_XL, where weights are the smaller share,
+   and cut what is not bandwidth: fewer, fatter dispatches across a visit,
+   barrier count, the depth mixes and attention at one token. Q4_K_XL needs
+   ≥17.5 tok/s (1.25 × 14), Q2_K_XL ≥20.5 (1.25 × 16.4).
+2. **pp512, both files:** expert tile throughput and attention; then the
+   dense projections on the ANE (probe: 6–8 TF/s).
+3. **Server route:** an Inkling2 GGUF backend over `Inkling2GGUFSession`, as
+   `Inkling2ServerBackend` does for the safetensors build.
 4. **Prefill (batched, 2026-11-22).** One graph for decode and prefill: a
    chunk of up to `maxChunk` tokens runs in one command buffer; decode is a
    one-token chunk on the tuned GEMVs. New: `gguf_gemm_tiled.metal`
@@ -237,6 +282,6 @@ swift test -c release --filter GGUFDequantTests
 llama-bench -m "$Q2" -ngl 99 -t 8 -fa on -b 512 -ub 256 -p 64 -n 64 -r 5
 ```
 
-Do not claim the 25% target until there is a native end-to-end Inkling2 GGUF
-run at ≥17 tok/s Q2_K and ≥14 tok/s Q4_K, with quality checks. The current
-number is a kernel microbenchmark, not a model tok/s.
+Do not claim the 25% target until a paired, interleaved run shows ≥1.25×
+llama.cpp on decode and prefill for the file in question, with parity
+checked on the same build.
