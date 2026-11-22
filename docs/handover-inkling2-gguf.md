@@ -12,20 +12,24 @@
 > f32 ops and expert prefetch, ANE for prefill. Work only from measured,
 > paired results and parity checks. **Both files run natively with greedy
 > parity (96/96 token by token and chunked), from the CLI and the loopback
-> server. Decode clears 1.25× llama.cpp on both files and 512-token prefill
-> on Q4_K_XL; Q2_K_XL pp512 sits at 1.22–1.25× and 64-token prefill at
-> 1.12–1.19× on both** — see "Where it stands" and the plan.
+> server, and clear 1.25× llama.cpp on decode, 64-token and 512-token prefill
+> in every paired round of the final runs** (one stalled decode round aside,
+> rerun clean) — see "Where it stands".
 
-## Where it stands (2026-11-22, 24 GB M3, 3 interleaved rounds each, tok/s, `3aed86af`)
+## Where it stands (2026-11-22, 24 GB M3, `0981b7dd`, paired, tok/s)
+
+Three interleaved rounds per file (Q2_K_XL twice), llama.cpp in the same rounds:
 
 | | Q4_K_XL native | llama.cpp | ratio | Q2_K_XL native | llama.cpp | ratio |
 | --- | --- | --- | --- | --- | --- | --- |
-| decode tg64 | 18.67–19.26 | 14.19–14.31 | **1.32–1.35×** | 19.56 ¹–21.37 | 16.63–16.89 | **1.27–1.28×** ¹ |
-| prefill pp64 | 103.3–104.0 | 90.1–92.5 | 1.12–1.15× | 102.4–106.5 | 85.7–92.7 | 1.15–1.19× |
-| prefill pp512 | 154.5–156.3 | 122.1–123.7 | **1.25–1.27×** | 149.1–153.2 | 122.4–123.0 | 1.22–1.25× |
+| decode tg64 | 18.90–19.57 | 14.10–14.22 | **1.34–1.38×** | 21.57–21.80 | 16.64–16.99 | **1.28–1.31×** ¹ |
+| prefill pp64 | 115.7 | 90.6–92.0 | **1.26–1.28×** | 108.8–118.7 | 86.2–92.9 | **1.26–1.36×** |
+| prefill pp512 | 170.2–171.8 | 121.8–123.2 | **1.39–1.40×** | 162.9–168.7 | 122.4–122.8 | **1.33–1.38×** |
 
-¹ One Q2_K_XL decode round stalled (median 52.0 ms against 46.8 in the
-others, 1.18×); the other two are 1.27–1.28×.
+¹ One Q2_K_XL decode round stalled (median 49.6 ms against a 45.8 ms
+minimum, 1.21×); the rerun's three rounds are 1.28–1.31×. Native pp64 on
+Q2_K_XL is bimodal across runs (≈109 or ≈118 tok/s); every paired round
+cleared 1.25× either way.
 
 llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
 -n 64 -r 3` (Homebrew's `llama-bench` has no `inkling2` architecture). Native:
@@ -50,21 +54,15 @@ llama: `~/.unsloth/llama.cpp/build/bin/llama-bench -ngl 99 -fa 1 -p 64,512
   operand tiles as contiguous 8 × 8 blocks (llama.cpp's layout, stride-8
   loads), and 64-row dense tiles when the 128-row grid is small (`3aed86af`).
 
-**What is left at pp64** (after `ef6d205e`: Q2_K_XL 108.1–108.4 tok/s,
-Q4_K_XL 105.1–106.0, single runs, against llama.cpp's 85.7–92.7, so
-1.17–1.26× and 1.13–1.24× depending on llama's round; ≥1.25× against its best
-round needs ~116). Measured limits:
-- the dense projections at T=64 run 2.1–2.3 TF/s, the simdgroup-MMA rate
-  this M3 reaches anywhere (no Metal-4 tensor ops here; llama.cpp uses the
-  same instructions), i.e. compute-bound, not bandwidth-bound;
-- the routed experts (~380 ms of ~600) run the 8-token tile at ~11 ms per
-  layer for ~16 GFLOP (8 padded tokens per expert at ~4 real): decode of the
-  64 x 64 weight tile per K step is fixed, and an MMA tile cannot be narrower
-  than 8 tokens. Measured slower: 8-token tiles of 32 or 128 rows or BK 128, a
-  register kernel (6×), a staged-activation kernel (5×), register prefetch, a
-  looping grid (−4% on real routing), 8-token tiles for dense projections;
-- the rest (~100 ms: mixes, convolutions, controllers, routing, elementwise)
-  would have to roughly halve to close the gap.
+**What closed pp64** (each paired, parity-checked; the category costs come
+from skipping every category but one, which has no routing confound): split-K
+small-rows GEMM (`ef6d205e`); the chunk controller apply reusing gain/forget
+rows across 16 tokens, bit-identical, and concurrent chunk projections
+(`427dedb4`, controllers 38 → 22.5 ms, projections 92 → 78); depth mix with
+one reduction barrier (`2220ec80`, 22 → 10.5 ms); parallel chunk convolutions
+(`1f8dfa1a`, 12.4 → 6.0 ms); grouped chunk controller downs (`0981b7dd`).
+Rejected along the way: 8-token dense tiles, a looping expert grid (8-token
+path too: −4% at pp64), a folded depth-mix weight (moved a greedy token).
 
 **Ablation trap:** skipping any category upstream of the router (`router`,
 `smallGemv`, `rms`, `control`, `mix`, `attention`) changes which experts run,
@@ -234,14 +232,10 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 
 ## What is missing — the plan
 
-1. **pp64 to 1.25×** (≥ ~116 tok/s against llama's best round; now
-   105–108) and Q2_K_XL pp512 the last few percent. Limits above. Untried:
-   fusing gate_up's SiTU into the down GEMM's activation load, and fusing the
-   depth mixes/convolutions of a visit (the ~100 ms of non-matrix ops). Split-K
-   expert tiles would add parallelism, which T=64 does not lack (~4,600 active
-   threadgroups per routed GEMM). `TINYTITAN_INKLING2_SKIP` with `router` now
-   freezes expert ids after a first full run, but every visit then reuses the
-   last layer's ids, so treat those numbers as rough.
+1. **Margin.** The targets hold in every final paired round, but pp64 margins
+   are small (Q4_K_XL 1.26–1.28×) and Q2_K_XL pp64 is bimodal across runs.
+   The remaining chunk cost is the experts (~400 ms of ~540 at pp64) and the
+   dense projections (~78 ms), both at the M3's simdgroup-MMA rate.
 2. **Decode headroom:** the 1–2-bit expert GEMVs sit at a ~0.22 ms floor
    (34–58 GB/s against NVFP4's 87). Untried: the IQ grid in threadgroup
    memory, with more rows per threadgroup to amortise the copy.
