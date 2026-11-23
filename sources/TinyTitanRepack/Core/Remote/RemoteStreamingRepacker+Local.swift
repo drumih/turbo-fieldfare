@@ -217,10 +217,7 @@ extension RemoteStreamingRepacker {
             ((paths.partialDirectory as NSString)
             .appendingPathComponent("packed_experts") as NSString)
             .appendingPathComponent("layout.json")
-        let expertStride =
-            plan.layers.first(where: {
-                $0.expertsPerLayer > 0
-            })?.expertStride ?? 0
+        let expertStride = plan.manifestExpertStride
         let layoutData = try SSDAIJSON.encodeLayout(
             plan: plan,
             expertStride: expertStride)

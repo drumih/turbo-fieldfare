@@ -165,6 +165,11 @@ enum SSDAIJSON {
             // `norm_topk_prob: true`; write it so the manifest says it too.
             archDict["routerNormTopK"] = arch.routerNormTopK
         }
+        if let geometry = arch.variantGeometry {
+            archDict["variantGeometry"] = [
+                "scalars": geometry.scalars, "lists": geometry.lists,
+            ]
+        }
         if arch.family == .laguna {
             // Layer 0 is dense and carries no expert file. The manifest is
             // where the runtime learns which layers may legitimately have no
@@ -212,15 +217,16 @@ enum SSDAIJSON {
             "sharedExpert": bitWidths.sharedExpert,
             "routedExpert": bitWidths.routedExpert,
         ]
-        func entry(_ bits: Int) -> [String: Any] {
+        func entry(_ bits: Int, slot: String? = nil) -> [String: Any] {
             [
-                "weightBits": bits, "scheme": plan.baseMode,
+                "weightBits": bits,
+                "scheme": slot.flatMap { plan.slotSchemes[$0] } ?? plan.baseMode,
                 "scaleType": "BF16", "biasType": "BF16",
                 "groupSize": plan.baseGroupSize,
             ]
         }
         var dict: [String: Any] = [:]
-        for (slot, bits) in slots { dict[slot] = entry(bits) }
+        for (slot, bits) in slots { dict[slot] = entry(bits, slot: slot) }
         for override in try perTensorWidths(
             quantized: plan.resident.entries.compactMap { resident in
                 guard let spec = resident.quantSpec else { return nil }
@@ -316,6 +322,33 @@ enum SSDAIJSON {
         return suffixes.contains { name.hasSuffix($0) }
     }
 
+    /// The `layout.json` element-type name of a slice's dtype code: the
+    /// resident-index codes, plus the repacker-internal codes for the separate
+    /// NVFP4/MXFP8 scale tensors, which have no index code of their own.
+    static func layoutDTypeName(_ code: UInt8) throws -> String {
+        switch code {
+        case 0: return "U32"
+        case 1: return "BF16"
+        case 3: return SSDAIAuxiliaryDTypeV1.f32.rawValue
+        case LayoutDTypeCode.f8e4m3: return SSDAIAuxiliaryDTypeV1.f8e4m3.rawValue
+        case LayoutDTypeCode.ue8m0: return SSDAIAuxiliaryDTypeV1.ue8m0.rawValue
+        default:
+            guard let dtype = SSDAIFormatV1.DType(rawValue: code),
+                let encoding = SSDAIBlockEncodingV1(residentDType: dtype)
+            else {
+                throw RepackError.configurationInvalid(
+                    detail: "no layout element type for dtype code \(code)")
+            }
+            return encoding.rawValue
+        }
+    }
+
+    /// Repacker-internal slice codes for element types with no resident code.
+    enum LayoutDTypeCode {
+        static let f8e4m3: UInt8 = 200
+        static let ue8m0: UInt8 = 201
+    }
+
     /// The suffix a resident tensor's name carries and its manifest key drops.
     private static let weightSuffix = ".weight"
 
@@ -333,12 +366,21 @@ enum SSDAIJSON {
         let layerStrides = Set(
             plan.layers.filter { $0.expertsPerLayer > 0 }
                 .map(\.expertStride))
-        guard layerStrides.count <= 1 else {
+        // Inkling keeps each layer's experts in their source encoding, so its
+        // NVFP4 and Q8_0 layers differ in stride; they are written compact
+        // inside the largest one, which `SSDAILayoutValidator` checks per layer.
+        let compactLayers = plan.arch.family == .inkling2
+        if compactLayers, let largest = layerStrides.max(), largest != expertStride {
+            throw RepackError.configurationInvalid(
+                detail: "manifest stride \(expertStride) is not the largest layer stride \(largest)"
+            )
+        }
+        guard compactLayers || layerStrides.count <= 1 else {
             throw RepackError.configurationInvalid(
                 detail: "packed expert stride differs between layers: "
                     + "\(layerStrides.sorted())")
         }
-        if let only = layerStrides.first, only != expertStride {
+        if !compactLayers, let only = layerStrides.first, only != expertStride {
             throw RepackError.configurationInvalid(
                 detail: "packed expert stride \(expertStride) does not match the "
                     + "layers' \(only); the layout is written from the first "
@@ -365,7 +407,7 @@ enum SSDAIJSON {
                     var t: [String: Any] = [
                         "offset": slice.offsetInExpertBlob,
                         "size": slice.sizeInExpertBlob,
-                        "dtype": slice.dtype == 0 ? "U32" : "BF16",
+                        "dtype": try layoutDTypeName(slice.dtype),
                         "shape": slice.logicalShape.map { Int($0) },
                     ]
                     if let bits = slice.bitsForWeights { t["bits"] = bits }

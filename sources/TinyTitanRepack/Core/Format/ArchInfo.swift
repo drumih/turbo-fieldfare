@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanFormat
 import TinyTitanCore
 
 /// Model family discriminator, mirrored into `manifest.json -> arch.family`.
@@ -23,6 +24,10 @@ enum RepackModelFamily: String, Sendable, Equatable {
     /// Laguna-S-2.1: per-head softplus gating, QK norms, two RoPE dialects
     /// and a 1:3 global-to-sliding layer mask.
     case laguna = "laguna"
+    /// Inkling 2 Mini (TT-121): a looped MoE with relative attention, installed
+    /// from its GGUF or its ModelOpt checkpoint with every tensor kept in its
+    /// source encoding. Its own geometry travels in `variantGeometry`.
+    case inkling2 = "inkling2"
     /// A draft sidecar is loaded beside a target and prompted through the
     /// target's tokenizer, so a local import of one carries no tokenizer of
     /// its own.
@@ -113,6 +118,8 @@ struct ArchInfo: Sendable, Equatable {
     let movaRouterHasBias: Bool
     let movaActivation: String
     let denseLayerIndices: [Int]
+    /// Geometry only this family's variant reads (`arch.variantGeometry`).
+    let variantGeometry: SSDAIVariantGeometryV1?
 
     init(
         hiddenSize: Int, intermediateSize: Int, moeIntermediateSize: Int,
@@ -141,8 +148,10 @@ struct ArchInfo: Sendable, Equatable {
         normGroups: Int = 1, attentionGate: String = "sigmoid",
         routerScaling: Double = 1, routerHasBias: Bool = false,
         movaRouterScaling: Double = 1, movaRouterHasBias: Bool = false,
-        movaActivation: String = "silu", denseLayerIndices: [Int] = []
+        movaActivation: String = "silu", denseLayerIndices: [Int] = [],
+        variantGeometry: SSDAIVariantGeometryV1? = nil
     ) {
+        self.variantGeometry = variantGeometry
         self.hiddenSize = hiddenSize
         self.intermediateSize = intermediateSize
         self.moeIntermediateSize = moeIntermediateSize

@@ -109,4 +109,16 @@ struct RepackPlan: Sendable {
     let matchedModelID: String?
     let excludedMultimodalTensorNames: [String]
     let passthroughFiles: [PassthroughFile]
+    /// Per-slot quantization scheme names, for a family whose tensors keep a
+    /// source encoding (`GGUF_NVFP4`, `GGUF_Q8_0`, ...); a slot absent here is
+    /// written with `baseMode`, which is every affine family.
+    var slotSchemes: [String: String] = [:]
+
+    /// The stride `manifest.json` records: the largest layer's. Equal to every
+    /// layer's for a uniform install; a family whose layers hold experts of
+    /// different encodings (Inkling's NVFP4 and Q8_0 layers) writes compact
+    /// layers inside it, which the format allows.
+    var manifestExpertStride: UInt64 {
+        layers.filter { $0.expertsPerLayer > 0 }.map(\.expertStride).max() ?? 0
+    }
 }

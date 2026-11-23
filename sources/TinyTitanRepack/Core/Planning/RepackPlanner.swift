@@ -25,7 +25,7 @@ extension RepackPlanner {
             // The draft needs no sidecar files of its own: it has no n-gram
             // block, and its embedding and head are the target's.
             return []
-        case .qwen35Dense, .k2Horizon, .laguna:
+        case .qwen35Dense, .k2Horizon, .laguna, .inkling2:
             // A dense Qwen 3.5 has no hashed n-gram block and no PLE
             // constants; its tokenizer travels with the payload like every
             // other family's. K2-Horizon likewise carries only its tokenizer

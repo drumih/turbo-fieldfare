@@ -346,6 +346,9 @@ extension RepackPlanner {
         case .bf16: 1
         case .fp16: 2
         case .fp32: 3
+        // An affine snapshot never yields one; an opaque source is planned by
+        // its own family's planner, which writes the dtype code itself.
+        case .opaque: 255
         }
     }
 

@@ -9,6 +9,10 @@ struct SourceTensor: Sendable, Hashable {
         case bf16 = 1
         case fp16 = 2
         case fp32 = 3
+        /// Bytes copied verbatim in a source encoding the plan entry names
+        /// (a GGUF block, NVFP4, MXFP8): the source tensor is a byte range, and
+        /// the destination's dtype code says what the bytes are.
+        case opaque = 255
 
         var elementBytes: Int {
             switch self {
@@ -16,6 +20,7 @@ struct SourceTensor: Sendable, Hashable {
             case .bf16: 2
             case .fp16: 2
             case .fp32: 4
+            case .opaque: 1
             }
         }
     }
