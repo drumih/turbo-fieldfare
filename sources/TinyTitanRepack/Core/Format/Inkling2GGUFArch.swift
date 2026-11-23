@@ -2,14 +2,8 @@ import Foundation
 import TinyTitanFormat
 
 /// The `ArchInfo` of an Inkling 2 GGUF, read from the file's own `inkling2.*`
-/// metadata rather than from a preset (TT-121).
-///
-/// The shared fields carry what every reader looks at; everything only the
-/// Inkling variant reads goes in `variantGeometry`, under the names
-/// `docs/plan-inkling2-7x-engine.md` lists. Inkling has no rotary embedding
-/// (`rope.dimension_count` is 0): position comes from its relative-attention
-/// bias, so the rotary fields record "none" (factor 0, theta 1) rather than a
-/// borrowed value.
+/// metadata rather than from a preset (TT-121); `Inkling2Arch` turns the
+/// constants into the manifest's shape.
 enum Inkling2GGUFArch {
     static func archInfo(_ header: GGUFHeaderV3) throws -> ArchInfo {
         func number(_ key: String) throws -> Double {
@@ -40,65 +34,40 @@ enum Inkling2GGUFArch {
                 detail: "Inkling 2 loop geometry \(loopStart)..<\(loopEnd) x \(passes) "
                     + "does not fit \(unrolled) layer visits")
         }
-        let localLayers = try slidingLayers(
-            header, stored: stored, loopStart: loopStart, loopEnd: loopEnd)
-        let headDim = try int("attention.key_length")
-        let scalars: [String: Double] = [
-            "loopStart": Double(loopStart), "loopEnd": Double(loopEnd),
-            "loopPasses": Double(passes), "loopGateRank": try number("loop.gate_rank"),
-            "unrolledLayers": Double(unrolled),
-            "attentionResidualBlock": try number("attn_res.block_size"),
-            "relativeLength": try number("attention.relative_length"),
-            "relativeExtent": try number("attention.relative_extent"),
-            "relativeClip": try number("attention.relative_clip"),
-            "convolutionTaps": try number("shortconv.l_cache"),
-            "paddedVocabulary": try number("vocab_size"),
-            "vocabulary": try number("vocab_size_unpadded"),
-            "rmsEpsilon": try number("attention.layer_norm_rms_epsilon"),
-            "qkClip": try number("attention.qk_clip"),
-            "logScaleFloor": try number("attention.log_scale_floor"),
-            "logScaleAlpha": try number("attention.log_scale_alpha"),
-            "expertWeightsScale": try number("expert_weights_scale"),
-            "situBeta": try number("activation.situ_beta"),
-            "situLinearBeta": try number("activation.situ_linear_beta"),
-            "contextLength": try number("context_length"),
-        ]
-        let mask = (0..<stored).map { localLayers.contains($0) ? UInt8(0) : UInt8(1) }
-        return ArchInfo(
-            hiddenSize: try int("embedding_length"),
-            intermediateSize: try int("feed_forward_length"),
-            moeIntermediateSize: try int("expert_feed_forward_length"),
-            numHeads: try firstOf("attention.head_count"),
-            numKVHeads: try firstOf("attention.head_count_kv"),
-            numFullKVHeads: try firstOf("attention.head_count_kv"),
-            headDim: headDim,
-            fullHeadDim: headDim,
-            vocabSize: try int("vocab_size"),
-            slidingWindow: try int("attention.sliding_window"),
-            finalLogitSoftcap: try number("final_logit_softcapping"),
-            ropeTheta: 1,
-            fullRopeTheta: 1,
-            partialRotaryFactor: 0,
-            numLayers: stored,
-            numExperts: try int("expert_count"),
-            topKExperts: try int("expert_used_count"),
-            tieWordEmbeddings: !header.tensors.contains { $0.name == "output.weight" },
-            attentionKEqV: false,
-            fullAttentionLayerMask: mask,
-            hiddenActivation: "situ",
-            family: .inkling2,
-            attnOutputGate: true,
-            attentionScale: 1 / Double(headDim).squareRoot(),
-            embeddingScaledBySqrtHidden: false,
-            routerScaled: false,
-            ffnSandwichNorms: false,
-            sharedExpertGated: false,
-            ropeNeoxSubdim: false,
-            linearNumKHeads: 0, linearNumVHeads: 0, linearKeyHeadDim: 0,
-            linearValueHeadDim: 0, linearConvKernelSize: 0,
-            quantGroupSize: 32,
-            variantGeometry: SSDAIVariantGeometryV1(
-                scalars: scalars, lists: ["localLayers": localLayers]))
+        return try Inkling2Arch.archInfo(
+            Inkling2Arch.Parameters(
+                hiddenSize: try int("embedding_length"),
+                intermediateSize: try int("feed_forward_length"),
+                expertIntermediateSize: try int("expert_feed_forward_length"),
+                heads: try firstOf("attention.head_count"),
+                kvHeads: try firstOf("attention.head_count_kv"),
+                headDim: try int("attention.key_length"),
+                paddedVocabulary: try int("vocab_size"),
+                vocabulary: try int("vocab_size_unpadded"),
+                slidingWindow: try int("attention.sliding_window"),
+                finalLogitSoftcap: try number("final_logit_softcapping"),
+                storedLayers: stored,
+                experts: try int("expert_count"),
+                expertsPerToken: try int("expert_used_count"),
+                localLayers: try slidingLayers(
+                    header, stored: stored, loopStart: loopStart, loopEnd: loopEnd),
+                tiedEmbeddings: !header.tensors.contains { $0.name == "output.weight" },
+                loopStart: loopStart, loopEnd: loopEnd, loopPasses: passes,
+                loopGateRank: try number("loop.gate_rank"),
+                attentionResidualBlock: try number("attn_res.block_size"),
+                relativeLength: try number("attention.relative_length"),
+                relativeExtent: try number("attention.relative_extent"),
+                relativeClip: try number("attention.relative_clip"),
+                convolutionTaps: try number("shortconv.l_cache"),
+                rmsEpsilon: try number("attention.layer_norm_rms_epsilon"),
+                qkClip: try number("attention.qk_clip"),
+                logScaleFloor: try number("attention.log_scale_floor"),
+                logScaleAlpha: try number("attention.log_scale_alpha"),
+                expertWeightsScale: try number("expert_weights_scale"),
+                situBeta: try number("activation.situ_beta"),
+                situLinearBeta: try number("activation.situ_linear_beta"),
+                contextLength: try number("context_length"),
+                quantGroupSize: 32))
     }
 
     /// The stored layers that use sliding-window attention. The GGUF's pattern

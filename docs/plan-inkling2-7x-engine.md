@@ -144,9 +144,26 @@ cache beside the slot cache.
 in 57 s into `models/inkling-2-mini_GGUF-Q4` (16 GB); `--verify-install`
 passes, and every tensor byte and the header compare equal to the source
 through llama.cpp's gguf-py. The raw GGUF stays until phase 2's variant
-serves the install. Remaining: the NVFP4 checkpoint planner, and streaming
-both sources from Hugging Face (registered, pinned sources; ranged header
-fetch for the GGUF).
+serves the install.
+
+The checkpoint half is done for a snapshot on disk: `TinyTitanRepack
+--input-snapshot` routes a `config.json` of model type `inkling2_loop` to
+`Inkling2CheckpointPlanner`, which reads both safetensors headers (the
+text model and `mtp.safetensors`) and `config.json` through the same
+`Inkling2Arch` builder the GGUF uses, so both installs carry one manifest
+shape. Layers 0-19 keep NVFP4 experts (packed E2M1 values, E4M3 scales per 16,
+per-expert F32 `amax`; the per-layer `outer_scale_denominator` is resident),
+layers 20-23 keep MXFP8 (E4M3 values, UE8M0 scales per 32), and every other
+text tensor stays BF16/F32. The MTP head is resident under `mtp.`; the vision
+tower (422 tensors, 0.64 GB) is left out like every install's image input.
+The tokenizer, chat template, tiktoken model and the quantization and
+generation configs are copied under `tokenizer/`. The snapshot converted in
+about 2 minutes into `models/inkling-2-mini_NVFP4` (18 GB, 35 files);
+`--verify-install` passes, and an independent check against the safetensors
+headers found all 19.525 GB of non-vision tensor bytes equal, none missing.
+The raw checkpoint stays until phase 3's variant serves the install.
+Remaining: streaming both sources from Hugging Face (registered, pinned
+sources; ranged header fetch for the GGUF).
 
 ### 2. Variant `Engines/Inkling2GGUFQ4`
 

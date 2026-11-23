@@ -8,12 +8,18 @@ enum Safetensors {
 
     struct Header {
         let tensors: [SourceTensor]
+        /// The source dtype name of every tensor parsed as `.opaque`.
+        var opaqueDTypeNames: [String: String] = [:]
     }
 
+    /// `opaqueDTypes` names one-byte source dtypes (`U8`, `F8_E4M3`) the caller
+    /// copies verbatim: they parse as `.opaque` instead of being refused, and
+    /// `Header.opaqueDTypeNames` keeps what each one was.
     static func parseHeaderBytes(
         path: String,
         fileSize: UInt64,
-        headerBytes data: Data
+        headerBytes data: Data,
+        opaqueDTypes: Set<String> = []
     ) throws -> Header {
         let headerSize = UInt64(data.count)
         // The 8-byte size prefix must fit inside the file before we can
@@ -29,6 +35,7 @@ enum Safetensors {
 
         let payloadBase = UInt64(8) + headerSize
         var tensors: [SourceTensor] = []
+        var opaqueNames: [String: String] = [:]
         tensors.reserveCapacity(dict.count)
         for (name, value) in dict {
             if name == "__metadata__" { continue }
@@ -48,6 +55,9 @@ enum Safetensors {
             case "BF16": dtype = .bf16
             case "F16": dtype = .fp16
             case "F32": dtype = .fp32
+            case _ where opaqueDTypes.contains(dtypeStr):
+                dtype = .opaque
+                opaqueNames[name] = dtypeStr
             default: throw RepackError.safetensorsUnknownDtype(path: path, dtype: dtypeStr)
             }
             guard let shape = entry["shape"] as? [Any] else {
@@ -114,6 +124,6 @@ enum Safetensors {
                     shape: shapeU64,
                     absoluteOffset: abs, sizeBytes: size))
         }
-        return Header(tensors: tensors)
+        return Header(tensors: tensors, opaqueDTypeNames: opaqueNames)
     }
 }

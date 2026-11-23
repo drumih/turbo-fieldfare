@@ -163,6 +163,7 @@ public final class RemoteStreamingRepacker {
     func copyLocalTokenizer(
         snapshotDirectory: String,
         partialDirectory: String,
+        extraFiles: [(source: String, name: String)] = [],
         record: (String, String) throws -> Void
     ) throws {
         let tokenizerDir = (partialDirectory as NSString)
@@ -192,6 +193,16 @@ public final class RemoteStreamingRepacker {
             let data = try Posix.readBoundedData(source, maximumBytes: 64 * 1024 * 1024)
             try writeSmall(path: destination, data: data)
             try record("tokenizer/\(file.name)", destination)
+        }
+        // Optional files a family carries beside its tokenizer; `source` may
+        // sit in a subdirectory, `name` is flat under `tokenizer/`.
+        for extra in extraFiles {
+            let source = (snapshotDirectory as NSString).appendingPathComponent(extra.source)
+            guard (try? Posix.entryKind(source)) == .regular else { continue }
+            let destination = (tokenizerDir as NSString).appendingPathComponent(extra.name)
+            let data = try Posix.readBoundedData(source, maximumBytes: 64 * 1024 * 1024)
+            try writeSmall(path: destination, data: data)
+            try record("tokenizer/\(extra.name)", destination)
         }
     }
 

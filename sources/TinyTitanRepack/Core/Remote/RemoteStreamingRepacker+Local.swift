@@ -16,6 +16,12 @@ extension RemoteStreamingRepacker {
         audit: RepackAudit = RepackAudit(),
         progress: @escaping @Sendable (ModelInstallProgress) -> Void = { _ in }
     ) async throws -> RemoteStreamingRepackResult {
+        // The Inkling 2 checkpoint is planned from its own tensors and config,
+        // not through `IndexLoader`, which reads affine quantization only.
+        if isInkling2Checkpoint(directory: local.inputSnapshotDir) {
+            return try await runLocalInkling2Checkpoint(
+                options: local, audit: audit, progress: progress)
+        }
         let source = try LocalSnapshotLoader.load(
             directory: local.inputSnapshotDir,
             draftHead: local.draftHead)
@@ -383,14 +389,19 @@ extension RemoteStreamingRepacker {
             // loaded beside a target and prompted through the target's
             // tokenizer, so requiring one here would refuse a sidecar that is
             // correct. Only a whole model needs its own.
-            // Inkling's tokenizer and chat template travel in the GGUF header
-            // the plan copies as a passthrough file, not as tokenizer files.
-            if !local.draftHead && !source.arch.family.isDraftHead
-                && source.arch.family != .inkling2
-            {
+            // An Inkling GGUF's tokenizer and chat template travel in the GGUF
+            // header the plan copies as a passthrough file, not as tokenizer
+            // files; the Inkling checkpoint carries them as files like any
+            // snapshot, plus its tiktoken model and quantization config.
+            let ggufHeaderInstall = plan.passthroughFiles.contains {
+                $0.destinationName == Inkling2GGUFPlanner.headerSidecarName
+            }
+            if !local.draftHead && !source.arch.family.isDraftHead && !ggufHeaderInstall {
                 try copyLocalTokenizer(
                     snapshotDirectory: local.inputSnapshotDir,
                     partialDirectory: paths.partialDirectory,
+                    extraFiles: source.arch.family == .inkling2
+                        ? Inkling2CheckpointPlanner.tokenizerExtras : [],
                     record: { relative, path in
                         try recordOutputFile(
                             relativePath: relative,

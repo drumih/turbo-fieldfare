@@ -5,8 +5,7 @@ import TinyTitanFormat
 // converted to `.ssdai` through the same copy, layout, manifest and receipt path
 // as a local snapshot.
 extension RemoteStreamingRepacker {
-    /// Installs the Inkling 2 GGUF at `options.inputSnapshotDir`'s file
-    /// `ggufFileName`. The file is the only shard; its header's SHA-256 is the
+    /// Installs the Inkling 2 GGUF at `ggufPath`. The file is the only shard; its header's SHA-256 is the
     /// source fingerprint the manifest and receipt record; with
     /// `consumeSnapshot` it is deleted once its last range is copied.
     public static func runLocalGGUF(
@@ -46,16 +45,24 @@ extension RemoteStreamingRepacker {
                 minFreeReserveBytes: local.minFreeReserveBytes,
                 overwrite: overwrite),
             audit: audit)
-        return try await worker.runLocalGGUFPrepared(
+        return try await worker.runLocalPlanned(
             source: LocalSnapshot(metadata: metadata, arch: arch, shardHeaders: []),
-            ggufSource: ggufSource, local: local, progress: progress)
+            local: local, repoID: "local/gguf", progress: progress
+        ) { outputDir in
+            try Inkling2GGUFPlanner.plan(source: ggufSource, outputDir: outputDir)
+        }
     }
 
-    func runLocalGGUFPrepared(
+    /// Installs a source whose plan is built by `makePlan` rather than by
+    /// `RepackPlanner` — the Inkling GGUF and checkpoint — through the same
+    /// lock, disk check, copy, manifest and receipt path as a local snapshot.
+    /// `makePlan` receives the partial directory the plan writes into.
+    func runLocalPlanned(
         source: LocalSnapshot,
-        ggufSource: Inkling2GGUFPlanner.Source,
         local: LocalSnapshotRepackOptions,
-        progress: @escaping @Sendable (ModelInstallProgress) -> Void
+        repoID: String,
+        progress: @escaping @Sendable (ModelInstallProgress) -> Void,
+        makePlan: (String) throws -> RepackPlan
     ) async throws -> RemoteStreamingRepackResult {
         try validateOptions()
         try validateLocalModelID(local.modelID)
@@ -64,8 +71,7 @@ extension RemoteStreamingRepacker {
         let paths = installLock.paths
         try validateLocalDestination(paths: paths, overwrite: local.overwrite)
         progress(.downloadingMetadata)
-        let plan = try Inkling2GGUFPlanner.plan(
-            source: ggufSource, outputDir: paths.partialDirectory)
+        let plan = try makePlan(paths.partialDirectory)
         let rangePlan = try RangeCopyPlanner.plan(
             repackPlan: plan, rangeChunkBytes: local.rangeChunkBytes,
             layoutMode: "identity", layoutOrderSha256: nil)
@@ -75,7 +81,7 @@ extension RemoteStreamingRepacker {
             + plan.passthroughFiles.reduce(UInt64(0)) { $0 + $1.size }
         progress(
             .planning(downloadBytes: rangePlan.remoteBytesToDownload, outputBytes: outputBytes))
-        // Consuming the GGUF frees its bytes only after the last range, so the
+        // A consumed source frees its bytes only after its last range, so the
         // install still needs its whole size free while it is written.
         let diskRequirement = try DiskSpaceChecker.requireAvailable(
             path: paths.parentDirectory, bytes: outputBytes,
@@ -83,7 +89,7 @@ extension RemoteStreamingRepacker {
         progress(.checkingDisk(diskRequirement))
         try Task.checkCancellation()
         configureLocalAudit(source: source, plan: plan)
-        audit.remoteRepoID = "local/gguf"
+        audit.remoteRepoID = repoID
         try await executeLocalCopy(
             source: source, local: local, paths: paths, plan: plan,
             rangePlan: rangePlan, outputBytes: outputBytes, progress: progress)

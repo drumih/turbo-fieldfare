@@ -6,7 +6,7 @@ private let supportedModelNames = SupportedModelSource.all.map(\.name).joined(se
 private let usage = """
     Usage:
       TinyTitanRepack [--model <\(supportedModelNames)>] --output <model.ssdai> [--overwrite] [--resume]
-      TinyTitanRepack --input-snapshot <affine-safetensors-dir> --model-id <id>
+      TinyTitanRepack --input-snapshot <affine-or-inkling2-safetensors-dir> --model-id <id>
                       --output <model.ssdai> [--overwrite] [--draft-head] [--share-ngram-table]
                       [--consume-snapshot]
       TinyTitanRepack --input-gguf <inkling2.gguf> --model-id <id> --output <model.ssdai>
@@ -37,7 +37,10 @@ private let usage = """
     shard once the last range that reads it has been committed, which is what
     lets a 125 GB install grow into the space its own snapshot is releasing on a
     host that cannot hold both. It is one-way: an interrupted run leaves a
-    partly consumed snapshot.
+    partly consumed snapshot. A snapshot whose config.json is an Inkling 2
+    checkpoint (model type inkling2_loop) is converted with every tensor kept in
+    its own encoding: routed experts NVFP4/MXFP8, the rest BF16 or F32, the MTP
+    head beside it and the vision tower left out.
 
     --input-gguf converts an Inkling 2 GGUF on disk into a .ssdai install, every
     tensor kept in its GGUF encoding (routed experts NVFP4/Q8_0, the rest Q8_0,
