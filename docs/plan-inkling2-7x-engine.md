@@ -434,3 +434,56 @@ empty), runs 2–3 warm.
   at 64 tokens (TT-118) and does not honour `--ram-budget`; its figure is wall
   time including prefill. The NVFP4 `.ssdai` install has no engine variant yet
   (phase 3), so this is the only way it runs today.
+
+## Remaining work, 2026-11-24
+
+Phases 0-2 are done (TT-121): both installs, the Q4 variant, streamed experts,
+`--ram-budget`, the full API through `Inkling2GGUFServerBackend`. What is left is
+for every TinyTitan feature and server parameter to apply to both Inklings, the
+way they apply to Ornith. The work is split into tracker rows, in this order:
+
+| Order | Row | Outcome | Gate |
+|---|---|---|---|
+| 1 | TT-128 | Every served route streams token by token | backend audit + a test that fails a buffering backend + streamed-chunks check |
+| 2 | TT-122 | Inkling 2 Q4 on `ServerModelSession` through `variantGPUInkling2Q4()` | api-feature-check 10/10 through the shared session; greedy text identical to the current route at 16-bit KV; prompt-cache hit on a repeated prompt; `LibraryContractTests` on the install |
+| 3 | TT-123 | `--kv-bits 4/8/16` honoured (8 is the server default) | 16-bit bit-identical; 8- and 4-bit measured against 16 on the parity prompts, kept only if they meet the quality bar |
+| 4 | TT-125 | `Engines/Inkling2NVFP4` over its `.ssdai`, on the shared session | greedy agreement with `Engines/Inkling2`, per-layer parity, api-feature-check 10/10 at 12G |
+| 5 | TT-124 | `--max-concurrent-sequences` for both | two concurrent requests equal two serial ones |
+| 6 | TT-126 | Selection table, catalog, launcher, goldens, parameter matrix, budget default | `/v1/models` from `--models-dir`, `golden-baseline.sh --check` for both, every flag applies or is refused by name |
+| 7 | TT-127 | Side routes deleted | no source references them; raw folders proposed to the owner |
+| 8 | TT-129 | MTP speculative decode from the NVFP4 install's MTP head | greedy text identical with and without MTP, paired speed |
+
+**Design of the shared-session step (TT-122).**
+
+- `Engines/Inkling2GGUFQ4` gains a `Model: EngineModel` and a
+  `Runner: EngineRunner` over `InklingQ4Decoder`. `prefillChunked` and
+  `produce` call the decoder's existing prefill and decode, so numerics don't
+  change. `captureInferenceState`/`restoreInferenceState` copy the per-layer K/V
+  rings (to the live length), the convolution states and the position.
+- `ArchConfig` is built from the install's `arch` block. The session only
+  reads `vocabSize`, `numExperts`, `finalLogitSoftcap`, `sparseIndexer` and `ple`.
+- The tokenizer becomes a `GFTokenizer` with an Inkling dialect, following the
+  K2 precedent:
+  - `applyChatTemplate` renders `Inkling2GGUFChatFormat`;
+  - `StructuredAssistantDecoder` learns the thinking and
+    `content_invoke_tool_json` markers;
+  - stop tokens are `<|end_message|>` and `<|content_model_end_sampling|>`.
+- The Q4 install carries its own `tokenizer/`, exported from the GGUF header at
+  install time and covered by the receipt. Today it is written on first load to
+  a cache under Application Support.
+- `variantGPUInkling2Q4()` in `TinyTitanVariants` supplies `prepareLoad` from
+  `InklingQ4LoadPlan`, so `--ram-budget`, `--expert-cache-slots` and
+  `--max-context` keep their current meaning.
+
+**Parameter matrix (TT-126).** Every `TinyTitanServer` flag either applies to
+both Inklings or is refused with the reason. No flag is accepted and ignored,
+which is the defect this work closes (`--ram-budget` was, and `--kv-bits`
+still is). The expected refusals:
+
+- `--host-kv-window`: needs a QSA model;
+- `--cpu`: dense Qwen only;
+- `--rope-scaling yarn`: only if the model card gives no YaRN factor.
+
+**Quality bar.** As everywhere: no step may change greedy text or logits beyond
+the measured noise floor. Speed figures are paired against the current default.
+Model runs stay under the owner's 16 GB cap.
