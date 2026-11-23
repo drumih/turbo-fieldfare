@@ -150,6 +150,11 @@ without the packages.
 
 ## 3. Convert and install
 
+The hard rule (AGENTS.md, "Models"): every Hugging Face download is converted to
+`.ssdai` as it arrives — each shard or byte range converted and deleted before
+the next one is staged — and only the `.ssdai` install is served. A new source
+format means a new streaming converter, never a raw folder under `models/`.
+
 ```bash
 tools/install_models.sh <key>            # 4-bit
 tools/install_models.sh <key>-8bit       # 8-bit

@@ -229,6 +229,21 @@ without staging the full source, so it needs `HF_TOKEN` only if one is requested
 cancellation preserves verified completed ranges, which `--resume` continues and
 `--discard-partial --output <model.ssdai>` removes.
 
+**Every model downloaded from Hugging Face is converted to `.ssdai` while it
+downloads — this is a hard rule.** Safetensors, GGUF or any other source format,
+there is no exception and no raw checkpoint is served: the runtime reads only
+verified `.ssdai` installs, because that layout is what streaming relies on (one
+16 KiB-aligned read per expert, which bypasses the page cache; an unaligned read
+straight out of a GGUF does not, measured 2026-11-23 — 53.5% of the experts read
+ended up resident against 0% for the aligned layout). The conversion streams with
+the smallest disk footprint: a chunk — a shard, or a byte range of a single-file
+checkpoint — is downloaded, converted into the install, and deleted as soon as
+nothing more needs it, before the next chunk takes its place; the full source is
+never staged on disk. A converter that would stage the whole source is a defect to
+fix, not a mode to offer. The raw Inkling folders `models/inkling-2-mini` and
+`models/inkling-2-mini-gguf` predate this rule; they are replaced by `.ssdai`
+installs under TT-121 and then removed.
+
 ```bash
 swift run -c release TinyTitanRepack --model ornith15-8bit --output models/ornith-1.5_35B_A3B_8Bit
 swift run -c release TinyTitanRepack --model ornith15-8bit --output models/ornith-1.5_35B_A3B_8Bit --resume
