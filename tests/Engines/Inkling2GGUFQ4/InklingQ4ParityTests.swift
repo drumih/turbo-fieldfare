@@ -155,9 +155,11 @@ extension InklingQ4ParityTests {
             reset: { decoder.state.reset() })
     }
 
-    static var slotCounts: [Int] {
-        var counts = [16, 64]
-        if environment["TINYTITAN_INKLING2_Q4_FULL_SLOTS"] == "1" { counts.append(128) }
+    /// Slots per layer, and whether decode resolves them behind a shared
+    /// event (one command buffer per token) or ends a buffer at each router.
+    static var slotCounts: [(slots: Int, eventRouting: Bool)] {
+        var counts = [(16, true), (16, false), (64, true)]
+        if environment["TINYTITAN_INKLING2_Q4_FULL_SLOTS"] == "1" { counts.append((128, true)) }
         return counts
     }
 
@@ -165,12 +167,13 @@ extension InklingQ4ParityTests {
     func streamedExpertsAreBitIdenticalToTheMappedInstall() throws {
         let directory = URL(fileURLWithPath: try #require(Self.install))
         let mapped = try Self.mappedTrace(directory)
-        for slots in Self.slotCounts {
+        for (slots, eventRouting) in Self.slotCounts {
             let (streamed, stats): ([[Float]], InklingQ4ExpertCache.Statistics) =
                 try autoreleasepool {
                     let decoder = try InklingQ4Decoder(
                         directory: directory, maxContext: 256, maxChunk: 64,
                         experts: .slots(slots))
+                    decoder.eventRouting = eventRouting
                     let cache = try #require(decoder.expertCache)
                     return (try Self.traceLogits(decoder), cache.statistics)
                 }
@@ -180,11 +183,11 @@ extension InklingQ4ParityTests {
                 differing += 1
             }
             Self.log(
-                "Inkling Q4, \(slots) slots/layer: \(differing) of \(mapped.count) rows differ; "
+                "Inkling Q4, \(slots) slots/layer, event routing \(eventRouting): \(differing) of \(mapped.count) rows differ; "
                     + "\(stats.syncs) syncs, \(stats.rounds) rounds, \(stats.hits) hits, "
                     + "\(stats.misses) misses, \(stats.bytesRead >> 20) MiB read")
             #expect(streamed.count == mapped.count)
-            #expect(differing == 0, "\(slots) slots")
+            #expect(differing == 0, "\(slots) slots, event routing \(eventRouting)")
             if slots < 128 {
                 #expect(stats.misses > 0 && stats.syncs > 0)
             }
@@ -207,12 +210,16 @@ extension InklingQ4ParityTests {
             directory: URL(fileURLWithPath: try #require(Self.install)), maxContext: 512,
             maxChunk: 64, experts: slots == 0 ? .mapped : .slots(slots))
         decoder.lookaheadPrefetch = Self.environment["TINYTITAN_INKLING2_PREFETCH"] != "0"
+        decoder.eventRouting = Self.environment["TINYTITAN_INKLING2_EVENT"] != "0"
+        decoder.routing?.spin = Self.environment["TINYTITAN_INKLING2_SPIN"] != "0"
         let prompt = [371, 151451, 149879, 151194, 149884]
         var next = try decoder.prefill(prompt, position: 0).next
         let count = 64
         var samples: [Double] = []
         var gpu: Double = 0
         let readBefore = decoder.expertCache?.statistics.readSeconds ?? 0
+        let handlerBefore = decoder.routing?.handlerSeconds ?? 0
+        let waitBefore = decoder.expertCache?.statistics.prefetchWaitSeconds ?? 0
         for offset in 0..<count {
             let started = Date()
             next = try decoder.step(token: next, position: prompt.count + offset).next
@@ -231,14 +238,18 @@ extension InklingQ4ParityTests {
                 samples.sorted()[count / 2] * 1e3,
                 (decoder.expertCache?.residentBytes ?? 0) >> 20)
                 + (stats.map {
-                    "; \($0.hits) hits, \($0.misses) misses; lookahead \($0.predictedCorrect)/"
+                    "; \($0.hits) hits, \($0.misses) misses in \($0.loadCalls) loads; lookahead \($0.predictedCorrect)/"
                         + "\($0.predicted) right, prefetch \($0.prefetchUsed)/\($0.prefetchLoads) used, "
                         + String(format: "waited %.1f ms", $0.prefetchWaitSeconds * 1e3)
                 } ?? "")
                 + String(
                     format: "; per token: GPU %.1f ms, expert reads %.1f ms, rest %.1f ms",
                     gpu / Double(count) * 1e3, read / Double(count) * 1e3,
-                    (total - gpu - read) / Double(count) * 1e3))
+                    (total - gpu - read) / Double(count) * 1e3)
+                + String(
+                    format: "; handlers %.1f ms/token (prefetch wait %.1f ms)",
+                    ((decoder.routing?.handlerSeconds ?? 0) - handlerBefore) / Double(count) * 1e3,
+                    ((stats?.prefetchWaitSeconds ?? 0) - waitBefore) / Double(count) * 1e3))
     }
 }
 

@@ -283,6 +283,22 @@ extension InklingQ4Decoder {
                 weights: scratch(s.lookaheadWeights), args: routerArgs, tokens: 1, encoder: e)
             predictsLayer = next.index
         }
+        var deep: (ids: MTLBuffer, layers: [Int])?
+        if predictsLayer != nil, traceDepth > 1, eventRouting, let scratch = deepScratch {
+            var layers: [Int] = []
+            for depth in 2...min(traceDepth, 8) where visit + depth < m.unrolledLayers {
+                let ahead = weights.layers[m.storedLayer(forUnrolled: visit + depth)]
+                let k = layers.count
+                try ops.route(
+                    router: ahead.router, bias: ahead.routerBias, x: row(input),
+                    logits: .init(scratch.logits, offset: k * m.expertCount * 4),
+                    ids: .init(scratch.ids, offset: k * used * 4),
+                    weights: .init(scratch.weights, offset: k * used * 4), args: routerArgs,
+                    tokens: 1, encoder: e)
+                layers.append(ahead.index)
+            }
+            if !layers.isEmpty { deep = (scratch.ids, layers) }
+        }
         let situArgs = InklingQ4Ops.SituArgs(
             feedForward: UInt32(feedForward), slots: UInt32(used * tokens), beta: m.situBeta,
             linearBeta: m.situLinearBeta)
@@ -302,6 +318,14 @@ extension InklingQ4Decoder {
             try experts(
                 ids: scratch(s.routeIDs), matrices: m.expertCount, idRange: m.expertCount, e)
             return e
+        }
+        if let next = try encodeEventResolve(
+            layer: layer.index, predicts: predictsLayer, deep: deep)
+        {
+            try experts(
+                ids: scratch(s.slotIDs), matrices: cache.slotCount,
+                idRange: min(cache.slotCount + 1, m.expertCount), next)
+            return next
         }
         // Streaming: the router's choice reaches the CPU, the missing experts
         // are read into slots, and each round of the visit's experts runs on

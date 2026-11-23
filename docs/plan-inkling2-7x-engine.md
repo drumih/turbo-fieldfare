@@ -293,6 +293,77 @@ router without a prediction (a chunk routes to most experts, so there is little
 to guess) — that, and the shared session (`EngineModel`/`EngineRunner`, KV
 bits, prompt cache), are what remains.
 
+**Swift coding workload and the 250-record database, 2026-11-23.** Quiet M3
+(24 GB), release build. `InklingQ4CodingWorkloadTests` (opt-in,
+`TINYTITAN_INKLING2_CODING=1`) runs five TinyTitan-style Swift requests through
+one decoder, 256 greedy tokens each, 1,280 decode tokens in all; the windows
+are full after the first request's prefill.
+
+*The database, live.* Pinning each layer's top experts of its last 250
+routings (loading at most two missing ones per visit), against plain LRU, both
+with lookahead prefetch, order swapped, 76 slots (the 12G plan): decode 9.84 /
+9.86 against 9.88 / 9.63 tok/s, prefill 15% slower. Blocking misses fell 30%
+(17,111 -> 11,768), but the pin loads (5,846) are reads too, and total reads
+were level. Rejected and removed.
+
+*The database, replayed.* The decode trace of the workload (every routed set
+and every prediction, `TINYTITAN_INKLING2_ROUTING_TRACE`) replays through a
+model of the cache that reproduces the live counters exactly (17,111 misses,
+21,057 prefetches). Reads per decode token at 76 slots:
+
+| Policy | Blocking | Background | Total |
+| --- | --- | --- | --- |
+| LRU + lookahead (shipped) | 9.0 | 16.5 | 25.4 |
+| LRU, no prefetch | 16.8 | 0 | 16.8 |
+| pin 32 / 48 / 64 of 250 + lookahead | 8.8 / 8.7 / 8.6 | 16.6 / 17.0 / 17.9 | 25.5 / 25.8 / 26.6 |
+| evict by 250-window count + lookahead | 8.5 | 16.8 | 25.3 |
+| lookahead + 1 / 4 / 8 top-count experts | 8.8 | 26.3 / 43.7 / 54.9 | 35.1 / 52.4 / 63.7 |
+| evict by count, window 250 / 1000 / 4000, no prefetch | 16.6 / 16.1 / 18.7 | 0 | 16.6 / 16.1 / 18.7 |
+
+The clairvoyant floor (Belady, demand reads only) is 6.8 a token at 76 slots,
+against 16.8 for LRU: a policy could save that much, but what Belady uses is
+*when* an expert returns, which a frequency window does not see. As a
+predictor, the window's top 8 for a layer name 37.7% of the experts that visit
+routes; the same visit one token earlier names 39.1%; the next visit's router
+run on this visit's input names 73.7%, and further ahead 66.0 / 59.1 / 54.9 /
+51.4 / 48.7% at 2-6 visits. Deeper prediction removes 0.4 blocking reads a
+token at depths 1-2 for 8 more reads; the database's extras add reads and
+remove none. **The database does not help prefetch on this model:** its
+routing is spread too evenly for counts to say more than LRU already keeps.
+
+*Where the time goes.* At 76 slots a token took ~100 ms against 50.7 ms
+all-resident (128 slots, 19.7 tok/s; mapped 18.6-19.7). With the reads skipped
+(wrong data, timing only) the same 76-slot run is 17.0 tok/s: the whole gap is
+the GPU waiting for expert reads at the routers, not round trips or encoding.
+What closed part of it, each order-swapped and bit-identical (16 and 64 slots,
+both routing modes; 96/96 against llama.cpp):
+
+| Change | Measured | Kept |
+| --- | --- | --- |
+| One command buffer per decode token; each router signals a shared event and the GPU waits for the CPU's slot resolution (`eventRouting`) | 9.30 / 9.06 / 9.28 against 8.30 / 8.58 / 8.59 tok/s (short prompts) | yes |
+| The decoding thread polls the event instead of a listener queue waking (`spin`) | 9.56 / 9.64 against 9.29 / 9.26 | yes |
+| A visit waits only for the in-flight reads of the experts it routed, not every prefetch (`waitPerExpert`) | 10.73 / 10.49 against 10.15 / 10.17 (coding) | yes |
+| Each expert read as four concurrent 16 KiB-aligned parts | 10.94 / 10.98 against 10.98 / 10.95 | no |
+
+The split read looked like 2.5x in a microbenchmark that ran after the mapped
+benchmarks had warmed the page cache; cold and in the engine it is level.
+
+*What does scale: memory.* The coding workload against slots per layer, one
+run each, a 4K window, 76 repeated last (10.72 then 10.66, no drift):
+
+| Slots | Budget (32K window) | Decode tok/s | Blocking misses | Prefetches |
+| --- | --- | --- | --- | --- |
+| 76 | 12G | 10.72 | 17,111 | 21,057 |
+| 90 | ~13.6G | 12.84 | 10,503 | 10,539 |
+| 100 | ~14.8G | 12.86 | 7,149 | 5,838 |
+| 110 | ~15.9G | 14.68 | 4,667 | 2,831 |
+| 128 | ~18G | 19.7 (short prompts) | 0 | 0 |
+
+128 slots is above the 16 GB this 24 GB machine may plan and was not run on the
+coding workload. A bare `--ram-budget 12G` gives the window priority and, with
+no `--max-context`, plans 15 slots and a 262K window; `--max-context 32768` is
+what gives 76.
+
 ### 3. Variant `Engines/Inkling2NVFP4`
 
 - The same graph, copied (duplication is the 7.0 rule), with the NVFP4/MXFP8

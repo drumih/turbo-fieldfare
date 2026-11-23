@@ -39,6 +39,26 @@ package final class InklingQ4Decoder {
     /// background while the GPU works. Off, a visit loads only what its own
     /// router chose. Either way the logits are the same bits.
     package var lookaheadPrefetch = true
+    /// When experts stream, a decode token is one command buffer whose
+    /// visits wait on a shared event while the CPU resolves their slots
+    /// (`InklingQ4EventRouting`). Off, each router ends a command buffer.
+    /// Either way the logits are the same bits.
+    package var eventRouting = true
+    /// Diagnostic: with event routing and a routing log, also run the
+    /// routers of the visits 2 ... `traceDepth` ahead on each decode visit's
+    /// MoE input and log their choices. 0 or 1 adds nothing.
+    package var traceDepth = 0
+    /// Scratch for those routers: ids, logits and weights per depth.
+    lazy var deepScratch: (ids: MTLBuffer, logits: MTLBuffer, weights: MTLBuffer)? = {
+        let n = 8
+        let device = context.device
+        guard let ids = device.makeBuffer(length: n * manifest.expertsPerToken * 4),
+            let logits = device.makeBuffer(length: n * manifest.expertCount * 4),
+            let weights = device.makeBuffer(length: n * manifest.expertsPerToken * 4)
+        else { return nil }
+        return (ids, logits, weights)
+    }()
+    let routing: InklingQ4EventRouting?
     private var segmentGPUSeconds: Double = 0
     private var segmentWaitSeconds: Double = 0
 
@@ -81,6 +101,13 @@ package final class InklingQ4Decoder {
             manifest: manifest, device: context.device, maxContext: maxContext,
             maxChunk: maxChunk)
         ops = try InklingQ4Ops(context: context)
+        if let expertCache, !expertCache.isIdentity {
+            routing = try InklingQ4EventRouting(
+                device: context.device, cache: expertCache, state: state,
+                expertsPerToken: manifest.expertsPerToken)
+        } else {
+            routing = nil
+        }
     }
 
     /// Feeds `token` at `position` and returns the greedy next token. With
@@ -136,8 +163,15 @@ package final class InklingQ4Decoder {
         let encodeStarted = Date()
         segmentGPUSeconds = 0
         segmentWaitSeconds = 0
-        try encodeChunk(try beginSegment())
-        try endSegment()
+        do {
+            try encodeChunk(try beginSegment())
+            try endSegment()
+        } catch {
+            // A handler may have failed first and left the GPU running on
+            // stale slots; its error is the one that explains the result.
+            throw routing?.takeFailure() ?? error
+        }
+        if let failure = routing?.takeFailure() { throw failure }
         lastEncodeSeconds = Date().timeIntervalSince(encodeStarted) - segmentWaitSeconds
         lastGPUSeconds = segmentGPUSeconds
         let next = Int(state.nextToken.contents().load(as: Int32.self))
@@ -232,6 +266,7 @@ package final class InklingQ4Decoder {
     func endSegment() throws {
         commitSegment()
         let started = Date()
+        if let routing, let last = inFlight.last { routing.drive(last) }
         inFlight.last?.waitUntilCompleted()
         segmentWaitSeconds += Date().timeIntervalSince(started)
         let finished = inFlight
@@ -240,6 +275,21 @@ package final class InklingQ4Decoder {
             if let error = buffer.error { throw error }
             segmentGPUSeconds += buffer.gpuEndTime - buffer.gpuStartTime
         }
+    }
+
+    /// At a decode visit with streamed experts and `eventRouting` on: ends
+    /// the current encoder at the router and returns the encoder the experts
+    /// go to, in the same command buffer, behind the CPU's slot resolution.
+    /// Nil when the visit must end its command buffer instead.
+    func encodeEventResolve(
+        layer: Int, predicts: Int?, deep: (ids: MTLBuffer, layers: [Int])? = nil
+    ) throws -> MTLComputeCommandEncoder? {
+        guard tokens == 1, eventRouting, let routing, let current = segment else { return nil }
+        let next = try routing.encodeResolve(
+            buffer: current.buffer, encoder: current.encoder, layer: layer, predicts: predicts,
+            deep: deep)
+        segment = (current.buffer, next)
+        return next
     }
 
     /// The encoder dispatches go to now (a visit may have started a new one).

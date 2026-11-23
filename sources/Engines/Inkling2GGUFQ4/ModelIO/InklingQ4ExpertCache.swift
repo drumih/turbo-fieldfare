@@ -45,6 +45,8 @@ package final class InklingQ4ExpertCache {
         /// Wall time spent reading experts from the install on the critical
         /// path (prefetch reads run beside the GPU and are not counted).
         package var readSeconds: Double = 0
+        /// Blocking load calls (one per round that misses).
+        package var loadCalls: UInt64 = 0
         /// Lookahead routing: experts predicted for a visit, how many of
         /// them the visit's router then chose, prefetch reads issued, the
         /// prefetched experts a router used, and the time a visit waited for
@@ -67,9 +69,10 @@ package final class InklingQ4ExpertCache {
     private var lastUse: [[UInt64]]
     private var tick: UInt64 = 0
     package private(set) var statistics = Statistics()
-    /// When set, every routing `resolve` sees is appended (layer, routed ids):
-    /// the trace prefetch policies are measured against.
-    package var routingLog: [(layer: Int, ids: [Int32])]?
+    /// When set, the trace prefetch policies are measured against: each
+    /// visit's routed ids (depth 0), the lookahead prediction for the next
+    /// visit (depth 1), and diagnostic predictions further ahead (depth d).
+    package var routingLog: [(layer: Int, ids: [Int32], depth: Int)]?
     /// The prediction each layer's next visit is scored against.
     private var predictions: [Set<Int>]
     /// Experts loaded by prefetch and not yet chosen by a router, per layer.
@@ -77,6 +80,12 @@ package final class InklingQ4ExpertCache {
     private let prefetchQueue = DispatchQueue(
         label: "inkling-q4-prefetch", qos: .userInitiated, attributes: .concurrent)
     private let prefetchGroup = DispatchGroup()
+    /// Per layer and slot, the background read still writing it (nil once
+    /// it is known to have landed).
+    private var landing: [[DispatchGroup?]]
+    /// A visit waits only for the in-flight reads of the experts it routed
+    /// (true), or for every background read issued so far (false).
+    package var waitPerExpert = true
     private let prefetchFailure = PrefetchFailure()
 
     /// Bytes of expert slots (and their scales) this cache holds.
@@ -106,6 +115,8 @@ package final class InklingQ4ExpertCache {
             repeating: Array(repeating: 0, count: slotCount), count: manifest.storedLayers)
         predictions = Array(repeating: [], count: manifest.storedLayers)
         prefetched = Array(repeating: [], count: manifest.storedLayers)
+        landing = Array(
+            repeating: Array(repeating: nil, count: slots), count: manifest.storedLayers)
         for index in 0..<manifest.storedLayers {
             guard let plan = install.layout.layers.first(where: { $0.layer == index }),
                 plan.experts.count == expertCount, let first = plan.experts.first,
@@ -208,11 +219,22 @@ package final class InklingQ4ExpertCache {
         round body: (_ slots: [Int32], _ last: Bool) throws -> Void
     ) throws {
         statistics.syncs += 1
-        routingLog?.append((layer, ids))
-        // A prefetch may still be writing slots; nothing is resolved before
-        // every read it issued has landed.
+        routingLog?.append((layer, ids, 0))
+        // A prefetch may still be writing slots. The visit's resident experts
+        // must have landed before the GPU reads them; with `waitPerExpert`
+        // that is all it waits for, so a mispredicted read in flight and the
+        // blocking reads below overlap instead of queueing.
         let waitStarted = Date()
-        prefetchGroup.wait()
+        if waitPerExpert {
+            for id in Set(ids.map(Int.init)) where (0..<expertCount).contains(id) {
+                let slot = slotOf[layer][id]
+                guard slot >= 0, let group = landing[layer][slot] else { continue }
+                group.wait()
+                landing[layer][slot] = nil
+            }
+        } else {
+            prefetchGroup.wait()
+        }
         statistics.prefetchWaitSeconds += Date().timeIntervalSince(waitStarted)
         if let failure = prefetchFailure.take() { throw failure }
         let chosen = Set(ids.map(Int.init))
@@ -278,6 +300,7 @@ package final class InklingQ4ExpertCache {
         where (0..<expertCount).contains(id) && !distinct.contains(id) {
             distinct.append(id)
         }
+        routingLog?.append((layer, predicted, 1))
         statistics.predicted += UInt64(distinct.count)
         predictions[layer] = Set(distinct)
         tick += 1
@@ -304,7 +327,11 @@ package final class InklingQ4ExpertCache {
         let target = layers[layer]
         let count = slotCount
         let failure = prefetchFailure
+        let group = DispatchGroup()
+        for slot in victims { landing[layer][slot] = group }
+        group.enter()
         prefetchQueue.async(group: prefetchGroup) {
+            defer { group.leave() }
             do {
                 try Self.read(target, experts: assigned, into: victims, slotCount: count)
             } catch {
@@ -317,16 +344,26 @@ package final class InklingQ4ExpertCache {
     /// least recently used first. (Evicting the expert routed least often in
     /// the layer's last 250 routings instead was measured and rejected: more
     /// misses at 14 slots and no faster at 32 or 64; see the plan document.)
+    /// A slot a background read is still writing is never a victim: a second
+    /// write to it would race the first.
     private func evictionOrder(layer: Int) -> [Int] {
         (0..<slotCount)
-            .filter { lastUse[layer][$0] < tick }
+            .filter { lastUse[layer][$0] < tick && landed(layer: layer, slot: $0) }
             .sorted { lastUse[layer][$0] < lastUse[layer][$1] }
+    }
+
+    private func landed(layer: Int, slot: Int) -> Bool {
+        guard let group = landing[layer][slot] else { return true }
+        guard group.wait(timeout: .now()) == .success else { return false }
+        landing[layer][slot] = nil
+        return true
     }
 
     /// Reads `experts` into `slots` on the critical path.
     private func load(layer index: Int, experts: [Int], into slots: [Int]) throws {
         let started = Date()
         defer { statistics.readSeconds += Date().timeIntervalSince(started) }
+        statistics.loadCalls += 1
         try Self.read(layers[index], experts: experts, into: slots, slotCount: slotCount)
         statistics.bytesRead += UInt64(experts.count * layers[index].stride)
     }
