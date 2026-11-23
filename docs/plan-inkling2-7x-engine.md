@@ -138,6 +138,16 @@ despite F_NOCACHE — 53.5% of the expert pages read were resident afterwards,
 against 0% for the aligned layout. In-place streaming would fill RAM with page
 cache beside the slot cache.
 
+**Progress 2026-11-23.** The GGUF half is done for a file on disk:
+`GGUFHeaderV3` (format), `Inkling2GGUFPlanner` and `TinyTitanRepack
+--input-gguf` (`1364ce88`, `75bab405`, `13d2f70a`). The Q4_K_XL file converted
+in 57 s into `models/inkling-2-mini_GGUF-Q4` (16 GB); `--verify-install`
+passes, and every tensor byte and the header compare equal to the source
+through llama.cpp's gguf-py. The raw GGUF stays until phase 2's variant
+serves the install. Remaining: the NVFP4 checkpoint planner, and streaming
+both sources from Hugging Face (registered, pinned sources; ranged header
+fetch for the GGUF).
+
 ### 2. Variant `Engines/Inkling2GGUFQ4`
 
 - Graph: the GGUF decoder's looped graph (48 unrolled visits, sliding and
