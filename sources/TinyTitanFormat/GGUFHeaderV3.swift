@@ -153,7 +153,10 @@ private struct Cursor {
         guard length < 1 << 30 else {
             throw GGUFHeaderV3.ReadError.invalid("string length \(length)")
         }
-        return String(decoding: try raw(Int(length)), as: UTF8.self)
+        guard let text = String(bytes: try raw(Int(length)), encoding: .utf8) else {
+            throw GGUFHeaderV3.ReadError.invalid("string is not UTF-8")
+        }
+        return text
     }
 
     /// Reads one value of ggml metadata `type`; arrays are kept as numbers or
