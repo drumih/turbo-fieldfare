@@ -674,8 +674,8 @@
             ]
           },
           "limit": {
-            "context": 16384,
-            "output": 4096
+            "context": 262144,
+            "output": 32768
           },
           "variants": {
             "off": {

@@ -16,7 +16,8 @@ func runInkling2GGUF(
     do {
         let loadStarted = Date()
         let session = try await Inkling2GGUFSession(
-            gguf: model, maxContext: min(args.maxContext, 16_384))
+            gguf: model,
+            maxContext: min(args.maxContext, Inkling2GGUFSession.modelMaxContext))
         let loadSeconds = Date().timeIntervalSince(loadStarted)
         let text: String
         switch prompt {

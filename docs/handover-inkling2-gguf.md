@@ -100,9 +100,12 @@ heads of 128, 128 experts top-8 with expert FF 1152, hidden 2304, vocabulary
 - Hardware: Apple Silicon M3, 24 GB unified memory, macOS with Metal 4.
 - Reference engine: llama.cpp checkout at `~/.unsloth/llama.cpp`,
   binaries `~/.unsloth/llama.cpp/build/bin/llama-bench` and `llama-server`.
-- Models (already downloaded, do not re-download):
-  - `~/.cache/huggingface/hub/models--unsloth--Inkling-2-Mini-GGUF/snapshots/*/Inkling-2-Mini-UD-Q2_K_XL.gguf`
-  - `.../Inkling-2-Mini-UD-Q4_K_XL.gguf`
+- Models live under `models/`, like every other install: the Q4 file is
+  `models/inkling-2-mini-gguf/Inkling-2-Mini-UD-Q4_K_XL.gguf` (2026-11-23,
+  sha256 `e62d463c…`). The Hugging Face cache copies of Q2 and Q4 used before
+  are gone; the Q2 file is not installed, so the Q2 parity tests and the Q2
+  long-context reference cannot run until it is placed in its own `models/`
+  folder.
 - llama.cpp measurements on this machine:
   - Q2_K: stable **~12.8–13.8 decode tok/s**; `pp64` ~71–80 tok/s.
   - Q4_K: **~10.1–14.2 decode tok/s**, memory-sensitive; high variance.

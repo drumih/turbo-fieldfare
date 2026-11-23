@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import TinyTitanCore
 import Tokenizers
 
@@ -121,13 +122,45 @@ package final class Inkling2GGUFSession {
     let decoder: Inkling2GGUFDecoder
     package let tokenizer: Inkling2GGUFTokenizer
 
+    /// `maxContext` is what the front end asks for; the session allocates the
+    /// window this device can hold beside the weights
+    /// (`Inkling2GGUFContextBudget`), which `maximumContext` reports.
     package init(gguf url: URL, maxContext: Int, maxChunk: Int = 256) async throws {
-        decoder = try Inkling2GGUFDecoder(url: url, maxContext: maxContext, maxChunk: maxChunk)
+        let window = try Self.affordableContext(gguf: url, requested: maxContext)
+        decoder = try Inkling2GGUFDecoder(
+            url: url, maxContext: window, maxChunk: min(maxChunk, window))
         tokenizer = try await Inkling2GGUFTokenizer.load(gguf: url, model: decoder.manifest.model)
         decoder.weights.prefault()
     }
 
     package var maximumContext: Int { decoder.state.maxContext }
+
+    /// The window the device affords for `gguf`, reported on stderr when it is
+    /// below what was asked.
+    static func affordableContext(gguf url: URL, requested: Int) throws -> Int {
+        let manifest = try Inkling2GGUFManifest(url: url)
+        let fileBytes =
+            (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        let workingSet = Int(MTLCreateSystemDefaultDevice()?.recommendedMaxWorkingSetSize ?? 0)
+        let window = Inkling2GGUFContextBudget.affordable(
+            requested: requested, model: modelMaxContext, workingSet: workingSet,
+            weightBytes: fileBytes,
+            bytesPerPosition: Inkling2GGUFContextBudget.bytesPerPosition(manifest))
+        if window < requested {
+            FileHandle.standardError.write(
+                Data(
+                    ("Inkling2 GGUF: context \(window) tokens (asked \(requested)): the GPU working "
+                        + "set is \(workingSet >> 20) MiB and the weights take \(fileBytes >> 20) MiB\n")
+                        .utf8))
+        }
+        return window
+    }
+
+    /// The longest context a front end may ask for: the model's own declared
+    /// window (`model_max_length`, 1M). There is no lower artificial cap; what a
+    /// session actually allocates is the part of the request this device's GPU
+    /// can hold beside the weights (`Inkling2GGUFContextBudget`, TT-120).
+    package static let modelMaxContext = 1_048_576
 
     /// True for a `.gguf` file (or a directory holding exactly one model
     /// `.gguf`) whose architecture is `inkling2`.

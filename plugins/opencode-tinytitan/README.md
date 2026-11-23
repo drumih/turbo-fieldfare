@@ -69,15 +69,23 @@ own `--reasoning` (default off) applies.
 
 ## Inkling 2 Mini
 
-The GGUF is not an installer row and is not picked up by `--models-dir`: serve it
-on its own, from the file, and OpenCode reaches it at the same address.
+The GGUF is not an installer row and is not picked up by `--models-dir`: put the
+file in its own folder under `models/` and serve that folder on its own; OpenCode
+reaches it at the same address.
 
 ```bash
-.build/release/TinyTitanServer --model /path/to/Inkling-2-Mini-UD-Q4_K_XL.gguf
+hf download unsloth/Inkling-2-Mini-GGUF Inkling-2-Mini-UD-Q4_K_XL.gguf \
+  --local-dir models/inkling-2-mini-gguf
+```
+
+
+```bash
+.build/release/TinyTitanServer --model models/inkling-2-mini-gguf
 opencode -m tinytitan/inkling-2-mini
 ```
 
-Its entry declares a **16,384-token** window, because the server's GGUF route caps
-context there for now; OpenCode compacts the session before it reaches it.
-`limit.output` is 4096, which leaves the rest of the window for OpenCode's
-system prompt and tool definitions.
+Its entry declares the same 256K window as the others. The server asks for it and
+allocates what the GPU can hold beside the weights, logging the result: every
+position costs 32 KB of KV cache, so the 9.1 GB Q2 file gets the full 256K on a
+24 GB Mac, while the 17.6 GB Q4 file gets about 26K there — less than OpenCode's
+first request (about 27K tokens with its tools), so on a 24 GB Mac use Q2.

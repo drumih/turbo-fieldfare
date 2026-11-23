@@ -26,7 +26,7 @@ package actor Inkling2GGUFServerBackend: ServerInferenceBackend, PromptTokenCoun
 
     /// The context the decoder's KV ring and caches are sized for: the
     /// server's `--max-context`, capped as the CLI caps it.
-    package static let contextCap = 16_384
+    package static let contextCap = Inkling2GGUFSession.modelMaxContext
 
     /// Inkling's thinking control: off, or one of the template's effort
     /// levels, `high` (0.9) being the template's own default.
@@ -37,7 +37,7 @@ package actor Inkling2GGUFServerBackend: ServerInferenceBackend, PromptTokenCoun
         let context = min(maxContext, Self.contextCap)
         session = try await Inkling2GGUFSession(gguf: gguf, maxContext: context)
         vocabulary = try Inkling2GGUFOutputParser.Vocabulary(tokenizer: session.tokenizer)
-        maximumContext = context
+        maximumContext = session.maximumContext
         defaultReasoning = Self.requestReasoning(for: reasoning)
     }
 

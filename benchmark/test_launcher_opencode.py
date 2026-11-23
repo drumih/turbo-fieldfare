@@ -48,9 +48,9 @@ def default_model() -> str:
 
 # Models a server serves from a file the installer does not produce: run as
 # `TinyTitanServer --model <file.gguf>`, so they are not launcher-menu rows. Each
-# carries its own window: the Inkling 2 GGUF route caps context at 16,384
-# (`Inkling2GGUFServerBackend.contextCap`), and OpenCode must not plan for more.
-GGUF_ROUTES = {"inkling-2-mini": {"context": 16384, "output": 4096}}
+# declares the same window as every other entry: the server asks for its default
+# 256K and the session allocates what the device affords (TT-120).
+GGUF_ROUTES = {"inkling-2-mini": {"context": 262144, "output": 32768}}
 
 
 def installer_menu_rows() -> int:
