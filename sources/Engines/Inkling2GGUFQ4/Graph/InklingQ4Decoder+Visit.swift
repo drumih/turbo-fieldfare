@@ -241,7 +241,7 @@ extension InklingQ4Decoder {
                 blocks + [ffnInput], query: layer.ffnResQuery.operand, count: 1,
                 norm: (layer.ffnNorm.operand, m.rmsEpsilon), e)
         }
-        let e = try encodeMoE(layer: layer, input: moeInput, e)
+        let e = try encodeMoE(visit: visit, layer: layer, input: moeInput, e)
         // The post-convolution reads the routed experts' weighted sum and adds
         // the FFN input.
         let out = try persistentSlab()
@@ -257,7 +257,7 @@ extension InklingQ4Decoder {
     /// Returns the encoder the visit continues on: a new one when the experts
     /// stream, because the router's choice had to reach the CPU.
     private func encodeMoE(
-        layer: InklingQ4LayerWeights, input: Int, _ e: MTLComputeCommandEncoder
+        visit: Int, layer: InklingQ4LayerWeights, input: Int, _ e: MTLComputeCommandEncoder
     ) throws -> MTLComputeCommandEncoder {
         let m = manifest
         let s = state
@@ -270,6 +270,19 @@ extension InklingQ4Decoder {
             router: layer.router, bias: layer.routerBias, x: row(input),
             logits: scratch(s.routerLogits), ids: scratch(s.routeIDs),
             weights: scratch(s.routeWeights), args: routerArgs, tokens: tokens, encoder: e)
+        // The next visit's router on this input: a guess at its routing that
+        // the cache reads ahead while the GPU finishes this visit.
+        var predictsLayer: Int?
+        if let cache = expertCache, !cache.isIdentity, lookaheadPrefetch, tokens == 1,
+            visit + 1 < m.unrolledLayers
+        {
+            let next = weights.layers[m.storedLayer(forUnrolled: visit + 1)]
+            try ops.route(
+                router: next.router, bias: next.routerBias, x: row(input),
+                logits: scratch(s.lookaheadLogits), ids: scratch(s.lookaheadIDs),
+                weights: scratch(s.lookaheadWeights), args: routerArgs, tokens: 1, encoder: e)
+            predictsLayer = next.index
+        }
         let situArgs = InklingQ4Ops.SituArgs(
             feedForward: UInt32(feedForward), slots: UInt32(used * tokens), beta: m.situBeta,
             linearBeta: m.situLinearBeta)
@@ -310,7 +323,19 @@ extension InklingQ4Decoder {
             // A later round reloads slots this one reads: it must finish first.
             if last { open = next } else { try endSegment() }
         }
-        guard let open else { throw MetalError.invalidState("routing produced no round") }
-        return open
+        guard open != nil else { throw MetalError.invalidState("routing produced no round") }
+        // The experts run while the CPU starts the prediction's reads and
+        // encodes the rest of the visit.
+        commitSegment()
+        if let predictsLayer {
+            cache.prefetch(
+                layer: predictsLayer,
+                experts: Array(
+                    UnsafeBufferPointer(
+                        start: s.lookaheadIDs.contents().bindMemory(
+                            to: Int32.self, capacity: used),
+                        count: used)))
+        }
+        return try beginSegment()
     }
 }

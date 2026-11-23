@@ -32,6 +32,13 @@ package final class InklingQ4Decoder {
     /// The command buffer being encoded. A chunk is one buffer unless experts
     /// stream, when each layer visit's router ends one (`resolveRouting`).
     private var segment: (buffer: MTLCommandBuffer, encoder: MTLComputeCommandEncoder)?
+    /// Committed command buffers not yet waited for, oldest first.
+    private var inFlight: [MTLCommandBuffer] = []
+    /// When experts stream, each decode visit also runs the next visit's
+    /// router on its own MoE input and the cache reads that prediction in the
+    /// background while the GPU works. Off, a visit loads only what its own
+    /// router chose. Either way the logits are the same bits.
+    package var lookaheadPrefetch = true
     private var segmentGPUSeconds: Double = 0
     private var segmentWaitSeconds: Double = 0
 
@@ -211,17 +218,28 @@ package final class InklingQ4Decoder {
         return encoder
     }
 
-    /// Ends, commits and waits for the current command buffer.
-    func endSegment() throws {
+    /// Ends and commits the current command buffer without waiting: the GPU
+    /// starts on it while the CPU encodes what follows.
+    func commitSegment() {
         guard let (buffer, encoder) = segment else { return }
         segment = nil
         encoder.endEncoding()
-        let started = Date()
         buffer.commit()
-        buffer.waitUntilCompleted()
+        inFlight.append(buffer)
+    }
+
+    /// Commits the current command buffer and waits for every one in flight.
+    func endSegment() throws {
+        commitSegment()
+        let started = Date()
+        inFlight.last?.waitUntilCompleted()
         segmentWaitSeconds += Date().timeIntervalSince(started)
-        if let error = buffer.error { throw error }
-        segmentGPUSeconds += buffer.gpuEndTime - buffer.gpuStartTime
+        let finished = inFlight
+        inFlight = []
+        for buffer in finished {
+            if let error = buffer.error { throw error }
+            segmentGPUSeconds += buffer.gpuEndTime - buffer.gpuStartTime
+        }
     }
 
     /// The encoder dispatches go to now (a visit may have started a new one).

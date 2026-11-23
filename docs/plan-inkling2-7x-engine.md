@@ -251,11 +251,47 @@ three prompts x two rounds, release build:
 At 4 GiB a long window costs speed: its KV takes what would be expert slots,
 and at 8 slots (one token's worth) nearly every expert is a miss.
 
-The gap is the cost of the 48 router stops a token: the reads do not overlap
-GPU work, and each stop is a commit-and-wait. Prefetch across the stop (the
-next visit's likely experts while this one runs) and the session wiring
-(`EngineModel`/`EngineRunner`, `--ram-budget` to slots, KV bits, prompt cache)
-are what remains of this phase.
+The gap was the cost of the 48 router stops a token: the reads did not overlap
+GPU work, and each stop is a commit-and-wait.
+
+**Prefetch, 2026-11-23.** History predicts nothing LRU does not already keep:
+on a decode trace of the six short reference prompts (96 tokens each, one of them code), prefetching the
+previous token's experts for a visit, or the previous loop pass's for the same
+layer, removes no blocking miss at 32 or 64 slots (every such expert is still
+resident) and 3% at 14. So each decode visit runs the *next* visit's router on
+its own MoE input (`lookaheadPrefetch`, on by default): 73.8% of the experts it
+names are the ones that visit then chooses. The experts' command buffer is
+committed at once, the cache starts the prediction's reads on a background
+queue into least-recently-used slots of the next layer, and the next visit
+waits for them before it resolves — so the logits stay bit-identical (checked at
+16 and 64 slots). Decode, release build, paired and interleaved, prefetch off
+-> on:
+
+| Slots | Rounds | tok/s off | tok/s on | Blocking misses |
+| --- | --- | --- | --- | --- |
+| 64 | 2 | 6.12, 3.99* | 7.16, 7.13 | 2,781 -> 1,663 |
+| 32 | 5 | 4.25, 4.20, 4.23, 4.26, 4.00 | 4.76, 4.33, 4.52, 4.64, 4.16 | 5,071 -> 2,915 |
+| 14 | 5 | 2.53, 2.61, 2.46, 2.25, 2.42 | 2.17*, 2.68, 2.68, 2.56, 2.67 | 9,523 -> 5,040 |
+
+\* GPU time per token doubled in that run alone (161 and 279 ms against 74-147):
+other work on the shared machine, not the change. Prefetch won every other pair.
+
+**Rejected: evict by recent count.** Keeping the experts routed most often in
+a layer's last 250 routings (least recently used breaking ties) cut blocking
+misses 7% / 4% / 1% at 14 / 32 / 64 slots in a no-prefetch simulation of the
+trace, but in the engine, with prefetch, it had 5.5% *more* blocking misses at
+14 slots (5,316 against 5,040) and lost all three paired rounds there (1.90,
+2.64, 2.23 against 2.42, 2.72, 2.79 tok/s); at 32 slots it was mixed (one win,
+two losses, misses level) and at 64 it won three rounds only while it always ran
+second — with the order swapped it was level (7.12 / 7.37 against 7.21 / 7.35).
+Not committed; LRU stays. The measurement covers these short general prompts only: a coding workload (long contexts, repeated identifiers, tool turns) is not measured, and is where a frequency window could still behave differently.
+
+Served at `--ram-budget 12G --max-context 32768` (76 slots) with prefetch:
+`api-feature-check` 10/10; streaming client, three prompts x two rounds, decode
+5.8-10.2 tok/s, TTFT 1.5-2.6 s, footprint 10 GB. Prefill still stops at every
+router without a prediction (a chunk routes to most experts, so there is little
+to guess) — that, and the shared session (`EngineModel`/`EngineRunner`, KV
+bits, prompt cache), are what remains.
 
 ### 3. Variant `Engines/Inkling2NVFP4`
 

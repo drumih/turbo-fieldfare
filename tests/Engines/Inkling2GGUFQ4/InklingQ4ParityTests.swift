@@ -206,6 +206,7 @@ extension InklingQ4ParityTests {
         let decoder = try InklingQ4Decoder(
             directory: URL(fileURLWithPath: try #require(Self.install)), maxContext: 512,
             maxChunk: 64, experts: slots == 0 ? .mapped : .slots(slots))
+        decoder.lookaheadPrefetch = Self.environment["TINYTITAN_INKLING2_PREFETCH"] != "0"
         let prompt = [371, 151451, 149879, 151194, 149884]
         var next = try decoder.prefill(prompt, position: 0).next
         let count = 64
@@ -229,10 +230,43 @@ extension InklingQ4ParityTests {
                 slots == 0 ? "mapped" : "\(slots) slots", Double(count) / total,
                 samples.sorted()[count / 2] * 1e3,
                 (decoder.expertCache?.residentBytes ?? 0) >> 20)
-                + (stats.map { "; \($0.hits) hits, \($0.misses) misses" } ?? "")
+                + (stats.map {
+                    "; \($0.hits) hits, \($0.misses) misses; lookahead \($0.predictedCorrect)/"
+                        + "\($0.predicted) right, prefetch \($0.prefetchUsed)/\($0.prefetchLoads) used, "
+                        + String(format: "waited %.1f ms", $0.prefetchWaitSeconds * 1e3)
+                } ?? "")
                 + String(
                     format: "; per token: GPU %.1f ms, expert reads %.1f ms, rest %.1f ms",
                     gpu / Double(count) * 1e3, read / Double(count) * 1e3,
                     (total - gpu - read) / Double(count) * 1e3))
+    }
+}
+
+/// Writes the decode routing trace (one line per layer visit: the stored layer
+/// and the routed ids) to `TINYTITAN_INKLING2_ROUTING_TRACE`, for measuring
+/// prefetch policies offline. Opt-in.
+extension InklingQ4ParityTests {
+    @Test(.enabled(if: install != nil && environment["TINYTITAN_INKLING2_ROUTING_TRACE"] != nil))
+    func writeDecodeRoutingTrace() throws {
+        let path = try #require(Self.environment["TINYTITAN_INKLING2_ROUTING_TRACE"])
+        let decoder = try InklingQ4Decoder(
+            directory: URL(fileURLWithPath: try #require(Self.install)), maxContext: 1_024,
+            maxChunk: 64, experts: .slots(64))
+        let cache = try #require(decoder.expertCache)
+        var lines: [String] = []
+        for item in try Self.reference().cases {
+            decoder.state.reset()
+            var next = try decoder.prefill(item.prompt_ids, position: 0).next
+            cache.routingLog = []
+            for offset in 0..<96 {
+                next = try decoder.step(token: next, position: item.prompt_ids.count + offset).next
+            }
+            let log = cache.routingLog ?? []
+            cache.routingLog = nil
+            lines.append("# case")
+            lines += log.map { "\($0.layer) " + $0.ids.map(String.init).joined(separator: ",") }
+        }
+        #expect(lines.count > 48)
+        try lines.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
     }
 }

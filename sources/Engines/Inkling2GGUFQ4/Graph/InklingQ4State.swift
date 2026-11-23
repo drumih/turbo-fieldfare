@@ -47,6 +47,11 @@ package final class InklingQ4State {
     let routeIDs: MTLBuffer
     /// Routing ids rewritten to expert-cache slots, when experts stream.
     let slotIDs: MTLBuffer
+    /// The next visit's router run on this visit's MoE input: its predicted
+    /// routing, which the expert cache prefetches (decode only).
+    let lookaheadLogits: MTLBuffer
+    let lookaheadIDs: MTLBuffer
+    let lookaheadWeights: MTLBuffer
     let routeWeights: MTLBuffer
     let gateUp: MTLBuffer
     let activation: MTLBuffer
@@ -112,6 +117,9 @@ package final class InklingQ4State {
         let pairs = t * m.expertsPerToken
         routeIDs = try buffer(pairs * 4, "route ids")
         slotIDs = try buffer(pairs * 4, "slot ids")
+        lookaheadLogits = try buffer(m.expertCount * 4, "lookahead logits")
+        lookaheadIDs = try buffer(m.expertsPerToken * 4, "lookahead ids")
+        lookaheadWeights = try buffer(m.expertsPerToken * 4, "lookahead weights")
         routeWeights = try buffer(pairs * 4, "route weights")
         let feedForward = m.layers.map(\.expertFeedForward).max() ?? 0
         gateUp = try buffer(pairs * 2 * feedForward * 4, "gate_up")

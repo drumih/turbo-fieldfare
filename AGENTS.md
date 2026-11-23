@@ -79,6 +79,25 @@ promise to a place nobody looked. Scripts that must accept a version check for
 6.4 and say exactly what they support; a build from another toolchain is the
 builder's own risk, and its failure is not a bug this project owes an answer to.
 
+**Housekeeping is part of finishing a task — this is a rule.** Model installs,
+build trees and benchmark output fill this disk fast, and a full disk stops
+installs, builds and the page cache the engine streams through. So after every
+major task is completed and closed, check what it left behind and clean it up
+before reporting done:
+
+- **Remove what the task itself created and no longer needs**: scratch and
+  temporary outputs, test or mirror installs, staging folders, stale logs and
+  benchmark captures under `.build/` or `/tmp`, and servers or background jobs
+  it started. Delete these without asking; they are the task's own leftovers.
+- **Propose, do not delete, anything else**: a superseded model install, a
+  source snapshot, a release build, a `.build/` subtree some script still
+  references. List each with its size and what it is for, and delete only what
+  the owner approves. Never delete or re-install a model, never purge caches,
+  and never touch another project's files to make room.
+- **Report it**: what was removed, how much space it freed (`df -h` before and
+  after), and what was left on purpose. "Nothing to clean" is a valid finding
+  and is said, not omitted.
+
 ## Layout and commands
 
 `sources/` holds one directory per SwiftPM target. `sources/TinyTitan/` is the
