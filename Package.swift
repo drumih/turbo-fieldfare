@@ -200,6 +200,15 @@ let package = Package(
             path: "sources/Engines/Ornith35B4Bit",
             swiftSettings: tinytitanLanguageStandard
         ),
+        // TT-121 phase 2: Inkling 2 Mini from its Q4_K_XL GGUF, served from a
+        // verified `.ssdai` install. The graph is a spec-sanctioned copy of the
+        // GGUF route's decoder (variant-isolation rule).
+        .target(
+            name: "Inkling2GGUFQ4",
+            dependencies: ["TinyTitanCore", "TinyTitanFormat"],
+            path: "sources/Engines/Inkling2GGUFQ4",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "TinyTitan",
             dependencies: [
@@ -446,6 +455,12 @@ let package = Package(
                 .product(name: "yyjson", package: "yyjson"),
             ],
             path: "tests/Engines/Ornith35B4Bit",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
+            name: "Inkling2GGUFQ4Tests",
+            dependencies: ["Inkling2GGUFQ4", "TinyTitan", "TinyTitanCore"],
+            path: "tests/Engines/Inkling2GGUFQ4",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(

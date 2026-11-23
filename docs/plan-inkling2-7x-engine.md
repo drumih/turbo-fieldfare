@@ -197,6 +197,41 @@ and the README matrix gain them when a variant serves them (phase 4).
   the long-context fixture (Q2 file when installed), golden capture,
   `api-feature-check` 10/10.
 
+**Progress 2026-11-23.** The target exists (`sources/Engines/Inkling2GGUFQ4`):
+the GGUF route's graph and its NVFP4/Q8_0/F32/BF16 kernels, copied, reading a
+verified install — the receipt is checked against the manifest and the
+directory before anything is mapped, the geometry comes from
+`arch.variantGeometry` and the resident index, and each layer's experts are
+read at the install's per-expert stride. `InklingQ4ParityTests` (model-gated on
+`TINYTITAN_INKLING2_Q4_INSTALL`): 96/96 greedy tokens agree with llama.cpp's
+`q4kxl-reference.json`, and every logit of those 96 teacher-forced steps,
+chunked prefill included, is bit-identical to the GGUF route on the source file.
+
+Experts stream (`InklingQ4ExpertResidency.slots(n)`): `n` experts per layer in
+the process's own memory, read with `F_NOCACHE`, least recently used evicted.
+A visit's router ends its command buffer, the CPU reads the routed ids, loads
+the missing experts and continues on slot ids; a prefill chunk that routes to
+more experts than a layer has slots runs in rounds, each finished before the
+next one's reads overwrite its slots. At `n` = 128 every expert is read once at
+load and no visit stops. Logits are bit-identical to the mapped install at 16
+slots (4,959 rounds over 4,608 visits, 74 GiB read) and at 64.
+
+Decode, release build, 24 GB M3, 64 tokens after a 5-token prompt, two rounds
+(74% of memory free, so the mapped run had the whole file in page cache — its
+best case, not what it gets under pressure):
+
+| Experts | tok/s | Expert RAM | Per token |
+| --- | --- | --- | --- |
+| mapped | 14.2 / 17.3 / 13.6 | page cache (≈ 16 GB) | GPU 67.8 ms |
+| 64 slots | 6.38 / 6.30 / 6.22 | 7.5 GB | GPU 77.6, reads 56.2, syncs 27.1 ms; 89% hits |
+| 32 slots | 4.36 / 4.27 / 4.26 | 3.8 GB | GPU 93.3, reads 111.8, syncs 29.7 ms; 80% hits |
+
+The gap is the cost of the 48 router stops a token: the reads do not overlap
+GPU work, and each stop is a commit-and-wait. Prefetch across the stop (the
+next visit's likely experts while this one runs) and the session wiring
+(`EngineModel`/`EngineRunner`, `--ram-budget` to slots, KV bits, prompt cache)
+are what remains of this phase.
+
 ### 3. Variant `Engines/Inkling2NVFP4`
 
 - The same graph, copied (duplication is the 7.0 rule), with the NVFP4/MXFP8
