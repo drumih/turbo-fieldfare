@@ -124,7 +124,7 @@ package enum SSDAIResidentIndexCodec {
                     reason: "invalid UTF-8 or duplicate")
             }
             let dtype = readU8(entry, 6)
-            guard SSDAIFormatV1.DType(rawValue: dtype) != nil else {
+            guard let knownDType = SSDAIFormatV1.DType(rawValue: dtype) else {
                 throw TinyTitanFormatError.invalid(
                     field: "resident.entries[\(index)].dtype",
                     reason: "unknown dtype")
@@ -140,6 +140,11 @@ package enum SSDAIResidentIndexCodec {
                 readU32(entry, 32), readU32(entry, 36),
             ]
             try validateShape(shape, index: index)
+            if let encoding = SSDAIBlockEncodingV1(residentDType: knownDType) {
+                try validateBlockEncodedSizes(
+                    encoding, shape: shape, sizeBytes: sizeBytes,
+                    scaleSize: scaleSize, biasSize: biasSize, index: index)
+            }
             try validatePrimaryPayloadRange(
                 offset: fileOffset, size: sizeBytes,
                 header: header, residentEnd: residentEnd,
@@ -236,6 +241,28 @@ package enum SSDAIResidentIndexCodec {
         guard offset >= header.indexSize, end <= residentEnd else {
             throw TinyTitanFormatError.invalid(
                 field: field, reason: "range outside resident payload")
+        }
+    }
+
+    /// A block-encoded entry's values, scales and (absent) biases must be
+    /// exactly the bytes its shape implies, so a wrong length is refused here
+    /// rather than read past by a kernel.
+    private static func validateBlockEncodedSizes(
+        _ encoding: SSDAIBlockEncodingV1, shape: [UInt32], sizeBytes: UInt64,
+        scaleSize: UInt64, biasSize: UInt64, index: Int
+    ) throws {
+        let field = "resident.entries[\(index)]"
+        let (rows, columns) = try SSDAIBlockEncodingV1.matrix(of: shape, field: "\(field).shape")
+        let payload = try encoding.payloadBytes(
+            rows: rows, columns: columns, field: "\(field).shape")
+        let scales = try encoding.scaleBytes(rows: rows, columns: columns, field: "\(field).shape")
+        guard sizeBytes == payload, scaleSize == scales, biasSize == 0 else {
+            throw TinyTitanFormatError.invalid(
+                field: field,
+                reason:
+                    "\(encoding.rawValue) \(rows)x\(columns) needs \(payload) value bytes, "
+                    + "\(scales) scale bytes and no biases; the entry declares \(sizeBytes), "
+                    + "\(scaleSize) and \(biasSize)")
         }
     }
 

@@ -91,6 +91,20 @@ public struct ManifestArch: Decodable, Equatable, Sendable {
     public let linearKeyHeadDim: Int?
     public let linearValueHeadDim: Int?
     public let linearConvKernelSize: Int?
+    /// A variant's own geometry, read only by that variant (TT-121).
+    public let variantGeometry: ManifestVariantGeometry?
+}
+
+/// Named scalars and integer lists a variant stores in its manifest and alone
+/// interprets; the Core reader carries them without knowing what they mean.
+public struct ManifestVariantGeometry: Decodable, Equatable, Sendable {
+    public let scalars: [String: Double]
+    public let lists: [String: [Int]]
+
+    public init(scalars: [String: Double], lists: [String: [Int]]) {
+        self.scalars = scalars
+        self.lists = lists
+    }
 }
 
 public struct ManifestQuantSlot: Decodable, Equatable, Sendable {

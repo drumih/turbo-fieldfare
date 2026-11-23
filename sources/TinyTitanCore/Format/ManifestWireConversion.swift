@@ -77,7 +77,10 @@ extension ManifestArch {
             linearNumVHeads: wire.linearNumVHeads,
             linearKeyHeadDim: wire.linearKeyHeadDim,
             linearValueHeadDim: wire.linearValueHeadDim,
-            linearConvKernelSize: wire.linearConvKernelSize)
+            linearConvKernelSize: wire.linearConvKernelSize,
+            variantGeometry: wire.variantGeometry.map {
+                ManifestVariantGeometry(scalars: $0.scalars, lists: $0.lists)
+            })
     }
 }
 

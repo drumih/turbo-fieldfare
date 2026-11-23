@@ -27,8 +27,20 @@ The owner wants **both** sources as variants so they can be compared:
   (`models/inkling-2-mini`): NVFP4 block-16 experts in layers 0–19, MXFP8
   block-32 in 20–23, BF16 elsewhere, kept byte for byte.
 
-Neither requantizes. The comparison then measures the formats and their kernels,
-not a conversion.
+Neither requantizes (owner's rule, 2026-11-23: only the routed experts are
+4-bit; everything else stays at its original 8 or 16 bits). Both sources
+already have that shape, so both installs copy their bytes:
+
+| | Q4_K_XL GGUF | original checkpoint |
+| --- | --- | --- |
+| experts, layers 0–19 | NVFP4 (11.47 GB) | NVFP4 (10.32 GB values + E4M3 scales) |
+| experts, layers 20–23 | Q8_0 (4.33 GB) | MXFP8 |
+| everything else | Q8_0 (1.67 GB), F32/BF16 norms | BF16 (3.85 GB), F32 |
+
+The last four layers' experts are 8-bit in both, as the model's authors and
+Unsloth chose; making them 4-bit would be a requantization, which the rule
+excludes. The comparison then measures the formats and their kernels, not a
+conversion.
 
 ## What a variant gets that the side routes do not
 
@@ -58,14 +70,37 @@ packed words plus BF16 scales and biases, and `quant.<role>.scheme` is
   and `NVFP4` (block 16, FP8-E4M3 scales, tensor scale) and `MXFP8` (block 32,
   UE8M0 scales). `scheme` names them; `shape[1]` stays the logical width;
   `sizeBytes` is the raw byte count.
-- An `arch.inkling2` manifest extension the variant alone reads: loop
-  (`core_start/end`, `num_passes`, `gate_rank`), relative bias rank and extent,
-  convolution taps, sinks, message-controller and attention-residual block
-  geometry, softcaps, sliding window and the local/global layer list.
+- `arch.variantGeometry`: named scalars and integer lists the variant alone
+  interprets (keys below), instead of new per-family `arch` fields.
   `ArchConfig` gets only the generic fields the session reads (vocabulary,
   layers, hidden, heads, context).
+
+**Done 2026-11-23:** encodings 4–7 with byte-exact size checks in the index
+and the expert layout, `variantGeometry` through to the Core manifest, the
+format document, and `SSDAIBlockEncodingTests`. The repacker's writer gains the
+encodings in phase 1, where the first source that needs them is read.
 - Reader, writer and receipt validation for the new encodings; existing
   installs re-verify unchanged. Unit tests on synthetic tensors.
+
+#### Inkling's `variantGeometry` keys
+
+What the decoder reads beyond the shared `arch` fields (hidden size, heads,
+KV heads, head dimension, vocabulary, layers, experts, top-k, sliding window,
+softcap), taken from what the GGUF decoder reads today
+(`Inkling2GGUFManifest`). The repacker writes all of them; the variant refuses
+an install missing one.
+
+| Key | Kind | Meaning |
+| --- | --- | --- |
+| `loopStart`, `loopEnd`, `loopPasses`, `loopGateRank` | scalar | the looped core (layers 6–17, three passes, gate rank 64) |
+| `unrolledLayers` | scalar | layer visits per token (48) |
+| `attentionResidualBlock` | scalar | layers per attention-residual block |
+| `relativeLength`, `relativeExtent`, `relativeClip` | scalar | relative-position bias rank, its table length, its clip |
+| `convolutionTaps` | scalar | dynamic-convolution taps |
+| `paddedVocabulary` | scalar | the head's padded row count |
+| `rmsEpsilon`, `qkClip`, `logScaleFloor`, `logScaleAlpha` | scalar | norm epsilon, Q/K clip, attention log-scale |
+| `expertWeightsScale`, `situBeta`, `situLinearBeta` | scalar | routed-weight scale, the SiTU activation |
+| `localLayers` | list | the sliding-window layers; the rest are global |
 
 ### 1. Installs (TinyTitanRepack), streamed
 

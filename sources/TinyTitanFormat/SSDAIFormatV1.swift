@@ -58,6 +58,12 @@ package enum SSDAIFormatV1 {
         case bf16 = 1
         case fp16 = 2
         case fp32 = 3
+        /// Block encodings stored as their source wrote them
+        /// (`SSDAIBlockEncodingV1`); the index checks their byte counts.
+        case ggufQ8_0 = 4
+        case ggufNVFP4 = 5
+        case nvfp4 = 6
+        case mxfp8 = 7
     }
 }
 

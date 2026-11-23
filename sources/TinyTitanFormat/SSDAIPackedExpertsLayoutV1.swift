@@ -250,7 +250,7 @@ package enum SSDAIV1StructuralValidator {
                 expertRanges.append((expert.offset, rangeEnd))
                 var tensorRanges: [(start: UInt64, end: UInt64, name: String)] = []
                 for (name, tensor) in expert.tensors {
-                    guard tensor.dtype == "U32" || tensor.dtype == "BF16",
+                    guard SSDAIPackedExpertsLayoutV1.isKnownSubTensorDType(tensor.dtype),
                         !name.isEmpty, tensor.size > 0,
                         !tensor.shape.isEmpty,
                         tensor.shape.allSatisfy({ $0 > 0 }),
@@ -260,6 +260,8 @@ package enum SSDAIV1StructuralValidator {
                             field: "expert[\(logical)].tensors.\(name)",
                             reason: "invalid dtype or shape")
                     }
+                    try SSDAIPackedExpertsLayoutV1.validateSubTensorSize(
+                        tensor, field: "expert[\(logical)].tensors.\(name)")
                     let end = try ssdaiCheckedAdd(
                         tensor.offset, tensor.size,
                         field: "tensor.\(name).range")

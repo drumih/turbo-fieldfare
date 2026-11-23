@@ -92,6 +92,9 @@ package struct SSDAIManifestArchV1: Codable, Equatable, Sendable {
     package let movaRouterHasBias: Bool?
     package let movaActivation: String?
     package let denseLayerIndices: [Int]?
+    /// A variant's own geometry (`SSDAIVariantGeometryV1`); absent for every
+    /// family that predates it.
+    package let variantGeometry: SSDAIVariantGeometryV1?
 
     package init(
         hiddenSize: Int, ffnIntermediate: Int, moeIntermediateSize: Int,
@@ -140,7 +143,8 @@ package struct SSDAIManifestArchV1: Codable, Equatable, Sendable {
         movaRouterScaling: Double? = nil,
         movaRouterHasBias: Bool? = nil,
         movaActivation: String? = nil,
-        denseLayerIndices: [Int]? = nil
+        denseLayerIndices: [Int]? = nil,
+        variantGeometry: SSDAIVariantGeometryV1? = nil
     ) {
         self.hiddenSize = hiddenSize
         self.ffnIntermediate = ffnIntermediate
@@ -202,6 +206,7 @@ package struct SSDAIManifestArchV1: Codable, Equatable, Sendable {
         self.movaRouterHasBias = movaRouterHasBias
         self.movaActivation = movaActivation
         self.denseLayerIndices = denseLayerIndices
+        self.variantGeometry = variantGeometry
     }
 }
 
@@ -315,6 +320,7 @@ package enum SSDAIManifestCodec {
             throw TinyTitanFormatError.invalid(
                 field: "manifest.arch", reason: "invalid architecture values")
         }
+        try arch.variantGeometry?.validate(field: "manifest.arch.variantGeometry")
         if let quant = manifest.quant {
             for (name, slot) in [
                 ("embedding", quant.embedding),

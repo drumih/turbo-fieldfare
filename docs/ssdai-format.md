@@ -153,6 +153,14 @@ is `hcCount > 0 || indexerBudget > 0 || !pleLayerIndices.isEmpty`, which is how
 the runtime defines the same three (`enabled` on each config struct), so writer
 and reader agree by construction.
 
+A 7.0 variant does not add keys to that list. Its own geometry goes in
+`arch.variantGeometry`, a block of named scalars and named integer lists
+(`SSDAIVariantGeometryV1`) that the format stores, hashes and validates only for
+shape (non-empty keys, finite values, no name used twice); the variant that
+wrote the install defines the names and refuses an install that lacks one it
+needs. Inkling 2 Mini's loop, relative-bias and controller geometry is the first
+user.
+
 The reader compares every key it is given, and from version 1.1 **requires** the
 block for an architecture whose contract has the geometry. A 1.0 manifest may
 still omit it, because the installs already on disk were written before the
@@ -215,6 +223,10 @@ the table. The writer computes `stringTableBase + stringTableOffsets[i]`
 | 1 | bf16 |
 | 2 | fp16 |
 | 3 | fp32 |
+| 4 | `GGUF_Q8_0` block encoding |
+| 5 | `GGUF_NVFP4` block encoding |
+| 6 | `NVFP4` block encoding |
+| 7 | `MXFP8` block encoding |
 
 A quantized weight is `dtype 0`: `sizeBytes` covers the packed words and the
 group-64 scales and biases are **not entries of their own**. They are reached
@@ -222,6 +234,32 @@ through the weight's own `scaleOffset`/`scaleSize`/`biasOffset`/`biasSize`
 fields, and they are BF16. This is the sharpest difference from a safetensors
 snapshot, which names `foo.scales` and `foo.biases` as separate tensors. Reading
 a `.ssdai` index by looking up `"foo.scales"` finds nothing.
+
+### Block encodings: stored as the source wrote them
+
+Codes 4–7 (TT-121) hold a source's own quantization byte for byte instead of
+re-encoding it to the affine packing, so a GGUF or a ModelOpt checkpoint
+installs without a requantization step. `SSDAIBlockEncodingV1` owns their byte
+rules, and the index refuses an entry whose sizes do not match its shape:
+
+| Encoding | Values | Scales |
+| --- | --- | --- |
+| `GGUF_Q8_0` | ggml `block_q8_0`: 34 bytes per 32 values (f16 scale, 32 int8) | inside each block; `scaleSize` 0 |
+| `GGUF_NVFP4` | ggml `block_nvfp4`: 36 bytes per 64 values (4 UE4M3 sub-block scales, 32 bytes E2M1) | inside each block; `scaleSize` 0 |
+| `NVFP4` | 2 E2M1 values a byte | the scale range: 1 E4M3 byte per 16 values |
+| `MXFP8` | 1 E4M3 byte a value | the scale range: 1 UE8M0 byte per 32 values |
+
+The row length (the last non-zero dimension) must fill whole blocks; earlier
+dimensions multiply into the row count, so a `[experts, rows, columns]` tensor
+is `experts x rows` rows. None has biases. A global scale (an NVFP4 `amax`, a
+GGUF per-expert `scale`) is an ordinary `fp32` entry of its own. The format
+knows the bytes, not the arithmetic: a variant reads only the encodings it
+compiled kernels for, and the runtime's affine families still refuse any
+`scheme` other than `affine`.
+
+In `packed_experts/layout.json` an expert's sub-tensors may use the same names
+as `dtype` strings, plus the auxiliary `F32`, `F8_E4M3` and `UE8M0` for their
+scale tensors, and the layout validator checks each one's size the same way.
 
 ### `shape[1]` is the logical width
 
