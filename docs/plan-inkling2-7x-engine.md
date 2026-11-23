@@ -411,3 +411,26 @@ the handover say what 7.x actually serves.
   are not comparable.
 - **NVFP4 oracle.** There is no llama.cpp path for the safetensors checkpoint;
   the Python reference is the oracle and its coverage must be stated.
+
+## Chat benchmark at `--ram-budget 12G`, 2026-11-24
+
+Commit `fd29609c`, MacBook Pro M3 (Mac15,3) 24 GB, macOS 27.2.1, Swift 6.4.2, release
+build. One server at a time on loopback, prompt "Compare Swift vs C++ in detail.",
+`temperature 0`, `max_tokens 1024`, streamed; decode is measured by the client
+from the first token to the last. Run 1 is cold (page cache and prompt cache
+empty), runs 2–3 warm.
+
+| Model / route | Plan | RSS | Out | TTFT warm | Decode tok/s (runs) |
+|---|---|---|---|---|---|
+| Inkling 2 Q4 `.ssdai`, `--ram-budget 12G` (default 262K window) | 15 slots, 1769 MiB cache | 10.0 GB | 380 | 4.35 s | 3.07 / 3.12 |
+| Inkling 2 Q4 `.ssdai`, `--ram-budget 12G --max-context 32768` | 76 slots, 8963 MiB cache | 10.1 GB | 380 | 1.23 s | 12.30 / 12.48 / 12.34 |
+| Inkling 2 NVFP4, raw-checkpoint side route | fixed 48 slots, budget ignored | 7.0 GB | 64 (route cap) | — | ≈1.5 (64 tok in 42.3 s wall) |
+| Ornith 1.5 4-bit, `--ram-budget 12G` | 128 slots, 8.44 GB cache | 10.4 GB | 1024 | 1.00 s | 16.48 / 17.31 / 17.48 |
+
+- The two Q4 plans produced byte-identical text; only the slot count differs.
+  The default plan gives the 262K window priority and leaves 15 slots, which
+  costs 4x decode at the same budget.
+- The NVFP4 route does not stream (all 64 tokens arrive at the end), caps answers
+  at 64 tokens (TT-118) and does not honour `--ram-budget`; its figure is wall
+  time including prefill. The NVFP4 `.ssdai` install has no engine variant yet
+  (phase 3), so this is the only way it runs today.
