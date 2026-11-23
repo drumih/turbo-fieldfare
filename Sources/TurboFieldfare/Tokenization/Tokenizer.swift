@@ -125,8 +125,31 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         let tokenizerData = try await hub.tokenizerData
         let underlying = try AutoTokenizer.from(
-            tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData)
+            tokenizerConfig: preservingNullToolArguments(in: tokenizerConfig),
+            tokenizerData: tokenizerData)
         return try GFTokenizer(tokenizer: underlying, tokenizerData: tokenizerData)
+    }
+
+    /// The pinned template otherwise renders Jinja's null as an empty value
+    /// when replaying tool calls. Apply the upstream null branch in memory.
+    static func preservingNullToolArguments(in tokenizerConfig: Config) -> Config {
+        let legacy = """
+        {%- macro format_argument(argument, escape_keys=True) -%}
+            {%- if argument is string -%}
+        """
+        guard var template = tokenizerConfig.chatTemplate.string(),
+              let legacyBranch = template.range(of: legacy),
+              var config = tokenizerConfig.dictionary() else {
+            return tokenizerConfig
+        }
+        template.replaceSubrange(legacyBranch, with: """
+        {%- macro format_argument(argument, escape_keys=True) -%}
+            {%- if argument is none -%}
+                {{- 'null' -}}
+            {%- elif argument is string -%}
+        """)
+        config["chat_template"] = .init(template)
+        return Config(config)
     }
 
     private static func hasTokenizerJSON(in folder: URL, fileManager: FileManager) -> Bool {

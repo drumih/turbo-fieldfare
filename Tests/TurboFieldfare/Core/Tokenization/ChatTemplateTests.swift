@@ -1,4 +1,6 @@
 import Foundation
+import Hub
+import Jinja
 import Testing
 @testable import TurboFieldfare
 
@@ -133,4 +135,48 @@ struct ChatTemplateTests {
         let p = try tok.applyChatTemplate([])
         #expect(p == "<bos><|turn>model\n<|channel>thought\n<channel|>")
     }
+}
+
+@Test func preservesNullInLegacyToolTemplate() throws {
+    let legacyTemplate = """
+    {%- macro format_argument(argument, escape_keys=True) -%}
+        {%- if argument is string -%}
+            {{- '<|"|>' + argument + '<|"|>' -}}
+        {%- else -%}
+            {{- argument -}}
+        {%- endif -%}
+    {%- endmacro -%}
+    {{- format_argument(value) -}}
+    """
+    let original = Config(["chat_template": legacyTemplate])
+    let patched = GFTokenizer.preservingNullToolArguments(in: original)
+    let source = try #require(patched.chatTemplate.string())
+    let template = try Template(source)
+
+    #expect(try template.render(["value": .null]) == "null")
+    #expect(try template.render(["value": .string("null")]) == #"<|"|>null<|"|>"#)
+    #expect(GFTokenizer.preservingNullToolArguments(in: patched) == patched)
+    let customTemplate = Config(["chat_template": "{{ messages }}"])
+    #expect(GFTokenizer.preservingNullToolArguments(in: customTemplate) == customTemplate)
+}
+
+private let toolHistoryTokenizerFolder = GFTokenizer.tokenizerFolder(
+    forModelDirectory: URL(fileURLWithPath: "scratch/gemma4.gturbo"))
+
+@Test(.enabled(if: toolHistoryTokenizerFolder != nil, "Requires installed tokenizer sidecars"))
+func preservesNullInRenderedToolHistory() async throws {
+    let tokenizer = try await GFTokenizer.load(from: #require(toolHistoryTokenizerFolder))
+    let arguments: JSONValue = .object(["nested": .array([.integer(1), .null]), "value": .null])
+    let call = GFTokenizer.HistoricalToolCall(id: "call_test", name: "lookup", arguments: arguments)
+    let messages: [GFTokenizer.Message] = [
+        .init(role: .user, content: "Look it up."),
+        .init(role: .assistant, content: nil, toolCalls: [call]),
+        .init(role: .tool, content: "Done.", toolCallID: call.id),
+    ]
+    let tokens = try tokenizer.encodeToolChat(messages: messages, tools: [])
+    let start = try #require(tokens.firstIndex(of: tokenizer.toolCallStartID))
+    let end = try #require(tokens[(start + 1)...].firstIndex(of: tokenizer.toolCallEndID))
+    let body = tokenizer.decode(Array(tokens[(start + 1)..<end]), skipSpecialTokens: false)
+    let parsed = try GemmaToolCallParser().parse(body, allowedTools: [call.name], id: call.id)
+    #expect(parsed.arguments == arguments)
 }
