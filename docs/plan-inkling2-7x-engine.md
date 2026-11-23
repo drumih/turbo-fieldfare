@@ -226,6 +226,31 @@ best case, not what it gets under pressure):
 | 64 slots | 6.38 / 6.30 / 6.22 | 7.5 GB | GPU 77.6, reads 56.2, syncs 27.1 ms; 89% hits |
 | 32 slots | 4.36 / 4.27 / 4.26 | 3.8 GB | GPU 93.3, reads 111.8, syncs 29.7 ms; 80% hits |
 
+**Served, 2026-11-23.** `TinyTitanServer --model models/inkling-2-mini_GGUF-Q4`
+serves the variant through the Inkling backend (`Inkling2Q4ServerLoad`; model id
+`inkling-2-mini-gguf-q4`): its decoder sits behind `Inkling2Decoding` in the
+same `Inkling2GGUFSession` the GGUF route uses, and the tokenizer comes from the
+install's copy of the GGUF header (`GGUFModelReader.readHeader`). `--ram-budget`
+(or `--expert-cache-slots`) sizes the plan (`InklingQ4LoadPlan`): weights and a
+512 MiB reserve first, then the window's KV, then as many expert slots as the
+rest holds; with no budget the experts get 8 GiB. `tools/api-feature-check.py`:
+**10/10** at `--ram-budget 12G` (76 slots, 32K window; footprint 10 GB). The
+shared session (prompt cache, several sequences, KV bits) is still phase 4.
+
+4 GiB budget, for an 8 GB M2 Mac mini — **measured on the 24 GB M3, not on an
+M2**: the budget caps what the process allocates, but the M3's page cache kept
+the 1.8 GB of mapped resident weights warm, and an M2's GPU and SSD differ.
+Streaming client, temperature 0, 128-token answers to 25-32-token prompts,
+three prompts x two rounds, release build:
+
+| Launch | Plan | Decode tok/s | TTFT | Footprint |
+| --- | --- | --- | --- | --- |
+| `--ram-budget 4G --max-context 4096` | 14 slots, 4K | 2.66-2.97 | 4.5-5.0 s | 2.37 GB + 1.8 GB mapped weights |
+| `--ram-budget 4G --max-context 32768` | 8 slots, 28K | 2.24-2.35 | 4.9-5.7 s | 2.44 GB + 1.8 GB mapped weights |
+
+At 4 GiB a long window costs speed: its KV takes what would be expert slots,
+and at 8 slots (one token's worth) nearly every expert is a miss.
+
 The gap is the cost of the 48 router stops a token: the reads do not overlap
 GPU work, and each stop is a commit-and-wait. Prefetch across the stop (the
 next visit's likely experts while this one runs) and the session wiring

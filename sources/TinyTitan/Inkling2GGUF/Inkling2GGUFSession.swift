@@ -104,6 +104,24 @@ package struct Inkling2GGUFTokenizer: @unchecked Sendable {
     }
 }
 
+/// What the session drives: the GGUF route's decoder, or the Inkling 2 Q4
+/// engine variant over an `.ssdai` install (TT-121), which runs the same graph
+/// with its experts streamed. Greedy `next` is the GPU argmax; `logits` are
+/// the softcapped logits of the unpadded vocabulary when asked for.
+package protocol Inkling2Decoding: AnyObject {
+    var maxContext: Int { get }
+    func resetSequence()
+    func prefill(_ prompt: [Int], position: Int, returnLogits: Bool) throws
+        -> (next: Int, logits: [Float]?)
+    func step(token: Int, position: Int, returnLogits: Bool) throws
+        -> (next: Int, logits: [Float]?)
+}
+
+extension Inkling2GGUFDecoder: Inkling2Decoding {
+    package var maxContext: Int { state.maxContext }
+    package func resetSequence() { state.reset() }
+}
+
 /// One Inkling2 GGUF model ready to generate: the native decoder plus its
 /// tokenizer and chat format. The CLI and the loopback server both generate
 /// through this, so there is one prompt renderer and one decode loop.
@@ -119,7 +137,7 @@ package final class Inkling2GGUFSession {
         package let decodeSeconds: Double
     }
 
-    let decoder: Inkling2GGUFDecoder
+    let decoder: any Inkling2Decoding
     package let tokenizer: Inkling2GGUFTokenizer
 
     /// `maxContext` is what the front end asks for; the session allocates the
@@ -127,13 +145,22 @@ package final class Inkling2GGUFSession {
     /// (`Inkling2GGUFContextBudget`), which `maximumContext` reports.
     package init(gguf url: URL, maxContext: Int, maxChunk: Int = 256) async throws {
         let window = try Self.affordableContext(gguf: url, requested: maxContext)
-        decoder = try Inkling2GGUFDecoder(
+        let decoder = try Inkling2GGUFDecoder(
             url: url, maxContext: window, maxChunk: min(maxChunk, window))
         tokenizer = try await Inkling2GGUFTokenizer.load(gguf: url, model: decoder.manifest.model)
         decoder.weights.prefault()
+        self.decoder = decoder
     }
 
-    package var maximumContext: Int { decoder.state.maxContext }
+    /// A session over another decoder of the same graph, with the tokenizer
+    /// read from `header` (a GGUF header saved without its data section).
+    package init(decoder: any Inkling2Decoding, ggufHeader header: URL) async throws {
+        self.decoder = decoder
+        tokenizer = try await Inkling2GGUFTokenizer.load(
+            gguf: header, model: try GGUFModelReader.readHeader(at: header))
+    }
+
+    package var maximumContext: Int { decoder.maxContext }
 
     /// The window the device affords for `gguf`, reported on stderr when it is
     /// below what was asked.
@@ -255,7 +282,7 @@ package final class Inkling2GGUFSession {
             throw MetalError.invalidState(
                 "context overflow: \(promptIDs.count) prompt tokens for \(maximumContext)")
         }
-        decoder.state.reset()
+        decoder.resetSequence()
         let greedy =
             sampler.isGreedy && sampler.repetitionPenalty == 1
             && sampler.presencePenalty == 0 && shapeLogits == nil

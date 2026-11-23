@@ -6,7 +6,7 @@ import TinyTitanFormat
 /// the resident index of `model_weights.bin` and the packed-expert layout,
 /// opened only after the install receipt matches the manifest and the
 /// directory it was issued for.
-struct InklingQ4Install {
+package struct InklingQ4Install {
     enum Error: Swift.Error, CustomStringConvertible, Equatable {
         case notInkling(String)
         case receipt(String)
@@ -25,6 +25,17 @@ struct InklingQ4Install {
     static let modelIDPrefix = "inkling-2-mini-gguf"
     static let residentFile = "model_weights.bin"
     static let layoutFile = "packed_experts/layout.json"
+
+    /// The GGUF header the repacker copied verbatim: metadata, tokenizer,
+    /// chat template and tensor directory, with no tensor data behind it.
+    package static let ggufHeaderFile = "inkling2_gguf_header.bin"
+
+    /// Whether `url` is a directory holding this variant's install (by its
+    /// manifest identity; the full checks run when it is opened).
+    package static func recognizes(_ url: URL) -> Bool {
+        guard let manifest = try? SSDAIManifestReader.read(directoryURL: url) else { return false }
+        return manifest.modelID.hasPrefix(modelIDPrefix)
+    }
 
     let directory: URL
     let manifest: Manifest

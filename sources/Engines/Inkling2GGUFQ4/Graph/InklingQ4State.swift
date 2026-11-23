@@ -12,11 +12,11 @@ import TinyTitanCore
 /// Sliding-window visits keep a ring of `slidingWindow + maxChunk` positions —
 /// the extra `maxChunk` slots keep a chunk's later tokens from overwriting keys
 /// its earlier tokens still attend to; full-attention visits keep `maxContext`.
-final class InklingQ4State {
+package final class InklingQ4State {
     /// Convolution channels per visit: K, V, attention output, FFN output.
     let convChannels: Int
     let kvWidth: Int
-    let maxContext: Int
+    package let maxContext: Int
     let maxChunk: Int
     let kCaches: [MTLBuffer]
     let vCaches: [MTLBuffer]
@@ -124,14 +124,14 @@ final class InklingQ4State {
     }
 
     /// Clears every cache and convolution history for a new sequence.
-    func reset() {
+    package func reset() {
         for buffer in kCaches + vCaches + convStates {
             memset(buffer.contents(), 0, buffer.length)
         }
     }
 
     /// Bytes of recurrent state and scratch held by this session.
-    var allocatedBytes: Int {
+    package var allocatedBytes: Int {
         (kCaches + vCaches + convStates).reduce(0) { $0 + $1.length } + pool.length
             + gateUp.length + down.length + activation.length + logits.length
     }

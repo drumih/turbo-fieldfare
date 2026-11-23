@@ -284,6 +284,27 @@ private struct GGUFWriter {
         #expect(shardRead())
     }
 
+    /// An `.ssdai` install keeps a GGUF's header without its data section
+    /// (TT-121): the header-only read returns the metadata and directory such
+    /// a file holds, and the ordinary read still refuses it.
+    @Test func readsAHeaderSavedWithoutItsDataSection() throws {
+        let directory = try Self.tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var writer = GGUFWriter()
+        writer.addString("general.architecture", "toy")
+        writer.addStringArray("tokenizer.ggml.tokens", ["a", "b"])
+        writer.tensors = Self.standardTensors()
+        writer.dataSize = 0
+        let url = directory.appendingPathComponent("header.bin")
+        try writer.write(to: url)
+        #expect(throws: GGUFError.self) { _ = try GGUFReader.read(shardAt: url) }
+        let model = try GGUFModelReader.readHeader(at: url)
+        #expect(model.architecture == "toy")
+        #expect(model.metadata["tokenizer.ggml.tokens"]?.strings == ["a", "b"])
+        #expect(model.tensor(named: "toy.q6k")?.tensor.byteCount == 840)
+        #expect(model.tensors.count == 3)
+    }
+
     @Test func mergesSplitShardsByFilename() throws {
         let directory = try Self.tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

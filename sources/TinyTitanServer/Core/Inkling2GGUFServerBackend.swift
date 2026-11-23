@@ -35,7 +35,15 @@ package actor Inkling2GGUFServerBackend: ServerInferenceBackend, PromptTokenCoun
 
     package init(gguf: URL, maxContext: Int, reasoning: ReasoningLevel = .off) async throws {
         let context = min(maxContext, Self.contextCap)
-        session = try await Inkling2GGUFSession(gguf: gguf, maxContext: context)
+        try self.init(
+            session: try await Inkling2GGUFSession(gguf: gguf, maxContext: context),
+            reasoning: reasoning)
+    }
+
+    /// A backend over a session already built — the GGUF route's, or the
+    /// Inkling 2 Q4 engine variant's over its `.ssdai` install.
+    package init(session: Inkling2GGUFSession, reasoning: ReasoningLevel = .off) throws {
+        self.session = session
         vocabulary = try Inkling2GGUFOutputParser.Vocabulary(tokenizer: session.tokenizer)
         maximumContext = session.maximumContext
         defaultReasoning = Self.requestReasoning(for: reasoning)

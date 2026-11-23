@@ -218,7 +218,8 @@ package enum GGUFReader {
     /// typical directory costs one small page-cache read rather than the cap.
     package static func read(
         shardAt url: URL,
-        maxDirectoryBytes: UInt64 = defaultMaxDirectoryBytes
+        maxDirectoryBytes: UInt64 = defaultMaxDirectoryBytes,
+        headerOnly: Bool = false
     ) throws -> GGUFShard {
         let path = url.path
         let fd = open(path, O_RDONLY | O_CLOEXEC)
@@ -239,7 +240,8 @@ package enum GGUFReader {
         while true {
             let data = try readExact(fd: fd, path: path, count: Int(window))
             do {
-                var parser = GGUFParser(url: url, data: data, fileSize: fileSize)
+                var parser = GGUFParser(
+                    url: url, data: data, fileSize: fileSize, headerOnly: headerOnly)
                 return try parser.parse()
             } catch GGUFError.truncated(let offset) {
                 if window >= fileSize { throw GGUFError.truncated(offset: offset) }

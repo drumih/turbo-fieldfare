@@ -354,6 +354,9 @@ let package = Package(
                 // the variant-isolation rule; only a variant may not import
                 // the server.
                 "TinyTitanVariants",
+                // TT-121: the Inkling 2 Q4 variant, served through the Inkling
+                // backend until the shared session takes Inkling (phase 4).
+                "Inkling2GGUFQ4",
                 "TinyTitanCPUEngine", "TinyTitanInkling2",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),

@@ -4,12 +4,17 @@ struct GGUFParser {
     let url: URL
     let data: Data
     let fileSize: UInt64
+    /// A header copied out of a GGUF without its data section (an `.ssdai`
+    /// install keeps one for its tokenizer and template): the tensor directory
+    /// is read, but no tensor's bytes are expected behind it.
+    let headerOnly: Bool
     var offset: Int = 0
 
-    init(url: URL, data: Data, fileSize: UInt64) {
+    init(url: URL, data: Data, fileSize: UInt64, headerOnly: Bool = false) {
         self.url = url
         self.data = data
         self.fileSize = fileSize
+        self.headerOnly = headerOnly
     }
 
     mutating func parse() throws -> GGUFShard {
@@ -75,13 +80,13 @@ struct GGUFParser {
         // directory: the Unsloth Qwen3.8 split puts all 67 architecture and
         // tokenizer keys in shard 1, 10,946,618 bytes that are not a multiple of
         // the 32-byte alignment and are followed by no data section at all.
-        if !tensors.isEmpty {
+        if !tensors.isEmpty, !headerOnly {
             guard dataOffset <= fileSize else {
                 throw GGUFError.missingDataSection(
                     headerEnd: headerEnd, alignment: alignment, fileSize: fileSize)
             }
         }
-        for tensor in tensors {
+        for tensor in tensors where !headerOnly {
             guard tensor.byteCount == 0 || tensor.offset % alignment == 0 else {
                 throw GGUFError.tensorOffsetMisaligned(
                     name: tensor.name, offset: tensor.offset, alignment: alignment)

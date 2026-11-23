@@ -12,12 +12,12 @@ import TinyTitanCore
 /// the 48 layer visits (depth mixes, loop controllers, short convolutions,
 /// relative attention, the sigmoid router and the routed experts) with no CPU
 /// round trip; the next token is the GPU argmax of the chunk's last position.
-final class InklingQ4Decoder {
+package final class InklingQ4Decoder {
     typealias Operand = GGUFGemvIds.Operand
 
     let manifest: InklingQ4Manifest
     let weights: InklingQ4Weights
-    let state: InklingQ4State
+    package let state: InklingQ4State
     private let context: MetalContext
     let ops: InklingQ4Ops
     /// Tokens of the chunk being encoded.
@@ -28,14 +28,14 @@ final class InklingQ4Decoder {
     private var freePersistent: [Int] = []
     private var transientCursor = 0
     /// The routed experts' slots when they stream; nil when they are mapped.
-    let expertCache: InklingQ4ExpertCache?
+    package let expertCache: InklingQ4ExpertCache?
     /// The command buffer being encoded. A chunk is one buffer unless experts
     /// stream, when each layer visit's router ends one (`resolveRouting`).
     private var segment: (buffer: MTLCommandBuffer, encoder: MTLComputeCommandEncoder)?
     private var segmentGPUSeconds: Double = 0
     private var segmentWaitSeconds: Double = 0
 
-    init(
+    package init(
         directory: URL, maxContext: Int = 4_096, maxChunk: Int = 256,
         experts residency: InklingQ4ExpertResidency = .mapped, context: MetalContext? = nil
     ) throws {
@@ -78,7 +78,7 @@ final class InklingQ4Decoder {
 
     /// Feeds `token` at `position` and returns the greedy next token. With
     /// `returnLogits`, also returns the softcapped logits of the unpadded vocabulary.
-    func step(token: Int, position: Int, returnLogits: Bool = false) throws
+    package func step(token: Int, position: Int, returnLogits: Bool = false) throws
         -> (next: Int, logits: [Float]?)
     {
         try prefill([token], position: position, returnLogits: returnLogits)
@@ -87,7 +87,7 @@ final class InklingQ4Decoder {
     /// Feeds `prompt` at positions `position ..<`, in chunks of up to
     /// `maxChunk` tokens, and returns the greedy token after its last one
     /// (with its softcapped logits when asked).
-    func prefill(_ prompt: [Int], position: Int, returnLogits: Bool = false) throws
+    package func prefill(_ prompt: [Int], position: Int, returnLogits: Bool = false) throws
         -> (next: Int, logits: [Float]?)
     {
         guard !prompt.isEmpty, position + prompt.count <= state.maxContext else {

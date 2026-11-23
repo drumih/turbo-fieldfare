@@ -4,7 +4,7 @@ import TinyTitanCore
 import TinyTitanFormat
 
 /// Where the routed experts live while the decoder runs.
-enum InklingQ4ExpertResidency: Sendable, Equatable {
+package enum InklingQ4ExpertResidency: Sendable, Equatable {
     /// No-copy buffers over the install's layer files: every expert is reached
     /// through the page cache. The reference the cached modes are checked against.
     case mapped
@@ -20,7 +20,7 @@ enum InklingQ4ExpertResidency: Sendable, Equatable {
 /// phase 2). One Metal buffer per layer holds `slots` expert blobs at the
 /// install's stride, so the kernels index a slot exactly as they index an
 /// expert in the mapped file; the per-expert F32 scales are kept per slot.
-final class InklingQ4ExpertCache {
+package final class InklingQ4ExpertCache {
     struct Layer {
         let stride: Int
         let file: Int32
@@ -34,17 +34,17 @@ final class InklingQ4ExpertCache {
         let downOffset: Int
     }
 
-    struct Statistics: Equatable {
-        var hits: UInt64 = 0
-        var misses: UInt64 = 0
-        var bytesRead: UInt64 = 0
-        var rounds: UInt64 = 0
-        var syncs: UInt64 = 0
+    package struct Statistics: Equatable {
+        package var hits: UInt64 = 0
+        package var misses: UInt64 = 0
+        package var bytesRead: UInt64 = 0
+        package var rounds: UInt64 = 0
+        package var syncs: UInt64 = 0
         /// Wall time spent reading experts from the install.
-        var readSeconds: Double = 0
+        package var readSeconds: Double = 0
     }
 
-    let slotCount: Int
+    package let slotCount: Int
     let expertCount: Int
     /// Every expert resident and slot `e` holding expert `e`: routing ids are
     /// slot ids and no visit needs a CPU step.
@@ -54,10 +54,10 @@ final class InklingQ4ExpertCache {
     private var expertIn: [[Int]]
     private var lastUse: [[UInt64]]
     private var tick: UInt64 = 0
-    private(set) var statistics = Statistics()
+    package private(set) var statistics = Statistics()
 
     /// Bytes of expert slots (and their scales) this cache holds.
-    var residentBytes: Int {
+    package var residentBytes: Int {
         layers.reduce(0) { total, layer in
             total + layer.slots.length + (layer.gateUpScale?.length ?? 0)
                 + (layer.downScale?.length ?? 0)

@@ -86,6 +86,18 @@ package enum GGUFModelReader {
         return try merge(shards: shards, split: split)
     }
 
+    /// Read a GGUF header saved without its data section: metadata and the
+    /// tensor directory only. Nothing may read tensor bytes through the result.
+    package static func readHeader(
+        at url: URL, maxDirectoryBytes: UInt64 = GGUFReader.defaultMaxDirectoryBytes
+    ) throws -> GGUFModel {
+        try merge(
+            shards: [
+                try GGUFReader.read(
+                    shardAt: url, maxDirectoryBytes: maxDirectoryBytes, headerOnly: true)
+            ], split: nil)
+    }
+
     private static func merge(shards: [GGUFShard], split: SplitName?) throws -> GGUFModel {
         var tensors: [String: GGUFTensorLocation] = [:]
         var total = 0
