@@ -44,57 +44,8 @@ extension RemoteStreamingRepacker {
             tempDirectory: paths.partialDirectory,
             retryPolicy: retryPolicy)
         progress(.downloadingMetadata)
-        let snapshot = try await RemoteSnapshotLoader.load(
-            remote: remote,
-            requireKnownSource: options.requireKnownSource,
-            metadataDirectory: paths.metadataDirectory,
-            installDraftHead: options.installDraftHead,
-            audit: audit)
-        try Task.checkCancellation()
-        // Files this family carries verbatim alongside the tensor payload.
-        // They are standalone files rather than index entries, so their sizes
-        // come from the remote before planning; the planner then treats them
-        // as ordinary resumable range copies.
-        var passthroughFiles: [PassthroughFile] = []
-        // The transfer layer resolves a copy's source through this map. These
-        // files are not safetensors shards, so the snapshot loader never put
-        // them there -- carrying the resolved info forward is what makes them
-        // fetchable rather than merely planned.
-        var passthroughRemoteInfo: [String: RemoteFileInfo] = [:]
-        for requirement in RepackPlanner.passthroughRequirements(
-            family: snapshot.arch.family)
-        {
-            let info: RemoteFileInfo
-            do {
-                info = try await remote.resolveFileInfo(
-                    filename: requirement.name,
-                    audit: audit)
-            } catch {
-                // An absent optional file leaves a runnable install; an absent
-                // required one does not, and must not be discovered later.
-                if requirement.required || !isRemoteNotFound(error) { throw error }
-                continue
-            }
-            guard info.size <= requirement.capBytes else {
-                throw RepackError.remoteFileTooLarge(
-                    path: requirement.name,
-                    size: info.size,
-                    cap: requirement.capBytes)
-            }
-            passthroughFiles.append(
-                PassthroughFile(
-                    sourceName: requirement.name,
-                    destinationName: requirement.name,
-                    size: info.size,
-                    required: requirement.required))
-            passthroughRemoteInfo[requirement.name] = info
-        }
-        let plan = try RepackPlanner.plan(
-            meta: snapshot.metadata,
-            arch: snapshot.arch,
-            shardHeaders: snapshot.shardHeaders,
-            outputDir: paths.partialDirectory,
-            passthroughFiles: passthroughFiles)
+        let (snapshot, plan, passthroughRemoteInfo) = try await prepareRemotePlan(
+            remote: remote, paths: paths)
         let rangePlan = try RangeCopyPlanner.plan(
             repackPlan: plan,
             rangeChunkBytes: options.rangeChunkBytes,
@@ -317,8 +268,12 @@ extension RemoteStreamingRepacker {
         // draft layer. It shares tokenization, embedding and lm_head with the
         // target bundle, so copying tokenizer/config sidecars would be both
         // redundant and a misleading standalone-model contract.
+        // An Inkling GGUF's tokenizer and template are in its header sidecar.
+        let ggufHeaderInstall = plan.passthroughFiles.contains {
+            $0.destinationName == Inkling2GGUFPlanner.headerSidecarName
+        }
         if plan.arch.family != .qwen36MTP && plan.arch.family != .qwen38flashMTP
-            && plan.arch.family != .qwen4flashMTP
+            && plan.arch.family != .qwen4flashMTP && !ggufHeaderInstall
         {
             try await copyRemoteMetadataSidecars(
                 snapshot: snapshot,
@@ -375,5 +330,70 @@ extension RemoteStreamingRepacker {
             downloadedThisRunBytes:
                 audit.remoteBytesDownloaded - payloadDownloadStart,
             dryRun: false)
+    }
+
+    /// The snapshot, the repack plan and the remote info of every passthrough
+    /// file: an Inkling 2 source through its own planner, every other one
+    /// through `model.safetensors.index.json` and `RepackPlanner`.
+    func prepareRemotePlan(
+        remote: HuggingFaceRemoteSource,
+        paths: RemoteInstallPaths
+    ) async throws -> (RemoteSnapshot, RepackPlan, [String: RemoteFileInfo]) {
+        if let inkling2 = options.inkling2 {
+            return try await prepareInkling2RemotePlan(
+                inkling2, remote: remote, paths: paths)
+        }
+        let snapshot = try await RemoteSnapshotLoader.load(
+            remote: remote,
+            requireKnownSource: options.requireKnownSource,
+            metadataDirectory: paths.metadataDirectory,
+            installDraftHead: options.installDraftHead,
+            audit: audit)
+        try Task.checkCancellation()
+        // Files this family carries verbatim alongside the tensor payload.
+        // They are standalone files rather than index entries, so their sizes
+        // come from the remote before planning; the planner then treats them
+        // as ordinary resumable range copies.
+        var passthroughFiles: [PassthroughFile] = []
+        // The transfer layer resolves a copy's source through this map. These
+        // files are not safetensors shards, so the snapshot loader never put
+        // them there -- carrying the resolved info forward is what makes them
+        // fetchable rather than merely planned.
+        var passthroughRemoteInfo: [String: RemoteFileInfo] = [:]
+        for requirement in RepackPlanner.passthroughRequirements(
+            family: snapshot.arch.family)
+        {
+            let info: RemoteFileInfo
+            do {
+                info = try await remote.resolveFileInfo(
+                    filename: requirement.name,
+                    audit: audit)
+            } catch {
+                // An absent optional file leaves a runnable install; an absent
+                // required one does not, and must not be discovered later.
+                if requirement.required || !isRemoteNotFound(error) { throw error }
+                continue
+            }
+            guard info.size <= requirement.capBytes else {
+                throw RepackError.remoteFileTooLarge(
+                    path: requirement.name,
+                    size: info.size,
+                    cap: requirement.capBytes)
+            }
+            passthroughFiles.append(
+                PassthroughFile(
+                    sourceName: requirement.name,
+                    destinationName: requirement.name,
+                    size: info.size,
+                    required: requirement.required))
+            passthroughRemoteInfo[requirement.name] = info
+        }
+        let plan = try RepackPlanner.plan(
+            meta: snapshot.metadata,
+            arch: snapshot.arch,
+            shardHeaders: snapshot.shardHeaders,
+            outputDir: paths.partialDirectory,
+            passthroughFiles: passthroughFiles)
+        return (snapshot, plan, passthroughRemoteInfo)
     }
 }

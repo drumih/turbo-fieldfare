@@ -4,6 +4,15 @@ import Foundation
 //
 // Split out of `RemoteStreamingRepacker.swift` (2026-09-28) under the
 // 500-line-per-file rule (Task 8 of the cleanup runbook) as pure code motion.
+/// An Inkling 2 source the installer plans from its own tensors rather than
+/// through `model.safetensors.index.json` affine metadata (TT-121).
+public enum RemoteInkling2Source: Sendable, Equatable {
+    /// One GGUF file in the repository; every tensor keeps its GGUF encoding.
+    case gguf(fileName: String)
+    /// The original ModelOpt NVFP4/MXFP8 checkpoint and its MTP shard.
+    case checkpoint
+}
+
 public struct RemoteStreamingRepackOptions: Sendable {
     public let repoID: String
     public let revision: String
@@ -29,6 +38,8 @@ public struct RemoteStreamingRepackOptions: Sendable {
     /// distinguishes them, which is why this is a choice the caller makes and
     /// not something the loader can infer.
     public let installDraftHead: Bool
+    /// Set for an Inkling 2 source, which is planned by its own planner.
+    public let inkling2: RemoteInkling2Source?
 
     public init(
         repoID: String,
@@ -47,8 +58,10 @@ public struct RemoteStreamingRepackOptions: Sendable {
         baseURL: URL = RemoteBaseURL.huggingFace,
         rangeRetryAttempts: Int = 4,
         retryBaseDelayNs: UInt64 = 1_000_000_000,
-        installDraftHead: Bool = false
+        installDraftHead: Bool = false,
+        inkling2: RemoteInkling2Source? = nil
     ) {
+        self.inkling2 = inkling2
         self.repoID = repoID
         self.revision = revision
         self.outputDir = outputDir

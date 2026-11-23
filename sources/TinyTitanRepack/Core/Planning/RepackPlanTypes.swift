@@ -106,7 +106,7 @@ struct RepackPlan: Sendable {
     let baseGroupSize: Int  // 64
     let resident: ResidentFilePlan
     let layers: [LayerFilePlan]
-    let matchedModelID: String?
+    var matchedModelID: String?
     let excludedMultimodalTensorNames: [String]
     let passthroughFiles: [PassthroughFile]
     /// Per-slot quantization scheme names, for a family whose tensors keep a

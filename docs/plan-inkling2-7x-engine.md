@@ -162,8 +162,22 @@ about 2 minutes into `models/inkling-2-mini_NVFP4` (18 GB, 35 files);
 `--verify-install` passes, and an independent check against the safetensors
 headers found all 19.525 GB of non-vision tensor bytes equal, none missing.
 The raw checkpoint stays until phase 3's variant serves the install.
-Remaining: streaming both sources from Hugging Face (registered, pinned
-sources; ranged header fetch for the GGUF).
+
+Streaming from Hugging Face is done for both: `TinyTitanRepack --model
+inkling2-gguf-q4` (`unsloth/Inkling-2-Mini-GGUF` at `45fd0876`) and `--model
+inkling2-nvfp4` (`thinkingmachines/Inkling-2-Mini` at `ed40e7da`). Before
+planning, only the GGUF header (one 16 MiB range) or the two safetensors
+headers, `config.json` and the index are fetched; every tensor byte then
+arrives through the ordinary ranged copy with its checkpoint and `--resume`,
+so no source file is staged. Each source is pinned by commit and by a
+fingerprint over exactly what decides the layout: the GGUF header's SHA-256,
+or `config.json` plus both safetensors headers. A dry run against Hugging Face
+planned both installs identically to the local copies, and a full install of
+each, streamed from the local files through a loopback mirror (GGUF 97 s,
+checkpoint 92 s), hashed file for file like the local install and passed
+`--verify-install` (`tests/TinyTitanRepack/Core/Remote/Inkling2RemoteInstallTests.swift`,
+opt-in). Both sources are listed by the repack CLI only; the installer menus
+and the README matrix gain them when a variant serves them (phase 4).
 
 ### 2. Variant `Engines/Inkling2GGUFQ4`
 

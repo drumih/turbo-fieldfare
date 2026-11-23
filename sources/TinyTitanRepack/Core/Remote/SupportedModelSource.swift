@@ -15,6 +15,9 @@ public struct SupportedModelSource: Sendable, Equatable {
     public let approximateDownloadBytes: UInt64
     public let installedBytes: UInt64
     public let reserveBytes: UInt64
+    /// Set for an Inkling 2 source, which the installer plans from its own
+    /// tensors instead of affine index metadata.
+    public var inkling2: RemoteInkling2Source?
 
     public func installOptions(
         outputDirectory: URL,
@@ -33,7 +36,8 @@ public struct SupportedModelSource: Sendable, Equatable {
             minFreeReserveBytes: reserveBytes,
             overwrite: overwrite,
             resume: resume,
-            installDraftHead: installsDraftHead)
+            installDraftHead: installsDraftHead,
+            inkling2: inkling2)
     }
 
     /// Whether this source claims a repository's `mtp.*` namespace rather
@@ -155,12 +159,49 @@ public struct SupportedModelSource: Sendable, Equatable {
         installedBytes: 1_480_000_000,
         reserveBytes: 2 * 1_073_741_824)
 
+    /// Inkling 2 Mini from Unsloth's Q4_K_XL GGUF (TT-121): routed experts
+    /// NVFP4 (Q8_0 in the last four layers), the rest Q8_0/F32/BF16, all kept
+    /// as the GGUF stores them. The fingerprint is the SHA-256 of the GGUF's
+    /// header (metadata, tokenizer and tensor table), which pins every tensor's
+    /// encoding and offset. Converted, not yet served: the variant that serves
+    /// it is TT-121 phase 2.
+    public static let inkling2GGUFQ4 = SupportedModelSource(
+        name: "inkling2-gguf-q4",
+        displayName: "Inkling 2 Mini Q4_K_XL GGUF (text)",
+        repoID: "unsloth/Inkling-2-Mini-GGUF",
+        revision: "45fd08764f2b0bf16b03a5483a80e5c7aaec8772",
+        sourceIndexSHA256:
+            "e35ee6baa44933adb00cd5196be291a80c7e6b35aa75c2b01549b056057387e0",
+        modelID: "inkling-2-mini-gguf-q4",
+        approximateDownloadBytes: 17_629_759_456,
+        installedBytes: 17_664_255_634,
+        reserveBytes: 1_073_741_824,
+        inkling2: .gguf(fileName: "Inkling-2-Mini-UD-Q4_K_XL.gguf"))
+
+    /// Inkling 2 Mini from the original ModelOpt checkpoint (TT-121): routed
+    /// experts NVFP4 (MXFP8 in the last four layers), the rest BF16/F32, the
+    /// MTP head beside it, the vision tower left out. The fingerprint is the
+    /// SHA-256 of `config.json` and both safetensors headers. Converted, not
+    /// yet served: the variant that serves it is TT-121 phase 3.
+    public static let inkling2NVFP4 = SupportedModelSource(
+        name: "inkling2-nvfp4",
+        displayName: "Inkling 2 Mini NVFP4 (text)",
+        repoID: "thinkingmachines/Inkling-2-Mini",
+        revision: "ed40e7da625f594fc9c4990f5f66be24873c22d7",
+        sourceIndexSHA256:
+            "0b94cadc1237f8d183c2fabf35dd610d4aa7364862be2afda0371eaacef45750",
+        modelID: "inkling-2-mini-nvfp4",
+        approximateDownloadBytes: 19_555_000_000,
+        installedBytes: 19_592_286_535,
+        reserveBytes: 1_073_741_824,
+        inkling2: .checkpoint)
+
     /// Default source when no `--model` selector is given.
     public static let `default` = ornith15_8bit
 
     public static let all: [SupportedModelSource] = [
         qwen36, qwen36_8bit, ornith15, ornith15_8bit, qwen36MTP, qwen38flash,
-        qwen38flashMTP,
+        qwen38flashMTP, inkling2GGUFQ4, inkling2NVFP4,
     ]
 
     public static func named(_ name: String) -> SupportedModelSource? {

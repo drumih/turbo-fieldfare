@@ -142,6 +142,24 @@ extension RemoteStreamingRepacker {
                 path: dst,
                 progress: progress)
         }
+        // The Inkling checkpoint's tiktoken model and its quantization and
+        // generation configs, the same optional files a local import copies.
+        guard snapshot.arch.family == .inkling2 else { return }
+        for extra in Inkling2CheckpointPlanner.tokenizerExtras {
+            try Task.checkCancellation()
+            let info: RemoteFileInfo
+            do {
+                info = try await pinned.resolveFileInfo(filename: extra.source, audit: audit)
+            } catch  where isRemoteNotFound(error) {
+                continue
+            }
+            let dst = (tokenizerDir as NSString).appendingPathComponent(extra.name)
+            try await pinned.fetchSmallFile(
+                filename: extra.source, info: info, capBytes: 64 * 1024 * 1024,
+                outputPath: dst, audit: audit)
+            try recordOutputFile(
+                relativePath: "tokenizer/\(extra.name)", path: dst, progress: progress)
+        }
     }
 
     func isRemoteNotFound(_ error: Error) -> Bool {
