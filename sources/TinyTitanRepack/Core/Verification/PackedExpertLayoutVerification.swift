@@ -70,11 +70,25 @@ extension VerifiedInstallTool {
         let declaredExpertBits = manifest.quant?.routedExpert.weightBits
         for layer in layout.layers {
             let count = layer.expertsPerLayer ?? layout.expertsPerLayer
-            let (expectedLayerSize, overflow) = UInt64(count)
+            let (capacity, overflow) = UInt64(count)
                 .multipliedReportingOverflow(by: layout.expertStride)
             guard !overflow else {
                 throw RepackError.configurationInvalid(
                     detail: "packed expert layer size overflows")
+            }
+            // A raw layer ends where its last expert does. For a uniform layer
+            // that is exactly `count * stride`; a compact one (Inkling's NVFP4
+            // layers inside a Q8_0-sized stride) ends earlier, which the format
+            // allows. A compressed layer is checked against the capacity.
+            var expectedLayerSize = capacity
+            if layout.compression == nil, !layer.experts.isEmpty {
+                expectedLayerSize = layer.experts.reduce(UInt64(0)) {
+                    max($0, $1.offset &+ $1.size)
+                }
+                guard expectedLayerSize <= capacity else {
+                    throw RepackError.configurationInvalid(
+                        detail: "packed_experts/\(layer.file) extends past its capacity")
+                }
             }
             try validateLayer(
                 layer, access: access, manifest: manifest, layout: layout,
@@ -152,7 +166,7 @@ extension VerifiedInstallTool {
                 throw RepackError.configurationInvalid(
                     detail: "\(relativePath) duplicate expert \(expertID)")
             }
-            guard expert.size == layout.expertStride else {
+            guard expert.size > 0, expert.size <= layout.expertStride else {
                 throw RepackError.configurationInvalid(
                     detail: "\(relativePath) expert \(expertID) size mismatch")
             }
@@ -175,7 +189,9 @@ extension VerifiedInstallTool {
             }
             try PackedExpertBytes.validate(
                 expert,
-                stride: layout.expertStride,
+                // The expert's own extent: equal to the layout stride for a
+                // uniform install, smaller in a compact layer.
+                stride: expert.size,
                 declaredWeightBits: declaredExpertBits,
                 in: relativePath,
                 rank: expertID)
@@ -360,6 +376,26 @@ enum PackedExpertBytes {
                         detail:
                             "\(at): \(tensor.size) bytes at \(describe(tensor.shape)) is not "
                             + "the \(expected) bytes a bf16 tensor of that shape is")
+                }
+            case let dtype
+            where SSDAIBlockEncodingV1(rawValue: dtype) != nil
+                || SSDAIAuxiliaryDTypeV1(rawValue: dtype) != nil:
+                // A block encoding or a scale type: its bytes are fixed by its
+                // shape. Its width is the encoding's own, so the routed-expert
+                // slot is not compared -- Inkling keeps its last four layers
+                // 8-bit beside 4-bit ones, each tensor naming its encoding.
+                do {
+                    try SSDAIPackedExpertsLayoutV1.validateSubTensorSize(tensor, field: at)
+                } catch {
+                    throw RepackError.configurationInvalid(detail: "\(error)")
+                }
+                if let encoding = SSDAIBlockEncodingV1(rawValue: dtype),
+                    let annotated = tensor.bits, annotated != encoding.weightBits
+                {
+                    throw RepackError.configurationInvalid(
+                        detail:
+                            "\(at): annotated \(annotated)-bit but \(dtype) is \(encoding.weightBits)-bit"
+                    )
                 }
             default:
                 throw RepackError.configurationInvalid(

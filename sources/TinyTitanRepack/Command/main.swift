@@ -9,6 +9,8 @@ private let usage = """
       TinyTitanRepack --input-snapshot <affine-safetensors-dir> --model-id <id>
                       --output <model.ssdai> [--overwrite] [--draft-head] [--share-ngram-table]
                       [--consume-snapshot]
+      TinyTitanRepack --input-gguf <inkling2.gguf> --model-id <id> --output <model.ssdai>
+                      [--overwrite] [--consume-snapshot]
       TinyTitanRepack --discard-partial --output <model.ssdai>
       TinyTitanRepack --verify-install --input-ssdai <model.ssdai>  (--input-gturbo still accepted)
       TinyTitanRepack --compress-experts --input-ssdai <raw model.ssdai>
@@ -36,6 +38,10 @@ private let usage = """
     lets a 125 GB install grow into the space its own snapshot is releasing on a
     host that cannot hold both. It is one-way: an interrupted run leaves a
     partly consumed snapshot.
+
+    --input-gguf converts an Inkling 2 GGUF on disk into a .ssdai install, every
+    tensor kept in its GGUF encoding (routed experts NVFP4/Q8_0, the rest Q8_0,
+    F32 or BF16). --consume-snapshot deletes the GGUF once it is converted.
     """
 
 private struct Arguments {
@@ -48,6 +54,7 @@ private struct Arguments {
     var verifyInstall = false
     var inputSSDAI: String?
     var inputSnapshot: String?
+    var inputGGUF: String?
     var compressExperts = false
     var codec: CompressExpertsCodec = .frames
     var localModelID: String?
@@ -113,7 +120,8 @@ private struct Arguments {
             case "--consume-snapshot":
                 parsed.consumeSnapshot = true
                 index += 1
-            case "--output", "--input-ssdai", "--input-gturbo", "--input-snapshot", "--model-id":
+            case "--output", "--input-ssdai", "--input-gturbo", "--input-snapshot", "--model-id",
+                "--input-gguf":
                 guard index + 1 < values.count else {
                     throw ParseError.missingValue(flag)
                 }
@@ -123,6 +131,8 @@ private struct Arguments {
                     parsed.inputSSDAI = values[index + 1]
                 } else if flag == "--input-snapshot" {
                     parsed.inputSnapshot = values[index + 1]
+                } else if flag == "--input-gguf" {
+                    parsed.inputGGUF = values[index + 1]
                 } else {
                     parsed.localModelID = values[index + 1]
                 }
@@ -137,9 +147,13 @@ private struct Arguments {
         }
         // Both are fields of `LocalSnapshotRepackOptions`, which the download,
         // discard and receipt routes have no parameter for.
-        guard !parsed.consumeSnapshot || parsed.inputSnapshot != nil else {
+        guard !parsed.consumeSnapshot || parsed.inputSnapshot != nil || parsed.inputGGUF != nil
+        else {
             throw ParseError.invalidMode(
-                "--consume-snapshot applies only to --input-snapshot imports")
+                "--consume-snapshot applies only to --input-snapshot and --input-gguf imports")
+        }
+        if parsed.inputGGUF != nil {
+            return try parsed.validatingLocalGGUF()
         }
         guard (!parsed.draftHead && !parsed.shareNgramTable) || parsed.inputSnapshot != nil else {
             throw ParseError.invalidMode(
@@ -183,6 +197,21 @@ private struct Arguments {
             }
         }
         return parsed
+    }
+
+    /// A GGUF conversion names its file, model id and output, and takes only
+    /// `--overwrite` and `--consume-snapshot` besides.
+    private func validatingLocalGGUF() throws -> Arguments {
+        guard localModelID != nil else { throw ParseError.missingRequired("--model-id") }
+        guard output != nil else { throw ParseError.missingRequired("--output") }
+        guard inputSnapshot == nil, inputSSDAI == nil, !modelExplicit, !resume,
+            !discardPartial, !verifyInstall, !compressExperts, !draftHead, !shareNgramTable
+        else {
+            throw ParseError.invalidMode(
+                "--input-gguf accepts only --model-id, --output, --overwrite and --consume-snapshot"
+            )
+        }
+        return self
     }
 
     /// A local snapshot import names its own source and model id, and takes no
@@ -247,6 +276,26 @@ private enum ParseError: Error, CustomStringConvertible {
 
 private func printError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
+/// `--input-gguf`: convert an Inkling 2 GGUF on disk into a `.ssdai` install.
+private func runInputGGUF(
+    input: String, modelID: String, output: String, arguments: Arguments,
+    progressDisplay: InstallProgressDisplay
+) async -> Int32 {
+    do {
+        let result = try await RemoteStreamingRepacker.runLocalGGUF(
+            ggufPath: input, outputDir: output, modelID: modelID,
+            consumeSource: arguments.consumeSnapshot, overwrite: arguments.overwrite,
+            progress: { progress in progressDisplay.handle(progress) })
+        print("Converted GGUF")
+        print("Source fingerprint: \(result.resolvedCommit)")
+        print("Model: \(result.outputDir)")
+        return 0
+    } catch {
+        printError("GGUF conversion failed: \(error)")
+        return 1
+    }
 }
 
 private func run(_ values: [String]) async -> Int32 {
@@ -315,6 +364,13 @@ private func run(_ values: [String]) async -> Int32 {
     }
 
     let progressDisplay = InstallProgressDisplay()
+    if let input = arguments.inputGGUF, let modelID = arguments.localModelID,
+        let output = arguments.output
+    {
+        return await runInputGGUF(
+            input: input, modelID: modelID, output: output, arguments: arguments,
+            progressDisplay: progressDisplay)
+    }
     if let input = arguments.inputSnapshot,
         let modelID = arguments.localModelID,
         let output = arguments.output

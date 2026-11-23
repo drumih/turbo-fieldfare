@@ -383,7 +383,11 @@ extension RemoteStreamingRepacker {
             // loaded beside a target and prompted through the target's
             // tokenizer, so requiring one here would refuse a sidecar that is
             // correct. Only a whole model needs its own.
-            if !local.draftHead && !source.arch.family.isDraftHead {
+            // Inkling's tokenizer and chat template travel in the GGUF header
+            // the plan copies as a passthrough file, not as tokenizer files.
+            if !local.draftHead && !source.arch.family.isDraftHead
+                && source.arch.family != .inkling2
+            {
                 try copyLocalTokenizer(
                     snapshotDirectory: local.inputSnapshotDir,
                     partialDirectory: paths.partialDirectory,

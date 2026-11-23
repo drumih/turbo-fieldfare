@@ -45,6 +45,14 @@ package enum SSDAIBlockEncodingV1: String, CaseIterable, Sendable {
         self = match
     }
 
+    /// The width of one value, in bits.
+    package var weightBits: Int {
+        switch self {
+        case .ggufNVFP4, .nvfp4: 4
+        case .ggufQ8_0, .mxfp8: 8
+        }
+    }
+
     /// Values one block (GGUF) or one scale (NVFP4, MXFP8) covers; a row's
     /// length must be a multiple of it.
     package var valuesPerBlock: Int {
@@ -127,7 +135,7 @@ package enum SSDAIAuxiliaryDTypeV1: String, CaseIterable, Sendable {
 extension SSDAIPackedExpertsLayoutV1 {
     /// The sub-tensor element types an expert blob may hold: the affine
     /// `U32`/`BF16`, a block encoding, or an auxiliary scale type.
-    static func isKnownSubTensorDType(_ dtype: String) -> Bool {
+    package static func isKnownSubTensorDType(_ dtype: String) -> Bool {
         dtype == "U32" || dtype == "BF16"
             || SSDAIBlockEncodingV1(rawValue: dtype) != nil
             || SSDAIAuxiliaryDTypeV1(rawValue: dtype) != nil
@@ -137,7 +145,7 @@ extension SSDAIPackedExpertsLayoutV1 {
     /// sub-tensor holds its values only (its separate scales are a sibling),
     /// and an auxiliary one holds `elements x width`. The affine types keep
     /// their existing range-only checks.
-    static func validateSubTensorSize(_ tensor: SSDAISubTensorV1, field: String) throws {
+    package static func validateSubTensorSize(_ tensor: SSDAISubTensorV1, field: String) throws {
         let expected: UInt64
         if let encoding = SSDAIBlockEncodingV1(rawValue: tensor.dtype) {
             let (rows, columns) = try SSDAIBlockEncodingV1.matrix(of: tensor.shape, field: field)
