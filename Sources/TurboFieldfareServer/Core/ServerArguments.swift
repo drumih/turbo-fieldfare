@@ -16,6 +16,7 @@ public struct ServerArguments: Equatable, Sendable {
     public let earlyExpertRead: RuntimeEarlyExpertRead
     public let visionPack: String?
     public let visionResidency: VisionResidencyPolicy
+    public var promptCheckpointEnabled: Bool = false
 
     public static let allowedMaxContext = [
         4_096, 8_192, 16_384, 32_768, 65_536, 98_304, 131_072, 196_608, 262_144,
@@ -38,6 +39,12 @@ public struct ServerArguments: Equatable, Sendable {
       --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
                                  Prompt KV reuse mode (default single-prefix).
+      --prompt-checkpoint on|off Keep the KV of the leading system turn (and
+                                 tools) so a new conversation that opens with
+                                 the same one skips its prefill (default off).
+                                 Costs about 20 KB per checkpointed token plus
+                                 210 MB for the sliding window, about 0.4 GB
+                                 for a 10K-token system turn.
       --expert-cache-slots <n>   Expert-cache slots: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertCacheSlots)) (default 16).
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
@@ -103,6 +110,7 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var promptCheckpointEnabled = false
         var visionPack: String?
         var visionResidency: VisionResidencyPolicy = .onDemand
         var expertCacheSlots = 16
@@ -150,6 +158,12 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--prompt-checkpoint":
+                switch value {
+                case "on": promptCheckpointEnabled = true
+                case "off": promptCheckpointEnabled = false
+                default: throw ServerArgumentError.invalid("--prompt-checkpoint must be on or off")
+                }
             case "--vision-pack":
                 visionPack = value
             case "--vision-residency":
@@ -244,7 +258,8 @@ public struct ServerArguments: Equatable, Sendable {
                                rdadvisePolicy: rdadvisePolicy,
                                earlyExpertRead: earlyExpertRead,
                                visionPack: visionPack,
-                               visionResidency: visionResidency)
+                               visionResidency: visionResidency,
+                               promptCheckpointEnabled: promptCheckpointEnabled)
     }
 }
 

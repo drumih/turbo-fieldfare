@@ -15,6 +15,16 @@ struct ServerPromptCacheTests {
         fp16RingEnabled: true,
         templateSHA256: "template")
 
+    /// The boundary is where the rendered system turn stops agreeing with the
+    /// prompt, so whatever a render appends after the system turn is excluded.
+    @Test func checkpointBoundaryIsTheCommonPrefixWithThePrompt() {
+        let systemTurn: [Int32] = [2, 10, 11, 12, 99, 98]
+        let prompt: [Int32] = [2, 10, 11, 12, 99, 50, 51]
+        #expect(ServerPromptCheckpoint.boundary(systemTurnIDs: systemTurn, promptIDs: prompt) == 5)
+        #expect(ServerPromptCheckpoint.boundary(systemTurnIDs: [7], promptIDs: prompt) == 0)
+        #expect(ServerPromptCheckpoint.boundary(systemTurnIDs: prompt, promptIDs: prompt) == prompt.count)
+    }
+
     @Test(arguments: ServerPromptCachePublishRejection.allCases)
     func publicationExplainsRejectionAndInvalidatesPreviousEntry(_ reason: ServerPromptCachePublishRejection) {
         let initial = request(messages: [.init(role: .user, content: "secret-prompt-sentinel")])
