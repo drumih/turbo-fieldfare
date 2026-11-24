@@ -39,6 +39,20 @@ kernel void embed_q8_0_row(
     out[index.y * columns + index.x] = d * float(((device const char*)(b + 2u))[index.x % 32u]);
 }
 
+// out[t][c] = row token[t] of a BF16 matrix, as F32 (the Inkling 2 checkpoint's
+// embedding, TT-125); grid (columns, tokens).
+kernel void embed_bf16_row(
+    device const ushort* weights [[buffer(0)]],
+    device const int* token [[buffer(1)]],
+    device float* out [[buffer(2)]],
+    constant uint& columns [[buffer(3)]],
+    uint2 index [[thread_position_in_grid]])
+{
+    if (index.x >= columns) return;
+    const ushort bits = weights[ulong(token[index.y]) * columns + index.x];
+    out[index.y * columns + index.x] = as_type<float>(uint(bits) << 16);
+}
+
 struct DepthRMSArgs {
     uint width;
     uint inStride;

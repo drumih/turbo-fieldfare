@@ -172,3 +172,76 @@ kernel void q8_0_gemv_ids(
         y[slot * args.rows + firstRow + lane] = total * scale;
     }
 }
+
+// OCP E4M3 (bias 7, no infinities; 0x7F/0xFF are NaN, read as 0).
+static inline float gemv_ids_e4m3(uchar bits) {
+    const uint exponent = (bits >> 3u) & 0x0Fu;
+    const uint mantissa = bits & 0x07u;
+    if ((bits & 0x7Fu) == 0x7Fu) return 0.0f;
+    const float magnitude = exponent == 0u
+        ? float(mantissa) * 0.001953125f
+        : (1.0f + float(mantissa) * 0.125f) * exp2(float(exponent) - 7.0f);
+    return (bits & 0x80u) ? -magnitude : magnitude;
+}
+
+// The Inkling 2 checkpoint's MXFP8 experts as the NVFP4 plugin repacks them
+// (TT-125): q8_0_gemv_ids over 34-byte blocks whose first byte is an E8M0 scale
+// and whose values are E4M3 instead of int8.
+kernel void mxfp8_gemv_ids(
+    device const uchar* weights [[buffer(0)]],
+    device const float* x [[buffer(1)]],
+    device float* y [[buffer(2)]],
+    device const int* ids [[buffer(3)]],
+    device const float* scales [[buffer(4)]],
+    constant GGUFGemvIdsArgs& args [[buffer(5)]],
+    uint2 groupIndex [[threadgroup_position_in_grid]],
+    uint sg [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]])
+{
+    threadgroup float partial[GEMV_IDS_Q8_0_ROWS][GEMV_IDS_Q8_0_SIMDGROUPS];
+
+    const uint slot = groupIndex.y;
+    const int expert = ids[slot];
+    const uint firstRow = groupIndex.x * GEMV_IDS_Q8_0_ROWS;
+    const uint blockCount = args.columns / 32u;
+    const uint rowBytes = blockCount * 34u;
+    device const uchar* matrix = weights + ulong(expert) * args.expertStride;
+    device const float* xs = x + slot * args.xSlotStride;
+
+    const uint blockLane = lane / 4u;  // 0...7
+    const uint quarter = lane % 4u;    // eight quants of 32
+    const uint firstBlock = sg * 8u + blockLane;
+
+    device const uchar* rowBase[GEMV_IDS_Q8_0_ROWS];
+    for (uint r = 0u; r < GEMV_IDS_Q8_0_ROWS; ++r) {
+        rowBase[r] = matrix + min(firstRow + r, args.rows - 1u) * rowBytes;
+    }
+
+    float sums[GEMV_IDS_Q8_0_ROWS] = {0.0f};
+    float yl[8];
+    for (uint blockIndex = firstBlock; blockIndex < blockCount;
+        blockIndex += GEMV_IDS_Q8_0_SIMDGROUPS * 8u)
+    {
+        device const float* xb = xs + blockIndex * 32u + quarter * 8u;
+        for (uint i = 0u; i < 8u; ++i) yl[i] = xb[i];
+        for (uint r = 0u; r < GEMV_IDS_Q8_0_ROWS; ++r) {
+            device const uchar* b = rowBase[r] + blockIndex * 34u;
+            device const uchar* qs = b + 2u + quarter * 8u;
+            float sumq = 0.0f;
+            for (uint i = 0u; i < 8u; ++i) sumq += gemv_ids_e4m3(qs[i]) * yl[i];
+            sums[r] += sumq * exp2(float(b[0]) - 127.0f);
+        }
+    }
+
+    for (uint r = 0u; r < GEMV_IDS_Q8_0_ROWS; ++r) {
+        const float total = simd_sum(sums[r]);
+        if (lane == 0u) partial[r][sg] = total;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg == 0u && lane < GEMV_IDS_Q8_0_ROWS && firstRow + lane < args.rows) {
+        float total = 0.0f;
+        for (uint i = 0u; i < GEMV_IDS_Q8_0_SIMDGROUPS; ++i) total += partial[lane][i];
+        const float scale = args.useScale != 0u ? scales[expert] : 1.0f;
+        y[slot * args.rows + firstRow + lane] = total * scale;
+    }
+}

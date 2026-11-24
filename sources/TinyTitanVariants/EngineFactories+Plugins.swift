@@ -1,6 +1,7 @@
 import Foundation
 import DenseGPU
 import Inkling2GGUFQ4
+import Inkling2NVFP4
 import Ornith35B4Bit
 import TemplatePlugin
 import TinyTitan
@@ -20,6 +21,7 @@ extension EngineFactories {
     public static let builtInPlugins: [any EnginePlugin.Type] = [
         TemplatePlugin.self,
         Inkling2GGUFQ4Plugin.self,
+        Inkling2NVFP4Plugin.self,
         Ornith35B4BitPlugin.self,
         DenseQwen35Plugin.self,
         LegacyEngineAdapter.self,

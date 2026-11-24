@@ -12,6 +12,7 @@ struct PluginResolutionTests {
     /// The engine each installed family ran on before TT-130.
     static func expected(_ name: String) -> String? {
         if name.hasPrefix("inkling-2-mini_GGUF-Q4") { return "ai.tinytitan.inkling2-gguf-q4" }
+        if name == "inkling-2-mini_NVFP4" { return "ai.tinytitan.inkling2-nvfp4" }
         if name.hasPrefix("ornith-1.5_35B_A3B_4Bit") {
             return "ai.tinytitan.ornith-1.5-35b-a3b-4bit"
         }

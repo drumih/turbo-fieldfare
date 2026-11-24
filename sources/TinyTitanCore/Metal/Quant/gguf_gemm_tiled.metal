@@ -55,6 +55,32 @@ struct GemmQ8_0 {
     static uint rowBytes(uint columns) { return columns / 32u * 34u; }
 };
 
+// OCP E4M3 (bias 7, no infinities; 0x7F/0xFF are NaN, read as 0).
+static inline float gemm_e4m3(uchar bits) {
+    const uint exponent = (bits >> 3u) & 0x0Fu;
+    const uint mantissa = bits & 0x07u;
+    if ((bits & 0x7Fu) == 0x7Fu) return 0.0f;
+    const float magnitude = exponent == 0u
+        ? float(mantissa) * 0.001953125f
+        : (1.0f + float(mantissa) * 0.125f) * exp2(float(exponent) - 7.0f);
+    return (bits & 0x80u) ? -magnitude : magnitude;
+}
+
+// The Inkling 2 checkpoint's MXFP8 experts repacked by the NVFP4 plugin
+// (TT-125): 34-byte blocks of 32 values -- an E8M0 scale byte, a zero byte,
+// then 32 E4M3 values -- the Q8_0 block's size and shape.
+struct GemmMXFP8 {
+    template <typename T>
+    static void decode(device const uchar* w, uint rowBytes, uint row, uint c, thread T* out,
+                       device const uchar* tables) {
+        device const uchar* b = w + row * rowBytes + (c / 32u) * 34u;
+        const float d = exp2(float(b[0]) - 127.0f);
+        device const uchar* qs = b + 2u + (c % 32u);
+        for (uint j = 0u; j < 16u; ++j) out[j] = T(d * gemm_e4m3(qs[j]));
+    }
+    static uint rowBytes(uint columns) { return columns / 32u * 34u; }
+};
+
 // E2M1 code (4 bits) as an exact fp16: magnitudes 2..7 are their bits shifted
 // into the fp16 exponent/mantissa plus the exponent bias difference (14);
 // 0 and 1 (0 and 0.5) are selected; bit 3 is the sign.
@@ -271,6 +297,8 @@ GGUF_GEMM_TILED_KERNEL(gemm_tiled_f32, GemmF32, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_bf16, GemmBF16, 32u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_q8_0_n8, GemmQ8_0, 8u)
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_nvfp4_n8, GemmNVFP4, 8u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_mxfp8, GemmMXFP8, 32u)
+GGUF_GEMM_TILED_KERNEL(gemm_tiled_mxfp8_n8, GemmMXFP8, 8u)
 // The block decoders of gguf_block_decoders.metal (Inkling2 UD-Q2_K_XL types):
 // projections in 32-token tiles, routed experts in both widths.
 GGUF_GEMM_TILED_KERNEL(gemm_tiled_iq3_xxs, GemmIQ3XXS, 32u)

@@ -227,6 +227,14 @@ let package = Package(
             exclude: ["README.md"],
             swiftSettings: tinytitanLanguageStandard
         ),
+        // Inkling 2 Mini from its original NVFP4/MXFP8 checkpoint (TT-125): the
+        // Q4 variant's graph, copied, over the checkpoint install.
+        .target(
+            name: "Inkling2NVFP4",
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanPluginAPI"],
+            path: "sources/Engines/Inkling2NVFP4",
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "Inkling2GGUFQ4",
             dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanPluginAPI"],
@@ -270,7 +278,7 @@ let package = Package(
             name: "TinyTitanVariants",
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
-                "Ornith35B4Bit", "DenseGPU", "Inkling2GGUFQ4",
+                "Ornith35B4Bit", "DenseGPU", "Inkling2GGUFQ4", "Inkling2NVFP4",
                 "TinyTitanPluginAPI", "TemplatePlugin",
                 "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
@@ -486,6 +494,12 @@ let package = Package(
                 .product(name: "yyjson", package: "yyjson"),
             ],
             path: "tests/Engines/Ornith35B4Bit",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
+            name: "Inkling2NVFP4Tests",
+            dependencies: ["Inkling2NVFP4", "TinyTitanInkling2", "TinyTitanCore"],
+            path: "tests/Engines/Inkling2NVFP4",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
