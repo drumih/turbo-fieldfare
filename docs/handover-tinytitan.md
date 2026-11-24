@@ -1,4 +1,4 @@
-# Handover: engine 7 plugins, phase 2 (2026-11-24)
+# Handover: engine 7 plugins, phase 2 (2026-11-24, updated after slice 2)
 
 **Read this block first; every block below it is older.**
 
@@ -15,9 +15,9 @@
 > **Where it stands.** Phase 1 is done: every install on disk runs through
 > its own standalone plugin (TPP/1). Phase 2, TT-134, ports the rest of the
 > 6.x runtime (`sources/TinyTitan`) into 7.x so the only remaining work is a
-> plugin per model not on disk. Slice 1 is pushed (`a97145b0`). **Slice 2
-> is in the working tree, uncommitted** — finish and commit it first (see
-> "Slice 2" below), then take slice 3.
+> plugin per model not on disk. Slices 1 (`a97145b0`) and 2 (`d15f336e`)
+> are pushed and verified; the working tree is clean. Take slice 3 from
+> "Phase 2 slices after this one" below.
 >
 > **Owner's standing rules (in force):** at most 16 GB of RAM for any model
 > run (`--ram-budget 16G` max; this is a 24 GB M3 that other projects share);
@@ -29,7 +29,7 @@
 > clickhouse runs here); finish every task with the housekeeping AGENTS.md
 > requires.
 
-## Slice 2 (uncommitted): the dense CPU backend runs only on the variant engines
+## Slice 2 (done, `d15f336e`): the dense CPU backend runs only on the variant engines
 
 What changed:
 
@@ -59,32 +59,13 @@ What changed:
   (`CPUModelBackendTests.scriptedEngine`), and
   `aScriptedModelWithNoVariantIsRefusedByName` pins the refusal.
 
-Verified so far: release build exit 0; `tools/lint.sh` exit 0; the CPU-path
-suites (`CPUModelBackendTests`, `CPUSamplerRankingTests`, `CPUEngineTests`,
-`CPUDenseConformanceTests`, `CPUBatchedPrefillTests`,
-`DenseVariantBatchedMatmulTests`, `HouseSamplingDefaultsTests`) pass; all six
-CPU goldens (`tools/golden-baseline.sh --check --engine cpu qwen35-2b-4
-qwen35-2b-8 qwen35-4b-4 qwen35-4b-8 qwen35-9b-4 qwen35-9b-8`) were
-byte-identical both before and after the `routingCPUFactory` change (the
-recheck exited 0, six of six identical).
-
-To finish slice 2:
-
-1. (Done: the six CPU goldens.) Apply AGENTS.md's model-run preconditions
-   before the next step.
-2. Start `TinyTitanServer --cpu --model models/qwen3.5_4B_4Bit` on
-   127.0.0.1 and run `tools/api-feature-check.py --port <port>`: all ten
-   rows must pass. This is the only check of the no-width selection path.
-   Stop the server afterwards.
-3. Full serial suite: `swift test --no-parallel` (2,484 tests passed at
-   `a97145b0`).
-4. Commit and push. The message should also correct slice 1's: its commit
-   (`a97145b0`) says 87 importers / 61 left; the true counts are 78 before
-   slice 1, 52 after it, 50 after slice 2 (`git grep -lE "^(@testable
-   )?import TinyTitan$" <rev> -- sources`, excluding `sources/TinyTitan/`).
-5. Update the wiki tracker: TT-134 row (slice 2, the corrected counts —
-   the row still says 87 and 61) and the status table's "6.x runtime"
-   line (now 63,513 lines in 314 files, 50 importers).
+Verified before the commit: release build; `tools/lint.sh` exit 0; full
+serial `swift test` exit 0 (2,621 tests in 473 suites); the six CPU goldens
+(`tools/golden-baseline.sh --check --engine cpu qwen35-{2b,4b,9b}-{4,8}`)
+byte-identical; `TinyTitanServer --cpu --model models/qwen3.5_4B_4Bit`
+passes `tools/api-feature-check.py` 10/10. Importers of the 6.x runtime
+outside `sources/TinyTitan`: 78 before slice 1, 52 after it, 50 now
+(`a97145b0`'s message says 87 and 61; those were miscounts).
 
 ## Phase 2 slices after this one (from the inventory in the plan doc)
 
