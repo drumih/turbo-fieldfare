@@ -37,8 +37,9 @@ enum Inkling2Run {
                 "<|message_user|><|content_text|>\(userPrompt)<|end_message|>"
                 + "<|message_model|><|content_text|>"
             let result = try generator.generate(
-                prompt: prompt, maxTokens: args.maxNew)
-            stdout.write(Data((result.text + "\n").utf8))
+                prompt: prompt, maxTokens: args.maxNew
+            ) { delta in stdout.write(Data(delta.utf8)) }
+            stdout.write(Data("\n".utf8))
             if Inkling2Profiler.enabled {
                 stderr.write(Data((Inkling2Profiler.report() + "\n").utf8))
             }

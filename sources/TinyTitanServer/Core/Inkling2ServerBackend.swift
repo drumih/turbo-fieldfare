@@ -39,8 +39,9 @@ package actor Inkling2ServerBackend: ServerInferenceBackend {
         var generator = Inkling2Generator(model: model, tokenizer: tokenizer)
         let maximum = min(max(request.generationConfig.maxNewTokens, 1), 64)
         onEvent(.promptProcessed(tokens: promptIDs.count, cachedTokens: 0))
-        let result = try generator.generate(prompt: prompt, maxTokens: maximum)
-        if !result.text.isEmpty { onEvent(.content(result.text)) }
+        let result = try generator.generate(prompt: prompt, maxTokens: maximum) { delta in
+            onEvent(.content(delta))
+        }
         let usage = OpenAIUsage(
             promptTokens: promptIDs.count,
             completionTokens: result.tokens.count,

@@ -64,8 +64,26 @@ def request(path, body, stream=False):
             if line.startswith("data:"):
                 payload = line[5:].strip()
                 if payload and payload != "[DONE]":
-                    events.append(json.loads(payload))
+                    event = json.loads(payload)
+                    if isinstance(event, dict):
+                        event["_arrived"] = time.monotonic()
+                    events.append(event)
         return events
+
+
+def streamed_incrementally(events, has_text):
+    """Whether text deltas arrived while the answer was still decoding.
+
+    A route that decodes the whole answer and then sends every delta in one
+    burst still yields several deltas, so the count alone cannot catch it
+    (TT-128). Decoded tokens are milliseconds apart (2 ms is 500 tok/s) while
+    a burst arrives microseconds apart, so the text deltas must span at least
+    2 ms per gap. Prefill time is excluded on purpose: it says nothing about
+    whether decode streamed."""
+    times = [e["_arrived"] for e in events if has_text(e)]
+    if len(times) < 2:
+        return False
+    return times[-1] - times[0] >= 0.002 * (len(times) - 1)
 
 
 def check(name, fn):
@@ -119,9 +137,13 @@ def streaming():
     ]
     usage = [e["usage"] for e in events if e.get("usage")]
     text = "".join(pieces)
-    return len(pieces) > 1 and "5" in text and bool(
+    incremental = streamed_incrementally(
+        events,
+        lambda e: any(c.get("delta", {}).get("content") for c in e.get("choices", [])),
+    )
+    return len(pieces) > 1 and incremental and "5" in text and bool(
         usage
-    ), f"{len(pieces)} deltas {text[:60]!r} usage={bool(usage)}"
+    ), f"{len(pieces)} deltas, incremental={incremental} {text[:60]!r} usage={bool(usage)}"
 
 
 def tool_call():

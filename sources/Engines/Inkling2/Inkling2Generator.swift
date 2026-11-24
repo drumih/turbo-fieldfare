@@ -14,8 +14,11 @@ public struct Inkling2Generator {
         self.caches = model.makeCaches()
     }
 
+    /// Greedy decode of up to `maxTokens` tokens. `onDelta` receives the
+    /// answer's text as it decodes (TT-128: every route streams), never the
+    /// whole answer at the end; the returned text is the same concatenation.
     public mutating func generate(
-        prompt: String, maxTokens: Int
+        prompt: String, maxTokens: Int, onDelta: (String) -> Void = { _ in }
     ) throws -> (tokens: [Int], text: String) {
         var promptIds = try tokenizer.encode(prompt)
         guard !promptIds.isEmpty else { return ([], "") }
@@ -35,6 +38,7 @@ public struct Inkling2Generator {
                 try tokenizer.encode("<|content_model_end_sampling|>").first,
             ]
             .compactMap { $0 })
+        var stream = Inkling2TextDelta()
         for _ in 0..<maxTokens {
             let logits = try autoreleasepool {
                 try model.forward(token: next, caches: &caches)
@@ -42,8 +46,13 @@ public struct Inkling2Generator {
             next = Inkling2TextModel.greedyToken(logits)
             if stops.contains(next) { break }
             generated.append(next)
+            let delta = stream.advance(to: tokenizer.decode(generated))
+            if !delta.isEmpty { onDelta(delta) }
         }
         self.lastDecodeSeconds = Date().timeIntervalSince(decodeStart)
-        return (generated, tokenizer.decode(generated))
+        let text = tokenizer.decode(generated)
+        let tail = stream.finish(text)
+        if !tail.isEmpty { onDelta(tail) }
+        return (generated, text)
     }
 }
