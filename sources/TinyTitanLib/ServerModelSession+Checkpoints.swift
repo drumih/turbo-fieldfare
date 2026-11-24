@@ -26,7 +26,7 @@ extension ServerModelSession {
     func interiorCheckpointCapture(
         promptIDs: [Int32],
         messages: [GFTokenizer.Message],
-        imStartID: Int32,
+        markers: PromptMessageMarkers,
         enabled: Bool
     ) -> InteriorCheckpointCapture {
         guard enabled,
@@ -37,7 +37,7 @@ extension ServerModelSession {
         let boundaries = PromptCheckpointPlanner.boundaries(
             promptIDs: promptIDs,
             messages: messages,
-            imStartID: imStartID,
+            markers: markers,
             gridTokens: Self.checkpointGridTokens,
             includeMessageBoundaries: !Self.checkpointGridOnly)
         guard !boundaries.isEmpty else { return .none }
@@ -49,7 +49,7 @@ extension ServerModelSession {
         // chat labels it `.lastTurnStart`, which is why it is located
         // separately rather than read back from the label.
         let sharedSystemPosition = PromptCheckpointPlanner.systemEndPosition(
-            promptIDs: promptIDs, messages: messages, imStartID: imStartID)
+            promptIDs: promptIDs, messages: messages, markers: markers)
         let captureRunner = runner
         let captureDomain = promptCacheDomain
         let capturePromptIDs = promptIDs
@@ -156,7 +156,7 @@ extension ServerModelSession {
             let prefix = PromptCheckpointSharedSystem.prefix(
                 promptIDs: promptIDs,
                 messages: messages,
-                imStartID: tokenizer.imStartID,
+                markers: tokenizer.promptMessageMarkers,
                 domain: promptCacheDomain)
         else { return nil }
         return await PromptCheckpointSharedSystem.restore(

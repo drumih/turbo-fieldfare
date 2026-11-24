@@ -675,6 +675,12 @@ tail to `encodePrefillAttentionBranch` and `dumpPrefillLayerOutputs`. Both were
 the only functions over the 120-line ratchet that were not already baselined,
 so `tools/func-length-baseline.txt` gained no row.
 
+One more single-group cut (2026-11-24, TT-123's `--kv-bits` explicitness flag
+took `ServerArguments.swift` to 504): the three derived properties
+(`requestedReasoningLevel`, `managesResidency`, `unloadDiscardsWarmCache`) moved
+to `TinyTitanServer/Core/ServerArguments+Derived.swift` (31 lines) as an
+extension, without widening; `ServerArguments.swift` 504 → 481.
+
 ## Generated and local files
 `models/`, `.build/`, `.swiftpm/`, `benchmark/mock/`,
 `benchmark/benchmark-results/`, `.qwen/` (the wiki clone), `.claude/` and

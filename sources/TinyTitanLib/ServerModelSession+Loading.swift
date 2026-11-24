@@ -94,7 +94,9 @@ extension ServerModelSession {
             resolvedRopeScalingMode = ropeScalingMode
         }
         _ = try GFTokenizer.requireModelDirectory(modelDirectory)
-        let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
+        let tokenizerFolder =
+            try factory.tokenizerFolder?(modelDirectory)
+            ?? GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
             throw GFTokenizerError.missingToolTemplate
         }
@@ -334,7 +336,9 @@ extension ServerModelSession {
             prefillConfig: loadPlan.prefillConfiguration,
             expertCacheSlots: loadSlots,
             slots: effectiveSlots,
-            maxContext: resolvedMaxContext,
+            // The runner's window, when its plan granted less than was asked
+            // (an engine that sizes the window from a RAM budget).
+            maxContext: min(resolvedMaxContext, runner.maxContext),
             promptCacheMode: effectivePromptCacheMode,
             promptCacheDomain: promptCacheDomain,
             promptCache: promptCache,

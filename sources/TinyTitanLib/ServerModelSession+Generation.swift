@@ -257,7 +257,7 @@ extension ServerModelSession {
         let interiorCapture = interiorCheckpointCapture(
             promptIDs: activePromptIDs,
             messages: cacheRequest.messages,
-            imStartID: renderTokenizer.imStartID,
+            markers: renderTokenizer.promptMessageMarkers,
             enabled: !isRaw && activeProducer is any EngineRunner)
         // `renderTokenizer` is the one this request's reasoning resolves to, and
         // it is already what rendered the prompt and what the assistant decoder

@@ -229,19 +229,30 @@ extension ServerModelSession {
         with renderTokenizer: GFTokenizer,
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition],
-        usesToolTemplate: Bool
+        usesToolTemplate: Bool,
+        structuredAnswer: Bool = false
     ) throws -> [Int32] {
         try Self.encodePrompt(
             tokenizer: renderTokenizer, messages: messages, tools: tools,
-            usesToolTemplate: usesToolTemplate)
+            usesToolTemplate: usesToolTemplate, structuredAnswer: structuredAnswer)
     }
 
+    /// `structuredAnswer` is a request with a JSON schema. ChatML renders it
+    /// like any other turn; Inkling has no generation prompt, so a grammar that
+    /// constrains the first token needs the prompt to open the text message
+    /// (`GFTokenizer.inklingPromptText`).
     package static func encodePrompt(
         tokenizer: GFTokenizer,
         messages: [GFTokenizer.Message],
         tools: [GFTokenizer.FunctionDefinition],
-        usesToolTemplate: Bool
+        usesToolTemplate: Bool,
+        structuredAnswer: Bool = false
     ) throws -> [Int32] {
+        if tokenizer.dialect == .inkling {
+            return tokenizer.encodeInklingPrompt(
+                messages: messages, tools: usesToolTemplate ? tools : [],
+                structuredAnswer: structuredAnswer)
+        }
         if usesToolTemplate {
             return try tokenizer.encodeToolChat(messages: messages, tools: tools)
         }

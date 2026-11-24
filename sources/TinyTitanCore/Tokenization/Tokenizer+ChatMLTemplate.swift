@@ -9,6 +9,9 @@ import Tokenizers
 // widened from private to internal so the extension can read them.
 extension GFTokenizer {
     public func applyChatTemplate(_ messages: [Message]) throws -> String {
+        if dialect == .inkling {
+            return inklingPromptText(messages: messages, tools: [], structuredAnswer: false)
+        }
         // K2's template is not ChatML and has its own message schema (an
         // assistant turn must carry a thinking field), so it is rendered by the
         // installed template through the same path tools use. The manual

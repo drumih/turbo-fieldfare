@@ -62,6 +62,7 @@ extension EngineFactories {
     /// engines for their installs, the 6.x engine for everything else —
     /// which keeps serving every model without a shipped variant (TT-087).
     public static func gpuFactory(directoryURL: URL) throws -> EngineFactory {
+        if isInkling2Q4(directoryURL: directoryURL) { return variantGPUInkling2Q4() }
         let identity = try TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
         return gpuFactory(
             family: identity.family,
@@ -102,6 +103,7 @@ extension EngineFactories {
     /// (an affine snapshot, a GGUF directory) falls back to the 6.x factory,
     /// which is what those paths used before this surface existed.
     public static func routingFactory(directoryURL: URL) -> EngineFactory {
+        if isInkling2Q4(directoryURL: directoryURL) { return variantGPUInkling2Q4() }
         guard let identity = try? TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
         else { return sixXGPU() }
         return gpuFactory(

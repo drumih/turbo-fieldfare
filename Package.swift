@@ -246,7 +246,7 @@ let package = Package(
             name: "TinyTitanVariants",
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
-                "Ornith35B4Bit", "DenseGPU",
+                "Ornith35B4Bit", "DenseGPU", "Inkling2GGUFQ4",
                 "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
                 "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
@@ -515,6 +515,9 @@ let package = Package(
             dependencies: [
                 .product(name: "yyjson", package: "yyjson"),
                 "TinyTitanCore", "TinyTitanLib", "TinyTitan", "TinyTitanLegacyEngine",
+                // The contract suite builds engines the way an embedder does,
+                // through the variant selection table.
+                "TinyTitanVariants",
             ],
             path: "tests/TinyTitanLib",
             swiftSettings: tinytitanLanguageStandard

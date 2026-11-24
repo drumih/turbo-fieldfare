@@ -49,6 +49,9 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     private var inToolWrapper = false
     private var emittedCalls = 0
     private var failed = false
+    /// The Inkling dialect's parser: its messages are told apart by control
+    /// tokens, not by marker pairs, so the whole stream goes through it.
+    private var inkling: InklingAssistantParser?
 
     /// `startsInThought` is true when the rendered prompt already opened a
     /// `<think>` block: the model's first token is then reasoning, and it
@@ -103,6 +106,13 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         promptIDs: [Int32],
         allowedTools: Set<String>?
     ) -> StructuredAssistantDecoder {
+        if tokenizer.dialect == .inkling,
+            let decoder = try? StructuredAssistantDecoder(
+                inklingTokenizer: tokenizer, promptIDs: promptIDs,
+                allowedTools: allowedTools ?? [])
+        {
+            return decoder
+        }
         let opensThought = promptLeavesThoughtOpen(promptIDs, tokenizer: tokenizer)
         if let allowedTools {
             return StructuredAssistantDecoder(
@@ -143,8 +153,36 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         return open
     }
 
+    /// The Inkling dialect's decoder (TT-122). A prompt that opened a text
+    /// message itself (`inklingPromptText`) starts the stream in text; anything
+    /// else waits for the model to open its own message. A call is reported
+    /// only for an offered tool; any other invocation stays visible as text.
+    package init(
+        inklingTokenizer tokenizer: GFTokenizer, promptIDs: [Int32], allowedTools: Set<String>
+    ) throws {
+        let vocabulary = try InklingAssistantParser.Vocabulary(tokenizer: tokenizer)
+        let opensText =
+            promptIDs.count >= 2
+            && Int(promptIDs[promptIDs.count - 2]) == vocabulary.messageModel
+            && Int(promptIDs[promptIDs.count - 1]) == vocabulary.contentText
+        self.tokenizer = tokenizer
+        self.allowedTools = allowedTools
+        self.parsesToolCalls = !allowedTools.isEmpty
+        self.idGenerator = { InklingAssistantParser.callID() }
+        self.channel = .visible
+        self.inkling = InklingAssistantParser(
+            vocabulary: vocabulary,
+            decode: { tokenizer.decode($0.map(Int32.init), skipSpecialTokens: true) },
+            offeredTools: allowedTools, startInText: opensText)
+    }
+
     public func consume(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw ToolCallParserError.malformed }
+        if inkling != nil {
+            let events = inkling?.consume(Int(tokenID)) ?? []
+            emittedCalls += events.filter { if case .toolCall = $0 { true } else { false } }.count
+            return events
+        }
         return try consumeChatML(tokenID: tokenID, delta: delta)
     }
 
@@ -299,6 +337,10 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                         throw ToolCallParserError.malformed
                     }
                     call = calls[0]
+                case .inkling:
+                    // Unreachable: an Inkling stream goes through its own
+                    // parser before the marker-pair path is consulted.
+                    throw ToolCallParserError.malformed
                 }
                 emittedCalls += 1
                 return [.toolCall(call)]
@@ -322,6 +364,13 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     /// tail never becomes visible.
     public func consumeTail(_ text: String) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw ToolCallParserError.malformed }
+        // Inkling decodes its own segments from ids, so the detokenizer's tail
+        // is already in them; the stop boundary flushes the open message.
+        if inkling != nil {
+            let events = inkling?.finish() ?? []
+            emittedCalls += events.filter { if case .toolCall = $0 { true } else { false } }.count
+            return events
+        }
         guard toolTokens == nil, !inToolWrapper else { return [] }
         var events: [StructuredAssistantEvent] = []
         if !thoughtSuffix.isEmpty {
@@ -356,6 +405,9 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     }
 
     public func finish() throws {
+        // An unterminated Inkling message was flushed at the stop boundary; a
+        // call body that never closed surfaced there as text, not as an error.
+        if inkling != nil { return }
         guard !failed, toolTokens == nil, !inToolWrapper else {
             throw ToolCallParserError.malformed
         }

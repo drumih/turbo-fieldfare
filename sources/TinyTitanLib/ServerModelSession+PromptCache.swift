@@ -123,7 +123,8 @@ extension ServerModelSession {
             with: renderTokenizer,
             messages: effectiveMessages,
             tools: filteredTools,
-            usesToolTemplate: needsToolTemplate)
+            usesToolTemplate: needsToolTemplate,
+            structuredAnswer: request.jsonSchema != nil)
         if let stats = stripStats {
             ServerLog.strip(
                 stats: stats,
@@ -331,7 +332,7 @@ extension ServerModelSession {
         let boundaries = PromptCheckpointPlanner.boundaries(
             promptIDs: promptIDs,
             messages: messages,
-            imStartID: tokenizer.imStartID,
+            markers: tokenizer.promptMessageMarkers,
             gridTokens: Self.checkpointGridTokens,
             includeMessageBoundaries: !Self.checkpointGridOnly
         ).sorted { $0.position > $1.position }

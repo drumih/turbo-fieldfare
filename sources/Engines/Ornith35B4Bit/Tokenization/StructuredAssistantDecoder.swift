@@ -300,6 +300,10 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                         throw ToolCallParserError.malformed
                     }
                     call = calls[0]
+                case .inkling:
+                    // An Inkling tokenizer never reaches this engine's copy of
+                    // the decoder; refuse rather than guess its call format.
+                    throw ToolCallParserError.malformed
                 }
                 emittedCalls += 1
                 return [.toolCall(call)]

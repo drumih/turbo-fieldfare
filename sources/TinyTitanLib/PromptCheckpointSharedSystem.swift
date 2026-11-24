@@ -33,11 +33,22 @@ enum PromptCheckpointSharedSystem {
         imStartID: Int32,
         domain: ServerPromptCacheDomain
     ) -> Prefix? {
+        prefix(
+            promptIDs: promptIDs, messages: messages,
+            markers: .chatML(imStartID: imStartID), domain: domain)
+    }
+
+    static func prefix(
+        promptIDs: [Int32],
+        messages: [GFTokenizer.Message],
+        markers: PromptMessageMarkers,
+        domain: ServerPromptCacheDomain
+    ) -> Prefix? {
         guard
             let position = PromptCheckpointPlanner.systemEndPosition(
                 promptIDs: promptIDs,
                 messages: messages,
-                imStartID: imStartID),
+                markers: markers),
             position > 0, position < promptIDs.count
         else { return nil }
         let ids = Array(promptIDs.prefix(position))

@@ -35,9 +35,21 @@ enum PromptCheckpointPlanner {
         gridTokens: Int? = nil,
         includeMessageBoundaries: Bool = true
     ) -> [PromptCheckpointBoundary] {
+        boundaries(
+            promptIDs: promptIDs, messages: messages,
+            markers: .chatML(imStartID: imStartID), gridTokens: gridTokens,
+            includeMessageBoundaries: includeMessageBoundaries)
+    }
+
+    static func boundaries(
+        promptIDs: [Int32],
+        messages: [GFTokenizer.Message],
+        markers: PromptMessageMarkers,
+        gridTokens: Int? = nil,
+        includeMessageBoundaries: Bool = true
+    ) -> [PromptCheckpointBoundary] {
         guard promptIDs.count > 1, !messages.isEmpty else { return [] }
-        let messageStarts = messageStarts(
-            promptIDs: promptIDs, imStartID: imStartID)
+        let messageStarts = markers.messageStarts(promptIDs)
         guard !messageStarts.isEmpty else { return [] }
 
         var byPosition: [Int: PromptCheckpointKind] = [:]
@@ -71,24 +83,6 @@ enum PromptCheckpointPlanner {
             .sorted { $0.position < $1.position }
     }
 
-    /// The message starts of a rendered chat prompt, excluding the generation
-    /// prompt's assistant header (always the final `<|im_start|>`).
-    ///
-    /// Empty when the ids are not a chat render this planner understands: a
-    /// rendered chat prompt always ends with the generation prompt, so fewer
-    /// than two markers means there is no message start to locate at all.
-    private static func messageStarts(
-        promptIDs: [Int32],
-        imStartID: Int32
-    ) -> [Int] {
-        var starts: [Int] = []
-        for (index, token) in promptIDs.enumerated() where token == imStartID {
-            starts.append(index)
-        }
-        guard starts.count >= 2 else { return [] }
-        return Array(starts.dropLast())
-    }
-
     /// The end of the opening system/developer message, on the rendered ids.
     ///
     /// This is the position `boundaries` labels `.systemEnd`, except that a
@@ -102,14 +96,22 @@ enum PromptCheckpointPlanner {
         messages: [GFTokenizer.Message],
         imStartID: Int32
     ) -> Int? {
+        systemEndPosition(
+            promptIDs: promptIDs, messages: messages, markers: .chatML(imStartID: imStartID))
+    }
+
+    static func systemEndPosition(
+        promptIDs: [Int32],
+        messages: [GFTokenizer.Message],
+        markers: PromptMessageMarkers
+    ) -> Int? {
         guard promptIDs.count > 1, !messages.isEmpty else { return nil }
         let opensWithGuidance =
             messages.first.map {
                 $0.role == .system || $0.role == .developer
             } ?? false
         guard opensWithGuidance else { return nil }
-        let messageStarts = messageStarts(
-            promptIDs: promptIDs, imStartID: imStartID)
+        let messageStarts = markers.messageStarts(promptIDs)
         guard messageStarts.count >= 2 else { return nil }
         let position = messageStarts[1]
         guard position > 0, position < promptIDs.count else { return nil }

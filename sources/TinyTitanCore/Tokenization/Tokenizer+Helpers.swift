@@ -59,6 +59,9 @@ extension GFTokenizer {
         tokenizer: any Tokenizer,
         resolved: ResolvedSpecialTokens
     ) throws {
+        // Inkling's markers are all special tokens and its decoder reads them
+        // by id, never by their text; there is no ChatML barrier to check.
+        guard resolved.dialect != .inkling else { return }
         let literalMarkers: [(Int32, String)] = [
             (resolved.toolCallStartID, resolved.toolCallStartMark),
             (resolved.toolCallEndID, resolved.toolCallEndMark),
@@ -121,7 +124,65 @@ extension GFTokenizer {
         reasoningEffort: ModelReasoningEffort?
     ) throws -> ResolvedSpecialTokens {
         if let chatML = try? resolveChatMLTokens(tokenizer) { return chatML }
+        if specialTokenID(tokenizer, "<|message_model|>") != nil {
+            return try resolveInklingTokens(tokenizer)
+        }
         return try resolveK2Tokens(tokenizer, effort: reasoningEffort ?? .high)
+    }
+
+    /// Inkling 2's dialect (`InklingChatTemplate`). A model turn is a run of
+    /// `<|message_model|>` messages closed by `<|content_model_end_sampling|>`,
+    /// which is the turn's stop; a turn the model must not write (user, system,
+    /// tool) stops it too. Its messages are parsed by id in
+    /// `InklingAssistantParser`, so the ChatML-shaped slots carry the nearest
+    /// Inkling marker and are read only for diagnostics and the token table.
+    ///
+    /// `imStartID` is the end-of-text token, which a chat render never holds:
+    /// Inkling has no single message-start token, so the prompt cache locates
+    /// its messages through `promptMessageMarkers` instead.
+    static func resolveInklingTokens(
+        _ tokenizer: any Tokenizer
+    ) throws -> ResolvedSpecialTokens {
+        func id(_ token: String) throws -> Int32 {
+            guard let value = specialTokenID(tokenizer, token) else {
+                throw GFTokenizerError.missingSpecialToken(token)
+            }
+            return Int32(value)
+        }
+        let endOfText = try id("<|endoftext|>")
+        let endSampling = try id("<|content_model_end_sampling|>")
+        let endMessage = try id("<|end_message|>")
+        let invoke = try id("<|content_invoke_tool_json|>")
+        let toolTurn = try id("<|message_tool|>")
+        let thinking = try id("<|content_thinking|>")
+        let foreign = try ["<|message_user|>", "<|message_system|>", "<|message_tool|>"].map(id)
+        return ResolvedSpecialTokens(
+            dialect: .inkling,
+            imStartID: endOfText,
+            bosID: endOfText,
+            eosID: endOfText,
+            padID: endOfText,
+            endOfTurnID: endSampling,
+            toolCallStartID: invoke,
+            toolCallEndID: endMessage,
+            toolCallsStartID: nil,
+            toolCallsEndID: nil,
+            toolResponseID: toolTurn,
+            toolResponseEndID: endMessage,
+            channelStartID: thinking,
+            channelEndID: endMessage,
+            thinkStartID: nil,
+            thinkEndID: nil,
+            thinkStartMark: "",
+            thinkEndMark: "",
+            toolCallStartMark: "",
+            toolCallEndMark: "",
+            toolCallsStartMark: "",
+            toolCallsEndMark: "",
+            stopTokenIDs: Set([endSampling, endOfText] + foreign),
+            // The tokenizer's own count; the logits rows are the model's
+            // (`ArchConfig.vocabSize`), which is what the session sizes by.
+            vocabSize: Self.derivedVocabSize(tokenizer) ?? 0)
     }
 
     static func resolveChatMLTokens(

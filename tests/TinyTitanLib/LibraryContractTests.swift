@@ -4,6 +4,7 @@ import Testing
 
 import TinyTitanLib
 import TinyTitanLegacyEngine
+import TinyTitanVariants
 @testable import TinyTitanCore
 
 /// The concurrency and lifetime contract of §5 of
@@ -17,6 +18,9 @@ import TinyTitanLegacyEngine
 ///     TINYTITAN_LIBRARY_CONTRACT_MODEL=models/qwen3.5_4B_4Bit \
 ///         swift test --no-parallel --filter LibraryContractTests
 ///
+/// `TINYTITAN_LIBRARY_CONTRACT_SLOTS` sets the routed-expert slots per layer
+/// for a streaming install, so the two-engine test fits beside each other.
+///
 /// Serialized because each test loads an install and, in one case, two.
 @Suite(.serialized, .enabled(if: contractModel() != nil))
 struct LibraryContractTests {
@@ -28,11 +32,17 @@ struct LibraryContractTests {
     private func engine() async throws -> Engine {
         let model = try #require(contractModel())
         let device = try #require(MTLCreateSystemDefaultDevice())
+        var configuration = EngineConfiguration(contextWindow: Self.window)
+        // Two engines are resident at once below; a large install names a slot
+        // count that keeps both inside the machine's budget.
+        configuration.expertCacheSlots = contractSlots()
+        // The factory an embedder uses: the selection table, so an install
+        // with an engine variant (Ornith, dense Qwen 3.5, Inkling 2) runs it.
         return try await Engine(
             directory: model,
             device: device,
-            factory: EngineFactories.sixXGPU(),
-            configuration: EngineConfiguration(contextWindow: Self.window))
+            factory: EngineFactories.routingFactory(directoryURL: model),
+            configuration: configuration)
     }
 
     private func ask(
@@ -188,4 +198,10 @@ func contractModel() -> URL? {
         isDirectory.boolValue
     else { return nil }
     return URL(fileURLWithPath: path)
+}
+
+/// `TINYTITAN_LIBRARY_CONTRACT_SLOTS`, when it names a positive count.
+func contractSlots() -> Int? {
+    ProcessInfo.processInfo.environment["TINYTITAN_LIBRARY_CONTRACT_SLOTS"]
+        .flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil }
 }

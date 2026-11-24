@@ -40,6 +40,11 @@ public struct EngineFactory: Sendable {
     public let runRawCompletion: @Sendable (RawCompletionRequest) async throws -> RawDecodeResult
     public let makeWarmup: @Sendable (any EngineModel, Int?) -> EngineExpertWarmup?
     public let perSlotBytes: @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int
+    /// The folder holding the install's `tokenizer.json` and
+    /// `chat_template.jinja`, for an engine whose install does not keep them
+    /// under `tokenizer/` (the Inkling 2 Q4 install derives them from its
+    /// verified GGUF header). `nil` uses `GFTokenizer.tokenizerFolder`.
+    public let tokenizerFolder: (@Sendable (URL) throws -> URL)?
 
     public init(
         prepare: @escaping @Sendable (SessionBuildOptions) -> Void = { _ in },
@@ -88,7 +93,8 @@ public struct EngineFactory: Sendable {
         perSlotBytes:
             @escaping @Sendable (any EngineModel, SessionBuildOptions, EngineLoadPlan) -> Int = {
                 _, _, _ in 0
-            }
+            },
+        tokenizerFolder: (@Sendable (URL) throws -> URL)? = nil
     ) {
         self.prepare = prepare
         self.makeContext = makeContext
@@ -107,5 +113,6 @@ public struct EngineFactory: Sendable {
         self.runRawCompletion = runRawCompletion
         self.makeWarmup = makeWarmup
         self.perSlotBytes = perSlotBytes
+        self.tokenizerFolder = tokenizerFolder
     }
 }

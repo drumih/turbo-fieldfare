@@ -487,3 +487,57 @@ still is). The expected refusals:
 **Quality bar.** As everywhere: no step may change greedy text or logits beyond
 the measured noise floor. Speed figures are paired against the current default.
 Model runs stay under the owner's 16 GB cap.
+
+### TT-122 and TT-123 as built, 2026-11-24
+
+- **Shared session.** `variantGPUInkling2Q4()` (`TinyTitanVariants`) is the
+  install's `EngineFactory`; the selection paths (`gpuFactory(directoryURL:)`,
+  `routingFactory(directoryURL:)`) return it for an Inkling 2 Q4 install. Its
+  pieces:
+  - `InklingQ4EngineModel` (the `EngineModel`);
+  - `InklingQ4Runner` (the `EngineRunner`, over the decoder's own prefill and
+    step);
+  - `runInklingQ4Completion` (the completion loop: GPU argmax when greedy, the
+    copied `InklingQ4Sampler` otherwise);
+  - the variant's `InklingQ4LoadPlan`, so `--ram-budget`, `--expert-cache-slots`
+    and `--max-context` keep their meaning.
+
+  The session's window is now `min(asked, runner.maxContext)`, for an engine
+  whose plan grants less than was asked.
+- **Tokenizer dialect.** `TokenizerDialect.inkling` follows the K2 precedent:
+  - `InklingChatTemplate` (moved from the 6.x route into Core, one renderer)
+    renders the prompt;
+  - `InklingAssistantParser` (moved likewise) runs inside
+    `StructuredAssistantDecoder`;
+  - the turn stops on `<|content_model_end_sampling|>` or on a turn the model
+    must not write;
+  - a JSON-schema answer opens the text message itself and ends on
+    `<|end_message|>` (`documentEndTokenIDs`).
+- **Revised: the tokenizer is not in the install.** The plan said the Q4
+  install would carry `tokenizer/`. Writing into an existing install changes it,
+  so instead the factory's `tokenizerFolder` exports it once from the verified
+  GGUF header into the user cache directory, as the old route did, keyed by
+  model id, snapshot hash and header size.
+- **Prompt cache.** Snapshots hold each visit's written K/V rows (and scales
+  below 16 bits) plus the convolution history; the direct prefix hit is
+  dialect-free. Interior checkpoints locate messages through
+  `PromptMessageMarkers` (ChatML: `<|im_start|>`, the last start being the
+  generation header; Inkling: the four role tokens, with a header only when
+  the prompt opened the text message). The ChatML continuation bridges are
+  skipped for Inkling.
+- **`--kv-bits` (TT-123): built, measured, rejected.**
+  - 8- and 4-bit K/V kernels (quantize on write in `kv_finish`/`kv_finish_chunk`,
+    dequantize in both relative-attention kernels, symmetric absmax) were run
+    on the llama.cpp reference cases: 96 teacher-forced tokens, 16 slots.
+  - Top-1 agreement with llama.cpp, largest logit difference from 16 bits:
+
+    | K/V | one scale per head | one scale per 32 channels |
+    |---|---|---|
+    | 16-bit | 96/96 | 96/96 |
+    | 8-bit | 94/96, 1.96 | 95/96, 1.46 |
+    | 4-bit | 90/96, 6.42 | 91/96, 3.32 |
+
+  - A memory saving that changes a token is rejected, so the kernels were not
+    committed. Inkling keeps 16-bit K/V: an explicit `--kv-bits 8/4` is refused
+    with these numbers, and the server's default of 8 is served at 16 with a
+    logged notice rather than ignored silently.

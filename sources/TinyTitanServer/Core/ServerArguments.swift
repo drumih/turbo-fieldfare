@@ -38,6 +38,9 @@ public struct ServerArguments: Equatable, Sendable {
     /// One line naming what the profile contributed, for the startup log.
     public let calibrationLogLine: String?
     public let kvCachePrecision: KVCachePrecision
+    /// Whether `--kv-bits` was given. Inkling 2 refuses an explicit 8 or 4 and
+    /// serves the default at 16 bits (TT-123), so it has to tell them apart.
+    public var kvCachePrecisionExplicit = false
     /// Host-KV window: full-attention rows stay in a host arena and only this
     /// many rows per layer/slot live in Metal. Nil is the contiguous cache.
     public let hostKVWindowTokens: Int?
@@ -77,29 +80,6 @@ public struct ServerArguments: Equatable, Sendable {
     /// The explicit `--reasoning` level; nil when the older flags were used.
     public let reasoningLevel: TinyTitanCore.ReasoningLevel?
 
-    /// The server-wide level, however it was spelled: `--reasoning` wins,
-    /// otherwise `--thinking` and `--reasoning-effort` say the same thing.
-    public var requestedReasoningLevel: TinyTitanCore.ReasoningLevel {
-        if let reasoningLevel { return reasoningLevel }
-        guard thinkingMode.isEnabled else { return .off }
-        return reasoningEffort.flatMap { TinyTitanCore.ReasoningLevel(rawValue: $0.rawValue) }
-            ?? .on
-    }
-
-    /// Unloading implies deferring the first load — loading at boot only to
-    /// drop it moments later is incoherent. Derived rather than folded into
-    /// `lazyLoad` so the struct stays a faithful record of what was typed.
-    public var managesResidency: Bool { lazyLoad || idleUnloadSeconds > 0 }
-
-    /// Idle unloading discards the in-memory prefix cache with the session.
-    /// With a disk cache configured the entries rehydrate on reload; without
-    /// one, every unload costs a full cold prefill on the next request.
-    public var unloadDiscardsWarmCache: Bool {
-        idleUnloadSeconds > 0
-            && promptCacheMode != .off
-            && promptCacheDiskDirectory == nil
-    }
-
     /// lint:allow-long a flag table: one `case` per option plus its
     /// validation. Splitting it into per-group parsers would hide the
     /// exhaustive switch that makes an unhandled flag a compile-visible gap.
@@ -133,6 +113,7 @@ public struct ServerArguments: Equatable, Sendable {
         var calibrationProfile: String?
         var calibrationLogLine: String?
         var kvCachePrecision: KVCachePrecision = .int8
+        var kvCachePrecisionExplicit = false
         var hostKVWindowTokens: Int?
         var ropeScalingMode: RuntimeRoPEScalingMode = .none
         var thinkingMode = ModelThinkingMode.resolved(environment: environment)
@@ -295,6 +276,7 @@ public struct ServerArguments: Equatable, Sendable {
                     throw ServerArgumentError.invalid("--kv-bits must be 4, 8, or 16")
                 }
                 kvCachePrecision = parsed
+                kvCachePrecisionExplicit = true
             case "--host-kv-window":
                 guard let parsed = Int(value),
                     (1...RuntimeConfiguration.maximumContextTokens).contains(parsed)
@@ -469,6 +451,7 @@ public struct ServerArguments: Equatable, Sendable {
             calibrationProfile: calibrationProfile,
             calibrationLogLine: calibrationLogLine,
             kvCachePrecision: kvCachePrecision,
+            kvCachePrecisionExplicit: kvCachePrecisionExplicit,
             hostKVWindowTokens: hostKVWindowTokens,
             ropeScalingMode: ropeScalingMode,
             thinkingMode: thinkingMode,

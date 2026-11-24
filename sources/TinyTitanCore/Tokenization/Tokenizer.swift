@@ -7,6 +7,10 @@ public enum TokenizerDialect: String, Sendable, Equatable {
     case chatML
     /// K2-Horizon: `<|ifm|im_start|>`, `<ifm|think>`, `<ifm|tool_call>`.
     case k2
+    /// Inkling 2: `<|message_model|>` turns of `<|content_text|>`,
+    /// `<|content_thinking|>` and `<|content_invoke_tool_json|>` messages,
+    /// closed by `<|content_model_end_sampling|>` (`InklingChatTemplate`).
+    case inkling
 }
 
 /// Tokenizer wrapper for the compatible Qwen3.5-MoE ChatML model family.
@@ -404,6 +408,9 @@ public struct GFTokenizer: @unchecked Sendable {
         messages: [Message],
         tools: [FunctionDefinition]
     ) throws -> [Int32] {
+        if dialect == .inkling {
+            return encodeInklingPrompt(messages: messages, tools: tools, structuredAnswer: false)
+        }
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
         }

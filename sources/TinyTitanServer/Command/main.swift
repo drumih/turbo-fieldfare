@@ -52,20 +52,16 @@ do {
     }
     let signals = ServerTerminationSignals()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
-    // Inkling 2: the Q4 engine variant over its `.ssdai` install, or the GGUF
-    // route over the raw file. One backend serves both.
+    if arguments.kvCachePrecisionExplicit, EngineFactories.isInkling2Q4(directoryURL: modelURL),
+        let refusal = EngineFactories.inkling2RefusesKVBits(arguments.kvCachePrecision)
+    {
+        throw ServerArgumentError.invalid(refusal)
+    }
+    // Inkling 2 as a raw GGUF file: the as-is route until it is retired
+    // (TT-127). The Q4 `.ssdai` install is served by the shared session below
+    // through its engine variant (TT-122).
     var inkling: (backend: Inkling2GGUFServerBackend, label: String, id: String)?
-    if Inkling2Q4ServerLoad.recognizes(modelURL) {
-        let loaded = try await Inkling2Q4ServerLoad.session(
-            directory: modelURL, requestedContext: arguments.maxContext,
-            ramBudget: arguments.expertCacheBudgetBytes,
-            explicitSlots: arguments.expertCacheSlots)
-        inkling = (
-            try Inkling2GGUFServerBackend(
-                session: loaded.session, reasoning: arguments.requestedReasoningLevel),
-            modelURL.lastPathComponent, "inkling-2-mini-gguf-q4"
-        )
-    } else if let gguf = Inkling2GGUFSession.modelFile(at: modelURL) {
+    if let gguf = Inkling2GGUFSession.modelFile(at: modelURL) {
         inkling = (
             try await Inkling2GGUFServerBackend(
                 gguf: gguf, maxContext: arguments.maxContext,

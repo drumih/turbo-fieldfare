@@ -193,6 +193,14 @@ extension ServerArguments {
         directory: URL
     ) throws -> (thinking: ModelThinkingMode, effort: ModelReasoningEffort?) {
         guard let reasoningLevel else { return (thinkingMode, reasoningEffort) }
+        if !cpu, EngineFactories.isInkling2Q4(directoryURL: directory) {
+            // Inkling 2 is not a 6.x family: its control is the variant's own.
+            let control = EngineFactories.inkling2ReasoningControl
+            let level = ReasoningFallback.effectiveLevel(
+                reasoningLevel, supported: control.supportedLevels, whenOn: control.levelWhenOn)
+            ServerLog.residency("reasoning=\(level.rawValue)")
+            return level == .off ? (.off, nil) : (.on, level.effort ?? .high)
+        }
         let kind: ModelCatalog.Kind =
             cpu
             ? .cpu(try ModelCatalog.snapshotFamily(directory))

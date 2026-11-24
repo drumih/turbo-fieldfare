@@ -67,7 +67,7 @@ public struct JSONTokenTable: Sendable {
         self.storage = storage
         self.offsets = offsets
         self.buckets = buckets
-        self.stopTokens = tokenizer.stopTokenIDs
+        self.stopTokens = tokenizer.documentEndTokenIDs
     }
 
     /// Build from explicit entries. This is the seam the tests use: the
