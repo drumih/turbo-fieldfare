@@ -13,7 +13,6 @@ import NIOCore
 import NIOHTTP1
 import NIOPosix
 import Synchronization
-import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
 

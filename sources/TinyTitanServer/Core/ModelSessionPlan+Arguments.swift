@@ -7,7 +7,6 @@ import TinyTitanCore
 // and not part of the engine an embedder links, so the flags are read here and
 // the kit's plan is built through its own initializer.
 import Foundation
-import TinyTitan
 import TinyTitanLib
 
 extension ModelSessionPlan {

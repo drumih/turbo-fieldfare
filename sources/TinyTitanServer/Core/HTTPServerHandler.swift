@@ -12,7 +12,7 @@ import NIOCore
 import NIOHTTP1
 import NIOPosix
 import Synchronization
-import TinyTitan
+import TinyTitanCore
 import TinyTitanLib
 
 /// unchecked-invariant: NIO calls every ChannelInboundHandler method on the

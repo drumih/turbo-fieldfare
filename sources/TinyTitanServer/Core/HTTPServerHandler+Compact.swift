@@ -10,7 +10,6 @@ import Foundation
 import NIOCore
 import NIOHTTP1
 import Synchronization
-import TinyTitan
 import TinyTitanLib
 
 extension ServerHTTPHandler {

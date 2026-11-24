@@ -8,7 +8,6 @@ import TinyTitanCore
 //
 
 import Foundation
-import TinyTitan
 import TinyTitanLib
 
 /// How a compaction was produced, so a replayed note can say what it is.

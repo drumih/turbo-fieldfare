@@ -354,6 +354,46 @@ The order is chosen so each step is shippable and bit-identical:
    - Prove them with `examples/plugin/` beside `examples/embedded/`, built by a
      check script like `tools/embedded-dependency-check.sh`.
 
+6. **TT-134: port the remaining 6.x code into 7.x (phase 2).**
+   - Inventory (2026-11-24, before this work): 87 files outside
+     `sources/TinyTitan` imported the 6.x runtime (63,679 lines in 314 files):
+     server 35, bench 13, CLI 13, `TinyTitanLegacyEngine` 8, validation 6,
+     CPU engine 2, variants 2.
+   - Slice 1 (done): 26 host files imported 6.x but used only types that
+     already live in Core; they now import `TinyTitanCore`. The house
+     sampling constants the CLI and the Responses store read come from
+     `SamplingProfile.house`, held equal to 6.x `GenerationDefaults.house` by
+     a test until 6.x is gone.
+   - What the remaining 61 files reach, by owner:
+     - **Side routes (TT-127)**: `Inkling2GGUFSession` and its parser and
+       format; the K2 probe (`K2GraphProbe`, `K2Model`, `K2Snapshot`);
+       Nemotron (`NemotronInstall`, `NemotronMetalGraph`, ...); `GGUFDecoder`.
+       These are deleted with their routes or become plugins; they are not
+       ported into Core.
+     - **The dense CPU engine**: `CPUQwen35`, `AffineSnapshot`, `CPUSampler`,
+       `SideEngine`, `CPUModelFamily`. They move into `TinyTitanCPUEngine`
+       once the 6.x kernels that use them (`Int8AffineGEMV`, `CPUExpertFFN`)
+       and the GGUF session no longer do.
+     - **The 6.x MoE runtime behind `LegacyEngineAdapter`**: `Model`,
+       `RealForwardRunner`, `RuntimeConfiguration`, `KVCacheManager`,
+       `StreamingMTPDecoder`, the expert-I/O types. This is the code the
+       families not on disk (Qwen 3.8, KAT, AgentWorld, Ornith 8-bit, Laguna)
+       run on. It moves, as one engine target that imports only Core, under
+       `sources/Engines/`, so each later plugin copies from it the way the
+       Ornith plugin did.
+     - **Host model knowledge**: `ModelFamily`, `ManifestReader`,
+       `ManifestIdentity`, per-family `GenerationDefaults`. In 7.x a plugin
+       declares these (identity and `SamplingProfile` in its load plan), so
+       the host's uses move onto the resolved plugin rather than into Core;
+       `core-purity` forbids the alternative.
+     - **Host plumbing still typed by 6.x**: `ServerArguments`
+       (`RuntimeConfiguration`, `KVCacheManager`, `StreamingMTPMemoryPlan`),
+       `ManagedModelBackend` (`PreadExpertStreamer`, `ResidentBuffer`),
+       `ServerCoordinator` (`ForwardStepGate`), and the bench's kernel
+       benchmarks.
+   - Done when no host or plugin target imports `TinyTitan` (6.x) and the
+     6.x adapter is gone.
+
 Each step is gated by the full lint set, the unit suites, the golden baselines
 of every installed model, and api-feature-check 10/10 on the engines it touches.
 

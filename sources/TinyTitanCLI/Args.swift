@@ -63,14 +63,14 @@ public struct Args: Equatable, Sendable {
         messagesFile: String? = nil,
         maxNew: Int = 1_024,
         maxContext: Int = 4096,
-        temperature: Float = GenerationDefaults.temperature,
-        topK: Int? = GenerationDefaults.topK,
-        topP: Float? = GenerationDefaults.topP,
+        temperature: Float = SamplingProfile.house.temperature,
+        topK: Int? = SamplingProfile.house.topK,
+        topP: Float? = SamplingProfile.house.topP,
         temperatureWasSet: Bool = false,
         topKWasSet: Bool = false,
         topPWasSet: Bool = false,
         repetitionPenalty: Float = 1.0,
-        presencePenalty: Float = GenerationDefaults.presencePenalty,
+        presencePenalty: Float = SamplingProfile.house.presencePenalty,
         presencePenaltyWasSet: Bool = false,
         seed: UInt64? = nil,
         stops: [String] = [],
@@ -159,11 +159,11 @@ extension Args {
         var temperatureWasSet = false
         var topKWasSet = false
         var topPWasSet = false
-        var temperature: Float = GenerationDefaults.temperature
-        var topK: Int? = GenerationDefaults.topK
-        var topP: Float? = GenerationDefaults.topP
+        var temperature: Float = SamplingProfile.house.temperature
+        var topK: Int? = SamplingProfile.house.topK
+        var topP: Float? = SamplingProfile.house.topP
         var repetitionPenalty: Float = 1.0
-        var presencePenalty: Float = GenerationDefaults.presencePenalty
+        var presencePenalty: Float = SamplingProfile.house.presencePenalty
         var presencePenaltyWasSet = false
         var seed: UInt64?
         var stops: [String] = []

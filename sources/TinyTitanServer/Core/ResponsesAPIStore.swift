@@ -138,7 +138,7 @@ public struct ResponsesAPIEcho: Sendable {
         // an omitted field nil so validation could resolve it; by this point the
         // validator has, exactly as the generation config below shows.
         temperature = applied.temperature
-        topP = applied.topP ?? GenerationDefaults.topP
+        topP = applied.topP ?? SamplingProfile.house.topP
         presencePenalty = applied.presencePenalty
         // frequency_penalty has no runtime knob: the validator admits only the
         // neutral value, so the number this server applied is always zero. The

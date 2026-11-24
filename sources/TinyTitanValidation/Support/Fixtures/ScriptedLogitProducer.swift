@@ -1,7 +1,6 @@
 import Foundation
 import Metal
 import Synchronization
-import TinyTitan
 import TinyTitanCore
 
 /// Test `LogitProducer` that writes scripted logits, independent of the kernel

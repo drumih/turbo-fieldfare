@@ -11,7 +11,7 @@ import NIOCore
 import NIOHTTP1
 import NIOPosix
 import Synchronization
-import TinyTitan
+import TinyTitanCore
 
 /// Bounded FIFO of pre-encoded SSE frames for one stream, with a cap that
 /// fails the stream when a slow reader outruns the drainer (S4).

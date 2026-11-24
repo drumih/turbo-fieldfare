@@ -1,6 +1,5 @@
 import TinyTitanCore
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanMemory
 
