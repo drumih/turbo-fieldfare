@@ -309,8 +309,22 @@ PY
   fi
 
   local model_id
-  model_id="$(curl -s --max-time 30 "http://127.0.0.1:$PORT/v1/models" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])')"
+  if ! model_id="$(curl -s --max-time 30 "http://127.0.0.1:$PORT/v1/models" \
+    | python3 -c '
+import json, sys
+want = sys.argv[1]
+ids = [m["id"] for m in json.load(sys.stdin)["data"]]
+if want in ids:
+    print(want)
+elif len(ids) == 1:
+    print(ids[0])
+else:
+    sys.stderr.write(f"requested model {want!r} not in /v1/models: {ids}\n")
+    sys.exit(1)
+' "$catalog_id")"; then
+    echo "  server: FAILED — model $catalog_id not served by /v1/models"
+    cleanup; rm -rf "$work"; return 1
+  fi
 
   body="$(python3 - "$model_id" "$PROMPT" "$MAX_NEW" "$SEED" <<'PY'
 import json, sys

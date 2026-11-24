@@ -347,16 +347,6 @@ enum ServerMemory {
         return String(format: "s-%016llx", hash)
     }
 
-    /// True when this request is the opening turn of a conversation, which is
-    /// where the bootstrap belongs. Later turns reuse the session.
-    @available(
-        *, deprecated,
-        message: "No caller (TT-051): sessions are identified by sessionIdentifier."
-    )
-    static func isFirstTurn(_ messages: [GFTokenizer.Message]) -> Bool {
-        !messages.contains { $0.role == .assistant }
-    }
-
     /// Memory tools in the tokenizer's own definition type.
     static func functionDefinitions(_ definitions: [MemoryToolDefinition])
         -> [GFTokenizer.FunctionDefinition]
