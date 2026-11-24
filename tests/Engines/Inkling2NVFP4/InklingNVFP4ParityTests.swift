@@ -220,3 +220,97 @@ extension InklingNVFP4ParityTests {
         #expect(worst < 0.5, "a disagreement with llama.cpp is not a near-tie (\(worst))")
     }
 }
+
+extension InklingNVFP4ParityTests {
+    /// TT-135: the CPU cost of repacking one streamed expert, the part of a
+    /// cache miss the NVFP4 plugin adds over the Q4 plugin. Diagnostic: enabled
+    /// with `TINYTITAN_INKLING2_REPACK_TIMING=1`.
+    @Test(.enabled(if: nvfp4 != nil && environment["TINYTITAN_INKLING2_REPACK_TIMING"] == "1"))
+    func repackCostPerExpert() throws {
+        let install = try InklingQ4Install(directory: try #require(Self.nvfp4))
+        let plan = try #require(install.slotPlans.first { $0.layer == 0 })
+        let file = try FileHandle(
+            forReadingFrom: install.directory.appendingPathComponent("packed_experts/" + plan.file))
+        defer { try? file.close() }
+        let planar = try #require(try file.read(upToCount: plan.fileStride))
+        var slot = [UInt8](repeating: 0, count: plan.slotStride)
+        typealias Repack = (
+            UnsafeRawPointer, UnsafeRawPointer, Int, Int, Bool, UnsafeMutableRawPointer
+        ) -> Void
+        let variants: [(String, Repack)] = [
+            (
+                "nibble reference",
+                {
+                    InklingNVFP4Repack.nvfp4Reference(
+                        values: $0, scales: $1, rows: $2, columns: $3, interleaved: $4, into: $5)
+                }
+            ),
+            (
+                "word-wide",
+                {
+                    InklingNVFP4Repack.nvfp4(
+                        values: $0, scales: $1, rows: $2, columns: $3, interleaved: $4, into: $5)
+                }
+            ),
+        ]
+        var totals = [Double](repeating: 0, count: variants.count)
+        let rounds = 10
+        // Interleaved rounds, so machine load hits both alike.
+        for _ in 0..<rounds {
+            for (index, variant) in variants.enumerated() {
+                let started = Date()
+                planar.withUnsafeBytes { raw in
+                    slot.withUnsafeMutableBytes { out in
+                        guard let base = raw.baseAddress, let target = out.baseAddress else {
+                            return
+                        }
+                        for (matrix, interleaved) in [(plan.gateUp, true), (plan.down, false)] {
+                            variant.1(
+                                base + matrix.valuesOffset, base + matrix.scalesOffset,
+                                matrix.rows, matrix.columns, interleaved,
+                                target + matrix.slotOffset)
+                        }
+                    }
+                }
+                totals[index] += Date().timeIntervalSince(started)
+            }
+        }
+        for (index, variant) in variants.enumerated() {
+            Self.log(
+                "Inkling NVFP4 repack (layer 0 expert), \(variant.0): "
+                    + "\(totals[index] / Double(rounds) * 1000) ms per expert")
+        }
+        #expect(totals.allSatisfy { $0 > 0 })
+    }
+}
+
+extension InklingNVFP4ParityTests {
+    /// TT-135 diagnostic: greedy decode at the 12G plan's 59 slots, with the
+    /// cache's counters, to show where a token's time goes. Enabled with
+    /// `TINYTITAN_INKLING2_DECODE_TIMING=1`; an observation, not a benchmark.
+    @Test(.enabled(if: nvfp4 != nil && environment["TINYTITAN_INKLING2_DECODE_TIMING"] == "1"))
+    func decodeTimingAtTheTwelveGigabytePlan() throws {
+        let decoder = try InklingQ4Decoder(
+            directory: try #require(Self.nvfp4), maxContext: 4_096, maxChunk: 64,
+            experts: .slots(59))
+        let prompt = try Self.reference().cases[3].prompt_ids
+        var result = try decoder.prefill(prompt, position: 0)
+        var position = prompt.count
+        let cache = try #require(decoder.expertCache)
+        let before = cache.statistics
+        let count = 48
+        let started = Date()
+        for _ in 0..<count {
+            result = try decoder.step(token: result.next, position: position)
+            position += 1
+        }
+        let seconds = Date().timeIntervalSince(started)
+        let after = cache.statistics
+        Self.log(
+            "Inkling NVFP4 decode at 59 slots: \(Double(count) / seconds) tok/s over \(count) tokens; "
+                + "misses \(after.misses - before.misses), blocking reads "
+                + "\(after.readSeconds - before.readSeconds) s, prefetch wait "
+                + "\(after.prefetchWaitSeconds - before.prefetchWaitSeconds) s")
+        #expect(seconds > 0)
+    }
+}

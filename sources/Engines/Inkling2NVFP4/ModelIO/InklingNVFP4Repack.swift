@@ -32,7 +32,50 @@ enum InklingNVFP4Repack {
         return row < half ? 2 * row : 2 * (row - half) + 1
     }
 
+    /// The repack the cache runs: one 64-bit word per 16-value group. The
+    /// group's 8 source bytes hold value 2k in the low and value 2k+1 in the
+    /// high nibble of byte k; output byte 2m is value 2m | value 2m+8 << 4 and
+    /// byte 2m+1 is value 2m+1 | value 2m+9 << 4, which is the low nibbles of
+    /// bytes m and m+4 (and the high ones) folded, then byte-interleaved.
+    /// `nvfp4Reference` is the nibble-at-a-time definition it is tested against.
     static func nvfp4(
+        values: UnsafeRawPointer, scales: UnsafeRawPointer, rows: Int, columns: Int,
+        interleaved: Bool, into out: UnsafeMutableRawPointer
+    ) {
+        let valueRow = columns / 2
+        let scaleRow = columns / 16
+        let blocks = columns / 64
+        let nibbles: UInt64 = 0x0F0F_0F0F_0F0F_0F0F
+        @inline(__always) func spread(_ word: UInt64) -> UInt64 {
+            var x = (word | word << 16) & 0x0000_FFFF_0000_FFFF
+            x = (x | x << 8) & 0x00FF_00FF_00FF_00FF
+            return x
+        }
+        for row in 0..<rows {
+            let source = sourceRow(row, rows: rows, interleaved: interleaved)
+            let rowValues = values + source * valueRow
+            let rowScales = scales + source * scaleRow
+            let rowOut = out + row * blocks * nvfp4BlockBytes
+            for block in 0..<blocks {
+                let blockOut = rowOut + block * nvfp4BlockBytes
+                blockOut.storeBytes(
+                    of: rowScales.loadUnaligned(fromByteOffset: block * 4, as: UInt32.self),
+                    as: UInt32.self)
+                for group in 0..<4 {
+                    let word = rowValues.loadUnaligned(
+                        fromByteOffset: block * 32 + group * 8, as: UInt64.self)
+                    let low = word & nibbles
+                    let high = (word >> 4) & nibbles
+                    let a = (low & 0xFFFF_FFFF) | ((low >> 32) << 4)
+                    let b = (high & 0xFFFF_FFFF) | ((high >> 32) << 4)
+                    (blockOut + 4 + group * 8).storeBytes(
+                        of: spread(a) | (spread(b) << 8), as: UInt64.self)
+                }
+            }
+        }
+    }
+
+    static func nvfp4Reference(
         values: UnsafeRawPointer, scales: UnsafeRawPointer, rows: Int, columns: Int,
         interleaved: Bool, into out: UnsafeMutableRawPointer
     ) {

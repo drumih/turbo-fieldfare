@@ -54,6 +54,34 @@ import Testing
         for g in 0..<4 { #expect(Array(out[(4 + 8 * g)..<(12 + 8 * g)]) == group) }
     }
 
+    /// The word-wide repack the cache runs equals the nibble-at-a-time
+    /// definition on arbitrary bytes (16 rows x 128 columns, interleaved rows).
+    @Test func wordWideNVFP4RepackEqualsTheReference() {
+        var generator = SystemRandomNumberGenerator()
+        let rows = 16
+        let columns = 128
+        let values = (0..<(rows * columns / 2)).map { _ in
+            UInt8.random(in: 0...255, using: &generator)
+        }
+        let scales = (0..<(rows * columns / 16)).map { _ in
+            UInt8.random(in: 0...255, using: &generator)
+        }
+        let bytes = InklingNVFP4Repack.nvfp4Bytes(rows: rows, columns: columns)
+        for interleaved in [false, true] {
+            let fast = repacked(values, scales, outputBytes: bytes) {
+                InklingNVFP4Repack.nvfp4(
+                    values: $0, scales: $1, rows: rows, columns: columns,
+                    interleaved: interleaved, into: $2)
+            }
+            let reference = repacked(values, scales, outputBytes: bytes) {
+                InklingNVFP4Repack.nvfp4Reference(
+                    values: $0, scales: $1, rows: rows, columns: columns,
+                    interleaved: interleaved, into: $2)
+            }
+            #expect(fast == reference, "interleaved \(interleaved)")
+        }
+    }
+
     @Test func mxfp8BlockIsScalePadThenValues() {
         let values = [UInt8](0..<64)
         let scales: [UInt8] = [127, 130]
