@@ -50,12 +50,17 @@ let package = Package(
             name: "TinyTitanLib",
             targets: [
                 "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
+                "TinyTitanPluginAPI",
             ]),
         .library(
             name: "TinyTitanLibDynamic", type: .dynamic,
             targets: [
                 "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
+                "TinyTitanPluginAPI",
             ]),
+        // Each engine plugin is a library of its own (TPP/1): built and tested
+        // standalone, compiled into the products above.
+        .library(name: "TemplatePlugin", targets: ["TemplatePlugin"]),
         // Product 2 of 2: the engine, embedding the library above.
         .executable(name: "TinyTitanRepack", targets: ["TinyTitanRepack"]),
         .executable(name: "TinyTitanCLI", targets: ["TinyTitanCLI"]),
@@ -203,9 +208,26 @@ let package = Package(
         // TT-121 phase 2: Inkling 2 Mini from its Q4_K_XL GGUF, served from a
         // verified `.ssdai` install. The graph is a spec-sanctioned copy of the
         // GGUF route's decoder (variant-isolation rule).
+        // TinyTitan Plugin Protocol v1 (docs/plugin-api-v1.md): the promise to
+        // a plugin author. Depends on Core only.
+        .target(
+            name: "TinyTitanPluginAPI",
+            dependencies: ["TinyTitanCore"],
+            path: "sources/TinyTitanPluginAPI",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        // The golden base every engine plugin is copied from: a standalone
+        // library over the plugin API, compiled in, serving no shipped model.
+        .target(
+            name: "TemplatePlugin",
+            dependencies: ["TinyTitanPluginAPI", "TinyTitanCore"],
+            path: "sources/Plugins/TemplatePlugin",
+            exclude: ["README.md"],
+            swiftSettings: tinytitanLanguageStandard
+        ),
         .target(
             name: "Inkling2GGUFQ4",
-            dependencies: ["TinyTitanCore", "TinyTitanFormat"],
+            dependencies: ["TinyTitanCore", "TinyTitanFormat", "TinyTitanPluginAPI"],
             path: "sources/Engines/Inkling2GGUFQ4",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -247,6 +269,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
                 "Ornith35B4Bit", "DenseGPU", "Inkling2GGUFQ4",
+                "TinyTitanPluginAPI", "TemplatePlugin",
                 "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
                 "Qwen35Dense4B4Bit", "Qwen35Dense4B8Bit",
                 "Qwen35Dense9B4Bit", "Qwen35Dense9B8Bit",
@@ -344,7 +367,7 @@ let package = Package(
             name: "TinyTitanServerCore",
             dependencies: [
                 "TinyTitanCore",
-                "TinyTitanLib",
+                "TinyTitanLib", "TinyTitanPluginAPI",
                 "TinyTitan",
                 "TinyTitanLegacyEngine",
                 "TinyTitanMemory",
@@ -367,7 +390,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanServer",
-            dependencies: ["TinyTitanServerCore", "TinyTitanVariants", "TinyTitanCPUEngine"],
+            dependencies: [
+                "TinyTitanServerCore", "TinyTitanVariants", "TinyTitanCPUEngine",
+                "TinyTitanPluginAPI",
+            ],
             path: "sources/TinyTitanServer/Command",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -461,8 +487,20 @@ let package = Package(
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
+            name: "TinyTitanPluginAPITests",
+            dependencies: ["TinyTitanPluginAPI", "TinyTitanCore"],
+            path: "tests/TinyTitanPluginAPI",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
+            name: "TemplatePluginTests",
+            dependencies: ["TemplatePlugin", "TinyTitanPluginAPI", "TinyTitanCore"],
+            path: "tests/Plugins/TemplatePlugin",
+            swiftSettings: tinytitanLanguageStandard
+        ),
+        .testTarget(
             name: "Inkling2GGUFQ4Tests",
-            dependencies: ["Inkling2GGUFQ4", "TinyTitan", "TinyTitanCore"],
+            dependencies: ["Inkling2GGUFQ4", "TinyTitan", "TinyTitanCore", "TinyTitanPluginAPI"],
             path: "tests/Engines/Inkling2GGUFQ4",
             swiftSettings: tinytitanLanguageStandard
         ),

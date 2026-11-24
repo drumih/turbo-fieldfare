@@ -11,6 +11,7 @@ import TinyTitan
 import TinyTitanCore
 import TinyTitanLegacyEngine
 import TinyTitanLib
+import TinyTitanPluginAPI
 
 /// The engine a caller asks for explicitly.
 public enum EngineChoice: String, Sendable, CaseIterable, Equatable {
@@ -61,13 +62,16 @@ extension EngineFactories {
     /// and dispatches through the selection table: the shipped variant
     /// engines for their installs, the 6.x engine for everything else —
     /// which keeps serving every model without a shipped variant (TT-087).
+    ///
+    /// Resolved through the plugin registry (TPP/1, TT-130): the strongest
+    /// plugin probe wins. An install no plugin claims specifically and that has
+    /// no readable manifest is refused here, as before the registry.
     public static func gpuFactory(directoryURL: URL) throws -> EngineFactory {
-        if isInkling2Q4(directoryURL: directoryURL) { return variantGPUInkling2Q4() }
-        let identity = try TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
-        return gpuFactory(
-            family: identity.family,
-            manifestModelID: identity.modelID,
-            routedExpertWeightBits: identity.weightBits)
+        let resolved = try pluginRegistry.resolve(directoryURL)
+        if resolved.strength == .fallback {
+            _ = try TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
+        }
+        return resolved.engineFactory()
     }
 
     /// The CPU factory for a dense Qwen 3.5 install: the per-width variant
@@ -103,13 +107,7 @@ extension EngineFactories {
     /// (an affine snapshot, a GGUF directory) falls back to the 6.x factory,
     /// which is what those paths used before this surface existed.
     public static func routingFactory(directoryURL: URL) -> EngineFactory {
-        if isInkling2Q4(directoryURL: directoryURL) { return variantGPUInkling2Q4() }
-        guard let identity = try? TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
-        else { return sixXGPU() }
-        return gpuFactory(
-            family: identity.family,
-            manifestModelID: identity.modelID,
-            routedExpertWeightBits: identity.weightBits)
+        (try? pluginRegistry.resolve(directoryURL))?.engineFactory() ?? sixXGPU()
     }
 
     public static func gpuFactory(

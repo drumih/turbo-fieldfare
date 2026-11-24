@@ -9,6 +9,7 @@ import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanMemory
 import TinyTitanServerCore
+import TinyTitanPluginAPI
 import TinyTitanVariants
 import TinyTitanCPUEngine
 
@@ -52,10 +53,26 @@ do {
     }
     let signals = ServerTerminationSignals()
     let modelURL = URL(fileURLWithPath: arguments.model).standardizedFileURL
-    if arguments.kvCachePrecisionExplicit, EngineFactories.isInkling2Q4(directoryURL: modelURL),
-        let refusal = EngineFactories.inkling2RefusesKVBits(arguments.kvCachePrecision)
+    // The plugin's parameter table (TPP/1 §4): an explicit value the engine
+    // cannot honour is refused with its reason; a default it cannot honour is
+    // replaced by the engine's own, announced rather than ignored.
+    if arguments.modelsDirectory == nil, !arguments.cpu,
+        let resolved = try? EngineFactories.pluginRegistry.resolve(modelURL)
     {
-        throw ServerArgumentError.invalid(refusal)
+        let kvBits = resolved.parameters.kvCachePrecision
+        if arguments.kvCachePrecisionExplicit {
+            if let refusal = kvBits.refusal(
+                for: arguments.kvCachePrecision, flag: "--kv-bits",
+                plugin: resolved.plugin.displayName, spelled: { "\($0.rawValue)" })
+            {
+                throw ServerArgumentError.invalid(refusal)
+            }
+        } else if let notice = kvBits.resolveDefault(
+            arguments.kvCachePrecision, flag: "--kv-bits", plugin: resolved.plugin.displayName,
+            spelled: { "\($0.rawValue)" }
+        ).notice {
+            ServerLog.diagnostic(notice)
+        }
     }
     // Inkling 2 as a raw GGUF file: the as-is route until it is retired
     // (TT-127). The Q4 `.ssdai` install is served by the shared session below

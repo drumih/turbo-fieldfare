@@ -3,6 +3,7 @@ import TinyTitan
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
+import TinyTitanPluginAPI
 import TinyTitanVariants
 import TinyTitanCPUEngine
 
@@ -193,9 +194,12 @@ extension ServerArguments {
         directory: URL
     ) throws -> (thinking: ModelThinkingMode, effort: ModelReasoningEffort?) {
         guard let reasoningLevel else { return (thinkingMode, reasoningEffort) }
-        if !cpu, EngineFactories.isInkling2Q4(directoryURL: directory) {
-            // Inkling 2 is not a 6.x family: its control is the variant's own.
-            let control = EngineFactories.inkling2ReasoningControl
+        if !cpu,
+            let control = (try? EngineFactories.pluginRegistry.resolve(directory))?
+                .reasoningControl
+        {
+            // A plugin that brings its own levels (TPP/1); the 6.x adapter
+            // returns nil and its families keep their table below.
             let level = ReasoningFallback.effectiveLevel(
                 reasoningLevel, supported: control.supportedLevels, whenOn: control.levelWhenOn)
             ServerLog.residency("reasoning=\(level.rawValue)")

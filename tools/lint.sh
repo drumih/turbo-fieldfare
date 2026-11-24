@@ -1511,6 +1511,8 @@ root = os.environ["ROOT"]
 libs = [
     os.path.join(root, "sources", "TinyTitanLib"),
     os.path.join(root, "sources", "TinyTitanCPUEngine"),
+    # TPP/1 (TT-130): the plugin API is a promise to a plugin author.
+    os.path.join(root, "sources", "TinyTitanPluginAPI"),
 ]
 DECL = re.compile(
     r"\b(func|let|var|init|struct|class|enum|actor|protocol|typealias|"
@@ -1568,7 +1570,7 @@ PY
 }
 
 check_library_facade() {
-  echo "== library-facade: the TinyTitanLib + CPUEngine surface must be chosen, not inherited =="
+  echo "== library-facade: the TinyTitanLib + CPUEngine + plugin API surface must be chosen, not inherited =="
   local raw rc scanned current unresolved
   raw="$(measure_library_facade)"
   rc=$?
@@ -1716,9 +1718,11 @@ check_variant_isolation() {
       case "$imp" in
         TinyTitanCore|TinyTitanFormat|Metal|MetalKit|Foundation|Accelerate|Compression|SystemPackage|Darwin|Synchronization|IOKit|TinyTitanKernelsC) ;;
         TinyTitan|TinyTitanLib|TinyTitanServerCore|TinyTitanRepackCore|TinyTitanCLICore) bad=1 ;;
+        TinyTitanVariants|TinyTitanLegacyEngine|TinyTitanCPUEngine) bad=1 ;;
         *)
-          # Another variant target: a sibling directory under sources/Engines.
-          if [ -d "$dir/$imp" ] && [ "$imp" != "$variant" ]; then bad=1; fi
+          # Another variant or plugin target: a sibling directory under
+          # sources/Engines or sources/Plugins (TPP/1: a plugin is standalone).
+          if { [ -d "$dir/$imp" ] || [ -d "$ROOT/sources/Plugins/$imp" ]; } && [ "$imp" != "$variant" ]; then bad=1; fi
           ;;
       esac
       if [ "$bad" -eq 1 ]; then
@@ -1726,7 +1730,7 @@ check_variant_isolation() {
         found=$((found+1))
       fi
     done <<< "$imports"
-  done < <(find "$dir" -name '*.swift' -type f | sort)
+  done < <( { find "$dir" -name '*.swift' -type f; [ -d "$ROOT/sources/Plugins" ] && find "$ROOT/sources/Plugins" -name '*.swift' -type f; } | sort)
   if [ "$found" -gt 0 ]; then
     status=1
     return

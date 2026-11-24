@@ -62,6 +62,22 @@ class VariantIsolationTests(VariantIsolationHarness):
         self.assertNotEqual(rc, 0, f"variant-isolation passed a runtime import:\n{out}")
         self.assertIn("TinyTitan", out)
 
+    def test_plugin_importing_another_plugin_is_refused(self):
+        # TPP/1: a plugin under sources/Plugins is standalone -- it may not
+        # import another plugin or a host target such as TinyTitanVariants.
+        self.variant_file("Ornith35B4Bit", "import Foundation\n")
+        write(
+            self.root / "sources" / "Plugins" / "AlphaPlugin" / "Alpha.swift",
+            "import Foundation\nimport BetaPlugin\nimport TinyTitanVariants\n",
+        )
+        write(
+            self.root / "sources" / "Plugins" / "BetaPlugin" / "Beta.swift", "import Foundation\n"
+        )
+        rc, out = self.run_mode("variant-isolation")
+        self.assertNotEqual(rc, 0, f"variant-isolation passed a plugin-to-plugin import:\n{out}")
+        self.assertIn("BetaPlugin", out)
+        self.assertIn("TinyTitanVariants", out)
+
     def test_clean_variant_passes(self):
         self.variant_file(
             "Qwen35Dense2B4Bit",

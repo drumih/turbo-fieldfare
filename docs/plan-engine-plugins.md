@@ -1,6 +1,8 @@
 # Engine plugins: TinyTitan Plugin Protocol v1
 
-Status: **design, 2026-11-24** — not implemented. Tracker: TT-130 (protocol and
+Status: **design, 2026-11-24; TPP/1.0 implemented (TT-130)**: the API target,
+the registry, the template plugin and the Inkling 2 Q4 plugin. The
+specification is `docs/plugin-api-v1.md`. Tracker: TT-130 (protocol and
 host), TT-131 (conformance kit), TT-132 (migrate the shipped engines), TT-133
 (out-of-tree plugins).
 
@@ -31,6 +33,26 @@ Non-goals for v1:
   the protocol.
 - **No GUI.**
 
+## The owner's rules (2026-11-24)
+
+- **A plugin is standalone.** Each LLM plugin is a library target compiled into
+  the build. Otherwise it is independent of the rest: it imports only the plugin
+  API, Core and system frameworks, and all tuning and customization for a model
+  happens in its plugin's code only.
+- **This holds for every supported model, 6.x included.** The template plugin,
+  with the API spec, is the golden base; the other models come in as plugins
+  one by one over time.
+- **Phase 1:** the plugin system is clear and works with every model on disk:
+  Inkling 2 Q4 and NVFP4, Ornith 1.5 4-bit, and the six dense Qwen 3.5
+  installs.
+- **Phase 2:** import the remaining 6.x code into 7.x, so the core is fully
+  ported. What remains after that is plugins for the models not on disk.
+
+**As built in 1.0, the plugin's entry points are static** (`static func probe`,
+`static func engineFactory(host:)`), and the engine is the existing Core
+`EngineFactory`. The `ChatDialect`, `LoadPlanV1` and `LoadedEngine` shapes below
+are the 1.1 direction.
+
 ## Why now: the seams the Inkling integration hit
 
 TT-122 put Inkling 2 Q4 on the shared session. Every edit outside the variant
@@ -43,7 +65,7 @@ what a plugin protocol has to remove:
 | Family identity | the 6.x `ModelFamily` enum, read by the catalog (`ModelCatalog.Kind.gpu(ModelFamily)`), reasoning fallback, generation defaults (9 files outside the runtime) | a separate reasoning path in `singleModelReasoning`; not in the catalog at all (TT-126) |
 | Front-end branches | `TinyTitanServer/Command/main.swift` and the CLI main: 18 model-specific branches (K2 probe, Inkling routes, GGUF, CPU) | its own branch until TT-122 removed it |
 | Chat format | `TokenizerDialect` enum in Core with 45 `dialect ==`/`switch` sites, copied into each variant's decoder | a new enum case, edits to the renderer, the decoder (and its two copies in the Ornith and dense variants), the JSON table |
-| Prompt cache | ChatML continuation bridges and `<|im_start|>` checkpoint markers in `TinyTitanLib` | a dialect guard, then `PromptMessageMarkers` |
+| Prompt cache | ChatML continuation bridges and checkpoint markers keyed on ChatML's message-start token in `TinyTitanLib` | a dialect guard, then `PromptMessageMarkers` |
 | Tokenizer source | `GFTokenizer.tokenizerFolder` assumes `tokenizer/` in the install | a `tokenizerFolder` factory hook |
 | Parameters | each server flag reaches each engine (or not) ad hoc | `--kv-bits` silently ignored until TT-123; `--ram-budget` ignored on the old route |
 
@@ -261,8 +283,10 @@ Dynamic loading can come in a later protocol version, if ever, over a C ABI.
   building and the gap is reported to the user rather than hidden.
 - A major version may remove or change requirements; the host refuses a plugin
   whose major differs, naming both versions.
-- `TinyTitanPluginAPI` gets its own `public`-allowlist gate, as
-  `library-facade` does for `TinyTitanLib`.
+- `TinyTitanPluginAPI` is in the `library-facade` gate's allowlist
+  (`tools/library-facade-baseline.txt`) beside `TinyTitanLib` and `CPUEngine`
+  (decided 2026-11-24): a new public plugin requirement is a deliberate,
+  re-measured change, never inherited.
 
 ## Conformance kit (what "automatically all features" is checked by)
 

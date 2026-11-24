@@ -1,62 +1,58 @@
 import Foundation
-import Inkling2GGUFQ4
 import Metal
-import TinyTitan
 import TinyTitanCore
-import TinyTitanLegacyEngine
-import TinyTitanLib
+import TinyTitanPluginAPI
 
-extension EngineFactories {
-    /// Inkling 2's reasoning control: thinking off, or one of its template's
-    /// effort levels (`InklingChatTemplate.effortValue`), `high` (0.9) being
-    /// the template's own default.
-    public static let inkling2ReasoningControl = ReasoningControl.thinkingWithEffortLevels(
+/// Inkling 2 Mini, Q4 `.ssdai` install, as a TPP/1 engine plugin (TT-130).
+///
+/// Everything model-specific is here: the probe, the parameter table, the
+/// reasoning levels, the load plan (`InklingQ4LoadPlan`), the decoder and its
+/// streamed experts, the completion loop and sampler, and the tokenizer derived
+/// from the install's verified GGUF header. The host holds no Inkling code.
+public enum Inkling2GGUFQ4Plugin: EnginePlugin {
+    public static let pluginID = "ai.tinytitan.inkling2-gguf-q4"
+    public static let protocolVersion = ProtocolVersion.current
+    public static let displayName = "Inkling 2 Mini Q4"
+
+    /// Thinking off, or one of the template's effort levels (`high`, 0.9, is
+    /// its own default).
+    public static let reasoning = ReasoningControl.thinkingWithEffortLevels(
         defaultEffort: .high, supported: [.low, .medium, .high, .xhigh])
 
-    /// Why Inkling 2 keeps its K/V cache at 16 bits (TT-123). Quantized K/V
-    /// was built and measured on the llama.cpp reference cases (96 tokens,
-    /// teacher-forced): 8 bits agreed on 95 and 4 bits on 91 with one scale per
-    /// 32 channels, 94 and 90 with one per head. A memory saving that changes a
-    /// token is rejected, so 8 and 4 bits are not offered: an explicit request is
-    /// refused (`inkling2RefusesKVBits`) and a default one is served at 16 bits
-    /// with this notice.
-    public static func inkling2KVNotice(_ requested: KVCachePrecision) -> String {
-        "Inkling 2 Q4: --kv-bits \(requested.rawValue) does not apply; K/V stays 16-bit "
-            + "(8-bit measured 95/96 and 4-bit 91/96 top-1 against llama.cpp, TT-123)"
+    public static func probe(_ install: InstallProbe) -> MatchStrength? {
+        InklingQ4Install.recognizes(install.directory) ? .exact : nil
     }
 
-    /// The refusal for an explicit `--kv-bits 8` or `4` on an Inkling 2 install.
-    public static func inkling2RefusesKVBits(_ requested: KVCachePrecision) -> String? {
-        requested == .fp16
-            ? nil
-            : "--kv-bits \(requested.rawValue) is not supported for Inkling 2: its K/V cache "
-                + "stays 16-bit because 8-bit measured 95/96 and 4-bit 91/96 top-1 agreement "
-                + "with llama.cpp (TT-123); drop the flag or pass --kv-bits 16"
+    /// K/V stays 16-bit: 8- and 4-bit K/V were built and measured on the
+    /// llama.cpp reference cases (96 tokens) at 95/96 and 91/96 top-1 and
+    /// rejected under the quality rule (TT-123).
+    public static func parameters(for install: InstallProbe) -> ParameterSupport {
+        ParameterSupport(
+            kvCachePrecision: .only(
+                [.fp16],
+                reason: "its K/V cache stays 16-bit; 8-bit measured 95/96 and 4-bit 91/96 "
+                    + "top-1 agreement with llama.cpp (TT-123)"),
+            ropeScaling: .only(
+                [.none], reason: "Inkling 2 has a 1M native window and no YaRN factor"),
+            hostKVWindow: .refused(reason: "it needs a QSA model"),
+            concurrentSequences: .only([1], reason: "one sequence until TT-124"),
+            multiTokenPrediction: .refused(
+                reason: "the Q4 install has no MTP head (the NVFP4 install's is TT-129)"),
+            expertStreaming: .supported)
     }
 
-    /// Whether `directoryURL` is an Inkling 2 Q4 `.ssdai` install.
-    public static func isInkling2Q4(directoryURL: URL) -> Bool {
-        InklingQ4Install.recognizes(directoryURL)
+    public static func reasoningControl(for install: InstallProbe) -> ReasoningControl? {
+        reasoning
     }
 
-    /// The Inkling 2 Q4 install as a shared-session engine (TT-122): the
-    /// variant's decoder behind `ServerModelSession`, so the prompt cache, the
-    /// library and CLI paths and every API surface apply to it as they do to
-    /// the other models.
-    ///
-    /// The load plan is the variant's own (`InklingQ4LoadPlan`): `--ram-budget`
-    /// is the whole-process target (`expertCacheBudgetBytes`), sized into a
-    /// window and expert slots; `--expert-cache-slots` wins over the budget's
-    /// slot count. The tokenizer is derived from the install's verified GGUF
-    /// header into the user's cache directory, as the Inkling route did.
     /// lint:allow-long one factory literal: every stage is a short closure over
     /// the variant, and splitting them would only move the list elsewhere.
-    public static func variantGPUInkling2Q4() -> EngineFactory {
+    public static func engineFactory(host: HostServices) -> EngineFactory {
         @Sendable func metadata(_ directory: URL) throws -> EngineModelMetadata {
             let manifest = try SSDAIManifestReader.read(directoryURL: directory)
             return EngineModelMetadata(
                 modelID: manifest.modelID, family: "inkling2", weightBits: 4,
-                sampling: .house, reasoningControl: inkling2ReasoningControl)
+                sampling: .house, reasoningControl: reasoning)
         }
         return EngineFactory(
             prepareLoad: { options in
@@ -68,10 +64,7 @@ extension EngineFactories {
                     geometry: try InklingQ4LoadPlan.Geometry(directory: options.modelDirectory),
                     requested: options.maxContext, ramBudget: options.expertCacheBudgetBytes,
                     explicitSlots: options.expertCacheSlots, workingSet: workingSet)
-                if options.kvCachePrecision != .fp16 {
-                    ServerLog.diagnostic(inkling2KVNotice(options.kvCachePrecision))
-                }
-                ServerLog.diagnostic(
+                host.log(
                     "Inkling 2 Q4: 16-bit K/V, \(plan.slots) expert slots per layer, context "
                         + "\(plan.context) tokens (asked \(options.maxContext)), planned "
                         + "\(plan.plannedBytes >> 20) MiB")
@@ -90,7 +83,7 @@ extension EngineFactories {
                     throw EngineFactoryError.unsupported(
                         "reasoning effort \(effort.rawValue) needs thinking on for Inkling 2")
                 }
-                guard case .thinkingWithEffortLevels(_, let supported) = inkling2ReasoningControl,
+                guard case .thinkingWithEffortLevels(_, let supported) = reasoning,
                     supported.contains(effort)
                 else {
                     throw EngineFactoryError.unsupported(
@@ -116,7 +109,7 @@ extension EngineFactories {
                 guard let model = model as? InklingQ4EngineModel, let context = options.context,
                     let plan = options.engineConfiguration as? InklingQ4LoadPlan
                 else {
-                    throw ServerInferenceError.unsupportedModel(
+                    throw MetalError.invalidState(
                         "the Inkling 2 Q4 runner needs its model, plan and Metal context")
                 }
                 let decoder = try model.makeDecoder(
@@ -128,26 +121,23 @@ extension EngineFactories {
             // One sequence until per-slot state exists (TT-124): a cost no
             // budget can meet keeps the session's width at 1.
             perSlotBytes: { _, options, _ in options.slots > 1 ? Int.max / 2 : 0 },
-            tokenizerFolder: { directory in try inkling2Q4TokenizerFolder(directory) })
+            tokenizerFolder: { directory in try tokenizerFolder(directory, host: host) })
     }
 
     /// The install's tokenizer as a folder the session can load: exported once
     /// from the verified GGUF header (`tokenizer.json`, its config and the chat
-    /// template) into the user's cache directory, keyed by the install's
+    /// template) into the host's cache directory, keyed by the install's
     /// identity and the header's size so a different install never reuses it.
-    static func inkling2Q4TokenizerFolder(_ directory: URL) throws -> URL {
+    static func tokenizerFolder(_ directory: URL, host: HostServices) throws -> URL {
         let header = directory.appendingPathComponent(InklingQ4Install.ggufHeaderFile)
         let manifest = try SSDAIManifestReader.read(directoryURL: directory)
         let size =
             (try? FileManager.default.attributesOfItem(atPath: header.path)[.size] as? Int) ?? 0
         let snapshot = (manifest.sourceSnapshotHash ?? "unpinned")
             .replacingOccurrences(of: "sha256:", with: "").prefix(16)
-        let caches =
-            FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-            ?? FileManager.default.temporaryDirectory
         let folder =
-            caches
-            .appendingPathComponent("TinyTitan/gguf-tokenizers", isDirectory: true)
+            host.cacheDirectory
+            .appendingPathComponent("gguf-tokenizers", isDirectory: true)
             .appendingPathComponent("\(manifest.modelID)-\(snapshot)-\(size)", isDirectory: true)
         let files = [
             GGUFTokenizerSidecar.tokenizerFileName, GGUFTokenizerSidecar.templateFileName,

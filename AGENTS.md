@@ -239,6 +239,16 @@ same table. The dense CPU engine is the CPU target's `CPUEngine` over the
 selects it with `--engine cpu`. Do not move variant construction back into
 `TinyTitanServerCore`, and do not let the facade re-export it.
 
+**Every model is an engine plugin (TPP/1, 2026-11-24).** A model joins
+TinyTitan through `TinyTitanPluginAPI`: one standalone library target, compiled
+in, importing only the plugin API, `TinyTitanCore` and system frameworks, with
+all its tuning and customization inside it. The host resolves an install only
+through `PluginRegistry` (`EngineFactories.pluginRegistry`). The spec is
+`docs/plugin-api-v1.md`, and `sources/Plugins/TemplatePlugin` is the golden base
+a new plugin is copied from. Engines not yet migrated run behind labelled
+adapters in `TinyTitanVariants` until their plugin lands (TT-132); the
+`variant-isolation` gate also holds `sources/Plugins/` to the plugin rule.
+
 ## Models
 
 **Installing a model is a separate, operator-requested job** — never run it to
