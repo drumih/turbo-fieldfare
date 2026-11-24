@@ -214,6 +214,7 @@ sources/TinyTitanPluginAPI/PluginRegistry.swift:func:engineFactory
 sources/TinyTitanPluginAPI/PluginRegistry.swift:func:register
 sources/TinyTitanPluginAPI/PluginRegistry.swift:func:resolve
 sources/TinyTitanPluginAPI/PluginRegistry.swift:init:init
+sources/TinyTitanPluginAPI/PluginRegistry.swift:init:init
 sources/TinyTitanPluginAPI/PluginRegistry.swift:let:plugin
 sources/TinyTitanPluginAPI/PluginRegistry.swift:let:probe
 sources/TinyTitanPluginAPI/PluginRegistry.swift:let:shared

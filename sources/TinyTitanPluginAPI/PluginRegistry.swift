@@ -61,6 +61,12 @@ public struct ResolvedPlugin: Sendable {
     public let probe: InstallProbe
     public let strength: MatchStrength
 
+    public init(plugin: any EnginePlugin.Type, probe: InstallProbe, strength: MatchStrength) {
+        self.plugin = plugin
+        self.probe = probe
+        self.strength = strength
+    }
+
     public var pluginID: String { plugin.pluginID }
     public var parameters: ParameterSupport { plugin.parameters(for: probe) }
     public var reasoningControl: ReasoningControl? { plugin.reasoningControl(for: probe) }

@@ -46,9 +46,11 @@ import TinyTitanVariants
                 routedExpertWeightBits: 4) == .legacy)
     }
 
-    @Test("the ornith variant factory composes the production planner stages")
+    @Test("the ornith plugin factory composes its own planner stages")
     func variantFactoryIsComplete() throws {
-        let variant = EngineFactories.variantGPUOrnith()
+        let variant = EngineFactories.gpuFactory(
+            family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b-4bit",
+            routedExpertWeightBits: 4)
         // The planner and architecture stages are the family-generic
         // production ones; the engine stages are the variant's own. A default
         // EngineFactory refuses with a sentinel ("no load planner" / "no
@@ -105,7 +107,7 @@ import TinyTitanVariants
             family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b",
             routedExpertWeightBits: 4)
         #expect(
-            engineStageError(ornith).contains("ornith variant"),
+            engineStageError(ornith).contains("Ornith engine"),
             "the shipped ornith identity must dispatch to the variant factory")
 
         let legacy = EngineFactories.gpuFactory(
@@ -184,7 +186,7 @@ import TinyTitanVariants
             _ = try factory.buildModel(directory, ArchConfig.qwen36_35B_A3B, nil)
             Issue.record("the variant requires a Metal context")
         } catch {
-            #expect("\(error)".contains("ornith variant"))
+            #expect("\(error)".contains("Ornith engine"))
         }
         // The CLI and an embedder call `routingFactory`, which must take the
         // same table: a directory naming the Ornith install gets the variant,
@@ -194,7 +196,7 @@ import TinyTitanVariants
             _ = try routed.buildModel(directory, ArchConfig.qwen36_35B_A3B, nil)
             Issue.record("the routed factory must be the variant too")
         } catch {
-            #expect("\(error)".contains("ornith variant"))
+            #expect("\(error)".contains("Ornith engine"))
         }
     }
 

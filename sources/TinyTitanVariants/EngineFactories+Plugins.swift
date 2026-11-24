@@ -1,5 +1,6 @@
 import Foundation
 import Inkling2GGUFQ4
+import Ornith35B4Bit
 import TemplatePlugin
 import TinyTitan
 import TinyTitanCore
@@ -10,14 +11,15 @@ extension EngineFactories {
     /// The engine plugins compiled into this build (TPP/1, TT-130), strongest
     /// first only for readability: resolution is by probe strength.
     ///
-    /// `TemplatePlugin` and `Inkling2GGUFQ4Plugin` are standalone plugins. The
-    /// three `…Adapter` entries wrap engines that still borrow 6.x stages and
+    /// `TemplatePlugin`, `Inkling2GGUFQ4Plugin` and `Ornith35B4BitPlugin` are
+    /// standalone plugins. The `…Adapter` entries wrap engines that still borrow
+    /// 6.x stages and
     /// are migrated into plugins of their own one by one (TT-132); each adapter
     /// is removed when its plugin lands.
     public static let builtInPlugins: [any EnginePlugin.Type] = [
         TemplatePlugin.self,
         Inkling2GGUFQ4Plugin.self,
-        Ornith35B4BitAdapter.self,
+        Ornith35B4BitPlugin.self,
         DenseQwen35Adapter.self,
         LegacyEngineAdapter.self,
     ]
@@ -52,28 +54,6 @@ extension EngineFactories {
             gpuSelection(
                 family: $0.family, manifestModelID: $0.modelID, routedExpertWeightBits: $0.bits)
         }
-    }
-}
-
-/// Adapter (TT-132 migrates it): the shipped Ornith 1.5 35B-A3B 4-bit variant.
-public enum Ornith35B4BitAdapter: EnginePlugin {
-    public static let pluginID = "ai.tinytitan.adapter.ornith-1.5-35b-a3b-4bit"
-    public static let protocolVersion = ProtocolVersion.current
-    public static let displayName = "Ornith 1.5 35B-A3B 4-bit (adapter)"
-
-    public static func probe(_ install: InstallProbe) -> MatchStrength? {
-        EngineFactories.selection(install) == .ornith35B4Bit ? .exact : nil
-    }
-
-    /// The adapter keeps the flags' existing handling, which the 6.x stages own.
-    public static func parameters(for install: InstallProbe) -> ParameterSupport {
-        ParameterSupport()
-    }
-
-    public static func reasoningControl(for install: InstallProbe) -> ReasoningControl? { nil }
-
-    public static func engineFactory(host: HostServices) -> EngineFactory {
-        EngineFactories.variantGPUOrnith()
     }
 }
 

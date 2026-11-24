@@ -120,117 +120,10 @@ extension EngineFactories {
             manifestModelID: manifestModelID,
             routedExpertWeightBits: routedExpertWeightBits)
         {
-        case .ornith35B4Bit: return variantGPUOrnith()
+        case .ornith35B4Bit: return Ornith35B4BitPlugin.engineFactory(host: .standard)
         case .qwen35DenseGPU: return variantDenseGPU()
         case .legacy: return sixXGPU()
         }
-    }
-
-    /// The Ornith 1.5 35B-A3B 4-bit variant as the server's GPU engine. The
-    /// planner, metadata, preview and architecture stages are the
-    /// family-generic production ones shared with the 6.x factory; the model
-    /// and runner stages close over the variant target's own copies, which
-    /// conform to the same Core contracts (`EngineModel`/`EngineRunner`) the
-    /// shared session consumes. The variant's runtime configuration is built
-    /// here — engine-specific configuration stays inside the factory
-    /// (`SessionBuildOptions` deliberately does not expose a runtime module).
-    public static func variantGPUOrnith() -> EngineFactory {
-        let base = sixXGPU()
-        return EngineFactory(
-            prepare: base.prepare,
-            makeContext: base.makeContext,
-            prepareLoad: base.prepareLoad,
-            metadata: base.metadata,
-            validateReasoning: base.validateReasoning,
-            resolveArchitecture: base.resolveArchitecture,
-            preview: base.preview,
-            buildModel: { directory, arch, context in
-                try loadOrnithModel(directory, arch, context, slots: nil)
-            },
-            // The variant owns its streaming slots; the session's resolved
-            // slot count (profile default, --ram-budget or
-            // --expert-cache-slots) reaches the model here. The env override
-            // stays the operator's last word.
-            buildModelWithSlots: { directory, arch, context, slots in
-                try loadOrnithModel(directory, arch, context, slots: slots)
-            },
-            buildRunner: { model, options in
-                guard let model = model as? Ornith35B4Bit.Model,
-                    let context = options.context
-                else {
-                    throw ServerInferenceError.unsupportedModel(
-                        "the ornith variant runner requires its model and Metal context")
-                }
-                let runtime = try Ornith35B4Bit.RuntimeConfiguration(
-                    forceLogitsHead: true,
-                    kvCachePrecision: options.kvCachePrecision)
-                return try Ornith35B4Bit.RealForwardRunner(
-                    model: model,
-                    context: context,
-                    maxContext: options.maxContext,
-                    slots: options.slots,
-                    runtimeConfiguration: runtime)
-            },
-            // The variant's own scratch buffers and generation loop: the Core
-            // contract erases them, and the loop itself is engine-generic
-            // through the session's `any LogitProducer` — the variant
-            // difference is only which concrete scratch and loop the closures
-            // name.
-            makeScratch: { context, vocabulary, softcap in
-                RawCompletionScratch(
-                    payload: try Ornith35B4Bit.RawCompletionScratch(
-                        context: context, vocab: vocabulary, logitSoftcap: softcap))
-            },
-            runRawCompletion: { request in
-                guard
-                    let scratch = request.scratch.payload
-                        as? Ornith35B4Bit.RawCompletionScratch
-                else {
-                    throw ServerInferenceError.unsupportedModel(
-                        "the ornith variant completion requires its scratch buffers")
-                }
-                let result = try await Ornith35B4Bit.runRawCompletion(
-                    producer: request.producer,
-                    tokenizer: request.tokenizer,
-                    promptIds: request.promptIDs,
-                    config: request.configuration,
-                    context: request.context,
-                    scratch: scratch,
-                    prefillConfig: request.prefillConfiguration,
-                    // The variant's start enum is its own copy of the promoted
-                    // shape; map the two cases across the eraser.
-                    start: {
-                        switch request.start {
-                        case .reset: return .reset
-                        case .resume(let cached): return .resume(cachedPromptTokens: cached)
-                        }
-                    }(),
-                    slot: request.slot,
-                    checkpointPositions: request.checkpointPositions,
-                    onPrefillCheckpoint: request.onPrefillCheckpoint,
-                    shouldStop: request.shouldStop,
-                    onProgress: { progress in
-                        switch progress {
-                        case .prefill(let done, let total):
-                            request.onProgress(.prefill(done: done, total: total))
-                        case .token(let index, let id, let delta):
-                            request.onProgress(.token(index: index, id: id, delta: delta))
-                        case .tail(let text):
-                            request.onProgress(.tail(text))
-                        }
-                    })
-                return RawDecodeResult(
-                    prefillTokens: result.prefillTokens,
-                    cachedPromptTokens: result.cachedPromptTokens,
-                    computedPrefillTokens: result.computedPrefillTokens,
-                    prefillSeconds: result.prefillSeconds,
-                    newTokens: result.newTokens,
-                    decodeSeconds: result.decodeSeconds,
-                    reason: result.reason,
-                    kvPosition: result.kvPosition,
-                    kvBackedTokenIDs: result.kvBackedTokenIDs,
-                    uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs)
-            })
     }
 
     /// The shared dense-GPU engine as the server's engine: one factory for
@@ -458,29 +351,3 @@ extension EngineFactories {
 /// variant's own 32-slot default. The session's resolved count (profile,
 /// `--ram-budget`, `--expert-cache-slots`) arrives through
 /// `buildModelWithSlots`. The env stays the operator's last word.
-private func loadOrnithModel(
-    _ directory: URL,
-    _ arch: ArchConfig,
-    _ context: MetalContext?,
-    slots: Int?
-) throws -> any EngineModel {
-    guard let context else {
-        throw ServerInferenceError.unsupportedModel(
-            "the ornith variant engine requires Metal")
-    }
-    let requested =
-        ProcessInfo.processInfo.environment["TINYTITAN_EXPERT_CACHE_SLOTS"]
-        .flatMap(Int.init) ?? slots ?? Ornith35B4BitModelDefaults.streamingSlots
-    return try Ornith35B4Bit.Model.load(
-        directoryURL: directory,
-        device: context.device,
-        expecting: arch,
-        streamingMode: .pread(slotCount: requested))
-}
-
-/// The variant engine's own defaults, kept beside the factory that uses them.
-/// `Ornith35B4Bit.ExpertStreamingMode`'s 32-slot default is the value the
-/// variant's parity was measured at.
-private enum Ornith35B4BitModelDefaults {
-    static let streamingSlots = 32
-}

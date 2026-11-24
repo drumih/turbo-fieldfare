@@ -201,6 +201,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC",
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                "TinyTitanPluginAPI",
             ],
             path: "sources/Engines/Ornith35B4Bit",
             swiftSettings: tinytitanLanguageStandard
@@ -527,6 +528,7 @@ let package = Package(
                 .product(name: "yyjson", package: "yyjson"),
                 "TinyTitanCore",
                 "TinyTitanServerCore",
+                "TinyTitanPluginAPI",
                 "TinyTitanLib",
                 "TinyTitanMemory",
                 // `GenerationDefaults.Sampling`, so the mapper tests can pin
