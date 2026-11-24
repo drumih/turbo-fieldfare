@@ -27,4 +27,12 @@ public protocol CPUEngineRunner: AnyObject {
     func prefill(tokens: [Int]) throws -> [Float]
     /// One decode step from `token`; returns the next-token logits.
     func step(token: Int) throws -> [Float]
+    /// The sampling row the model's card specifies, used wherever a request
+    /// leaves a field unset. The engine owns it, not the host (TT-134): a
+    /// host that switched on the model family to find it is model knowledge
+    /// outside the plugin.
+    var samplingDefaults: SamplingProfile { get }
+    /// Fault the weights in and keep them there; returns the bytes made
+    /// resident. The engine owns its storage, so only it can pin it.
+    func makeResident() -> Int
 }

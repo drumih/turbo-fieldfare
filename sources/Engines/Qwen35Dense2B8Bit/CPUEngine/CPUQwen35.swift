@@ -493,4 +493,3 @@ public final class CPUQwen35 {
 // TT-097: the Core CPU-engine contract. Every member already existed with
 // this exact surface (the same file family in every module), so the
 // conformance is a declaration only — no behavior changes.
-extension CPUQwen35: CPUEngineRunner {}

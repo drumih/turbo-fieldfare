@@ -1,7 +1,7 @@
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
+import TinyTitanVariants
 
 /// Serving a small model from the CPU, through the same HTTP surface as the
 /// big ones.
@@ -40,7 +40,7 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// and shared by every request this backend serves.
     private var jsonTokenTable: JSONTokenTable?
     private let context: Int
-    private let defaults: GenerationDefaults.Sampling
+    private let defaults: SamplingProfile
 
     package nonisolated let residentBytes: Int
     /// What the CPU engine loaded, in the facade's vocabulary. Used by
@@ -58,11 +58,7 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// same diagnostic on the side engine, which does narrow.
     package var threadWidthInUse: Int { model.threads }
     package nonisolated var maximumContext: Int { context }
-    package nonisolated var samplingDefaults: SamplingProfile {
-        SamplingProfile(
-            temperature: defaults.temperature, topK: defaults.topK, topP: defaults.topP,
-            minP: defaults.minP, presencePenalty: defaults.presencePenalty)
-    }
+    package nonisolated var samplingDefaults: SamplingProfile { defaults }
     /// The CPU engine has no prompt cache, and says so rather than borrowing the
     /// mode the server was asked for. `.off` is what the launch banner reports
     /// for this backend, so the banner and the residency line agree.
@@ -104,44 +100,27 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
         thinkingMode: ModelThinkingMode = .off,
         routedExpertWeightBits: Int? = nil
     ) async throws {
-        // A `.ssdai` declares itself with a manifest; a snapshot does not.
-        // `manifest.json` is also what the catalog keys on, so the two agree
-        // about which shape a directory is.
-        let isSSDAI = FileManager.default.fileExists(
-            atPath: snapshotDirectory.appendingPathComponent("manifest.json").path)
-        let snapshot =
-            isSSDAI
-            ? try AffineSnapshot(ssdai: snapshotDirectory)
-            : try AffineSnapshot(directory: snapshotDirectory)
-        guard let family = snapshot.family else {
-            throw CPUBackendError.unsupported(
-                CPUModelFamily.refusal(modelType: snapshot.modelType))
-        }
-        _ = family
-        residentBytes = resident ? snapshot.makeResident() : 0
+        // What the install is -- shape, size, width, identity -- read without
+        // loading weights. The engine is chosen from it; everything after
+        // that (geometry, residency, the sampling row) comes from the engine
+        // itself, so the backend holds no model knowledge of its own (TT-134).
+        let install = try DenseCPUInstall(directory: snapshotDirectory)
+        // TT-097 Task 13: the dense installs serve on their dedicated variant
+        // CPU engines -- hidden size names the model, the width its quant
+        // twin. An explicitly injected factory still wins, which is the test
+        // seam and a future engine's entry point. A caller that names no
+        // width gets the install's own; a size or width no variant ships is
+        // refused by name (there is no 6.x fallback any more).
+        let engine = try
+            (factory
+            ?? CPUEngineFactory.widthSelected(install: install, weightBits: routedExpertWeightBits))
+            .build()
         // No contention signal: this engine runs at its full width, and the
         // guard that the served path stays that way is
         // `theServedEngineKeepsTheWidthItsLoadChose`. The coordinator's
         // `generating` is not the signal to reach for here, because it is
         // raised by a CPU client generation too.
-        // TT-097 Task 13: the dense installs serve on their dedicated variant
-        // CPU engines by default — hidden size names the model, the width its
-        // quant twin (both facts this init already holds); an explicitly
-        // injected factory still wins, which is the test seam and a future
-        // engine's entry point. A caller that names no width gets the 6.x
-        // engine, the same fallback the selection table's legacy miss uses.
-        let engine = try
-            (factory
-            ?? {
-                guard let routedExpertWeightBits else {
-                    return CPUEngineFactory.legacy(snapshot: snapshot)
-                }
-                return CPUEngineFactory.widthSelected(
-                    snapshotDirectory: snapshotDirectory,
-                    isSSDAI: isSSDAI,
-                    hiddenSize: snapshot.configuration.hiddenSize,
-                    weightBits: routedExpertWeightBits)
-            }()).build()
+        residentBytes = resident ? engine.makeResident() : 0
         threads = engine.threads
         model = engine
         // A snapshot keeps its tokenizer at the directory root; a `.ssdai`
@@ -167,16 +146,14 @@ package actor CPUModelBackend: ServerInferenceBackend, PromptCacheDescribing {
             thinkingMode: thinkingMode,
             effort: nil)
         context = min(
-            maximumContext, snapshot.configuration.maxPositions,
+            maximumContext, engine.configuration.maxPositions,
             Self.contextCeiling)
-        // The family's own, which is what the catalog advertises for it, so
-        // a launcher showing the defaults shows what a request will get.
-        defaults = family.samplingDefaults
-        let identity = try? ManifestReader.peekIdentity(directoryURL: snapshotDirectory)
+        // The engine's own row, which is what the catalog advertises for the
+        // model, so a launcher showing the defaults shows what a request gets.
+        defaults = engine.samplingDefaults
         descriptor = ModelDescriptor(
-            id: identity?.modelID ?? snapshot.modelType
-                ?? snapshotDirectory.lastPathComponent,
-            family: identity?.family.rawValue ?? snapshot.modelType ?? "unknown",
+            id: install.modelID ?? install.family ?? snapshotDirectory.lastPathComponent,
+            family: install.family ?? "unknown",
             contextWindow: context,
             weightBytes: 0,
             expertCacheBytes: 0)

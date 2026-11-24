@@ -6,6 +6,7 @@ import Testing
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
 @testable import TinyTitanCore
+import TinyTitanVariants
 
 /// The CPU serving path's ceilings, which it enforces rather than promises,
 /// and its handling of a thinking model's output.
@@ -148,6 +149,16 @@ import Testing
         func reset() { engine.reset() }
         func prefill(tokens: [Int]) throws -> [Float] { try engine.prefill(tokens: tokens) }
         func step(token: Int) throws -> [Float] { try engine.step(token: token) }
+        var samplingDefaults: SamplingProfile { engine.samplingDefaults }
+        func makeResident() -> Int { engine.makeResident() }
+    }
+
+    /// The scripted model's engine. Its geometry is a few dozen values wide,
+    /// which no shipped variant serves -- the backend refuses it by name
+    /// without a factory (`aScriptedModelWithNoVariantIsRefusedByName`) -- so
+    /// these tests run it on the config-driven engine directly.
+    static func scriptedEngine(_ directory: URL) -> CPUEngineFactory {
+        CPUEngineFactory { try CPUQwen35(snapshot: AffineSnapshot(directory: directory)) }
     }
 
     /// unchecked-invariant: every access is under `lock`.
@@ -218,7 +229,8 @@ import Testing
 
         let directory = try writeScriptedModel(chain: chain, tokenizer: fixture)
         let backend = try await CPUModelBackend(
-            snapshotDirectory: directory, factory: factory?(directory), resident: false,
+            snapshotDirectory: directory, factory: (factory ?? Self.scriptedEngine)(directory),
+            resident: false,
             thinkingMode: thinking)
         return (backend, directory, spoken)
     }
@@ -233,6 +245,25 @@ import Testing
         #expect(
             ServerLog.promptCacheField(for: backend) == " prompt_cache=off",
             "the field the residency line prints comes from this backend")
+    }
+
+    /// TT-134: with no factory the backend selects a variant from the
+    /// install's own hidden size and width, and a combination no variant
+    /// ships is refused by name -- the 6.x engine is no longer a fallback.
+    @Test func aScriptedModelWithNoVariantIsRefusedByName() async throws {
+        let fixture = try TokenizerFixture.folder()
+        let directory = try writeScriptedModel(chain: [1, 2], tokenizer: fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let install = try DenseCPUInstall(directory: directory)
+        #expect(!install.isSSDAI)
+        #expect(install.weightBits == 8)
+        #expect(install.family == "qwen3_5")
+        await #expect {
+            _ = try await CPUModelBackend(
+                snapshotDirectory: directory, resident: false, thinkingMode: .off)
+        } throws: { error in
+            "\(error)".contains("no dense CPU variant ships for hiddenSize \(install.hiddenSize)")
+        }
     }
 
     @Test func theBackendBuildsFromAnInjectedCPUEngineFactory() async throws {
@@ -380,8 +411,8 @@ import Testing
         let directory = try writeScriptedModel(chain: chain, tokenizer: fixture)
         defer { try? FileManager.default.removeItem(at: directory) }
         let backend = try await CPUModelBackend(
-            snapshotDirectory: directory, resident: false,
-            thinkingMode: .off)
+            snapshotDirectory: directory, factory: Self.scriptedEngine(directory),
+            resident: false, thinkingMode: .off)
         let completion = try await backend.generate(request(stops: [])) { _ in }
         #expect(completion.content == "ok")
         #expect(completion.reasoning == "mh")
@@ -418,8 +449,8 @@ import Testing
         let directory = try writeScriptedModel(chain: chain, tokenizer: fixture, sidecar: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let backend = try await CPUModelBackend(
-            snapshotDirectory: directory, resident: false,
-            thinkingMode: .off)
+            snapshotDirectory: directory, factory: Self.scriptedEngine(directory),
+            resident: false, thinkingMode: .off)
 
         // Counting resolves a tokenizer for the switch without generating.
         let count = try await backend.countPromptTokens(

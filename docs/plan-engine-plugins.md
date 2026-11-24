@@ -355,25 +355,41 @@ The order is chosen so each step is shippable and bit-identical:
      check script like `tools/embedded-dependency-check.sh`.
 
 6. **TT-134: port the remaining 6.x code into 7.x (phase 2).**
-   - Inventory (2026-11-24, before this work): 87 files outside
-     `sources/TinyTitan` imported the 6.x runtime (63,679 lines in 314 files):
-     server 35, bench 13, CLI 13, `TinyTitanLegacyEngine` 8, validation 6,
-     CPU engine 2, variants 2.
+   - Inventory (2026-11-24, at `5bca3b63`, before this work): 78 files
+     outside `sources/TinyTitan` imported the 6.x runtime (63,679 lines in
+     314 files): server 35, CLI 13, bench 12, `TinyTitanLegacyEngine` 8,
+     validation 6, CPU engine 2, variants 2. After slice 1: 52; after
+     slice 2: 50 (server 14, bench 11, CLI 11, legacy engine 8, validation
+     5, variants 1; the CPU engine target no longer imports it).
    - Slice 1 (done): 26 host files imported 6.x but used only types that
      already live in Core; they now import `TinyTitanCore`. The house
      sampling constants the CLI and the Responses store read come from
      `SamplingProfile.house`, held equal to 6.x `GenerationDefaults.house` by
      a test until 6.x is gone.
-   - What the remaining 61 files reach, by owner:
+   - Slice 2: the dense CPU backend runs only on the per-width variant
+     engines. `DenseCPUInstall` (in `TinyTitanVariants`, Core types only)
+     reads hidden size, width and identity from the manifest or
+     `config.json`; the engine then supplies geometry, residency
+     (`makeResident`) and its sampling row (`samplingDefaults`), both new
+     `CPUEngineRunner` requirements. The 6.x `CPUQwen35` fallback is gone: a
+     size or width no variant ships, or an architecture the selected
+     variant does not implement, is refused by name. `--cpu`, which named
+     no width, now serves the install's own width on its variant rather
+     than the 6.x engine. `CPUSampler` moved into Core unchanged (its
+     index tie-break kept; the variant copies' unstable sort is not used by
+     the backend).
+   - What the remaining 50 files reach, by owner:
      - **Side routes (TT-127)**: `Inkling2GGUFSession` and its parser and
        format; the K2 probe (`K2GraphProbe`, `K2Model`, `K2Snapshot`);
        Nemotron (`NemotronInstall`, `NemotronMetalGraph`, ...); `GGUFDecoder`.
        These are deleted with their routes or become plugins; they are not
        ported into Core.
-     - **The dense CPU engine**: `CPUQwen35`, `AffineSnapshot`, `CPUSampler`,
-       `SideEngine`, `CPUModelFamily`. They move into `TinyTitanCPUEngine`
-       once the 6.x kernels that use them (`Int8AffineGEMV`, `CPUExpertFFN`)
-       and the GGUF session no longer do.
+     - **The 6.x dense CPU engine** (`CPUQwen35`, `AffineSnapshot`,
+       `SideEngine`, `CPUModelFamily`): no longer served (slice 2). Still
+       reached by the memory side engine (`SideEngineService`,
+       `CPUQwen35SideEngineModel`), the server catalog's family check
+       (`CPUModelFamily`) and the bench's CPU commands; each moves to the
+       variant engines or the dense plugin, then the 6.x copy goes.
      - **The 6.x MoE runtime behind `LegacyEngineAdapter`**: `Model`,
        `RealForwardRunner`, `RuntimeConfiguration`, `KVCacheManager`,
        `StreamingMTPDecoder`, the expert-I/O types. This is the code the

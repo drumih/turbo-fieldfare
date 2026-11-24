@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import TinyTitan
+@testable import TinyTitanCore
 
 /// The sampler ranks candidates by sorting (logit, index) pairs; this pins
 /// that ranking, and every seeded draw built on it, to the index sort it

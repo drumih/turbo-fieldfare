@@ -1,5 +1,6 @@
 import Foundation
 import TinyTitan
+import TinyTitanCore
 import TinyTitanLib
 
 /// The CLI's Inkling2 GGUF route: an Unsloth Inkling-2-Mini `.gguf` (or a

@@ -1,4 +1,3 @@
-import TinyTitanCore
 import Foundation
 
 /// Choosing the next token, on the CPU.
@@ -13,8 +12,8 @@ import Foundation
 /// ranked by sorting contiguous (logit, index) pairs with an index tie-break,
 /// which is exactly the order a stable index sort by logit gives, so every draw
 /// is unchanged. Sorting indices through a closure over the logits measured
-/// about 25 ms per token over Inkling2's 200,058 logits, 40% of a 60 ms GPU
-/// decode step there.
+/// about 25 ms per token over a 200,058-entry vocabulary, 40% of a 60 ms GPU
+/// decode step on that model.
 public struct CPUSampler: Sendable {
     public var temperature: Float
     public var topP: Float

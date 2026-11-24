@@ -79,27 +79,29 @@ extension EngineFactories {
     /// quant width. A family the CPU engine does not implement is refused by
     /// name, before the model loads.
     public static func routingCPUFactory(directoryURL: URL) throws -> CPUEngineFactory {
-        guard
-            let identity = try? TinyTitan.ManifestReader.peekIdentity(
-                directoryURL: directoryURL)
+        // Read through `DenseCPUInstall`, not the 6.x manifest reader (TT-134).
+        guard let install = try? DenseCPUInstall(directory: directoryURL), install.isSSDAI
         else {
             throw EngineFactoryError.unsupported(
                 "--engine cpu needs an .ssdai install with a readable manifest; "
                     + "\(directoryURL.path) has none")
         }
-        guard identity.family == .qwen35Dense else {
+        guard install.family == Self.denseCPUFamily else {
             throw EngineFactoryError.unsupported(
-                "\(identity.modelID) declares family \(identity.family.rawValue); "
+                "\(install.modelID ?? directoryURL.lastPathComponent) declares family "
+                    + "\(install.family ?? "none"); "
                     + "the CPU engine implements the dense Qwen 3.5 family only, so "
                     + "this install is GPU-only")
         }
-        let arch = try sixXGPU().resolveArchitecture(directoryURL)
         return try variantCPUEngine(
-            hiddenSize: arch.hiddenSize,
-            weightBits: identity.weightBits,
+            hiddenSize: install.hiddenSize,
+            weightBits: install.weightBits,
             snapshotDirectory: directoryURL,
             isSSDAI: true)
     }
+
+    /// The family a dense `.ssdai` install declares.
+    static let denseCPUFamily = "qwen3_5_dense"
 
     /// The GPU factory a single-model front end (the CLI) and an embedder
     /// use: the same selection table the server's router uses, keyed on the
@@ -187,6 +189,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense2B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense2B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense2B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense2B4Bit.CPUQwen35(snapshot: snapshot)
             }
         case .qwen35Dense2B8Bit:
@@ -195,6 +201,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense2B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense2B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense2B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense2B8Bit.CPUQwen35(snapshot: snapshot)
             }
         case .qwen35Dense4B4Bit:
@@ -203,6 +213,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense4B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense4B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense4B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense4B4Bit.CPUQwen35(snapshot: snapshot)
             }
         case .qwen35Dense4B8Bit:
@@ -211,6 +225,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense4B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense4B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense4B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense4B8Bit.CPUQwen35(snapshot: snapshot)
             }
         case .qwen35Dense9B4Bit:
@@ -219,6 +237,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense9B4Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense9B4Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense9B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense9B4Bit.CPUQwen35(snapshot: snapshot)
             }
         case .qwen35Dense9B8Bit:
@@ -227,6 +249,10 @@ extension EngineFactories {
                     isSSDAI
                     ? try Qwen35Dense9B8Bit.AffineSnapshot(ssdai: snapshotDirectory)
                     : try Qwen35Dense9B8Bit.AffineSnapshot(directory: snapshotDirectory)
+                guard snapshot.family != nil else {
+                    throw ServerInferenceError.unsupportedModel(
+                        Qwen35Dense9B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
+                }
                 return try Qwen35Dense9B8Bit.CPUQwen35(snapshot: snapshot)
             }
         }
