@@ -804,6 +804,66 @@ struct GemmaToolCallTests {
         }
     }
 
+    @Test(arguments: [
+        #"call:lookup{"item-id":"blue","items":[{"r\u0061nk":1}]}"#,
+        #"call:lookup{<|"|>item-id<|"|>:<|"|>blue<|"|>,<|"|>items<|"|>:[{<|"|>rank<|"|>:1}]}"#,
+        #"call:lookup{item-id:<|"|>blue<|"|>,"items":[{<|"|>rank<|"|>:1}]}"#,
+    ])
+    func parsesQuotedObjectKeys(_ body: String) throws {
+        let parsed = try GemmaToolCallParser().parse(
+            body, allowedTools: ["lookup"], id: "call_test")
+        let expected: JSONValue = .object([
+            "item-id": .string("blue"),
+            "items": .array([.object(["rank": .integer(1)])]),
+        ])
+        #expect(parsed.arguments == expected)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: Data(parsed.argumentsJSON.utf8)) == expected)
+    }
+
+    @Test(arguments: [
+        #"call:lookup{"a b":1}"#,
+        #"call:lookup{<|"|>a b<|"|>:1}"#,
+        #"call:lookup{"":1}"#,
+        #"call:lookup{<|"|><|"|>:1}"#,
+    ])
+    func rejectsQuotedKeysThatCannotBeReplayed(_ body: String) {
+        #expect(throws: GemmaToolCallParserError.malformed) {
+            try GemmaToolCallParser().parse(
+                body, allowedTools: ["lookup"], id: "call_test")
+        }
+    }
+
+    @Test func parsesHyphenatedToolNamesAcceptedByTheServer() throws {
+        let call = try GemmaToolCallParser().parse(
+            "call:resolve-library-id{}", allowedTools: ["resolve-library-id"], id: "call_test")
+        #expect(call.name == "resolve-library-id")
+    }
+
+    @Test func preservesNativeGemmaStringContents() throws {
+        let call = try GemmaToolCallParser().parse(
+            #"call:lookup{text:<|"|> \r\n\d\u0041\ <|"|>}"#,
+            allowedTools: ["lookup"], id: "call_test")
+        let expected: JSONValue = .object(["text": .string(#" \r\n\d\u0041\ "#)])
+        #expect(call.arguments == expected)
+        #expect(try JSONDecoder().decode(JSONValue.self, from: Data(call.argumentsJSON.utf8)) == expected)
+    }
+
+    @Test func preservesJSONQuotedSpacesAndDecodesOnlyValidEscapes() throws {
+        let parser = GemmaToolCallParser()
+        let call = try parser.parse(
+            #"call:lookup{text:" a b\t "}"#, allowedTools: ["lookup"], id: "call_test")
+        #expect(call.arguments.objectValue?["text"] == .string(" a b\t "))
+
+        #expect(throws: GemmaToolCallParserError.malformed) {
+            try parser.parse(
+                "call:lookup{text:\"a\tb\"}", allowedTools: ["lookup"], id: "call_test")
+        }
+        #expect(throws: GemmaToolCallParserError.malformed) {
+            try parser.parse(
+                #"call:lookup{text:"a\ b"}"#, allowedTools: ["lookup"], id: "call_test")
+        }
+    }
+
     @Test func parsesJSONUnicodeEscapesAndSurrogatePairs() throws {
         let parsed = try GemmaToolCallParser().parse(
             #"call:read{path:"\u00fc-\ud83c\udf33",note:"a\b\f"}"#,

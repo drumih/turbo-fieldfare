@@ -111,9 +111,6 @@ Submitted results are not a controlled hardware comparison. Prefetch is
 `false` for verified pre-feature revisions and `unknown` when unverified.
 Maintainer M2/M5 results are in [Benchmarks](BENCHMARKS.md).
 
-<details>
-<summary>Submitted measurements and source revisions</summary>
-
 | Source | Mac | Memory | Storage | Prefetch | Prompt / generated tokens | Decode | Measurement |
 | --- | --- | ---: | --- | --- | ---: | ---: | --- |
 | [bangddong](https://github.com/bangddong) · [issue #80](https://github.com/drumih/turbo-fieldfare/issues/80) | A18 Pro MacBook Neo | 8 GB | Internal SSD | false | 61 / 516 | 4.134 tok/s | One submitted run |
@@ -240,5 +237,3 @@ the frozen community prompts. All three measured runs ended with
 `stop=endOfTurn`; the attached outputs finish without obvious loops or
 repeated blocks. Storage, energy mode and other active workloads were not
 reported. These are individual submitted runs, not repeated-run averages.
-
-</details>

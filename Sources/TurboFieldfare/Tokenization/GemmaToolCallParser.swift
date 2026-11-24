@@ -85,7 +85,9 @@ private struct Parser {
         let start = index
         while index < characters.count {
             let character = characters[index]
-            guard character.isLetter || character.isNumber || character == "_" else { break }
+            guard character.isLetter || character.isNumber || character == "_" || character == "-" else {
+                break
+            }
             index += 1
         }
         guard index > start else { throw GemmaToolCallParserError.malformed }
@@ -121,18 +123,32 @@ private struct Parser {
 
     mutating func objectKey() throws -> String {
         skipWhitespace()
-        let start = index
-        while index < characters.count {
-            let character = characters[index]
-            guard character.isLetter
-                    || character.isNumber
-                    || "_-.$".contains(character) else {
-                break
+        guard !isAtEnd else { throw GemmaToolCallParserError.malformed }
+
+        let key: String
+        switch characters[index] {
+        case "\"":
+            key = try jsonString()
+        case "<":
+            key = try gemmaString()
+        default:
+            let start = index
+            while index < characters.count {
+                let character = characters[index]
+                guard character.isLetter
+                        || character.isNumber
+                        || "_-.$".contains(character) else {
+                    break
+                }
+                index += 1
             }
-            index += 1
+            key = String(characters[start..<index])
         }
-        guard index > start else { throw GemmaToolCallParserError.malformed }
-        return String(characters[start..<index])
+
+        guard GemmaToolCallParser.isRepresentableObjectKey(key) else {
+            throw GemmaToolCallParserError.malformed
+        }
+        return key
     }
 
     mutating func array() throws -> JSONValue {
@@ -156,13 +172,9 @@ private struct Parser {
                 try consume("<|\"|>")
                 return result
             }
-            if characters[index] == "\\", index + 1 < characters.count {
-                index += 1
-                result += try escapedFragment()
-            } else {
-                result.append(characters[index])
-                index += 1
-            }
+            // Gemma's native delimiters enclose literal text.
+            result.append(characters[index])
+            index += 1
         }
         throw GemmaToolCallParserError.malformed
     }
@@ -171,12 +183,16 @@ private struct Parser {
         try consume("\"")
         var result = ""
         while !isAtEnd {
-            if take("\"") { return result }
-            if take("\\") {
+            let character = characters[index]
+            index += 1
+            if character == "\"" { return result }
+            if character == "\\" {
                 result += try escapedFragment()
             } else {
-                result.append(characters[index])
-                index += 1
+                guard character.unicodeScalars.allSatisfy({ $0.value >= 0x20 }) else {
+                    throw GemmaToolCallParserError.malformed
+                }
+                result.append(character)
             }
         }
         throw GemmaToolCallParserError.malformed
