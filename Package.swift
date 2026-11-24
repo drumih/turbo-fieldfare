@@ -192,6 +192,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitanFormat", "TinyTitanKernelsC",
                 .product(name: "Tokenizers", package: "swift-transformers"),
+                "TinyTitanPluginAPI",
             ],
             path: "sources/Engines/DenseGPU",
             swiftSettings: tinytitanLanguageStandard

@@ -15,7 +15,7 @@ struct PluginResolutionTests {
         if name.hasPrefix("ornith-1.5_35B_A3B_4Bit") {
             return "ai.tinytitan.ornith-1.5-35b-a3b-4bit"
         }
-        if name.hasPrefix("qwen3.5_") { return "ai.tinytitan.adapter.qwen3.5-dense" }
+        if name.hasPrefix("qwen3.5_") { return "ai.tinytitan.qwen3.5-dense" }
         return nil
     }
 

@@ -123,7 +123,7 @@ import TinyTitanVariants
             family: .qwen35Dense, manifestModelID: "qwen3.5-4b",
             routedExpertWeightBits: 4)
         #expect(
-            engineStageError(dense).contains("dense-GPU"),
+            engineStageError(dense).contains("dense Qwen 3.5 engine"),
             "the dense identity must dispatch to the dense-GPU factory")
     }
 

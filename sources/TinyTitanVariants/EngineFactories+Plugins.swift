@@ -1,4 +1,5 @@
 import Foundation
+import DenseGPU
 import Inkling2GGUFQ4
 import Ornith35B4Bit
 import TemplatePlugin
@@ -11,16 +12,16 @@ extension EngineFactories {
     /// The engine plugins compiled into this build (TPP/1, TT-130), strongest
     /// first only for readability: resolution is by probe strength.
     ///
-    /// `TemplatePlugin`, `Inkling2GGUFQ4Plugin` and `Ornith35B4BitPlugin` are
-    /// standalone plugins. The `…Adapter` entries wrap engines that still borrow
-    /// 6.x stages and
+    /// `TemplatePlugin`, `Inkling2GGUFQ4Plugin`, `Ornith35B4BitPlugin` and
+    /// `DenseQwen35Plugin` are standalone plugins. `LegacyEngineAdapter` wraps the
+    /// 6.x engine, whose families still borrow its stages and
     /// are migrated into plugins of their own one by one (TT-132); each adapter
     /// is removed when its plugin lands.
     public static let builtInPlugins: [any EnginePlugin.Type] = [
         TemplatePlugin.self,
         Inkling2GGUFQ4Plugin.self,
         Ornith35B4BitPlugin.self,
-        DenseQwen35Adapter.self,
+        DenseQwen35Plugin.self,
         LegacyEngineAdapter.self,
     ]
 
@@ -37,46 +38,6 @@ extension EngineFactories {
             try? PluginRegistry.shared.register(plugin)
         }
     }()
-
-    /// The manifest identity the adapters probe with (the 6.x reader).
-    fileprivate static func identity(_ install: InstallProbe)
-        -> (family: TinyTitan.ModelFamily, modelID: String, bits: Int)?
-    {
-        guard install.manifest != nil,
-            let identity = try? TinyTitan.ManifestReader.peekIdentity(
-                directoryURL: install.directory)
-        else { return nil }
-        return (identity.family, identity.modelID, identity.weightBits)
-    }
-
-    fileprivate static func selection(_ install: InstallProbe) -> GPUVariantSelection? {
-        identity(install).map {
-            gpuSelection(
-                family: $0.family, manifestModelID: $0.modelID, routedExpertWeightBits: $0.bits)
-        }
-    }
-}
-
-/// Adapter (TT-132 migrates it): the shared dense-GPU engine for every dense
-/// Qwen 3.5 install.
-public enum DenseQwen35Adapter: EnginePlugin {
-    public static let pluginID = "ai.tinytitan.adapter.qwen3.5-dense"
-    public static let protocolVersion = ProtocolVersion.current
-    public static let displayName = "Qwen 3.5 dense (adapter)"
-
-    public static func probe(_ install: InstallProbe) -> MatchStrength? {
-        EngineFactories.selection(install) == .qwen35DenseGPU ? .exact : nil
-    }
-
-    public static func parameters(for install: InstallProbe) -> ParameterSupport {
-        ParameterSupport()
-    }
-
-    public static func reasoningControl(for install: InstallProbe) -> ReasoningControl? { nil }
-
-    public static func engineFactory(host: HostServices) -> EngineFactory {
-        EngineFactories.variantDenseGPU()
-    }
 }
 
 /// Adapter (TT-132 migrates it, family by family): the 6.x engine, which
