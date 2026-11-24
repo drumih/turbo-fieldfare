@@ -1,3 +1,152 @@
+# Handover: engine 7 plugins, phase 2 (2026-11-24)
+
+**Read this block first; every block below it is older.**
+
+**Paste this into the next session:**
+
+> Continue the TinyTitan work in this checkout
+> (`/Users/andreborchert/Downloads/TinyTitan`, branch `master`, pushes go
+> to `main`). Read `AGENTS.md`, then this block of
+> `docs/handover-tinytitan.md`, then `docs/plan-engine-plugins.md` (step 6
+> of "Migration" is the live plan), `docs/plugin-api-v1.md`, and the wiki
+> `Project-Tracker` (clone at `.qwen/wiki`, branch `master`; rows TT-121 to
+> TT-135 and the "Engine 7 status at a glance" table).
+>
+> **Where it stands.** Phase 1 is done: every install on disk runs through
+> its own standalone plugin (TPP/1). Phase 2, TT-134, ports the rest of the
+> 6.x runtime (`sources/TinyTitan`) into 7.x so the only remaining work is a
+> plugin per model not on disk. Slice 1 is pushed (`a97145b0`). **Slice 2
+> is in the working tree, uncommitted** — finish and commit it first (see
+> "Slice 2" below), then take slice 3.
+>
+> **Owner's standing rules (in force):** at most 16 GB of RAM for any model
+> run (`--ram-budget 16G` max; this is a 24 GB M3 that other projects share);
+> the machine is busy, so coding and technical tests only, **no benchmark
+> runs** unless the owner says the machine is free; never download, convert,
+> delete or reinstall a model without the owner's approval; push to `main`
+> only, then sync the wiki tracker; never commit after `gate | tail` — check
+> the real exit code; don't touch other projects' processes (FXAI's
+> clickhouse runs here); finish every task with the housekeeping AGENTS.md
+> requires.
+
+## Slice 2 (uncommitted): the dense CPU backend runs only on the variant engines
+
+What changed:
+
+- `CPUSampler` moved from 6.x into `sources/TinyTitanCore/Generation/`
+  unchanged except a doc comment (its test moved to
+  `tests/TinyTitanCore/Generation/`). The 6.x copy is kept on purpose: it
+  breaks logit ties by index; the per-variant copies sort unstably.
+- `CPUEngineRunner` (Core) gained `samplingDefaults: SamplingProfile` and
+  `makeResident() -> Int`. All seven `CPUQwen35` copies (six
+  `sources/Engines/Qwen35Dense*` plus 6.x) implement them in a new
+  `CPUQwen35+Runner.swift` (kept out of `CPUQwen35.swift`, which would
+  otherwise pass the 500-line limit).
+- New `sources/TinyTitanVariants/DenseCPUInstall.swift` reads hidden size,
+  width, model id and family from `manifest.json` or `config.json` with Core
+  types only.
+- `CPUModelBackend` no longer imports 6.x: it selects the variant from
+  `DenseCPUInstall` (caller's width, else the install's), and takes context,
+  residency and sampling defaults from the engine. The 6.x `CPUQwen35`
+  fallback is gone; an unsupported size/width or architecture is refused by
+  name. Behaviour change: the server's `--cpu` (which passes no width) now
+  serves on the variant, not 6.x.
+- `EngineFactories.routingCPUFactory` (the CLI's `--engine cpu`) reads
+  through `DenseCPUInstall` instead of 6.x `ManifestReader`.
+- The six variant build closures in `EngineFactories+Variants.swift` refuse
+  an architecture their `CPUModelFamily` does not claim.
+- Tests: the scripted-model backend tests inject the config-driven engine
+  (`CPUModelBackendTests.scriptedEngine`), and
+  `aScriptedModelWithNoVariantIsRefusedByName` pins the refusal.
+
+Verified so far: release build exit 0; `tools/lint.sh` exit 0; the CPU-path
+suites (`CPUModelBackendTests`, `CPUSamplerRankingTests`, `CPUEngineTests`,
+`CPUDenseConformanceTests`, `CPUBatchedPrefillTests`,
+`DenseVariantBatchedMatmulTests`, `HouseSamplingDefaultsTests`) pass; all six
+CPU goldens (`tools/golden-baseline.sh --check --engine cpu qwen35-2b-4
+qwen35-2b-8 qwen35-4b-4 qwen35-4b-8 qwen35-9b-4 qwen35-9b-8`) were
+byte-identical both before and after the `routingCPUFactory` change (the
+recheck exited 0, six of six identical).
+
+To finish slice 2:
+
+1. (Done: the six CPU goldens.) Apply AGENTS.md's model-run preconditions
+   before the next step.
+2. Start `TinyTitanServer --cpu --model models/qwen3.5_4B_4Bit` on
+   127.0.0.1 and run `tools/api-feature-check.py --port <port>`: all ten
+   rows must pass. This is the only check of the no-width selection path.
+   Stop the server afterwards.
+3. Full serial suite: `swift test --no-parallel` (2,484 tests passed at
+   `a97145b0`).
+4. Commit and push. The message should also correct slice 1's: its commit
+   (`a97145b0`) says 87 importers / 61 left; the true counts are 78 before
+   slice 1, 52 after it, 50 after slice 2 (`git grep -lE "^(@testable
+   )?import TinyTitan$" <rev> -- sources`, excluding `sources/TinyTitan/`).
+5. Update the wiki tracker: TT-134 row (slice 2, the corrected counts —
+   the row still says 87 and 61) and the status table's "6.x runtime"
+   line (now 63,513 lines in 314 files, 50 importers).
+
+## Phase 2 slices after this one (from the inventory in the plan doc)
+
+The 50 remaining importers, by owner (server 14, bench 11, CLI 11, legacy
+engine 8, validation 5, variants 1):
+
+- **Rest of the 6.x CPU engine**: the memory side engine
+  (`SideEngineService`, `CPUQwen35SideEngineModel`), the server catalog's
+  `CPUModelFamily` check and the bench CPU commands. Move them to the
+  variant engines or the dense plugin, then delete `sources/TinyTitan/CPUEngine`
+  except what K2 still needs (`K2Model`, `K2Snapshot`).
+- **Host model knowledge**: `ModelFamily`, `ManifestReader`,
+  `ManifestIdentity`, per-family `GenerationDefaults` in the server, CLI and
+  `TinyTitanVariants` (GPU selection). These move onto the resolved plugin
+  (identity and `SamplingProfile` from its load plan), not into Core —
+  `core-purity` forbids model names there.
+- **Host plumbing typed by 6.x**: `ServerArguments` (`RuntimeConfiguration`,
+  `KVCacheManager`, `StreamingMTPMemoryPlan`), `ManagedModelBackend`
+  (`PreadExpertStreamer`, `ResidentBuffer`), `ServerCoordinator`
+  (`ForwardStepGate`).
+- **The 6.x MoE runtime behind `LegacyEngineAdapter`** (`Model`,
+  `RealForwardRunner`, ...): the families not on disk (Qwen 3.8, KAT,
+  AgentWorld, Ornith 8-bit, Laguna) run on it. It moves as one Core-only
+  engine target under `sources/Engines/`, from which each later plugin copies
+  (as the Ornith plugin did). Largest slice; plan it before moving code.
+- **Side routes**: Inkling GGUF (`sources/TinyTitan/Inkling2GGUF`), the raw
+  checkpoint route (`Inkling2ServerBackend`), the K2 probe, Nemotron and the
+  as-is GGUF CLI. These are deleted with their routes (TT-127, TT-053,
+  TT-055, TT-058), not ported. TT-127's raw model folders
+  (`models/inkling-2-mini` 19 GB, `models/inkling-2-mini-gguf` 16 GB) are to
+  be **proposed** for deletion, never deleted without approval;
+  `models/inkling-2-mini` is the second reference in
+  `InklingNVFP4ParityTests`.
+
+Done when no host or plugin target imports `TinyTitan` and the 6.x adapter is
+gone.
+
+## Other open rows
+
+- **TT-135** (Inkling NVFP4 decode): repack 2.06 -> 1.10 ms per expert and
+  E4M3 lookup tables are pushed (`5bca3b63`). Left: a paired Q4-vs-NVFP4
+  decode benchmark on a quiet machine — not before the owner frees it.
+- **TT-131**: the parameter gate is done; the conformance kit
+  `tinytitan-plugin-check` is open.
+- **TT-126**: Inkling catalog, goldens, installer rows and the
+  window-versus-slots default. **TT-124** (concurrent sequences for Inkling),
+  **TT-129** (Inkling MTP), **TT-133** (out-of-tree plugins) are open.
+
+## Traps that cost this session time
+
+- zsh does not split `$var` file lists: write the list to a file and
+  `while read`, or use bash.
+- A model test that edits a source mid-build races the build; wait for the
+  background job before editing.
+- Run model-gated tests with `-c release` (a debug build of the NVFP4 path
+  hits the GPU command-buffer timeout).
+- `swift build --build-tests -c release` fails on `@testable` imports; use
+  `swift test -c release`, which builds with testability.
+- The tracker table breaks on a blank line between rows or a row with the
+  wrong cell count; TT-097 and TT-098 still lack their impact cell.
+- Count before you report: the first TT-134 inventory mis-added 78 as 87.
+
 # Handover: the as-is GGUF route (2026-11-11, evening)
 
 **Read this block first; the release handover below it is older.** The Unsloth
