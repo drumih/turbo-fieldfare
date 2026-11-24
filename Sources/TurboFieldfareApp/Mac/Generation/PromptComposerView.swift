@@ -11,6 +11,9 @@ struct PromptComposerView: View {
     @FocusState private var promptFocused: Bool
     @StoredState private var showingImagePicker = false
     @StoredState private var isImageDropTargeted = false
+    /// Clear-button focus requests. Each new value is applied once; reclaiming
+    /// first responder on every refresh cancels system dictation.
+    @StoredState private var promptFocusRequest = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -48,6 +51,7 @@ struct PromptComposerView: View {
             isFocused: Binding(
                 get: { promptFocused },
                 set: { promptFocused = $0 }),
+            focusRequest: promptFocusRequest,
             newlineShortcut: model.newlineShortcut,
             canRun: model.canRun,
             canAcceptImages: model.isImageInputAvailable
@@ -222,6 +226,9 @@ struct PromptComposerView: View {
                 model.promptText = ""
                 model.clearImages()
                 promptFocused = true
+                // Image-only clear leaves the string unchanged, so focus is
+                // this count rather than a side effect of replacing text.
+                promptFocusRequest += 1
             } label: {
                 Label("Clear input", systemImage: "xmark.circle.fill")
                     .labelStyle(.iconOnly)
@@ -244,6 +251,7 @@ private struct PromptTextEditor: NSViewRepresentable {
     @Binding var text: String
     let typography: ConversationTypography
     let isFocused: Binding<Bool>
+    let focusRequest: Int
     let newlineShortcut: AppNewlineShortcut
     let canRun: Bool
     let canAcceptImages: Bool
@@ -305,11 +313,19 @@ private struct PromptTextEditor: NSViewRepresentable {
         textView.onPromisedImagesFailed = onPromisedImagesFailed
         textView.onUnsupportedImagePaste = onUnsupportedImagePaste
         textView.onDropTargeted = onDropTargeted
-        if textView.string != text {
-            textView.string = text
+        let decision = PromptEditorSync.decision(
+            bindingText: text,
+            viewText: textView.string,
+            hasMarkedText: textView.hasMarkedText(),
+            focusRequest: focusRequest,
+            appliedFocusRequest: context.coordinator.appliedFocusRequest,
+            isInWindow: textView.window != nil,
+            isFirstResponder: textView.window?.firstResponder === textView)
+        context.coordinator.appliedFocusRequest = decision.appliedFocusRequest
+        if let replacementText = decision.replacementText {
+            textView.string = replacementText
         }
-        if isFocused.wrappedValue,
-           textView.window?.firstResponder !== textView {
+        if decision.makeFirstResponder {
             DispatchQueue.main.async {
                 textView.window?.makeFirstResponder(textView)
             }
@@ -319,6 +335,7 @@ private struct PromptTextEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: PromptTextEditor
         weak var textView: NSTextView?
+        var appliedFocusRequest = 0
 
         init(_ parent: PromptTextEditor) {
             self.parent = parent
