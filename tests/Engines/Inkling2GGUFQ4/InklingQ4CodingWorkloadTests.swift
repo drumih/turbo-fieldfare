@@ -1,8 +1,9 @@
 import Foundation
 import Testing
+import TinyTitanCore
+import TinyTitanPluginAPI
 
 @testable import Inkling2GGUFQ4
-@testable import TinyTitan
 
 /// A Swift coding workload on the Inkling 2 Q4 install (TT-121): five
 /// TinyTitan-style requests, rendered with Inkling's chat format, tokenized by
@@ -40,9 +41,10 @@ struct InklingQ4CodingWorkloadTests {
         let directory = URL(
             fileURLWithPath: try #require(Self.environment["TINYTITAN_INKLING2_Q4_INSTALL"]))
         let slots = Self.environment["TINYTITAN_INKLING2_SLOTS"].flatMap(Int.init) ?? 76
-        let header = directory.appendingPathComponent(InklingQ4Install.ggufHeaderFile)
-        let tokenizer = try await Inkling2GGUFTokenizer.load(
-            gguf: header, model: try GGUFModelReader.readHeader(at: header))
+        let factory = Inkling2GGUFQ4Plugin.engineFactory(host: .standard)
+        let tokenizerFolder = try #require(try factory.tokenizerFolder?(directory))
+        let tokenizer = try await GFTokenizer.load(from: tokenizerFolder)
+        let stopIDs = Set(tokenizer.stopTokenIDs.map(Int.init))
         let decoder = try InklingQ4Decoder(
             directory: directory, maxContext: 4_096, maxChunk: 256, experts: .slots(slots))
         let cache = try #require(decoder.expertCache)
@@ -70,7 +72,10 @@ struct InklingQ4CodingWorkloadTests {
         }
         if tracePath != nil { cache.routingLog = [] }
         for (index, prompt) in Self.prompts.enumerated() {
-            let ids = tokenizer.encode(Inkling2GGUFSession.render([(role: .user, content: prompt)]))
+            let rendered = InklingChatTemplate.render(
+                messages: [GFTokenizer.Message(role: .user, content: prompt)],
+                tools: [], effort: nil, openTextTurn: true)
+            let ids = tokenizer.encode(rendered, addBOS: false).map(Int.init)
             decoder.state.reset()
             let prefillStarted = Date()
             var next = try decoder.prefill(ids, position: 0).next
@@ -78,7 +83,7 @@ struct InklingQ4CodingWorkloadTests {
             drain("prefill \(index + 1)")
             let decodeStarted = Date()
             var produced = 0
-            while produced < 256, !tokenizer.stopIDs.contains(next) {
+            while produced < 256, !stopIDs.contains(next) {
                 produced += 1
                 next = try decoder.step(token: next, position: ids.count + produced - 1).next
             }

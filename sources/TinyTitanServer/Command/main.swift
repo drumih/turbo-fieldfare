@@ -63,59 +63,6 @@ do {
         if let refusal = gate.refusal { throw ServerArgumentError.invalid(refusal) }
         for notice in gate.notices { ServerLog.diagnostic(notice) }
     }
-    // Inkling 2 as a raw GGUF file: the as-is route until it is retired
-    // (TT-127). The Q4 `.ssdai` install is served by the shared session below
-    // through its engine variant (TT-122).
-    var inkling: (backend: Inkling2GGUFServerBackend, label: String, id: String)?
-    if let gguf = Inkling2GGUFSession.modelFile(at: modelURL) {
-        inkling = (
-            try await Inkling2GGUFServerBackend(
-                gguf: gguf, maxContext: arguments.maxContext,
-                reasoning: arguments.requestedReasoningLevel),
-            gguf.lastPathComponent, "inkling-2-mini"
-        )
-    }
-    if let (backend, label, modelID) = inkling {
-        let level = arguments.requestedReasoningLevel
-        let coordinator = ServerCoordinator(queueLimit: arguments.queueLimit, width: 1)
-        let loaded = Inkling2GGUFServerBackend.requestReasoning(for: level)
-        let server = TinyTitanHTTPServer(
-            modelID: modelID,
-            queueLimit: arguments.queueLimit,
-            maxConcurrentSequences: 1,
-            backend: backend,
-            reasoningProfile: ServerReasoningProfile(
-                family: "inkling2", thinkingMode: loaded.thinkingMode,
-                reasoningEffort: loaded.effort,
-                reasoningControl: Inkling2GGUFServerBackend.reasoningControl),
-            coordinator: coordinator)
-        _ = try await server.start(port: arguments.port)
-        print(
-            "TinyTitanServer \(ServerVersion.current) ready at "
-                + "http://127.0.0.1:\(arguments.port) model=\(modelID) (\(label))"
-        )
-        _ = await signals.wait()
-        try await server.shutdown()
-        exit(0)
-    }
-    if Inkling2ServerBackend.isInkling2(modelURL) {
-        let backend = try Inkling2ServerBackend(directory: modelURL)
-        let coordinator = ServerCoordinator(
-            queueLimit: arguments.queueLimit, width: 1)
-        let server = TinyTitanHTTPServer(
-            modelID: "inkling-2-mini",
-            queueLimit: arguments.queueLimit,
-            maxConcurrentSequences: 1,
-            backend: backend,
-            coordinator: coordinator)
-        _ = try await server.start(port: arguments.port)
-        print(
-            "TinyTitanServer \(ServerVersion.current) ready at "
-                + "http://127.0.0.1:\(arguments.port) model=inkling-2-mini")
-        _ = await signals.wait()
-        try await server.shutdown()
-        exit(0)
-    }
     // Without --reasoning these are the --thinking / --reasoning-effort
     // values verbatim and nothing is read from disk; the router fits the
     // level per model itself, so it needs nothing from here.

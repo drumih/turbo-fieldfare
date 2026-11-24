@@ -2,8 +2,13 @@ import Foundation
 import Metal
 import Testing
 
+@testable import Inkling2GGUFQ4
 @testable import TinyTitan
 @testable import TinyTitanCore
+
+typealias GGUFType = TinyTitan.GGUFType
+typealias GGUFGemmTiled = TinyTitan.GGUFGemmTiled
+typealias GGUFGemvIds = TinyTitan.GGUFGemvIds
 
 /// The GPU block decoders (`gguf_block_decoders.metal`) behind the UD-Q2_K_XL
 /// file's tensors, against the bit-exact host decoders: the expert-indexed
@@ -219,30 +224,6 @@ import Testing
             scaleOf: { Double(scales[Int(ids[$0])]) }, outputs: pairs, relative: 2e-3,
             label: "\(type.name) experts tile=\(tileTokens)")
     }
-
-    @Test func iq4xsEmbeddingRowsMatchHostDecode() throws {
-        let context = try MetalContext()
-        let ops = try Inkling2GGUFOps(context: context)
-        let device = context.device
-        let (vocabulary, columns) = (9, 512)
-        let bytes = Self.blocks(type: .iq4XS, rows: vocabulary, columns: columns)
-        let decoded = try GGUFDequant.decode(type: .iq4XS, bytes: bytes)
-        let tokens: [Int32] = [7, 0, 4]
-        let table = Inkling2GGUFTensor(
-            operand: .init(try Self.buffer(device, bytes)), type: .iq4XS, rows: vocabulary,
-            columns: columns, byteCount: bytes.count)
-        let out = try #require(device.makeBuffer(length: tokens.count * columns * 4))
-        try Self.run(context) { encoder in
-            try ops.embed(
-                table, token: .init(try Self.buffer(device, tokens)), out: .init(out),
-                tokens: tokens.count, encoder: encoder)
-        }
-        let got = Self.floats(out, tokens.count * columns)
-        for (slot, token) in tokens.enumerated() {
-            let want = decoded[Int(token) * columns..<(Int(token) + 1) * columns]
-            #expect(Array(got[slot * columns..<(slot + 1) * columns]) == Array(want))
-        }
-    }
 }
 
 extension GGUFBlockKernelsTests {
@@ -324,10 +305,7 @@ extension GGUFBlockKernelsTests {
         let y = try #require(device.makeBuffer(length: rows * 4))
         for type in [GGUFType.q8_0, .q6K, .q5K, .q4K, .iq3XXS] {
             let stride = rows * columns / Int(type.blockSize) * Int(type.blockBytes)
-            let one =
-                type == .q8_0
-                ? GGUFGemmTiledTests.matrix(type: .q8_0, rows: rows, columns: columns)
-                : Self.blocks(type: type, rows: rows, columns: columns)
+            let one = Self.blocks(type: type, rows: rows, columns: columns)
             let weights = try #require(device.makeBuffer(length: stride * copies))
             for copy in 0..<copies {
                 one.withUnsafeBytes { raw in
@@ -374,18 +352,18 @@ extension GGUFBlockKernelsTests {
 extension GGUFBlockKernelsTests {
     /// GPU ms and GFLOP/s of the small-rows f32 GEMM over a chunk at the
     /// controller (64 x 4,608) and router (128 x 2,304) shapes, through
-    /// `Inkling2GGUFOps.gemv`, against the host result.
+    /// `InklingQ4Ops.gemv`, against the host result.
     @Test(arguments: [
         (64, 4_608, 512), (128, 2_304, 512), (24, 2_304, 37), (64, 4_608, 64), (128, 2_304, 64),
     ])
     func smallRowsChunkGemm(rows: Int, columns: Int, tokens: Int) throws {
         let context = try MetalContext()
-        let ops = try Inkling2GGUFOps(context: context)
+        let ops = try InklingQ4Ops(context: context)
         let device = context.device
         let w = Self.activation(rows * columns, seed: 5)
         let x = Self.activation(tokens * columns, seed: 9)
         let wb = try Self.buffer(device, w)
-        let tensor = Inkling2GGUFTensor(
+        let tensor = InklingQ4Tensor(
             operand: .init(wb), type: .f32, rows: rows, columns: columns, byteCount: w.count * 4)
         let xb = try Self.buffer(device, x)
         let y = try #require(device.makeBuffer(length: tokens * rows * 4))
@@ -505,7 +483,7 @@ extension GGUFBlockKernelsTests {
     @Test(.enabled(if: benchmarkEnabled), arguments: [64, 512])
     func chunkAttentionBenchmark(tokens: Int) throws {
         let context = try MetalContext()
-        let ops = try Inkling2GGUFOps(context: context)
+        let ops = try InklingQ4Ops(context: context)
         let device = context.device
         let (heads, kvHeads, dim, capacity) = (24, 8, 128, 4_096)
         func floats(_ count: Int, _ seed: Int) throws -> MTLBuffer {
@@ -517,7 +495,7 @@ extension GGUFBlockKernelsTests {
         let k = try Self.buffer(device, halves)
         let v = try Self.buffer(device, halves.reversed())
         let bias = try floats(16 * 1_024, 1)
-        let biasTensor = Inkling2GGUFTensor(
+        let biasTensor = InklingQ4Tensor(
             operand: .init(bias), type: .f32, rows: 1_024, columns: 16, byteCount: 16 * 1_024 * 4)
         let q = try floats(tokens * heads * dim, 2)
         let r = try floats(tokens * heads * 16, 3)
@@ -525,7 +503,7 @@ extension GGUFBlockKernelsTests {
         let gate = try floats(tokens * heads * dim, 5)
         let out = try #require(device.makeBuffer(length: tokens * heads * dim * 4))
         let step = try Self.buffer(device, [UInt32(0)])
-        let args = Inkling2GGUFOps.AttentionArgs(
+        let args = InklingQ4Ops.AttentionArgs(
             heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(dim), relative: 16,
             extent: 1_024, capacity: UInt32(capacity), ring: 0,
             scale: 1 / Float(dim).squareRoot(), window: UInt32.max, tokens: UInt32(tokens))
@@ -561,7 +539,7 @@ extension GGUFBlockKernelsTests {
     @Test(arguments: [false, true])
     func chunkAttentionMatchesReference(ring: Bool) throws {
         let context = try MetalContext()
-        let ops = try Inkling2GGUFOps(context: context)
+        let ops = try InklingQ4Ops(context: context)
         let device = context.device
         let (heads, kvHeads, dim, rank, extent, tokens) = (6, 2, 128, 16, 20, 37)
         let capacity = ring ? 48 : 128
@@ -579,7 +557,7 @@ extension GGUFBlockKernelsTests {
         let kh = kv.map(Float16.init)
         let vh = vv.map(Float16.init)
         let out = try #require(device.makeBuffer(length: tokens * heads * dim * 4))
-        let args = Inkling2GGUFOps.AttentionArgs(
+        let args = InklingQ4Ops.AttentionArgs(
             heads: UInt32(heads), kvHeads: UInt32(kvHeads), headDim: UInt32(dim),
             relative: UInt32(rank), extent: UInt32(extent), capacity: UInt32(capacity),
             ring: ring ? 1 : 0, scale: 1 / Float(dim).squareRoot(), window: UInt32(window),
@@ -588,7 +566,7 @@ extension GGUFBlockKernelsTests {
             try ops.attention(
                 q: .init(try Self.buffer(device, qv)), kCache: try Self.buffer(device, kh),
                 vCache: try Self.buffer(device, vh), r: .init(try Self.buffer(device, rv)),
-                relativeBias: Inkling2GGUFTensor(
+                relativeBias: InklingQ4Tensor(
                     operand: .init(try Self.buffer(device, bv)), type: .f32, rows: extent,
                     columns: rank, byteCount: bv.count * 4),
                 sinks: .init(try Self.buffer(device, sv)),
@@ -647,12 +625,12 @@ extension GGUFBlockKernelsTests {
     /// identical to the one-token kernel run token by token.
     @Test func chunkControllerApplyIsBitIdentical() throws {
         let context = try MetalContext()
-        let ops = try Inkling2GGUFOps(context: context)
+        let ops = try InklingQ4Ops(context: context)
         let device = context.device
         let (width, rank, tokens) = (2_304, 64, 37)
-        func tensor(_ rows: Int, _ columns: Int, _ seed: Int) throws -> Inkling2GGUFTensor {
+        func tensor(_ rows: Int, _ columns: Int, _ seed: Int) throws -> InklingQ4Tensor {
             let v = Self.activation(rows * columns, seed: seed).map { $0 * 0.07 }
-            return Inkling2GGUFTensor(
+            return InklingQ4Tensor(
                 operand: .init(try Self.buffer(device, v)), type: .f32, rows: rows,
                 columns: columns, byteCount: v.count * 4)
         }

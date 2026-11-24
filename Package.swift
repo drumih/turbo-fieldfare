@@ -320,7 +320,7 @@ let package = Package(
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
                 "TinyTitanVariants",
-                "TinyTitanCPUEngine", "TinyTitanInkling2",
+                "TinyTitanCPUEngine",
             ],
             path: "sources/TinyTitanCLI",
             exclude: ["Command"],
@@ -387,10 +387,7 @@ let package = Package(
                 // the variant-isolation rule; only a variant may not import
                 // the server.
                 "TinyTitanVariants",
-                // TT-121: the Inkling 2 Q4 variant, served through the Inkling
-                // backend until the shared session takes Inkling (phase 4).
-                "Inkling2GGUFQ4",
-                "TinyTitanCPUEngine", "TinyTitanInkling2",
+                "TinyTitanCPUEngine",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
@@ -442,14 +439,7 @@ let package = Package(
                 .copy("Runtime/ple_golden.json"),
                 .copy("Infrastructure/ModelIO/GGUFDequantVectors.txt"),
                 .copy("Infrastructure/ModelIO/GGUFTokenizerVectors.json"),
-                .copy("Inkling2GGUF/Inkling2GGUFReferences"),
             ],
-            swiftSettings: tinytitanLanguageStandard
-        ),
-        .target(
-            name: "TinyTitanInkling2",
-            dependencies: ["TinyTitanCore"],
-            path: "sources/Engines/Inkling2",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
@@ -462,12 +452,6 @@ let package = Package(
             ],
             path: "tests/TinyTitanRepack/Core",
             resources: [.copy("Support/qwen38_tensor_names.txt")],
-            swiftSettings: tinytitanLanguageStandard
-        ),
-        .testTarget(
-            name: "TinyTitanInkling2Tests",
-            dependencies: ["TinyTitanInkling2"],
-            path: "tests/TinyTitanInkling2",
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(
@@ -501,7 +485,7 @@ let package = Package(
         ),
         .testTarget(
             name: "Inkling2NVFP4Tests",
-            dependencies: ["Inkling2NVFP4", "TinyTitanInkling2", "TinyTitanCore"],
+            dependencies: ["Inkling2NVFP4", "TinyTitanCore"],
             path: "tests/Engines/Inkling2NVFP4",
             swiftSettings: tinytitanLanguageStandard
         ),
@@ -521,6 +505,7 @@ let package = Package(
             name: "Inkling2GGUFQ4Tests",
             dependencies: ["Inkling2GGUFQ4", "TinyTitan", "TinyTitanCore", "TinyTitanPluginAPI"],
             path: "tests/Engines/Inkling2GGUFQ4",
+            resources: [.copy("Fixtures")],
             swiftSettings: tinytitanLanguageStandard
         ),
         .testTarget(

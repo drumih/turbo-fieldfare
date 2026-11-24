@@ -2,24 +2,16 @@ import Foundation
 import Testing
 
 @testable import Inkling2GGUFQ4
-@testable import TinyTitan
 
 /// The Inkling 2 Q4 variant reading its `.ssdai` install (TT-121 phase 2).
 ///
-/// Two oracles, both model-gated on `TINYTITAN_INKLING2_Q4_INSTALL` (the
-/// install directory):
-///
-/// - llama.cpp: greedy agreement, under teacher forcing, with the reference the
-///   GGUF route's parity suite pins (`q4kxl-reference.json`, captured from
-///   `llama-server` on the same Q4_K_XL file the install was converted from).
-/// - The GGUF route itself, with `TINYTITAN_INKLING2_GGUF` naming that file:
-///   the install holds the same bytes and the variant runs the same graph and
-///   kernels, so every logit must be bit-identical, token by token and through
-///   a chunked prefill.
+/// Oracle, model-gated on `TINYTITAN_INKLING2_Q4_INSTALL` (the install
+/// directory): greedy agreement, under teacher forcing, with the llama.cpp
+/// reference (`q4kxl-reference.json`, captured from `llama-server` on the same
+/// Q4_K_XL file the install was converted from).
 @Suite(.serialized) struct InklingQ4ParityTests {
     private static let environment = ProcessInfo.processInfo.environment
     private static var install: String? { environment["TINYTITAN_INKLING2_Q4_INSTALL"] }
-    private static var gguf: String? { environment["TINYTITAN_INKLING2_GGUF"] }
 
     struct Reference: Decodable {
         struct Step: Decodable {
@@ -35,10 +27,8 @@ import Testing
 
     static func reference() throws -> Reference {
         let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent(
-                "TinyTitan/Inkling2GGUF/Inkling2GGUFReferences/q4kxl-reference.json")
+            .appendingPathComponent("Fixtures/q4kxl-reference.json")
         return try JSONDecoder().decode(Reference.self, from: Data(contentsOf: url))
     }
 
@@ -88,46 +78,6 @@ import Testing
             }
         }
         return rows
-    }
-
-    @Test(.enabled(if: install != nil && gguf != nil))
-    func logitsAreBitIdenticalToTheGGUFRoute() throws {
-        // One model mapped at a time: each is 17 GB.
-        let route: [[Float]] = try autoreleasepool {
-            let decoder = try Inkling2GGUFDecoder(
-                url: URL(fileURLWithPath: try #require(Self.gguf)), maxContext: 256,
-                maxChunk: 64)
-            return try Self.trace(
-                prefill: {
-                    try #require(decoder.prefill($0, position: 0, returnLogits: true).logits)
-                },
-                step: {
-                    try #require(decoder.step(token: $0, position: $1, returnLogits: true).logits)
-                },
-                reset: { decoder.state.reset() })
-        }
-        let variant: [[Float]] = try autoreleasepool {
-            let decoder = try InklingQ4Decoder(
-                directory: URL(fileURLWithPath: try #require(Self.install)), maxContext: 256,
-                maxChunk: 64)
-            return try Self.trace(
-                prefill: {
-                    try #require(decoder.prefill($0, position: 0, returnLogits: true).logits)
-                },
-                step: {
-                    try #require(decoder.step(token: $0, position: $1, returnLogits: true).logits)
-                },
-                reset: { decoder.state.reset() })
-        }
-        #expect(route.count == variant.count && !route.isEmpty)
-        var differing = 0
-        for (ours, theirs) in zip(variant, route)
-        where ours.map(\.bitPattern) != theirs.map(\.bitPattern) {
-            differing += 1
-        }
-        Self.log(
-            "Inkling Q4 install vs GGUF route: \(differing) of \(route.count) logit rows differ")
-        #expect(differing == 0)
     }
 }
 

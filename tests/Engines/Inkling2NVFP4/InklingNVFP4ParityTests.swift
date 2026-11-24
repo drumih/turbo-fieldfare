@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import TinyTitanInkling2
 
 @testable import Inkling2NVFP4
 
@@ -8,10 +7,8 @@ import TinyTitanInkling2
 /// - `TINYTITAN_INKLING2_NVFP4_INSTALL` + `TINYTITAN_INKLING2_Q4_INSTALL`: the Swift
 ///   repack of real NVFP4 experts equals the Q4 install's bytes for the same
 ///   experts (the two installs hold the same weights).
-/// - `TINYTITAN_INKLING2_NVFP4_INSTALL` + `TINYTITAN_INKLING2_MODEL` (the raw
-///   checkpoint): the plugin's decoder, teacher-forced on the llama.cpp
-///   reference cases, chooses the same token as the checkpoint's own reference
-///   implementation (`Engines/Inkling2`) at every step.
+/// - `TINYTITAN_INKLING2_NVFP4_INSTALL`: disagreements with the llama.cpp
+///   reference are near-ties between BF16/MXFP8 and GGUF Q8_0 weights.
 @Suite(.serialized)
 struct InklingNVFP4ParityTests {
     static let environment = ProcessInfo.processInfo.environment
@@ -21,7 +18,6 @@ struct InklingNVFP4ParityTests {
     static var q4: URL? {
         environment["TINYTITAN_INKLING2_Q4_INSTALL"].map(URL.init(fileURLWithPath:))
     }
-    static var raw: URL? { environment["TINYTITAN_INKLING2_MODEL"].map(URL.init(fileURLWithPath:)) }
 
     static func log(_ line: String) {
         FileHandle.standardError.write(Data((line + "\n").utf8))
@@ -93,34 +89,9 @@ struct InklingNVFP4ParityTests {
 
     static func reference() throws -> Reference {
         let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(
-                "TinyTitan/Inkling2GGUF/Inkling2GGUFReferences/q4kxl-reference.json")
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Inkling2GGUFQ4/Fixtures/q4kxl-reference.json")
         return try JSONDecoder().decode(Reference.self, from: Data(contentsOf: url))
-    }
-
-    /// The greedy choice after every teacher-forced position of every case.
-    static func oracleTokens(_ raw: URL, _ cases: [Reference.Case]) throws -> [Int] {
-        try autoreleasepool {
-            let model = try Inkling2TextModel(
-                directory: raw, config: try Inkling2Config.load(directory: raw),
-                store: try Inkling2ExpertStore(directory: raw))
-            var chosen: [Int] = []
-            for item in cases {
-                var caches = model.makeCaches()
-                var logits: [Float] = []
-                for token in item.prompt_ids {
-                    logits = try model.forward(token: token, caches: &caches)
-                }
-                for (index, step) in item.steps.enumerated() {
-                    chosen.append(Inkling2TextModel.greedyToken(logits))
-                    if index + 1 < item.steps.count {
-                        logits = try model.forward(token: step.id, caches: &caches)
-                    }
-                }
-            }
-            return chosen
-        }
     }
 
     /// The plugin's greedy choices, and at each its logit gap over the
@@ -152,31 +123,6 @@ struct InklingNVFP4ParityTests {
                 }
             }
             return (chosen, gaps)
-        }
-    }
-
-    /// Two references, measured 2026-11-24: llama.cpp on the Q4 GGUF (the graph
-    /// this plugin runs) and the raw-checkpoint route (`Engines/Inkling2`). They
-    /// disagree with each other on 7 of 96 positions, where the raw route picks
-    /// rare high ids. Wherever both agree, the plugin must agree too, or the
-    /// difference must be a near-tie (under 0.5 logit) between the plugin's
-    /// BF16/MXFP8 weights and the GGUF's Q8_0: measured, one position at 0.007.
-    @Test(.enabled(if: nvfp4 != nil && raw != nil))
-    func greedyTokensAgreeWithBothReferences() throws {
-        let cases = try Self.reference().cases
-        let oracle = try Self.oracleTokens(try #require(Self.raw), cases)
-        let (plugin, gaps) = try Self.pluginTokens(try #require(Self.nvfp4), cases)
-        let llama = cases.flatMap { $0.steps.map(\.id) }
-        let count = { (a: [Int], b: [Int]) in zip(a, b).filter { $0 == $1 }.count }
-        Self.log(
-            "Inkling NVFP4 plugin: greedy agreement with llama.cpp \(count(plugin, llama))/"
-                + "\(llama.count), with the raw-checkpoint route \(count(plugin, oracle))/"
-                + "\(oracle.count); the two references agree on \(count(oracle, llama))")
-        #expect(plugin.count == llama.count && oracle.count == llama.count)
-        for index in llama.indices
-        where oracle[index] == llama[index] && plugin[index] != llama[index] {
-            Self.log("  step \(index): plugin \(plugin[index]) against both, gap \(gaps[index])")
-            #expect(gaps[index] < 0.5, "step \(index) is not a near-tie (\(gaps[index]))")
         }
     }
 }
