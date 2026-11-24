@@ -541,3 +541,49 @@ Model runs stay under the owner's 16 GB cap.
     committed. Inkling keeps 16-bit K/V: an explicit `--kv-bits 8/4` is refused
     with these numbers, and the server's default of 8 is served at 16 with a
     logged notice rather than ignored silently.
+
+### TT-125: the NVFP4 install against the Q4 graph, measured 2026-11-24
+
+The NVFP4 plugin runs the Q4 variant's graph (the same llama.cpp-derived
+decoder) over the checkpoint install. What that takes was established
+tensor by tensor from the two installs on disk, which hold the same weights
+(`scratchpad` scripts `tensor_map.py`, `expert_repack.py`):
+
+- **Resident tensors.** All 646 tensors the Q4 graph reads map to checkpoint
+  tensors.
+  - *Identity copies:* every projection, norm, clip, router weight and bias,
+    controller, convolution and residual query.
+  - *Value types:* BF16 in the checkpoint, F32 or Q8_0 in the GGUF.
+  - *Transforms*, each verified on every layer:
+    - `attn_rel_bias` = `rel_logits_proj.proj` transposed;
+    - in the four dynamic-convolution layers (5, 11, 17, 23), `attn_{k,v}_conv`
+      = `{k,v}_sconv.static_w` transposed with its four taps reversed (exact,
+      error 0);
+    - `blk.L.attn_res_query` = `attn_res.attn_queries.(L-1)`;
+    - `blk.L.ffn_res_query` = `attn_res.mlp_queries.L`;
+    - the globals map by name (`embed`, `unembed`, `norm`, `embed_norm`,
+      `attn_res.output_query`, `middle_cycle_cross_pass_{,kv_}queries`).
+- **NVFP4 experts (layers 0–19): byte-exact.** A planar checkpoint expert
+  repacks into the GGUF NVFP4 blocks the Q4 kernels read, and every byte is
+  identical to the Q4 install's (9 experts in 3 layers tested; `down` and
+  `gate_up`). The repack:
+  - a block of 64 values is 4 E4M3 scale bytes, then per 16-value group
+    8 bytes holding value j in the low nibble and value j+8 in the high
+    nibble;
+  - `gate_up` rows go from the checkpoint's interleaved (gate, up, gate, …)
+    order to concatenated (all gate, then all up);
+  - the per-expert scale is `amax / outer_scale_denominator`, equal to the Q4
+    install's scale to 1e-9.
+
+  So these layers compute the same bits as the Q4 route.
+- **MXFP8 experts (layers 20–23)** have no exact GGUF form (the GGUF re-quantized
+  them to Q8_0). They need their own expert kernels: an MXFP8 GEMV-ids and a
+  GEMM-tiled decoder. The repack writes a 34-byte block per 32 values (E8M0 scale,
+  one pad byte, 32 E4M3 bytes), which keeps the Q8_0 stride, so slot and
+  budget arithmetic is unchanged.
+- **Kernels the Q4 graph lacks:** the MXFP8 expert pair above, and a BF16
+  embedding row (the Q4 graph's embedding is Q8_0 only). BF16 projections and
+  the BF16 head already run (`dense_gemv_f32_bf16`, the tiled GEMM).
+- **Oracle.** `Engines/Inkling2` (the raw-checkpoint route) runs the
+  checkpoint's own arithmetic; the plugin's gate is greedy agreement with it
+  on the parity prompts.
