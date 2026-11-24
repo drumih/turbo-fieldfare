@@ -149,6 +149,11 @@ jobs:
         # check builds the real thing instead of asserting it. See
         # docs/plan-embedded-library.md §2 and §6.
         run: tools/embedded-dependency-check.sh
+      - name: Out-of-tree engine plugin builds and registers
+        # `examples/plugin` is a separate package implementing `EnginePlugin`
+        # (TPP/1, TT-133) over `TinyTitanLib`, registering it with
+        # `PluginRegistry`, and resolving a matching install.
+        run: tools/plugin-dependency-check.sh
       - name: Converter gates (synthetic checkpoint, fault injection)
         # `tools/prepare_qwen38.py` converts a 360 GB checkpoint. The unit suite
         # pins its pieces; the end-to-end suite runs `main()` against a

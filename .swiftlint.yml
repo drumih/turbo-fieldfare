@@ -39,6 +39,7 @@ excluded:
   # reach it. Without this line the gate lints the dependency checkouts SwiftPM
   # leaves there.
   - examples/embedded/.build
+  - examples/plugin/.build
 
 disabled_rules:
   # Layout, owned by swift-format.

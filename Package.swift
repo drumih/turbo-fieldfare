@@ -49,14 +49,14 @@ let package = Package(
         .library(
             name: "TinyTitanLib",
             targets: [
-                "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
-                "TinyTitanPluginAPI",
+                "TinyTitanLib", "TinyTitanCore", "TinyTitanLegacyEngine", "TinyTitanVariants",
+                "TinyTitanCPUEngine", "TinyTitanPluginAPI",
             ]),
         .library(
             name: "TinyTitanLibDynamic", type: .dynamic,
             targets: [
-                "TinyTitanLib", "TinyTitanLegacyEngine", "TinyTitanVariants", "TinyTitanCPUEngine",
-                "TinyTitanPluginAPI",
+                "TinyTitanLib", "TinyTitanCore", "TinyTitanLegacyEngine", "TinyTitanVariants",
+                "TinyTitanCPUEngine", "TinyTitanPluginAPI",
             ]),
         // Each engine plugin is a library of its own (TPP/1): built and tested
         // standalone, compiled into the products above.
