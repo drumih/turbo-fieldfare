@@ -20,6 +20,11 @@ public protocol CPUEngineRunner: AnyObject {
     /// The GEMV row-split width in force. A scheduling decision, not a
     /// property of the model.
     var threads: Int { get }
+    /// Whether someone is waiting on the main engine, re-read before every
+    /// token; `busyThreads` / `idleThreads` are what it chooses between.
+    var contention: (@Sendable () -> Bool)? { get set }
+    var busyThreads: Int { get set }
+    var idleThreads: Int { get set }
     /// Forget the conversation: every carried state goes, and the next token
     /// is position zero again.
     func reset()
@@ -35,4 +40,27 @@ public protocol CPUEngineRunner: AnyObject {
     /// Fault the weights in and keep them there; returns the bytes made
     /// resident. The engine owns its storage, so only it can pin it.
     func makeResident() -> Int
+}
+
+extension CPUEngineRunner {
+    /// Greedy generation from `prompt`, stopping on any token in `stopping`
+    /// or after `maximumTokens`.
+    @discardableResult
+    public func generate(
+        prompt: [Int],
+        maximumTokens: Int,
+        stopping: Set<Int> = []
+    ) throws -> [Int] {
+        precondition(!prompt.isEmpty, "a generation needs a prompt")
+        var logits = try prefill(tokens: prompt)
+        var produced: [Int] = []
+        for _ in 0..<maximumTokens {
+            var best = 0
+            for index in logits.indices where logits[index] > logits[best] { best = index }
+            if stopping.contains(best) { break }
+            produced.append(best)
+            logits = try step(token: best)
+        }
+        return produced
+    }
 }

@@ -175,7 +175,8 @@ extension EngineFactories {
         hiddenSize: Int,
         weightBits: Int,
         snapshotDirectory: URL,
-        isSSDAI: Bool
+        isSSDAI: Bool,
+        threads: Int? = nil
     ) throws -> CPUEngineFactory {
         func engine(_ build: @Sendable @escaping () throws -> any CPUEngineRunner)
             -> CPUEngineFactory
@@ -193,7 +194,7 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense2B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense2B4Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense2B4Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         case .qwen35Dense2B8Bit:
             return engine {
@@ -205,7 +206,7 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense2B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense2B8Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense2B8Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         case .qwen35Dense4B4Bit:
             return engine {
@@ -217,7 +218,7 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense4B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense4B4Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense4B4Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         case .qwen35Dense4B8Bit:
             return engine {
@@ -229,7 +230,7 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense4B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense4B8Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense4B8Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         case .qwen35Dense9B4Bit:
             return engine {
@@ -241,7 +242,7 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense9B4Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense9B4Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense9B4Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         case .qwen35Dense9B8Bit:
             return engine {
@@ -253,9 +254,32 @@ extension EngineFactories {
                     throw ServerInferenceError.unsupportedModel(
                         Qwen35Dense9B8Bit.CPUModelFamily.refusal(modelType: snapshot.modelType))
                 }
-                return try Qwen35Dense9B8Bit.CPUQwen35(snapshot: snapshot)
+                return try Qwen35Dense9B8Bit.CPUQwen35(snapshot: snapshot, threads: threads)
             }
         }
+    }
+}
+
+/// CPU int8 affine GEMV entry point exposed for benchmarks without importing
+/// the 6.x runtime (TT-134).
+public enum VariantCPUInt8GEMV {
+    public static var preferredThreads: Int {
+        Qwen35Dense4B4Bit.Int8AffineGEMV.preferredThreads
+    }
+
+    public static func threaded(
+        weights: UnsafePointer<UInt8>,
+        scales: UnsafePointer<UInt16>,
+        biases: UnsafePointer<UInt16>,
+        x: UnsafePointer<Float>,
+        rows: Int,
+        n: Int,
+        out: UnsafeMutablePointer<Float>,
+        threads: Int
+    ) {
+        Qwen35Dense4B4Bit.Int8AffineGEMV.threaded(
+            weights: weights, scales: scales, biases: biases,
+            x: x, rows: rows, n: n, out: out, threads: threads)
     }
 }
 

@@ -1,4 +1,3 @@
-import TinyTitanCore
 import Foundation
 
 /// The seven single-decision tasks the side-engine is asked, and the prompts
@@ -14,7 +13,7 @@ import Foundation
 /// cannot drift apart silently.
 ///
 /// **Which model, and for which tasks.** The engine is model-agnostic — any
-/// dense Qwen3.5 snapshot fits — but the tasks are not decided equally at every
+/// dense CPU snapshot fits — but the tasks are not decided equally at every
 /// size. Measured over the same cases (`docs/side-engine-tasks.md`):
 /// contradiction is good from the smallest up; duplication and retrieval need a
 /// 4B; durability needs a 4B and is *worse* on the 9B; the reply check needs a
@@ -189,9 +188,10 @@ public enum SideEngineJudgement: Sendable, Equatable {
 
 /// What the resident service drives.
 ///
-/// A protocol rather than `CPUQwen35` directly so the service — the scheduler,
-/// the serialisation, the answer parsing — is tested without a model, which the
-/// test rules require and which a 1.9 GB load would otherwise make impossible.
+/// A protocol rather than a concrete engine directly so the service — the
+/// scheduler, the serialisation, the answer parsing — is tested without a
+/// model, which the test rules require and which a 1.9 GB load would otherwise
+/// make impossible.
 public protocol SideEngineModel: Sendable {
     /// Forget the KV state between jobs. The resident service exists so that
     /// the *weights* stay mapped while each job starts clean.
@@ -336,83 +336,4 @@ public actor SideEngine {
             throw error
         }
     }
-}
-
-/// `CPUQwen35` plus the tokenizer from the same directory.
-///
-/// This wrapper adds no model assumption to the engine, so the snapshot
-/// directory is the whole choice of model. For the shipped prompts the 4B is
-/// the verified floor and the 9B decides more (`docs/side-engine-tasks.md`);
-/// the 2B does not.
-///
-/// unchecked-invariant: every member is touched only from the `SideEngine`
-/// actor that owns this wrapper, which serialises `reset`, `encode`, and
-/// `generate`. The underlying engine is a class with one KV state, so that
-/// serialisation is the correctness argument, not a convenience.
-public final class CPUQwen35SideEngineModel: SideEngineModel, @unchecked Sendable {
-    private let engine: CPUQwen35
-    private let tokenizer: GFTokenizer
-
-    public init(snapshotDirectory: URL, threads: Int? = nil) async throws {
-        // A shipped `.ssdai` install and a flat HF/affine snapshot are both
-        // reached, the same rule the batch command uses.
-        let snapshot: AffineSnapshot
-        if FileManager.default.fileExists(
-            atPath: snapshotDirectory.appendingPathComponent("manifest.json").path)
-        {
-            snapshot = try AffineSnapshot(ssdai: snapshotDirectory)
-        } else {
-            snapshot = try AffineSnapshot(directory: snapshotDirectory)
-        }
-        guard
-            let folder = GFTokenizer.resolvedTokenizerFolder(
-                forModelDirectory: snapshotDirectory)
-        else {
-            throw SideEngineError.missingTokenizer(snapshotDirectory.path)
-        }
-        self.engine = try CPUQwen35(snapshot: snapshot, threads: threads)
-        self.tokenizer = try await GFTokenizer.load(from: folder)
-    }
-
-    public func reset() { engine.reset() }
-
-    public func encode(system: String, user: String) throws -> [Int] {
-        let rendered = try tokenizer.applyChatTemplate([
-            GFTokenizer.Message(role: .system, content: system),
-            GFTokenizer.Message(role: .user, content: user),
-        ])
-        return tokenizer.encode(rendered, addBOS: false).map(Int.init)
-    }
-
-    public func decode(_ tokens: [Int]) -> String {
-        tokenizer.decode(tokens.map(Int32.init))
-    }
-
-    public func generate(
-        prompt: [Int], maximumTokens: Int,
-        stopping: Set<Int>
-    ) throws -> [Int] {
-        try engine.generate(
-            prompt: prompt, maximumTokens: maximumTokens,
-            stopping: stopping)
-    }
-
-    public var endOfSequence: Int { Int(tokenizer.eosID) }
-
-    public var contention: (@Sendable () -> Bool)? {
-        get { engine.contention }
-        set { engine.contention = newValue }
-    }
-
-    public var busyThreads: Int {
-        get { engine.busyThreads }
-        set { engine.busyThreads = newValue }
-    }
-
-    public var idleThreads: Int {
-        get { engine.idleThreads }
-        set { engine.idleThreads = newValue }
-    }
-
-    public var threads: Int { engine.threads }
 }

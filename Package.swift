@@ -409,7 +409,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "TinyTitanBench",
-            dependencies: ["TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine"],
+            dependencies: [
+                "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
+                "TinyTitanVariants",
+            ],
             path: "sources/TinyTitanBench",
             swiftSettings: tinytitanLanguageStandard
         ),

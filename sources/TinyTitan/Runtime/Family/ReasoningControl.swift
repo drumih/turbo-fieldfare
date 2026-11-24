@@ -141,21 +141,7 @@ extension ModelFamily {
 /// `ReasoningFallback.effectiveLevel` on the server, and `requested(_:)`
 /// below is what turns a client's free-text spelling into a level.
 public typealias ReasoningLevel = TinyTitanCore.ReasoningLevel
-
-public enum ReasoningLevelError: Error, Equatable, CustomStringConvertible {
-    case unsupported(
-        family: String, level: ReasoningLevel,
-        supported: [ReasoningLevel])
-
-    public var description: String {
-        switch self {
-        case .unsupported(let family, let level, let supported):
-            return "thinking level \(level.displayName) is not supported: the "
-                + "\(family) chat template renders only "
-                + supported.map(\.displayName).joined(separator: ", ")
-        }
-    }
-}
+public typealias ReasoningLevelError = TinyTitanCore.ReasoningLevelError
 
 extension ModelReasoningControl {
     /// Shared by the GPU and CPU families so the two cannot disagree on what

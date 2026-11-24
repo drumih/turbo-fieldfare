@@ -144,11 +144,26 @@ import TinyTitanVariants
         private let engine: CPUQwen35
         var configuration: CPUEngineConfiguration { engine.configuration }
         var threads: Int { 77 }
+        var contention: (@Sendable () -> Bool)? {
+            get { engine.contention }
+            set { engine.contention = newValue }
+        }
+        var busyThreads: Int {
+            get { engine.busyThreads }
+            set { engine.busyThreads = newValue }
+        }
+        var idleThreads: Int {
+            get { engine.idleThreads }
+            set { engine.idleThreads = newValue }
+        }
 
         init(_ engine: CPUQwen35) { self.engine = engine }
         func reset() { engine.reset() }
         func prefill(tokens: [Int]) throws -> [Float] { try engine.prefill(tokens: tokens) }
         func step(token: Int) throws -> [Float] { try engine.step(token: token) }
+        func generate(prompt: [Int], maximumTokens: Int, stopping: Set<Int>) throws -> [Int] {
+            try engine.generate(prompt: prompt, maximumTokens: maximumTokens, stopping: stopping)
+        }
         var samplingDefaults: SamplingProfile { engine.samplingDefaults }
         func makeResident() -> Int { engine.makeResident() }
     }

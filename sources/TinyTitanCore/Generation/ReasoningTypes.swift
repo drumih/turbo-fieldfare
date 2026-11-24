@@ -32,6 +32,37 @@ public enum ReasoningControl: Sendable, Equatable {
             thinkingMode.isEnabled ? effort ?? defaultEffort : nil
         }
     }
+
+    public func runtimeReasoning(for level: ReasoningLevel, family: String) throws
+        -> (thinking: ModelThinkingMode, effort: ModelReasoningEffort?)
+    {
+        let supported = supportedLevels
+        guard supported.contains(level) else {
+            throw ReasoningLevelError.unsupported(
+                family: family, level: level, supported: supported)
+        }
+        switch level {
+        case .off: return (.off, nil)
+        case .on: return (.on, nil)
+        default:
+            return (.on, ModelReasoningEffort(rawValue: level.rawValue))
+        }
+    }
+}
+
+public enum ReasoningLevelError: Error, Equatable, CustomStringConvertible {
+    case unsupported(
+        family: String, level: ReasoningLevel,
+        supported: [ReasoningLevel])
+
+    public var description: String {
+        switch self {
+        case .unsupported(let family, let level, let supported):
+            return "thinking level \(level.displayName) is not supported: the "
+                + "\(family) chat template renders only "
+                + supported.map(\.displayName).joined(separator: ", ")
+        }
+    }
 }
 
 public enum ReasoningLevel: String, CaseIterable, Sendable, Codable {

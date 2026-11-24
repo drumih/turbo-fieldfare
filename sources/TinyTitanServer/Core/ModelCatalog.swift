@@ -1,9 +1,10 @@
 import Foundation
 import TinyTitan
-import TinyTitanLib
+import TinyTitanCPUEngine
 import TinyTitanCore
 import TinyTitanLegacyEngine
-import TinyTitanCPUEngine
+import TinyTitanLib
+import TinyTitanVariants
 
 /// Every model a models directory holds that this server can actually serve,
 /// GPU installs and CPU snapshots alike.
@@ -24,7 +25,7 @@ public struct ModelCatalog: Sendable {
 
     public enum Kind: Sendable, Equatable {
         case gpu(ModelFamily)
-        case cpu(CPUModelFamily)
+        case cpu(VariantCPUModelFamily)
 
         package var backend: Backend {
             switch self {
@@ -333,8 +334,9 @@ public struct ModelCatalog: Sendable {
             return .failure(ProbeFailure(reason: "unreadable config.json: \(error)"))
         }
         let modelType = config["model_type"] as? String
-        guard let family = CPUModelFamily.resolve(modelType: modelType) else {
-            return .failure(ProbeFailure(reason: CPUModelFamily.refusal(modelType: modelType)))
+        guard let family = VariantCPUModelFamily.resolve(modelType: modelType) else {
+            return .failure(
+                ProbeFailure(reason: VariantCPUModelFamily.refusal(modelType: modelType)))
         }
         guard let quantization = config["quantization"] as? [String: Any],
             let bits = quantization["bits"] as? Int
@@ -387,23 +389,23 @@ public struct ModelCatalog: Sendable {
     /// died with a raw `NSCocoaErrorDomain` "config.json couldn't be opened"
     /// instead of naming the family -- and a `.ssdai` install is exactly the
     /// shape the three dense Qwen 3.5 models are installed as.
-    static func snapshotFamily(_ directory: URL) throws -> CPUModelFamily {
+    static func snapshotFamily(_ directory: URL) throws -> VariantCPUModelFamily {
         if FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("manifest.json").path)
         {
             let family = try ManifestReader.peekFamily(directoryURL: directory)
             guard family == .qwen35Dense else {
                 throw CPUModelBackend.CPUBackendError.unsupported(
-                    CPUModelFamily.refusal(modelType: family.rawValue))
+                    VariantCPUModelFamily.refusal(modelType: family.rawValue))
             }
             return .qwen35Dense
         }
         let data = try readSnapshotConfig(directory)
         let config = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let modelType = config?["model_type"] as? String
-        guard let family = CPUModelFamily.resolve(modelType: modelType) else {
+        guard let family = VariantCPUModelFamily.resolve(modelType: modelType) else {
             throw CPUModelBackend.CPUBackendError.unsupported(
-                CPUModelFamily.refusal(modelType: modelType))
+                VariantCPUModelFamily.refusal(modelType: modelType))
         }
         return family
     }

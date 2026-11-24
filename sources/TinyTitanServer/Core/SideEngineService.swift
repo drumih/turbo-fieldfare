@@ -1,7 +1,8 @@
 import Foundation
-import TinyTitan
+import TinyTitanCore
 import TinyTitanLib
 import TinyTitanMemory
+import TinyTitanVariants
 
 /// The resident CPU side-engine, wearing memory's port.
 ///
@@ -113,7 +114,7 @@ public enum ServerSideEngineFactory {
             return nil
         }
         return SideEngine(isClientGenerating: isClientGenerating) {
-            try await CPUQwen35SideEngineModel(
+            try await DenseSideEngineModel(
                 snapshotDirectory: URL(fileURLWithPath: directory))
         }
     }

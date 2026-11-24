@@ -6,6 +6,7 @@ import TinyTitanCPUEngine
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
 @testable import TinyTitanCore
+import TinyTitanVariants
 
 @Suite("Model router")
 struct ModelRouterTests {

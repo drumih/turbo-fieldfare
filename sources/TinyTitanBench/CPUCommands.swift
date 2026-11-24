@@ -11,8 +11,9 @@
 
 import Foundation
 import Metal
-import TinyTitan
 import TinyTitanCore
+import TinyTitanLegacyEngine
+import TinyTitanVariants
 
 extension TinyTitanBench {
     /// What the CPU side-engine can actually read, and at how many threads.
@@ -43,7 +44,7 @@ extension TinyTitanBench {
             "cpu int8 affine gemv: \(rows)x\(n), "
                 + "\(Double(weightBytes) / 1e6) MB of weights per pass, "
                 + "\(iterations) passes")
-        print("performance cores reported: \(Int8AffineGEMV.preferredThreads)")
+        print("performance cores reported: \(VariantCPUInt8GEMV.preferredThreads)")
 
         let weights = UnsafeMutablePointer<UInt8>.allocate(capacity: weightBytes)
         let scales = UnsafeMutablePointer<UInt16>.allocate(capacity: groups)
@@ -82,12 +83,12 @@ extension TinyTitanBench {
         for threads in [1, 2, 4, 6, 8] {
             // One untimed pass so the first one's page faults are not the
             // measurement.
-            Int8AffineGEMV.threaded(
+            VariantCPUInt8GEMV.threaded(
                 weights: weights, scales: scales, biases: biases,
                 x: x, rows: rows, n: n, out: out, threads: threads)
             let started = ContinuousClock.now
             for _ in 0..<iterations {
-                Int8AffineGEMV.threaded(
+                VariantCPUInt8GEMV.threaded(
                     weights: weights, scales: scales, biases: biases,
                     x: x, rows: rows, n: n, out: out, threads: threads)
             }
@@ -150,7 +151,7 @@ extension TinyTitanBench {
         var passes = 0
         let started = ContinuousClock.now
         while ContinuousClock.now < deadline {
-            Int8AffineGEMV.threaded(
+            VariantCPUInt8GEMV.threaded(
                 weights: weights, scales: scales, biases: biases,
                 x: x, rows: rows, n: n, out: out, threads: threads)
             passes += 1
@@ -183,29 +184,29 @@ extension TinyTitanBench {
         }
     }
 
-    /// Loads a dense CPU model in either shape it ships in.
-    ///
-    /// These commands took an affine safetensors snapshot only. That stopped
-    /// reaching a shipped model once the dense Qwen 3.5 family became `.ssdai`
-    /// installs: all six carry a `manifest.json` and no `config.json`, so the
-    /// whole-model check could only run against a conversion intermediate -- and
-    /// the 4B/9B intermediates were deleted to reclaim disk, leaving the 2B
-    /// pair. Choosing by what is on disk makes the check usable on the models a
-    /// user actually has, which is what `tools/verify_cpu_models.sh` drives.
-    static func loadDenseSnapshot(_ path: String) throws -> AffineSnapshot {
+    /// Loads a dense CPU variant engine in either shape it ships in
+    /// (`.ssdai` install or affine safetensors snapshot), without the 6.x
+    /// runtime (TT-134).
+    static func loadDenseEngine(
+        _ path: String,
+        threads: Int? = nil
+    ) throws -> any CPUEngineRunner {
         let directory = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(
+        let hasManifest = FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("manifest.json").path)
-        {
-            return try AffineSnapshot(ssdai: directory)
-        }
-        guard
-            FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent("config.json").path)
-        else {
+        let hasConfig = FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("config.json").path)
+        guard hasManifest || hasConfig else {
             throw DenseModelError.notAModel(path)
         }
-        return try AffineSnapshot(directory: directory)
+        let install = try DenseCPUInstall(directory: directory)
+        let factory = try EngineFactories.variantCPUEngine(
+            hiddenSize: install.hiddenSize,
+            weightBits: install.weightBits,
+            snapshotDirectory: install.directory,
+            isSSDAI: install.isSSDAI,
+            threads: threads)
+        return try factory.build()
     }
 
     /// The string-to-id and id-to-string mapping the `cpu35` checks read.
@@ -234,7 +235,7 @@ extension TinyTitanBench {
             let object = try JSONSerialization.jsonObject(
                 with: BoundedMetadataRead.read(
                     fileAt: vocabularyURL,
-                    maxBytes: ManifestReader.defaultMaxBytes))
+                    maxBytes: SSDAIManifestReader.defaultMaxBytes))
             guard let mapping = object as? [String: Int] else {
                 throw DenseModelError.unreadableVocabulary(vocabularyURL.path)
             }

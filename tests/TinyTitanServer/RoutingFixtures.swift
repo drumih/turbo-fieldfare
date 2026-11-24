@@ -5,6 +5,7 @@ import Testing
 @testable import TinyTitan
 @testable import TinyTitanLib
 @testable import TinyTitanServerCore
+import TinyTitanVariants
 
 // Shared by the router and dynamic-serving tests: a three-model catalog that
 // exists only in memory, and stub models that record what they were asked.

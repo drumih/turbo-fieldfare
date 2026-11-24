@@ -11,8 +11,8 @@
 
 import Foundation
 import Metal
-import TinyTitan
 import TinyTitanCore
+import TinyTitanVariants
 
 extension TinyTitanBench {
 
@@ -25,22 +25,22 @@ extension TinyTitanBench {
     static func runCPUQwen35(snapshot path: String, dump: URL? = nil) throws {
         let directory = URL(fileURLWithPath: path)
         let started = ContinuousClock.now
-        let snapshot = try Self.loadDenseSnapshot(path)
         // Width is the side-engine's scheduling knob, so it is settable
         // here: the measurement that produced the policy is a sweep of it.
         let requested = ProcessInfo.processInfo.environment["TINYTITAN_CPU35_THREADS"]
             .flatMap(Int.init)
-        let model = try CPUQwen35(snapshot: snapshot, threads: requested)
+        let model = try Self.loadDenseEngine(path, threads: requested)
+        let configuration = model.configuration
         func seconds(_ from: ContinuousClock.Instant) -> Double {
             let elapsed = from.duration(to: .now)
             return Double(elapsed.components.seconds)
                 + Double(elapsed.components.attoseconds) / 1e18
         }
         print(
-            "\(path): \(snapshot.configuration.layers) layers, "
-                + "hidden \(snapshot.configuration.hiddenSize), "
-                + "rotary \(snapshot.configuration.rotaryDim)/"
-                + "\(snapshot.configuration.headDim), "
+            "\(path): \(configuration.layers) layers, "
+                + "hidden \(configuration.hiddenSize), "
+                + "rotary \(configuration.rotaryDim)/"
+                + "\(configuration.headDim), "
                 + "loaded in \(String(format: "%.2fs", seconds(started)))")
         print("threads: \(model.threads)")
 
@@ -130,10 +130,9 @@ extension TinyTitanBench {
         nllOutput: URL?
     ) throws {
         let directory = URL(fileURLWithPath: path)
-        let snapshot = try Self.loadDenseSnapshot(path)
         let requested = ProcessInfo.processInfo.environment["TINYTITAN_CPU35_THREADS"]
             .flatMap(Int.init)
-        let model = try CPUQwen35(snapshot: snapshot, threads: requested)
+        let model = try Self.loadDenseEngine(path, threads: requested)
         guard let tokenizer = try loadTokenizer(directory) else {
             FileHandle.standardError.write(Data("no tokenizer in \(path)\n".utf8))
             exit(2)
@@ -204,10 +203,9 @@ extension TinyTitanBench {
         limit: Int
     ) throws {
         let directory = URL(fileURLWithPath: path)
-        let snapshot = try Self.loadDenseSnapshot(path)
         let requested = ProcessInfo.processInfo.environment["TINYTITAN_CPU35_THREADS"]
             .flatMap(Int.init)
-        let model = try CPUQwen35(snapshot: snapshot, threads: requested)
+        let model = try Self.loadDenseEngine(path, threads: requested)
         guard let tokenizer = try loadTokenizer(directory) else {
             // Non-zero: a run that never checked anything is not a pass.
             FileHandle.standardError.write(Data("no tokenizer in \(path)\n".utf8))
@@ -244,10 +242,9 @@ extension TinyTitanBench {
         output: URL
     ) throws {
         let directory = URL(fileURLWithPath: path)
-        let snapshot = try Self.loadDenseSnapshot(path)
         let requested = ProcessInfo.processInfo.environment["TINYTITAN_CPU35_THREADS"]
             .flatMap(Int.init)
-        let model = try CPUQwen35(snapshot: snapshot, threads: requested)
+        let model = try Self.loadDenseEngine(path, threads: requested)
         let tokenizer = try loadTokenizer(directory)
         guard let tokenizer else {
             // Non-zero: a run that never checked anything is not a pass.
