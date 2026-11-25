@@ -63,6 +63,12 @@
 >   `hidden_size: 2304`, `target_layer_ids: [5, 23, 41, 48]`), and MTP tensors are
 >   not exposed in `manifest.json`; needs a dedicated draft graph + repack +
 >   quiet-machine benchmark.
+> - **TT-135 (Done 2026-11-25)**: paired interleaved Q4 vs NVFP4 decode benchmark
+>   at `1e50dab6` (128 tokens greedy, load avg 6.4–8.2): at `--ram-budget 12G`,
+>   NVFP4 4.253 vs Q4 6.415 tok/s (0.663×); at matched 64 slots, NVFP4 5.333 vs
+>   Q4 7.874 tok/s (0.677×, +60.5 ms/tok). Word-wide CPU repack (1.10 ms/expert)
+>   already took repack off the critical path; gap is inherent to the BF16
+>   resident weights, so no GPU repack kernel is needed.
 >
 > **Owner's standing rules (in force):** at most 16 GB of RAM for any model
 > run (`--ram-budget 16G` max; this is a 24 GB M3 that other projects share);
