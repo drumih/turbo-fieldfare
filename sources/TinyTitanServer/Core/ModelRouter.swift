@@ -104,7 +104,7 @@ extension ModelRouter {
                     thinking: reasoning.thinking,
                     reasoningEffort: reasoning.effort,
                     slots: slots)
-            case .gpu:
+            case .gpu, .plugin:
                 // One plan factory for both front ends: a loader-built plan
                 // that drops a field is how `slots` silently stayed at one on
                 // the catalog path while the coordinator admitted four.
@@ -143,8 +143,13 @@ extension ModelRouter {
     package static let standardCounter: Counter = { entry, choice, request in
         _ = try GFTokenizer.requireModelDirectory(entry.path)
         switch entry.kind {
-        case .gpu:
-            guard let folder = GFTokenizer.tokenizerFolder(forModelDirectory: entry.path) else {
+        case .gpu, .plugin:
+            let pluginFolder = try? EngineFactories.gpuFactory(directoryURL: entry.path)
+                .tokenizerFolder?(entry.path)
+            guard
+                let folder = pluginFolder
+                    ?? GFTokenizer.tokenizerFolder(forModelDirectory: entry.path)
+            else {
                 throw GFTokenizerError.missingToolTemplate
             }
             let tokenizer = try await GFTokenizer.load(

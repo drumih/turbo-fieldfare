@@ -368,6 +368,8 @@ check_golden qwen3.5_9B_8Bit qwen35-9b-8-cpu
 # installs, so the first release that ships them cannot skip the check.
 check_golden ornith-1.5_122B_4Bit ornith122-4
 check_golden ornith-1.5_122B_8Bit ornith122-8
+check_golden inkling-2-mini_GGUF-Q4 inkling2-gguf-q4
+check_golden inkling-2-mini_NVFP4 inkling2-nvfp4
 
 # An installed model that no check_golden line covers would be silently
 # unchecked. The old guard caught that only when *no* baseline had been checked

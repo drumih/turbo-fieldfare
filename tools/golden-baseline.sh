@@ -393,6 +393,8 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     qwen35-4b-4) dir="qwen3.5_4B_4Bit"; file="qwen3.5-4b-4bit.txt"; q=4 ;;
     qwen35-4b-8) dir="qwen3.5_4B_8Bit"; file="qwen3.5-4b-8bit.txt"; q=8 ;;
     qwen35-9b-4) dir="qwen3.5_9B_4Bit"; file="qwen3.5-9b-4bit.txt"; q=4 ;;
+    inkling2-q4|inkling2-gguf-q4) dir="inkling-2-mini_GGUF-Q4"; file="inkling-2-mini-gguf-q4.txt"; q=4 ;;
+    inkling2-nvfp4) dir="inkling-2-mini_NVFP4"; file="inkling-2-mini-nvfp4.txt"; q=4 ;;
     qwen35-9b-8) dir="qwen3.5_9B_8Bit"; file="qwen3.5-9b-8bit.txt"; q=8 ;;
     # K2-Horizon installs, driven by the probe: `TinyTitanBench k2gpu`.
     k2-4) dir="k2-horizon-4bit.ssdai"; file="k2-horizon-4bit.txt"; q=4; kind=k2 ;;

@@ -83,13 +83,17 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
         }
     }
 
+    /// Default context cap when `--ram-budget` is active and the caller did not
+    /// pass an explicit `--max-context` (TT-126).
+    package static let defaultBudgetedContext = 32_768
+
     /// The plan for `requested` context tokens. `ramBudget` caps the whole
     /// process; `explicitSlots` (`--expert-cache-slots`) wins over the budget's
     /// slot count but never exceeds the expert count; `workingSet` is the
     /// GPU's recommended maximum, which nothing may exceed.
     package static func make(
         geometry g: Geometry, requested: Int, ramBudget: Int?, explicitSlots: Int?,
-        workingSet: Int
+        workingSet: Int, maxContextExplicit: Bool = true
     ) throws -> InklingQ4LoadPlan {
         let fixed = g.residentBytes + reserveBytes
         let minimumSlots = g.expertsPerToken
@@ -98,12 +102,15 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
         guard ceiling >= minimum else {
             throw Error.budgetTooSmall(budget: ceiling, minimum: minimum)
         }
+        let targetContext =
+            (!maxContextExplicit && ramBudget != nil)
+            ? min(requested, defaultBudgetedContext) : requested
         // The window takes what is left after the weights and the minimum
         // slots, up to the request and the model's own window.
         let forWindow = ceiling - fixed - minimumSlots * g.bytesPerSlot
         let fits = forWindow / max(g.bytesPerPosition, 1)
         let context = max(
-            min(requested, g.modelContext, fits) / 1_024 * 1_024, minimumContext)
+            min(targetContext, g.modelContext, fits) / 1_024 * 1_024, minimumContext)
         let left = ceiling - fixed - context * g.bytesPerPosition
         var slots = left / max(g.bytesPerSlot, 1)
         if ramBudget == nil { slots = min(slots, defaultExpertBytes / max(g.bytesPerSlot, 1)) }

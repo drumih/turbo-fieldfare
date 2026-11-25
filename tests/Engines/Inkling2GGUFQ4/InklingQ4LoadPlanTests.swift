@@ -59,4 +59,12 @@ struct InklingQ4LoadPlanTests {
                 explicitSlots: nil, workingSet: Self.workingSet)
         }
     }
+
+    @Test func anImplicitWindowUnderABudgetCapsAtThirtyTwoKForSlots() throws {
+        let plan = try InklingQ4LoadPlan.make(
+            geometry: Self.geometry, requested: 262_144, ramBudget: 12 * Self.gib,
+            explicitSlots: nil, workingSet: Self.workingSet, maxContextExplicit: false)
+        #expect(plan.context == InklingQ4LoadPlan.defaultBudgetedContext)
+        #expect(plan.slots > 60)
+    }
 }

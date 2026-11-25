@@ -182,15 +182,23 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         for entry: ModelCatalog.Entry,
         choice: ReasoningChoice
     ) -> ServerReasoningProfile {
-        let family: ModelFamily
         switch entry.kind {
-        case .gpu(let gpuFamily): family = gpuFamily
-        case .cpu: family = .qwen36
+        case .gpu(let family):
+            return ServerReasoningProfile(
+                family: family.rawValue, thinkingMode: choice.thinking,
+                reasoningEffort: choice.effort,
+                reasoningControl: family.engineReasoningControl)
+        case .cpu:
+            return ServerReasoningProfile(
+                family: ModelFamily.qwen36.rawValue, thinkingMode: choice.thinking,
+                reasoningEffort: choice.effort,
+                reasoningControl: ModelFamily.qwen36.engineReasoningControl)
+        case .plugin(let family, let control):
+            return ServerReasoningProfile(
+                family: family, thinkingMode: choice.thinking,
+                reasoningEffort: choice.effort,
+                reasoningControl: control)
         }
-        return ServerReasoningProfile(
-            family: family.rawValue, thinkingMode: choice.thinking,
-            reasoningEffort: choice.effort,
-            reasoningControl: family.engineReasoningControl)
     }
 
     // MARK: - ServerInferenceBackend

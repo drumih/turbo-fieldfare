@@ -4,6 +4,7 @@ import TinyTitanCPUEngine
 import TinyTitanCore
 import TinyTitanLegacyEngine
 import TinyTitanLib
+import TinyTitanPluginAPI
 import TinyTitanVariants
 
 /// Every model a models directory holds that this server can actually serve,
@@ -26,10 +27,11 @@ public struct ModelCatalog: Sendable {
     public enum Kind: Sendable, Equatable {
         case gpu(ModelFamily)
         case cpu(VariantCPUModelFamily)
+        case plugin(family: String, reasoning: ReasoningControl)
 
         package var backend: Backend {
             switch self {
-            case .gpu: .gpu
+            case .gpu, .plugin: .gpu
             case .cpu: .cpu
             }
         }
@@ -38,7 +40,7 @@ public struct ModelCatalog: Sendable {
         /// runtime implements the family there too.
         package func kind(forBackend backend: Backend) -> Kind? {
             switch (self, backend) {
-            case (.gpu, .gpu), (.cpu, .cpu):
+            case (.gpu, .gpu), (.cpu, .cpu), (.plugin, .gpu):
                 return self
             case (.gpu(.qwen35Dense), .cpu), (.cpu(.qwen35Dense), .gpu):
                 // The dense family is the one both engines implement, and its
@@ -53,6 +55,7 @@ public struct ModelCatalog: Sendable {
             switch self {
             case .gpu(let family): family.rawValue
             case .cpu(let family): family.rawValue
+            case .plugin(let family, _): family
             }
         }
 
@@ -60,6 +63,7 @@ public struct ModelCatalog: Sendable {
             switch self {
             case .gpu(let family): family.supportedReasoningLevels
             case .cpu(let family): family.supportedReasoningLevels
+            case .plugin(_, let reasoning): reasoning.supportedLevels
             }
         }
 
@@ -67,6 +71,7 @@ public struct ModelCatalog: Sendable {
             switch self {
             case .gpu(let family): family.reasoningControl.levelWhenOn
             case .cpu(let family): family.levelWhenOn
+            case .plugin(_, let reasoning): reasoning.levelWhenOn
             }
         }
 
@@ -76,6 +81,8 @@ public struct ModelCatalog: Sendable {
             switch self {
             case .gpu(let family): try family.runtimeReasoning(for: level)
             case .cpu(let family): try family.runtimeReasoning(for: level)
+            case .plugin(let family, let reasoning):
+                try reasoning.runtimeReasoning(for: level, family: family)
             }
         }
     }
@@ -234,6 +241,16 @@ public struct ModelCatalog: Sendable {
     }
 
     private static func probeInstall(_ directory: URL) -> Result<Entry, ProbeFailure> {
+        // Standalone TPP/1 plugins whose declared family is outside the 6.x
+        // `ModelFamily` enum (such as Inkling 2 Q4 and NVFP4, TT-126) supply
+        // their own identity, sampling, reasoning control, and tokenizer hook.
+        if let declaredFamily = try? SSDAIManifestReader.declaredFamily(directoryURL: directory),
+            ModelFamily(rawValue: declaredFamily) == nil,
+            let resolved = try? EngineFactories.pluginRegistry.resolve(directory),
+            resolved.strength > .fallback
+        {
+            return probePluginInstall(directory, resolved: resolved)
+        }
         let identity: ManifestIdentity
         do {
             identity = try ManifestReader.peekIdentity(directoryURL: directory)
@@ -408,24 +425,6 @@ public struct ModelCatalog: Sendable {
                 VariantCPUModelFamily.refusal(modelType: modelType))
         }
         return family
-    }
-
-    /// Allocated bytes, so an APFS clone or a sparse file reports what it
-    /// really occupies rather than its logical length.
-    static func sizeOnDisk(_ directory: URL) -> Int64 {
-        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileSizeKey, .isRegularFileKey]
-        guard
-            let walker = FileManager.default.enumerator(
-                at: directory, includingPropertiesForKeys: keys)
-        else { return 0 }
-        var total: Int64 = 0
-        for case let file as URL in walker {
-            guard let values = try? file.resourceValues(forKeys: Set(keys)),
-                values.isRegularFile == true
-            else { continue }
-            total += Int64(values.totalFileAllocatedSize ?? values.fileSize ?? 0)
-        }
-        return total
     }
 
     // MARK: - Reporting
