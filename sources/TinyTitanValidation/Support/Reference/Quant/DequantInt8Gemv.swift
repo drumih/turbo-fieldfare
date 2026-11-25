@@ -1,6 +1,6 @@
 import Accelerate
 import Foundation
-import TinyTitan
+import TinyTitanCore
 
 /// FP32 reference for the INT8-affine groupwise GEMV `y = W * x`.
 ///

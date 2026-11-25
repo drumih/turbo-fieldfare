@@ -1,5 +1,5 @@
 import Foundation
-import TinyTitan
+import TinyTitanCore
 
 /// FP32 reference for the INT8-affine embedding lookup
 /// `out = dequantize(table[tokenId])`.

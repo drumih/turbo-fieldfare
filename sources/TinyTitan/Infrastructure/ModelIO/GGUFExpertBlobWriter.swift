@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 import TinyTitanFormat
 
 package enum GGUFExpertBlobError: Error, Equatable, CustomStringConvertible {

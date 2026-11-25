@@ -1,4 +1,5 @@
 import Foundation
+import TinyTitanCore
 import TinyTitanKernelsC
 
 /// `y = W · x` for an affine-INT8 matrix, on the CPU.

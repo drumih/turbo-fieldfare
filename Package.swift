@@ -415,7 +415,7 @@ let package = Package(
         ),
         .target(
             name: "TinyTitanValidationSupport",
-            dependencies: ["TinyTitan"],
+            dependencies: ["TinyTitanCore"],
             path: "sources/TinyTitanValidation/Support",
             swiftSettings: tinytitanLanguageStandard
         ),
