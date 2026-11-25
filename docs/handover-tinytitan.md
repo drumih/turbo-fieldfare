@@ -1,4 +1,4 @@
-# Handover: engine 7 plugins, phase 2 (2026-11-25, updated after TT-134 slice 4 & TT-126)
+# Handover: engine 7 plugins, phase 2 (2026-11-25, updated after TT-126, TT-124 & TT-134 slice 5)
 
 **Read this block first; every block below it is older.**
 
@@ -37,15 +37,32 @@
 > - **TT-134 slice 4** (`a7f3f85f`): moved `Quantization.swift` and
 >   `TensorOpsPolicy.swift` into `TinyTitanCore`; cleared `import TinyTitan` from
 >   all 5 `TinyTitanValidationSupport` files, `DoctorReport+Build`, and 4
->   `TinyTitanServerCore` files. External 6.x importers down from 78 -> **35**
->   (6.x tree: 60,297 lines in 301 files).
-> - **TT-126 (partial, `58c6cc71`)**: `ModelCatalog` + `ModelRouter` now discover
->   and serve plugin-backed installs (`inkling-2-mini-gguf-q4` and
->   `inkling-2-mini-nvfp4` appear in `--catalog` / `/v1/models`); added golden
->   and release targets; added 32K default context cap under `--ram-budget` in
->   both `InklingQ4LoadPlan` copies. Remaining for TT-126: `registry/registry.json`
->   rows, `tools/tinytitan_models.sh` + `tools/install_models.sh` + `tools/server_launcher.sh`
->   rows, and capturing the two Inkling golden baselines.
+>   `TinyTitanServerCore` files.
+> - **TT-126** (`58c6cc71`, `c2246f94` — **Done**): `ModelCatalog` + `ModelRouter`
+>   discover and serve plugin-backed installs; wired `maxContextExplicit` so
+>   Inkling 2 defaults to a 32K window under `--ram-budget` while honoring
+>   explicit `--max-context`; added `inkling-2-mini` (`Inkling2GGUFQ4`,
+>   `Inkling2NVFP4`) to `registry/registry.json` (`TinyTitanCLI catalog --check`
+>   green), `tools/tinytitan_models.sh`, `tools/install_models.sh` (`repack`, no
+>   Python needed), and `tools/server_launcher.sh`; captured and re-verified
+>   both Inkling 2 golden baselines (`benchmark/golden/inkling-2-mini-gguf-q4.txt`,
+>   622 B, and `inkling-2-mini-nvfp4.txt`, 682 B).
+> - **TT-124** (`a779718a` — **Done**): multi-slot `--max-concurrent-sequences`
+>   for both `Inkling2GGUFQ4` and `Inkling2NVFP4` (per-slot KV/conv `SlotState`,
+>   slot-indexed `InklingQ4Decoder`, lock-serialized multi-slot `InklingQ4Runner`,
+>   `BatchedLogitProducer` completion loop with per-slot `InklingQ4LogitsScratch`,
+>   real `perSlotBytes` in `InklingQ4LoadPlan`, and `concurrentSequences: .supported`).
+> - **TT-134 slice 5** (`7124a7ca`): extracted model-free `RuntimeLimits` into
+>   `TinyTitanCore`, removed `TinyTitan` dependency from `TinyTitanVariants` and
+>   `TinyTitanCPUEngine` in `Package.swift`, and cleared `import TinyTitan` from
+>   `ServerArguments+Usage.swift` and `Args+Usage.swift`. External 6.x importers
+>   down from 78 -> **32**.
+> - **TT-129 (assessed 2026-11-25)**: `models/inkling-2-mini_NVFP4/tokenizer/config.json`
+>   shows Inkling 2's MTP head is a bespoke 3-layer Markov RNN-hidden draft model
+>   (`markov_head_type: "rnn_hidden"`, `markov_rank: 256`, `block_size: 8`,
+>   `hidden_size: 2304`, `target_layer_ids: [5, 23, 41, 48]`), and MTP tensors are
+>   not exposed in `manifest.json`; needs a dedicated draft graph + repack +
+>   quiet-machine benchmark.
 >
 > **Owner's standing rules (in force):** at most 16 GB of RAM for any model
 > run (`--ram-budget 16G` max; this is a 24 GB M3 that other projects share);
