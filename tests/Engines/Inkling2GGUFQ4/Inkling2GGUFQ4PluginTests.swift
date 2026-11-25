@@ -32,7 +32,7 @@ import TinyTitanPluginAPI
     @Test func kvRowBytesScaleWithPrecision() {
         #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .fp16) == 1024)
         #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .int8) == 576)
-        #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .int4) == 320)
+        #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .int4) == 384)
     }
 
     @Test func declaresItsReasoningLevels() {

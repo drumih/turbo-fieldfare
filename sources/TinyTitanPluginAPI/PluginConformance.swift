@@ -96,6 +96,26 @@ package enum PluginConformance {
         checkSupport(params.multiTokenPrediction, flag: "--mtp-model", into: &findings)
         checkSupport(params.expertStreaming, flag: "--ram-budget", into: &findings)
 
+        // Mandatory engine parameters (TPP/1.1): every production LLM plugin
+        // must honour --kv-bits (4, 8, 16) and --max-concurrent-sequences.
+        if !isFallback, plugin.pluginID != "ai.tinytitan.template" {
+            for precision in KVCachePrecision.allCases
+            where !params.kvCachePrecision.accepts(precision) {
+                findings.append(
+                    PluginCheckFinding(
+                        check: "mandatory-parameter",
+                        message: "--kv-bits \(precision.rawValue) is required by the TinyTitan "
+                            + "plugin protocol; plugin refused or restricted it"))
+            }
+            if !params.concurrentSequences.accepts(1) || !params.concurrentSequences.accepts(2) {
+                findings.append(
+                    PluginCheckFinding(
+                        check: "mandatory-parameter",
+                        message: "--max-concurrent-sequences is required by the TinyTitan "
+                            + "plugin protocol; plugin refused or restricted it"))
+            }
+        }
+
         _ = plugin.engineFactory(host: .standard)
 
         return PluginCheckReport(

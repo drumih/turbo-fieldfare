@@ -16,7 +16,7 @@ struct DepthKVGroupQ8 {
 struct DepthKVGroupQ4 {
     half scale;
     half bias;
-    uchar q[16];
+    uchar q[8];
 };
 
 inline void depth_kv_store_q8(device DepthKVGroupQ8* dst, float val, uint lane) {
@@ -36,8 +36,16 @@ inline void depth_kv_store_q8(device DepthKVGroupQ8* dst, float val, uint lane) 
 }
 
 inline void depth_kv_store_q4(device DepthKVGroupQ4* dst, float val, uint lane) {
-    const float vMin = simd_min(val);
-    const float vMax = simd_max(val);
+    float vMin = val;
+    float vMax = val;
+    vMin = min(vMin, simd_shuffle_xor(vMin, 1u));
+    vMax = max(vMax, simd_shuffle_xor(vMax, 1u));
+    vMin = min(vMin, simd_shuffle_xor(vMin, 2u));
+    vMax = max(vMax, simd_shuffle_xor(vMax, 2u));
+    vMin = min(vMin, simd_shuffle_xor(vMin, 4u));
+    vMax = max(vMax, simd_shuffle_xor(vMax, 4u));
+    vMin = min(vMin, simd_shuffle_xor(vMin, 8u));
+    vMax = max(vMax, simd_shuffle_xor(vMax, 8u));
     const half hBias = half(vMin);
     const float fBias = float(hBias);
     const half hScale = half((vMax - fBias) / 15.0f);
@@ -45,12 +53,13 @@ inline void depth_kv_store_q4(device DepthKVGroupQ4* dst, float val, uint lane) 
     const float invScale = fScale > 0.0f ? (1.0f / fScale) : 0.0f;
     const uint q = uint(clamp(rint((val - fBias) * invScale), 0.0f, 15.0f));
     const uint hi = simd_shuffle_xor(q, 1u);
-    if (lane == 0u) {
+    const uint localLane = lane & 15u;
+    if (localLane == 0u) {
         dst->scale = hScale;
         dst->bias = hBias;
     }
-    if ((lane & 1u) == 0u) {
-        dst->q[lane >> 1] = uchar((q & 0xFu) | ((hi & 0xFu) << 4));
+    if ((localLane & 1u) == 0u) {
+        dst->q[localLane >> 1] = uchar((q & 0xFu) | ((hi & 0xFu) << 4));
     }
 }
 
@@ -60,8 +69,8 @@ inline float depth_kv_load_q8(device const DepthKVGroupQ8* headRow, uint ch) {
 }
 
 inline float depth_kv_load_q4(device const DepthKVGroupQ4* headRow, uint ch) {
-    device const DepthKVGroupQ4& g = headRow[ch >> 5];
-    const uint off = ch & 31u;
+    device const DepthKVGroupQ4& g = headRow[ch >> 4];
+    const uint off = ch & 15u;
     const uchar packed = g.q[off >> 1];
     const uint nibble = (off & 1u) == 0u ? (packed & 0xFu) : (packed >> 4);
     return float(g.bias) + float(g.scale) * float(nibble);
@@ -89,8 +98,8 @@ inline float depth_kv_dot_q4(
     for (uint g = 0u; g < groupsPerHead; ++g) {
         const float sc = float(kj[g].scale);
         const float bi = float(kj[g].bias);
-        const uint base = g << 5;
-        for (uint e = 0u; e < 16u; ++e) {
+        const uint base = g << 4;
+        for (uint e = 0u; e < 8u; ++e) {
             const uchar packed = kj[g].q[e];
             dot += qh[base + 2u * e] * (bi + sc * float(packed & 0xFu));
             dot += qh[base + 2u * e + 1u] * (bi + sc * float(packed >> 4));
@@ -112,7 +121,7 @@ inline void depth_kv_finish_impl(
     const bool isV = groupIndex >= args.kvHeads;
     const uint head = groupIndex % args.kvHeads;
     const uint width = args.kvHeads * args.headDim;
-    const uint groupsPerHead = args.headDim >> 5;
+    const uint groupsPerHead = IsQ4 ? (args.headDim >> 4) : (args.headDim >> 5);
     const uint groupsPerRow = args.kvHeads * groupsPerHead;
     const uint c = head * args.headDim + tid;
     device const float* xs = isV ? v : k;
@@ -145,7 +154,8 @@ inline void depth_kv_finish_impl(
             : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
         const uint position = step[0].position + t;
         const uint slot = args.ring != 0u ? position % args.capacity : position;
-        device GroupT* dst = cache + ulong(slot) * groupsPerRow + head * groupsPerHead + sg;
+        const uint groupIdx = IsQ4 ? (sg * 2u + (lane >> 4)) : sg;
+        device GroupT* dst = cache + ulong(slot) * groupsPerRow + head * groupsPerHead + groupIdx;
         if (IsQ4) {
             depth_kv_store_q4(reinterpret_cast<device DepthKVGroupQ4*>(dst), value * factor, lane);
         } else {
@@ -172,7 +182,7 @@ inline void depth_kv_finish_chunk_impl(
     const bool isV = unit >= args.kvHeads;
     const uint head = unit % args.kvHeads;
     const uint width = args.kvHeads * args.headDim;
-    const uint groupsPerHead = args.headDim >> 5;
+    const uint groupsPerHead = IsQ4 ? (args.headDim >> 4) : (args.headDim >> 5);
     const uint groupsPerRow = args.kvHeads * groupsPerHead;
     const uint c = head * args.headDim + tid;
     device const float* xs = isV ? v : k;
@@ -200,7 +210,8 @@ inline void depth_kv_finish_chunk_impl(
         : clamp(args.threshold / (sqrt(sq) + 1e-6f), 0.0f, 1.0f);
     const uint position = step[0].position + t;
     const uint slot = args.ring != 0u ? position % args.capacity : position;
-    device GroupT* dst = cache + ulong(slot) * groupsPerRow + head * groupsPerHead + sg;
+    const uint groupIdx = IsQ4 ? (sg * 2u + (lane >> 4)) : sg;
+    device GroupT* dst = cache + ulong(slot) * groupsPerRow + head * groupsPerHead + groupIdx;
     if (IsQ4) {
         depth_kv_store_q4(reinterpret_cast<device DepthKVGroupQ4*>(dst), value * factor, lane);
     } else {
@@ -223,7 +234,7 @@ inline void relative_attention_decode_q_impl(
     const uint position = step[0] + token;
     const uint last = step[0] + args.tokens - 1u;
     const uint kvHead = head / (args.heads / args.kvHeads);
-    const uint groupsPerHead = args.headDim >> 5;
+    const uint groupsPerHead = IsQ4 ? (args.headDim >> 4) : (args.headDim >> 5);
     const uint groupsPerRow = args.kvHeads * groupsPerHead;
     const uint qWidth = args.heads * args.headDim;
     device const float* qh = q + token * qWidth + head * args.headDim;
@@ -315,7 +326,7 @@ inline void relative_attention_chunk_q_impl(
     const uint head = groupIndex % args.heads;
     const uint qBase = (groupIndex / args.heads) * ATTN_QB;
     const uint kvHead = head / (args.heads / args.kvHeads);
-    const uint groupsPerHead = ATTN_D >> 5;
+    const uint groupsPerHead = IsQ4 ? (ATTN_D >> 4) : (ATTN_D >> 5);
     const uint groupsPerRow = args.kvHeads * groupsPerHead;
     const uint qWidth = args.heads * ATTN_D;
     const uint first = step[0];

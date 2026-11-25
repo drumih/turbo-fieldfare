@@ -92,9 +92,12 @@ class SourceOfTruthTests(unittest.TestCase):
         self.assertIs(block["options"]["timeout"], False)
         self.assertEqual(len(block["models"]), installer_menu_rows() + len(GGUF_ROUTES))
         self.assertIn(default_model(), block["models"])
+        model_limit_overrides = {"inkling-2-mini_GGUF-Q4": {"context": 131072, "output": 32768}}
         for model_id, model in block["models"].items():
             with self.subTest(model=model_id):
-                expected = GGUF_ROUTES.get(model_id, {"context": 262144, "output": 32768})
+                expected = model_limit_overrides.get(
+                    model_id, GGUF_ROUTES.get(model_id, {"context": 262144, "output": 32768})
+                )
                 self.assertEqual(model["limit"], expected)
                 for variant in model["variants"].values():
                     self.assertTrue("reasoningEffort" in variant or variant == {"disabled": True})

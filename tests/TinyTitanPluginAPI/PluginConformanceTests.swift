@@ -17,7 +17,7 @@ import TinyTitanCore
         }
         static func parameters(for install: InstallProbe) -> ParameterSupport {
             ParameterSupport(
-                kvCachePrecision: .only([.fp16], reason: "fp16 only"),
+                kvCachePrecision: .supported,
                 multiTokenPrediction: .refused(reason: "no draft head"))
         }
         static func reasoningControl(for install: InstallProbe) -> ReasoningControl? {
@@ -55,6 +55,35 @@ import TinyTitanCore
         let report = PluginConformance.checkStatic(GoodPlugin.self)
         #expect(report.passed)
         #expect(report.findings.isEmpty)
+    }
+
+    private enum NarrowKVPlugin: EnginePlugin {
+        static let pluginID = "com.example.narrow-kv"
+        static let protocolVersion = ProtocolVersion.current
+        static let displayName = "Narrow KV Plugin"
+        static func probe(_ install: InstallProbe) -> MatchStrength? {
+            install.declaredFamily == "narrow" ? .exact : nil
+        }
+        static func parameters(for install: InstallProbe) -> ParameterSupport {
+            ParameterSupport(
+                kvCachePrecision: .only([.fp16], reason: "fp16 only"),
+                concurrentSequences: .only([1], reason: "single slot only"))
+        }
+        static func reasoningControl(for install: InstallProbe) -> ReasoningControl? {
+            .binaryThinking
+        }
+        static func engineFactory(host: HostServices) -> EngineFactory {
+            GoodPlugin.engineFactory(host: host)
+        }
+    }
+
+    @Test func aPluginRefusingMandatoryParametersFailsConformance() {
+        let report = PluginConformance.checkStatic(NarrowKVPlugin.self)
+        #expect(!report.passed)
+        let mandatory = report.findings.filter { $0.check == "mandatory-parameter" }
+        #expect(mandatory.contains { $0.message.contains("--kv-bits 8") })
+        #expect(mandatory.contains { $0.message.contains("--kv-bits 4") })
+        #expect(mandatory.contains { $0.message.contains("--max-concurrent-sequences") })
     }
 
     @Test func aBrokenPluginReportsEveryViolation() {

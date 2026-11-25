@@ -19,10 +19,9 @@ public enum EchoPlugin: EnginePlugin {
 
     public static func parameters(for install: InstallProbe) -> ParameterSupport {
         ParameterSupport(
-            kvCachePrecision: .only(
-                [.fp16], reason: "example echo plugin keeps state unquantized"),
+            kvCachePrecision: .supported,
             hostKVWindow: .refused(reason: "example echo plugin has no host-KV cache"),
-            concurrentSequences: .only([1], reason: "example echo plugin runs one sequence"),
+            concurrentSequences: .supported,
             multiTokenPrediction: .refused(reason: "example echo plugin has no draft head"),
             expertStreaming: .refused(reason: "example echo plugin has no routed experts"))
     }

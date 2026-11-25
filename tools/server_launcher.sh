@@ -721,11 +721,16 @@ else
       if (( dynamic )); then echo "installed: ${TINYTITAN_CAT_ID[*]+"${TINYTITAN_CAT_ID[*]}"}" >&2; fi
       exit 2
     fi
-    # No width given means 8-bit, the historical default. Every model the
-    # catalogue carries ships both widths; the guard below still refuses a
-    # width with no catalogue row rather than offering a fetch that cannot
-    # exist.
-    tinytitan_resolve_quant "${BITS:-8}" || exit 2
+    # No width given means 8-bit, the historical default; if a model only ships
+    # 4-bit (such as Inkling 2 Mini), select 4-bit automatically when no --bits
+    # was specified.
+    if [[ -z "$BITS" ]] \
+      && ! tinytitan_install_key "$TINYTITAN_MODEL_STEM" 8 >/dev/null 2>&1 \
+      && tinytitan_install_key "$TINYTITAN_MODEL_STEM" 4 >/dev/null 2>&1; then
+      tinytitan_resolve_quant 4 || exit 2
+    else
+      tinytitan_resolve_quant "${BITS:-8}" || exit 2
+    fi
     # A width the catalogue does not carry is not a missing install, and must
     # not be offered as one: the fetch below addresses a catalogue key, and a
     # key that does not exist can only fail after asking the person to wait.
@@ -1074,12 +1079,14 @@ elif [[ "$ENGINE" == "cpu" ]]; then
   # routed-expert cache, so a budget would be a number that changes nothing.
   ram_gb=""
 elif (( ! INTERACTIVE )); then
-  # Unattended or dry run: keep the install's own measured profile, whose cache
-  # budget the runtime holds to a third of physical memory. The 50% target is a
-  # person's choice, taken in the question below; a script gets the shipped
-  # default, which is also what the benchmark protocol measures
-  # (`TINYTITAN_BENCH_RAM_BUDGET` pins one when a harness wants a specific size).
+  # Unattended or dry run: Inkling Q4 defaults to 14 GB (measured coding sweet
+  # spot with 128K context and 8-bit KV on a 24 GB Mac) when the machine has at
+  # least 20 GB; other installs keep their own measured profile.
   ram_gb=""
+  if [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]] && (( physical_ram_gb >= 20 )); then
+    ram_gb=14
+    ram_default=1
+  fi
 else
   echo ""
   echo "RAM target for the server?"
@@ -1188,6 +1195,8 @@ elif [[ -n "$CONTEXT_ARG" ]]; then
     *[!0-9]*) echo "unknown --context: $CONTEXT_ARG (a native rung, native, or max)" >&2; exit 2 ;;
     *) max_context="$CONTEXT_ARG" ;;
   esac
+elif [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]]; then
+  max_context=131072
 fi
 
 # Concurrency: how many generations one server serves at once. It is opt-in --

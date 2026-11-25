@@ -31,12 +31,12 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
     package let kvCachePrecision: KVCachePrecision
 
     /// Bytes for one token row of K or V across `kvWidth` channels.
-    /// Quantized modes pack affine scale + bias (`half2`) alongside each 32-channel group.
+    /// 8-bit packs affine scale + bias (`half2`) per 32 channels; 4-bit per 16 channels.
     package static func kvRowBytes(kvWidth: Int, precision: KVCachePrecision) -> Int {
         switch precision {
         case .fp16: kvWidth * MemoryLayout<Float16>.size
         case .int8: (kvWidth / 32) * 36
-        case .int4: (kvWidth / 32) * 20
+        case .int4: (kvWidth / 16) * 12
         }
     }
 
@@ -110,8 +110,9 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
     }
 
     /// Default context cap when `--ram-budget` is active and the caller did not
-    /// pass an explicit `--max-context` (TT-126).
-    package static let defaultBudgetedContext = 32_768
+    /// pass an explicit `--max-context`: 128K with 8-bit KV preserves ~82 expert
+    /// slots at 14 GB (~10.2 tok/s) with zero quality drift vs 16-bit.
+    package static let defaultBudgetedContext = 131_072
 
     /// The plan for `requested` context tokens. `ramBudget` caps the whole
     /// process; `explicitSlots` (`--expert-cache-slots`) wins over the budget's

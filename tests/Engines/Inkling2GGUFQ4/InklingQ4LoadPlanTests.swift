@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TinyTitanCore
 
 @testable import Inkling2GGUFQ4
 
@@ -60,10 +61,16 @@ struct InklingQ4LoadPlanTests {
         }
     }
 
-    @Test func anImplicitWindowUnderABudgetCapsAtThirtyTwoKForSlots() throws {
+    @Test func anImplicitWindowUnderABudgetCapsAtOneTwentyEightKForSlots() throws {
+        let q8Geometry = InklingQ4LoadPlan.Geometry(
+            residentBytes: Self.geometry.residentBytes, bytesPerSlot: Self.geometry.bytesPerSlot,
+            bytesPerPosition: Self.geometry.bytesPerPosition * 9 / 16,
+            experts: Self.geometry.experts, expertsPerToken: Self.geometry.expertsPerToken,
+            modelContext: Self.geometry.modelContext)
         let plan = try InklingQ4LoadPlan.make(
-            geometry: Self.geometry, requested: 262_144, ramBudget: 12 * Self.gib,
-            explicitSlots: nil, workingSet: Self.workingSet, maxContextExplicit: false)
+            geometry: q8Geometry, requested: 262_144, ramBudget: 14 * Self.gib,
+            explicitSlots: nil, workingSet: Self.workingSet, maxContextExplicit: false,
+            kvCachePrecision: .int8)
         #expect(plan.context == InklingQ4LoadPlan.defaultBudgetedContext)
         #expect(plan.slots > 60)
     }
