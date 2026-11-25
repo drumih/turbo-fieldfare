@@ -177,6 +177,15 @@ extension InklingQ4Decoder {
             hasDynamic: dynamicK == nil ? 0 : 1, capacity: UInt32(capacity),
             ring: sliding ? 1 : 0, threshold: m.qkClip, epsilon: m.rmsEpsilon,
             scale: 1 / Float(dynamicK == nil ? 5 : 9).squareRoot(), tokens: UInt32(t))
+        if captureConvSnapshots, let mtp = mtpDraft {
+            try mtp.encodeConvSnapshot(
+                x: scratch(s.k), convState: .init(state), routeWeights: nil, visit: visit,
+                channels: kvWidth, slots: 0, tokens: t, channelOffset: 0, encoder: e)
+            try mtp.encodeConvSnapshot(
+                x: scratch(s.v), convState: .init(state, offset: kvWidth * 12), routeWeights: nil,
+                visit: visit, channels: kvWidth, slots: 0, tokens: t, channelOffset: kvWidth,
+                encoder: e)
+        }
         try ops.concurrent(e) {
             try ops.kvFinish(
                 k: scratch(s.k), v: scratch(s.v), kWeight: layer.kConv, vWeight: layer.vConv,
@@ -209,6 +218,12 @@ extension InklingQ4Decoder {
         try ops.gemv(
             layer.attnOutput, x: scratch(s.attention), y: row(projected), tokens: t, encoder: e)
         let attended = try rows(1)
+        if captureConvSnapshots, let mtp = mtpDraft {
+            try mtp.encodeConvSnapshot(
+                x: row(projected), convState: .init(state, offset: 2 * kvWidth * 12),
+                routeWeights: nil, visit: visit, channels: hidden, slots: 0, tokens: t,
+                channelOffset: 2 * kvWidth, encoder: e)
+        }
         try ops.shortConv(
             x: row(projected), weight: layer.attnPostConv,
             state: .init(state, offset: 2 * kvWidth * 12), out: row(attended),
@@ -247,6 +262,16 @@ extension InklingQ4Decoder {
         // The post-convolution reads the routed experts' weighted sum and adds
         // the FFN input.
         let out = try persistentSlab()
+        if captureConvSnapshots, let mtp = mtpDraft {
+            try mtp.encodeConvSnapshot(
+                x: scratch(s.down),
+                convState: .init(
+                    s.slotStates[activeSlot].convStates[visit],
+                    offset: (2 * kvWidth + hidden) * 12),
+                routeWeights: scratch(s.routeWeights), visit: visit, channels: hidden,
+                slots: m.expertsPerToken, tokens: tokens, channelOffset: 2 * kvWidth + hidden,
+                encoder: e)
+        }
         try ops.shortConv(
             x: scratch(s.down), weight: layer.ffnPostConv,
             state: .init(

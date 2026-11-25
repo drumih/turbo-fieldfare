@@ -40,7 +40,9 @@ public enum Inkling2NVFP4Plugin: EnginePlugin {
             hostKVWindow: .refused(reason: "it needs a QSA model"),
             concurrentSequences: .supported,
             multiTokenPrediction: .refused(
-                reason: "the install carries an MTP head but no draft path uses it yet (TT-129)"),
+                reason: "bundled DSpark MTP head is opt-in via TINYTITAN_INKLING_MTP=on; off by "
+                    + "default because 8-token verify measured 3.404 vs 8.047 tok/s (0.423x) "
+                    + "under SSD expert streaming (TT-129)"),
             expertStreaming: .supported)
     }
 

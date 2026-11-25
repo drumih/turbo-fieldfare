@@ -38,6 +38,8 @@ package struct InklingQ4Install {
     /// The checkpoint's resident index seen through the graph's tensor names
     /// (`InklingNVFP4TensorMap`); `conversions` are the roles built at load.
     let resident: ResidentIndex
+    /// Raw checkpoint resident index, preserving `mtp.*` tensors (TT-129).
+    let checkpointResident: ResidentIndex
     let conversions: [String: InklingNVFP4Conversion]
     /// The checkpoint's packed layout (where experts are read from) and how
     /// each layer's experts sit in a slot once repacked.
@@ -55,6 +57,7 @@ package struct InklingQ4Install {
         try Self.verifyReceipt(directory: self.directory, manifest: manifest)
         let residentURL = self.directory.appendingPathComponent(Self.residentFile)
         let checkpoint = try ResidentIndexReader.load(fileURL: residentURL)
+        checkpointResident = checkpoint
         (resident, conversions) = try Self.graphView(
             checkpoint: checkpoint, layers: manifest.numLayers)
         let files = try SSDAIModelDirectory(rootURL: self.directory)

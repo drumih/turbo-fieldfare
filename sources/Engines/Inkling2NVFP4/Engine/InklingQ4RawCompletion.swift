@@ -62,6 +62,10 @@ package func runInklingQ4Completion(_ request: RawCompletionRequest) async throw
     var stops = tokenizer.stopTokenIDs.union(config.extraStopTokens)
     if constraint != nil { stops.formUnion(tokenizer.documentEndTokenIDs) }
 
+    if greedy && slot == 0 && cached == 0 && runner.hasMTP {
+        return try await runInklingQ4MTPCompletion(request, runner: runner, stops: stops)
+    }
+
     // Prefill, stopping at each interior checkpoint the session asked for.
     let prefillStart = Date()
     var history = Array(prompt.prefix(cached))

@@ -72,6 +72,9 @@ final class InklingQ4Weights {
     let loopKVResQuery: InklingQ4Tensor?
     /// Bytes of every mapped file: the resident weights and the expert layers.
     let mappedBytes: Int
+    /// Zero-copy Metal buffer over `model_weights.bin`, shared with MTP weights (TT-129).
+    let residentBuffer: MTLBuffer
+    let residentLength: Int
     private let mappings: [MappedFile]
 
     /// With `cache`, the routed-expert tensors are its slot buffers and the
@@ -84,6 +87,8 @@ final class InklingQ4Weights {
         let residentFile = try MappedFile(
             url: install.directory.appendingPathComponent(InklingQ4Install.residentFile),
             device: device)
+        residentBuffer = residentFile.buffer
+        residentLength = residentFile.length
         var mappings = [residentFile]
         let entries = install.resident.entries
         func tensor(_ name: String) throws -> InklingQ4Tensor {

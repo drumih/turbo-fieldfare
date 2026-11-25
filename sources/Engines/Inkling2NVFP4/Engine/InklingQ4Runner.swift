@@ -52,6 +52,7 @@ package final class InklingQ4Runner: EngineRunner, @unchecked Sendable {
     package func reset() {
         lock.withLock {
             decoder.state.reset()
+            decoder.mtpDraft?.reset()
             for index in positions.indices { positions[index] = 0 }
         }
     }
@@ -60,7 +61,50 @@ package final class InklingQ4Runner: EngineRunner, @unchecked Sendable {
         lock.withLock {
             guard slot >= 0, slot < positions.count else { return }
             decoder.state.reset(slot: slot)
+            if slot == 0 { decoder.mtpDraft?.reset() }
             positions[slot] = 0
+        }
+    }
+
+    package var hasMTP: Bool { decoder.mtpDraft != nil }
+
+    package func prefillMTP(_ tokens: [Int], at start: Int) throws -> (next: Int, lastTapRow: Int) {
+        try lock.withLock {
+            guard start == positions[0] else {
+                throw InferenceStateSnapshotError.invalidPosition(start)
+            }
+            let result = try decoder.prefillWithMTP(tokens, position: start)
+            positions[0] = start + tokens.count
+            return result
+        }
+    }
+
+    package func draftMTP(anchorToken: Int, position: Int, lastTapRow: Int) throws -> [Int] {
+        try lock.withLock {
+            guard let mtp = decoder.mtpDraft else {
+                throw MetalError.invalidState("MTP draft model is not enabled")
+            }
+            return try mtp.draftBlock(
+                anchorToken: anchorToken, position: position, lastTapRow: lastTapRow)
+        }
+    }
+
+    package func verifyMTP(_ tokens: [Int], at start: Int) throws -> [Int] {
+        try lock.withLock {
+            guard start == positions[0] else {
+                throw InferenceStateSnapshotError.invalidPosition(start)
+            }
+            return try decoder.verifyBlock(tokens, position: start)
+        }
+    }
+
+    package func commitMTP(at start: Int, acceptedCount: Int) throws {
+        try lock.withLock {
+            guard start == positions[0] else {
+                throw InferenceStateSnapshotError.invalidPosition(start)
+            }
+            try decoder.commitVerified(position: start, acceptedCount: acceptedCount)
+            positions[0] = start + acceptedCount
         }
     }
 

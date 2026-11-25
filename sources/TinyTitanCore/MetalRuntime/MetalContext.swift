@@ -132,6 +132,7 @@ public final class MetalContext: @unchecked Sendable {
         "depth_decode_ops",
         "depth_decode_dense",
         "depth_decode_attention",
+        "DraftHeadOps",
         "ple_iq",
     ]
 
@@ -155,6 +156,7 @@ public final class MetalContext: @unchecked Sendable {
         "depth_decode_ops": "Metal/Primitives",
         "depth_decode_dense": "Metal/Primitives",
         "depth_decode_attention": "Metal/Primitives",
+        "DraftHeadOps": "Metal/Primitives",
         "ple_iq": "Metal/Prefill",
         "bf16_gemv": "Metal/Quant",
         "quant_nvfp4": "Metal/Quant",

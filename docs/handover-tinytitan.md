@@ -57,12 +57,17 @@
 >   `TinyTitanCPUEngine` in `Package.swift`, and cleared `import TinyTitan` from
 >   `ServerArguments+Usage.swift` and `Args+Usage.swift`. External 6.x importers
 >   down from 78 -> **32**.
-> - **TT-129 (assessed 2026-11-25)**: `models/inkling-2-mini_NVFP4/tokenizer/config.json`
->   shows Inkling 2's MTP head is a bespoke 3-layer Markov RNN-hidden draft model
->   (`markov_head_type: "rnn_hidden"`, `markov_rank: 256`, `block_size: 8`,
->   `hidden_size: 2304`, `target_layer_ids: [5, 23, 41, 48]`), and MTP tensors are
->   not exposed in `manifest.json`; needs a dedicated draft graph + repack +
->   quiet-machine benchmark.
+> - **TT-129 (Done 2026-11-25)**: implemented Inkling 2's bundled DSpark MTP
+>   draft model (`block_size = 8`, 3 dense BF16 layers + 7-step `rnn_hidden`
+>   Markov head over the 54 `mtp.*` tensors already inside `model_weights.bin`)
+>   plus target tap capture (`[5, 23, 41, 48]`) and exact 3-tap `convStates`
+>   rollback, behind opt-in `TINYTITAN_INKLING_MTP=on`. Exact byte-for-byte
+>   golden identity verified on both the 96-token raw golden and 128-token chat
+>   prompt. Paired 3-round interleaved benchmark (`--ram-budget 12G`, 59 expert
+>   slots/layer, 128 tokens greedy): MTP-off **8.047 tok/s** vs MTP-on
+>   **3.404 tok/s** (`0.423×`; 64/435 = 14.7% acceptance, 2.03 tok/pass;
+>   verify 502 ms/pass = 84% of decode due to ~6× more unique SSD expert reads
+>   per 8-token block). Kept opt-in (default OFF).
 > - **TT-135 (Done 2026-11-25)**: paired interleaved Q4 vs NVFP4 decode benchmark
 >   at `1e50dab6` (128 tokens greedy, load avg 6.4–8.2): at `--ram-budget 12G`,
 >   NVFP4 4.253 vs Q4 6.415 tok/s (0.663×); at matched 64 slots, NVFP4 5.333 vs

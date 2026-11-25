@@ -33,10 +33,13 @@ package final class InklingQ4EngineModel: EngineModel, @unchecked Sendable {
     package func makeDecoder(
         context: MetalContext, maxContext: Int, maxChunk: Int, sequenceSlots: Int = 1
     ) throws -> InklingQ4Decoder {
-        try InklingQ4Decoder(
+        let enableMTP =
+            sequenceSlots == 1
+            && ProcessInfo.processInfo.environment["TINYTITAN_INKLING_MTP"] == "on"
+        return try InklingQ4Decoder(
             directory: directory, maxContext: maxContext,
             maxChunk: min(maxChunk, maxContext), slots: sequenceSlots,
-            experts: .slots(slots), context: context)
+            experts: .slots(slots), enableMTP: enableMTP, context: context)
     }
 
     package func routedExpertCacheSlotCount() -> Int? { slots }

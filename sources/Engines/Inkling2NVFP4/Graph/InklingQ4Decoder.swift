@@ -61,13 +61,18 @@ package final class InklingQ4Decoder {
         return (ids, logits, weights)
     }()
     let routing: InklingQ4EventRouting?
+    /// Optional DSpark MTP draft engine (TT-129), built when enabled and the
+    /// install carries the bundled `mtp.*` tensors.
+    let mtpDraft: InklingMTPDraft?
+    var captureMTPTaps = false
+    var captureConvSnapshots = false
     private var segmentGPUSeconds: Double = 0
     private var segmentWaitSeconds: Double = 0
 
     package init(
         directory: URL, maxContext: Int = 4_096, maxChunk: Int = 256,
         slots: Int = 1, experts residency: InklingQ4ExpertResidency = .mapped,
-        context: MetalContext? = nil
+        enableMTP: Bool = false, context: MetalContext? = nil
     ) throws {
         let context = try context ?? MetalContext()
         self.context = context
@@ -110,6 +115,19 @@ package final class InklingQ4Decoder {
                 expertsPerToken: manifest.expertsPerToken)
         } else {
             routing = nil
+        }
+        if enableMTP,
+            let mtpWeights = try InklingMTPWeights(
+                install: install, weights: weights, device: context.device)
+        {
+            let mtpState = try InklingMTPState(
+                config: mtpWeights.config, manifest: manifest, device: context.device,
+                maxContext: maxContext, maxChunk: maxChunk)
+            mtpDraft = try InklingMTPDraft(
+                weights: mtpWeights, state: mtpState, targetWeights: weights,
+                manifest: manifest, ops: ops, context: context)
+        } else {
+            mtpDraft = nil
         }
     }
 
@@ -161,7 +179,7 @@ package final class InklingQ4Decoder {
         return produced
     }
 
-    private func run(_ chunk: [Int], position: Int, slot: Int, returnLogits: Bool) throws
+    func run(_ chunk: [Int], position: Int, slot: Int, returnLogits: Bool) throws
         -> (next: Int, logits: [Float]?)
     {
         activeSlot = slot
@@ -358,14 +376,58 @@ package final class InklingQ4Decoder {
                 }
                 messages = [mAttn, mKV, mKV + 1, mAttn + 1]
             }
+            if captureMTPTaps, let mtp = mtpDraft,
+                let tapIdx = mtp.weights.config.targetLayerIDs.firstIndex(of: visit)
+            {
+                try mtp.encodeCaptureTap(
+                    src: row(cur), width: hidden, taps: mtp.weights.config.targetLayerIDs.count,
+                    tapIndex: tapIdx, tokens: tokens, encoder: e)
+            }
             cur = try encodeVisit(
                 visit: visit, layer: layer, cur: cur, blocks: &blocks, messages: messages, e)
         }
 
-        // Only the chunk's last position needs logits: the final mix reads the
-        // slabs through a pool view offset to that token.
+        // Only the chunk's last position needs logits normally; when capturing
+        // MTP target taps we final-norm all positions and (during verify) argmax
+        // every position in the block.
         e = try currentEncoder
         beginVisit(live: Set(blocks + [cur]))
+        if captureMTPTaps, let mtp = mtpDraft {
+            let taps = mtp.weights.config.targetLayerIDs.count
+            try ops.depthMix(
+                pool: .init(state.pool), rows: blocks + [cur],
+                queries: weights.outputResQuery.operand, queryCount: 1,
+                out: .init(mtp.state.verifyFinalHidden),
+                width: hidden, tokens: tokens, slab: state.slabFloats,
+                norm: (weights.outputNorm.operand, m.rmsEpsilon), encoder: e)
+            try mtp.encodeCaptureTap(
+                src: .init(mtp.state.verifyFinalHidden), width: hidden, taps: taps,
+                tapIndex: taps - 1, tokens: tokens, encoder: e)
+            if captureConvSnapshots {
+                for t in 0..<tokens {
+                    try ops.gemv(
+                        weights.output,
+                        x: .init(mtp.state.verifyFinalHidden, offset: t * hidden * 4),
+                        y: scratch(state.logits), encoder: e)
+                    try ops.argmax(
+                        logits: scratch(state.logits), count: m.vocabulary,
+                        partials: scratch(state.argmaxPartials),
+                        groupCount: InklingQ4State.argmaxGroups,
+                        token: .init(mtp.state.verifyNextTokens, offset: t * 4), encoder: e)
+                }
+            } else {
+                try ops.gemv(
+                    weights.output,
+                    x: .init(mtp.state.verifyFinalHidden, offset: (tokens - 1) * hidden * 4),
+                    y: scratch(state.logits), encoder: e)
+                try ops.argmax(
+                    logits: scratch(state.logits), count: m.vocabulary,
+                    partials: scratch(state.argmaxPartials),
+                    groupCount: InklingQ4State.argmaxGroups,
+                    token: scratch(state.nextToken), encoder: e)
+            }
+            return
+        }
         let mixedSlab = try rows(1)
         try ops.depthMix(
             pool: .init(state.pool, offset: (tokens - 1) * hidden * 4), rows: blocks + [cur],
