@@ -220,6 +220,7 @@ import TinyTitanVariants
             "--calibration-profile", "--check", "--out",
             "--json", "--models-dir",
             "--markdown", "--registry",
+            "--install", "--plugin",
         ]
         // The usage text also spells the `calibrate` subcommand's flags, so
         // the bracket and pipe delimiters around them are part of the scan.
