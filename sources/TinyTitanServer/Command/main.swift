@@ -1,10 +1,6 @@
-import TinyTitanCore
 import Darwin
 import Foundation
-// `MemberImportVisibility`: `ServerArguments` exposes `ModelFamily` (an TinyTitan
-// type) and its `rawValue`, so this file names that module directly rather than
-// relying on TinyTitanServerCore re-exporting it.
-import TinyTitan
+import TinyTitanCore
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanMemory
@@ -143,7 +139,7 @@ do {
             // The probe backend keeps no prompt cache, so an entry the
             // catalogue lists for it reports `.off` rather than the mode the
             // server was asked for.
-            promptCacheMode: initial.kind == .gpu(.k2Horizon)
+            promptCacheMode: initial.kind.isK2Horizon
                 ? .off
                 : ServerModelSession.initialPromptCacheMode(
                     backend: initial.backend,
@@ -182,12 +178,8 @@ do {
                 cpuBackend.residentBytes > 0
                     ? "\(cpuBackend.residentBytes / 1_000_000) MB resident, " : "",
                 seconds, cpuBackend.threads))
-        reasoningProfile = ServerReasoningProfile(
-            family: ModelFamily.qwen36.rawValue,
-            thinkingMode: reasoning.thinking,
-            reasoningEffort: nil,
-            reasoningControl: ModelFamily.qwen36.engineReasoningControl)
-    } else if (try? ManifestReader.peekFamily(directoryURL: modelURL)) == .k2Horizon {
+        reasoningProfile = ModelCatalog.Kind.cpuReasoningProfile(thinking: reasoning.thinking)
+    } else if (try? SSDAIManifestReader.declaredFamily(directoryURL: modelURL)) == "k2_horizon" {
         // K2 has a graph, but not this runner's: the probe is the engine. It
         // is a backend of its own, like the CPU path, because
         // `RealForwardRunner` sizes a Qwen-shaped pipeline set and refuses the
@@ -196,7 +188,7 @@ do {
             ProcessInfo.processInfo.environment["TINYTITAN_K2_SLOTS"] ?? ""
         )
         .flatMap { $0 > 0 ? $0 : nil }
-        let identity = try? ManifestReader.peekIdentity(directoryURL: modelURL)
+        let identity = try? EngineFactories.gpuFactory(directoryURL: modelURL).metadata(modelURL)
         let resolvedSlots = slots ?? ((identity?.weightBits ?? 4) == 4 ? 64 : 16)
         let contextLimit = min(
             arguments.maxContext, K2ProbeBackend.contextCeiling)
@@ -217,12 +209,7 @@ do {
             let residency = ManagedModelBackend(
                 facts: k2Facts,
                 maximumContext: contextLimit,
-                samplingDefaults: SamplingProfile(
-                    temperature: GenerationDefaults.forFamily(.k2Horizon).temperature,
-                    topK: GenerationDefaults.forFamily(.k2Horizon).topK,
-                    topP: GenerationDefaults.forFamily(.k2Horizon).topP,
-                    minP: GenerationDefaults.forFamily(.k2Horizon).minP,
-                    presencePenalty: GenerationDefaults.forFamily(.k2Horizon).presencePenalty),
+                samplingDefaults: K2ProbeBackend.defaultSamplingProfile,
                 idleTimeout: arguments.idleUnloadSeconds > 0
                     ? .seconds(arguments.idleUnloadSeconds) : nil,
                 loader: { context in
@@ -259,11 +246,9 @@ do {
                     format: "K2 probe engine: %@ in %.1fs, context %d, %d expert slots",
                     identifier, seconds, k2.maximumContext, k2.expertCacheSlots))
         }
-        reasoningProfile = ServerReasoningProfile(
-            family: ModelFamily.k2Horizon.rawValue,
-            thinkingMode: reasoning.thinking,
-            reasoningEffort: reasoning.effort,
-            reasoningControl: ModelFamily.k2Horizon.engineReasoningControl)
+        reasoningProfile = K2ProbeBackend.reasoningProfile(
+            thinking: reasoning.thinking,
+            effort: reasoning.effort)
     } else if arguments.managesResidency {
         let plan = makePlan()
         // Reads manifest.json only; a bad --model still fails here at launch

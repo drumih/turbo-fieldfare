@@ -313,13 +313,13 @@
           "sourceSizeBytes": null,
           "qualification": {
             "goldenSHA256": "363ba710eef09deaeb3d2fe6c060b88b658bb392d767da0b4021ed6fc01500a7",
-            "decodeTokS": 11.55,
+            "decodeTokS": 15.69,
             "prefillTokS": null,
             "ttftS": null,
             "memoryCeilingBytes": null,
             "terminalBench": null,
             "hardware": "Apple M3 MacBook Pro 24 GB",
-            "date": "2026-11-15"
+            "date": "2026-11-25"
           }
         },
         {

@@ -1,6 +1,6 @@
-import TinyTitanCore
 import Foundation
-import TinyTitan
+import TinyTitanCore
+import TinyTitanLegacyEngine
 import TinyTitanLib
 import TinyTitanVariants
 
@@ -158,7 +158,7 @@ extension Args {
         // allocation is lazy -- a server started at 262,144 loads with the
         // same resident footprint as one started at 4,096 -- so defaulting
         // low only surprised people whose prompt was longer than 4k.
-        var maxContext = RuntimeConfiguration.nativeMaximumContextTokens
+        var maxContext = RuntimeLimits.nativeMaximumContextTokens
         var maxContextWasSet = false
         var temperatureWasSet = false
         var topKWasSet = false
@@ -218,7 +218,7 @@ extension Args {
             case "--max-new":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value),
-                    (1...RuntimeConfiguration.maximumContextTokens).contains(parsed)
+                    (1...RuntimeLimits.maximumContextTokens).contains(parsed)
                 else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
@@ -226,7 +226,7 @@ extension Args {
             case "--max-context":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value),
-                    (1...RuntimeConfiguration.maximumContextTokens).contains(parsed)
+                    (1...RuntimeLimits.maximumContextTokens).contains(parsed)
                 else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
@@ -291,15 +291,15 @@ extension Args {
             case "--expert-cache-slots":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = Int(value),
-                    RuntimeConfiguration.allowedExpertCacheSlots.contains(parsed)
+                    RuntimeLimits.allowedExpertCacheSlots.contains(parsed)
                 else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
                 expertCacheSlots = parsed
             case "--ram-budget":
                 let value = try takeValue(argv, &index, flag: flag)
-                guard let parsed = RuntimeConfiguration.parseBudgetBytes(value),
-                    parsed >= RuntimeConfiguration.minimumProcessTargetBytes
+                guard let parsed = RuntimeLimits.parseBudgetBytes(value),
+                    parsed >= RuntimeLimits.minimumProcessTargetBytes
                 else {
                     throw ArgsError.invalidValue(flag: flag, value: value)
                 }
@@ -317,7 +317,7 @@ extension Args {
                 if value == "auto" {
                     prefillChunk = .auto
                 } else if let parsed = Int(value),
-                    RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed)
+                    RuntimeLimits.allowedPrefillChunkTokens.contains(parsed)
                 {
                     prefillChunk = .fixed(parsed)
                 } else {
@@ -356,12 +356,12 @@ extension Args {
         }
         if ropeScalingMode == .yarn {
             if !maxContextWasSet {
-                maxContext = RuntimeConfiguration.defaultYaRNContextTokens
+                maxContext = RuntimeLimits.defaultYaRNContextTokens
             }
-            guard RuntimeConfiguration.supportedYaRNContextTokens.contains(maxContext) else {
+            guard RuntimeLimits.supportedYaRNContextTokens.contains(maxContext) else {
                 throw ArgsError.invalidValue(flag: "--max-context", value: String(maxContext))
             }
-        } else if maxContext > RuntimeConfiguration.nativeMaximumContextTokens {
+        } else if maxContext > RuntimeLimits.nativeMaximumContextTokens {
             throw ArgsError.invalidValue(flag: "--max-context", value: String(maxContext))
         }
         // Family support is checked in Run against the installed manifest;
@@ -379,13 +379,14 @@ extension Args {
                     if case .fixed(let chunk)? = prefillChunk { return chunk }
                     return nil
                 }()
-                let identity = try ManifestReader.peekIdentity(
-                    directoryURL: URL(fileURLWithPath: model))
+                let modelURL = URL(fileURLWithPath: model)
+                let identity = try EngineFactories.gpuFactory(directoryURL: modelURL)
+                    .metadata(modelURL)
                 let application = try profile.application(
                     for: CalibrationProfile.currentMachine(),
                     contextTokens: maxContext,
                     modelID: identity.modelID,
-                    family: identity.family.rawValue,
+                    family: identity.family,
                     weightBits: identity.weightBits,
                     explicitPrefillChunkTokens: explicitChunk,
                     explicitExpertCacheSlots: expertCacheSlots)

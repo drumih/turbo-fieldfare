@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
 import TinyTitanCPUEngine
@@ -182,23 +181,11 @@ public actor ModelRouter: ServerInferenceBackend, ResidencyManaging, PromptToken
         for entry: ModelCatalog.Entry,
         choice: ReasoningChoice
     ) -> ServerReasoningProfile {
-        switch entry.kind {
-        case .gpu(let family):
-            return ServerReasoningProfile(
-                family: family.rawValue, thinkingMode: choice.thinking,
-                reasoningEffort: choice.effort,
-                reasoningControl: family.engineReasoningControl)
-        case .cpu:
-            return ServerReasoningProfile(
-                family: ModelFamily.qwen36.rawValue, thinkingMode: choice.thinking,
-                reasoningEffort: choice.effort,
-                reasoningControl: ModelFamily.qwen36.engineReasoningControl)
-        case .plugin(let family, let control):
-            return ServerReasoningProfile(
-                family: family, thinkingMode: choice.thinking,
-                reasoningEffort: choice.effort,
-                reasoningControl: control)
-        }
+        let target = entry.kind.reasoningProfileTarget
+        return ServerReasoningProfile(
+            family: target.family, thinkingMode: choice.thinking,
+            reasoningEffort: choice.effort,
+            reasoningControl: target.control)
     }
 
     // MARK: - ServerInferenceBackend

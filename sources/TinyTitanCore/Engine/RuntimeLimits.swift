@@ -15,5 +15,28 @@ public enum RuntimeLimits {
     ]
     public static let minimumExpertCacheSlots = 8
     public static let minimumProcessTargetBytes = 4 << 30
+    public static let maximumConcurrentSequences = 256
+    public static let defaultMTPMemoryMiB = 384
+    public static let allowedMTPMemoryMiB = 256...512
     public static let allowedPrefillChunkTokens = PrefillRuntimeConfig.allowedProductionChunkTokens
+
+    public static func parseBudgetBytes(_ text: String) -> Int? {
+        let raw = text.trimmingCharacters(in: .whitespaces).uppercased()
+        guard !raw.isEmpty else { return nil }
+        let multipliers: [(String, Int)] = [
+            ("GIB", 1 << 30), ("MIB", 1 << 20), ("KIB", 1 << 10),
+            ("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10),
+            ("G", 1 << 30), ("M", 1 << 20), ("K", 1 << 10),
+        ]
+        for (suffix, scale) in multipliers where raw.hasSuffix(suffix) {
+            let number = String(raw.dropLast(suffix.count))
+                .trimmingCharacters(in: .whitespaces)
+            guard let value = Double(number), value > 0 else { return nil }
+            let bytes = value * Double(scale)
+            guard bytes.isFinite, bytes >= 1, bytes < Double(Int.max) else { return nil }
+            return Int(bytes)
+        }
+        guard let plain = Int(raw), plain > 0 else { return nil }
+        return plain
+    }
 }

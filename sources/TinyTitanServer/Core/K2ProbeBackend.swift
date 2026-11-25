@@ -31,6 +31,23 @@ public actor K2ProbeBackend: ServerInferenceBackend, PromptCacheDescribing {
     /// can. See the memory note above.
     public static let contextCeiling = K2ProbeRuntime.contextCeiling
 
+    package static var defaultSamplingProfile: SamplingProfile {
+        let d = GenerationDefaults.forFamily(.k2Horizon)
+        return SamplingProfile(
+            temperature: d.temperature, topK: d.topK, topP: d.topP,
+            minP: d.minP, presencePenalty: d.presencePenalty)
+    }
+
+    package static func reasoningProfile(
+        thinking: ModelThinkingMode, effort: ModelReasoningEffort?
+    ) -> ServerReasoningProfile {
+        ServerReasoningProfile(
+            family: ModelFamily.k2Horizon.rawValue,
+            thinkingMode: thinking,
+            reasoningEffort: effort,
+            reasoningControl: ModelFamily.k2Horizon.engineReasoningControl)
+    }
+
     private let directory: URL
     private let tokenizer: GFTokenizer
     private let tokenizerFolder: URL
@@ -202,5 +219,39 @@ extension K2ProbeBackend: PromptTokenCounting {
         return try encodePrompt(
             renderTokenizer, messages: request.messages, tools: request.tools
         ).count
+    }
+}
+
+/// 6.x `ModelFamily` bridges for `ModelCatalog.Kind`, kept beside the 6.x
+/// probe adapter so `ModelRouter`, `ModelRouterError`, and `main.swift` need
+/// not import `TinyTitan` (TT-134).
+extension ModelCatalog.Kind {
+    package var reasoningProfileTarget: (family: String, control: ReasoningControl) {
+        switch self {
+        case .gpu(let family): (family.rawValue, family.engineReasoningControl)
+        case .cpu: (ModelFamily.qwen36.rawValue, ModelFamily.qwen36.engineReasoningControl)
+        case .plugin(let family, let control): (family, control)
+        }
+    }
+
+    package var isK2Horizon: Bool {
+        if case .gpu(.k2Horizon) = self { return true }
+        return false
+    }
+
+    package static func resolve(directory: URL, cpu: Bool) throws -> Self {
+        cpu
+            ? .cpu(try ModelCatalog.snapshotFamily(directory))
+            : .gpu(try ManifestReader.peekFamily(directoryURL: directory))
+    }
+
+    package static func cpuReasoningProfile(
+        thinking: ModelThinkingMode
+    ) -> ServerReasoningProfile {
+        ServerReasoningProfile(
+            family: ModelFamily.qwen36.rawValue,
+            thinkingMode: thinking,
+            reasoningEffort: nil,
+            reasoningControl: ModelFamily.qwen36.engineReasoningControl)
     }
 }

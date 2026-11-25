@@ -57,6 +57,16 @@
 >   `TinyTitanCPUEngine` in `Package.swift`, and cleared `import TinyTitan` from
 >   `ServerArguments+Usage.swift` and `Args+Usage.swift`. External 6.x importers
 >   down from 78 -> **32**.
+> - **TT-134 slice 6** (2026-11-25): moved `parseBudgetBytes`,
+>   `maximumConcurrentSequences`, `defaultMTPMemoryMiB`, and `allowedMTPMemoryMiB`
+>   into `RuntimeLimits` (`TinyTitanCore`), and cleared `import TinyTitan` from 9
+>   more CLI/Server files (`Args`, `DoctorCommand`, `CalibrationCommand`, `Run`,
+>   `ServerArguments`, `ManagedModelBackend`, `ModelRouter`, `ModelRouterError`,
+>   `TinyTitanServer/Command/main.swift`). External 6.x importers down from 32 -> **23**.
+> - **TT-108 (Done 2026-11-25)**: re-qualified `models/ornith-1.5_35B_A3B_4Bit`
+>   at the 160-slot default (`cache=10.55G`, `estimate=12.84G`): median **15.69 tok/s**
+>   (`14.313 / 15.685 / 15.796`, up from old 32-slot `11.55 tok/s`); 96-token
+>   golden exact match; `registry/registry.json` updated.
 > - **TT-129 (Done 2026-11-25)**: implemented Inkling 2's bundled DSpark MTP
 >   draft model (`block_size = 8`, 3 dense BF16 layers + 7-step `rnn_hidden`
 >   Markov head over the 54 `mtp.*` tensors already inside `model_weights.bin`)

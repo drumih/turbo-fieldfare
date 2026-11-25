@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
@@ -220,7 +219,7 @@ public actor ManagedModelBackend: ServerInferenceBackend, ResidencyManaging, Pro
         if let metalContext {
             context = metalContext
         } else {
-            context = try MetalContext.runtimeDefault()
+            context = try MetalContext()
             metalContext = context
         }
 

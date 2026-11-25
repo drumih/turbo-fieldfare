@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanLegacyEngine
 import TinyTitanCore
@@ -89,8 +88,7 @@ extension ModelRouter {
     package static func standardLoader(arguments: ServerArguments) -> Loader {
         let metal = SharedMetalContext()
         return { entry, reasoning in
-            switch entry.kind {
-            case .gpu(.k2Horizon):
+            if entry.kind.isK2Horizon {
                 // K2 has a graph, but not the runner's: the probe is the
                 // engine, so the catalog path takes the same backend the
                 // single-model path does. No prompt cache, per-request graph.
@@ -104,6 +102,8 @@ extension ModelRouter {
                     thinking: reasoning.thinking,
                     reasoningEffort: reasoning.effort,
                     slots: slots)
+            }
+            switch entry.kind {
             case .gpu, .plugin:
                 // One plan factory for both front ends: a loader-built plan
                 // that drops a field is how `slots` silently stayed at one on
@@ -184,7 +184,7 @@ private actor SharedMetalContext {
 
     func context() throws -> MetalContext {
         if let built { return built }
-        let context = try MetalContext.runtimeDefault()
+        let context = try MetalContext()
         built = context
         return context
     }
@@ -210,10 +210,7 @@ extension ServerArguments {
             ServerLog.residency("reasoning=\(level.rawValue)")
             return level == .off ? (.off, nil) : (.on, level.effort ?? .high)
         }
-        let kind: ModelCatalog.Kind =
-            cpu
-            ? .cpu(try ModelCatalog.snapshotFamily(directory))
-            : .gpu(try ManifestReader.peekFamily(directoryURL: directory))
+        let kind = try ModelCatalog.Kind.resolve(directory: directory, cpu: cpu)
         let choice = try ReasoningFallback.choice(for: kind, requested: reasoningLevel)
         ServerLog.residency(
             "reasoning=\(choice.effective.rawValue)"

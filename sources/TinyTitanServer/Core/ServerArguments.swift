@@ -1,7 +1,8 @@
-import TinyTitanCore
 import Foundation
-import TinyTitan
+import TinyTitanCore
+import TinyTitanLegacyEngine
 import TinyTitanLib
+import TinyTitanVariants
 
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
@@ -92,7 +93,7 @@ public struct ServerArguments: Equatable, Sendable {
     ) throws -> ServerArguments {
         var model: String?
         var mtpModel: String?
-        var mtpMemoryMiB = StreamingMTPMemoryPlan.defaultBudgetMiB
+        var mtpMemoryMiB = RuntimeLimits.defaultMTPMemoryMiB
         var port = 8080
         var modelIDOverride: String?
         var maxContext = 262_144
@@ -175,7 +176,7 @@ public struct ServerArguments: Equatable, Sendable {
                 mtpModel = value
             case "--mtp-memory-mib":
                 guard let parsed = Int(value),
-                    StreamingMTPMemoryPlan.allowedBudgetMiB.contains(parsed)
+                    RuntimeLimits.allowedMTPMemoryMiB.contains(parsed)
                 else {
                     throw ServerArgumentError.invalid(
                         "--mtp-memory-mib must be between 256 and 512")
@@ -193,13 +194,13 @@ public struct ServerArguments: Equatable, Sendable {
                 modelIDOverride = value
             case "--max-context":
                 guard let parsed = Int(value),
-                    (1...RuntimeConfiguration.maximumContextTokens).contains(parsed)
+                    (1...RuntimeLimits.maximumContextTokens).contains(parsed)
                 else {
                     // Not "is not supported": that sentence belongs to the rung
                     // gate below, and a typo read as a policy refusal.
                     throw ServerArgumentError.invalid(
                         "--max-context must be a token count between 1 and "
-                            + "\(RuntimeConfiguration.maximumContextTokens)")
+                            + "\(RuntimeLimits.maximumContextTokens)")
                 }
                 maxContext = parsed
                 maxContextWasSet = true
@@ -222,12 +223,12 @@ public struct ServerArguments: Equatable, Sendable {
                 // Mac will run — that is the operator's call, and the clamp is
                 // what keeps it honest.
                 guard let parsed = Int(value), parsed >= 1,
-                    parsed <= KVCacheManager.maximumSlots,
+                    parsed <= RuntimeLimits.maximumConcurrentSequences,
                     parsed & (parsed - 1) == 0
                 else {
                     throw ServerArgumentError.invalid(
                         "--max-concurrent-sequences must be a power of two between 1 and "
-                            + "\(KVCacheManager.maximumSlots)")
+                            + "\(RuntimeLimits.maximumConcurrentSequences)")
                 }
                 maxConcurrentSequences = parsed
             case "--prompt-cache-mode":
@@ -264,7 +265,7 @@ public struct ServerArguments: Equatable, Sendable {
                 calibrationProfile = value
             case "--prefill-chunk":
                 guard let parsed = Int(value),
-                    RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed)
+                    RuntimeLimits.allowedPrefillChunkTokens.contains(parsed)
                 else {
                     throw ServerArgumentError.invalid(
                         "--prefill-chunk must be one of "
@@ -281,11 +282,11 @@ public struct ServerArguments: Equatable, Sendable {
                 kvCachePrecisionExplicit = true
             case "--host-kv-window":
                 guard let parsed = Int(value),
-                    (1...RuntimeConfiguration.maximumContextTokens).contains(parsed)
+                    (1...RuntimeLimits.maximumContextTokens).contains(parsed)
                 else {
                     throw ServerArgumentError.invalid(
                         "--host-kv-window must be a token count between 1 and "
-                            + "\(RuntimeConfiguration.maximumContextTokens)")
+                            + "\(RuntimeLimits.maximumContextTokens)")
                 }
                 hostKVWindowTokens = parsed
             case "--thinking":
@@ -316,15 +317,15 @@ public struct ServerArguments: Equatable, Sendable {
                 modelsDirectory = value
             case "--expert-cache-slots":
                 guard let parsed = Int(value),
-                    RuntimeConfiguration.allowedExpertCacheSlots.contains(parsed)
+                    RuntimeLimits.allowedExpertCacheSlots.contains(parsed)
                 else {
                     throw ServerArgumentError.invalid(
-                        "--expert-cache-slots must be one of \(RuntimeConfiguration.allowedExpertCacheSlots)"
+                        "--expert-cache-slots must be one of \(RuntimeLimits.allowedExpertCacheSlots)"
                     )
                 }
                 expertCacheSlots = parsed
             case "--ram-budget":
-                guard let parsed = RuntimeConfiguration.parseBudgetBytes(value) else {
+                guard let parsed = RuntimeLimits.parseBudgetBytes(value) else {
                     throw ServerArgumentError.invalid(
                         "--ram-budget must be a positive size such as 4G, 512M or a byte count")
                 }
@@ -332,10 +333,10 @@ public struct ServerArguments: Equatable, Sendable {
                 // weights plus the 8-slot minimum cache are already ~4.7 GiB on a
                 // Qwen3.8 4-bit install. Refuse rather than accept a target that
                 // silently overshoots by 2x.
-                guard parsed >= RuntimeConfiguration.minimumProcessTargetBytes else {
+                guard parsed >= RuntimeLimits.minimumProcessTargetBytes else {
                     throw ServerArgumentError.invalid(
                         "--ram-budget must be at least "
-                            + "\(RuntimeConfiguration.minimumProcessTargetBytes >> 30)G: a "
+                            + "\(RuntimeLimits.minimumProcessTargetBytes >> 30)G: a "
                             + "streaming install holds its weights plus a minimum expert cache "
                             + "beside them, which is about 4.7G for Qwen3.8 4-bit")
                 }
@@ -380,14 +381,14 @@ public struct ServerArguments: Equatable, Sendable {
         }
         if ropeScalingMode == .yarn {
             if !maxContextWasSet {
-                maxContext = RuntimeConfiguration.defaultYaRNContextTokens
+                maxContext = RuntimeLimits.defaultYaRNContextTokens
             }
-            guard RuntimeConfiguration.supportedYaRNContextTokens.contains(maxContext) else {
+            guard RuntimeLimits.supportedYaRNContextTokens.contains(maxContext) else {
                 throw ServerArgumentError.invalid(
                     "YaRN --max-context must be one of \(Self.supportedYaRNContextRungsHelp)")
             }
         } else {
-            guard RuntimeConfiguration.supportedContextTokens.contains(maxContext) else {
+            guard RuntimeLimits.supportedContextTokens.contains(maxContext) else {
                 throw ServerArgumentError.invalid(
                     "--max-context must be one of \(Self.supportedContextRungsHelp)")
             }
@@ -410,16 +411,19 @@ public struct ServerArguments: Equatable, Sendable {
                 // different checkpoint before its knobs are applied. A
                 // catalog server has no single model to bind to, so the
                 // check applies only when `--model` names one.
-                let identity =
-                    model.isEmpty
+                let identity: EngineModelMetadata? =
+                    try model.isEmpty
                     ? nil
-                    : try ManifestReader.peekIdentity(
-                        directoryURL: URL(fileURLWithPath: model))
+                    : {
+                        let modelURL = URL(fileURLWithPath: model)
+                        return try EngineFactories.gpuFactory(directoryURL: modelURL)
+                            .metadata(modelURL)
+                    }()
                 let application = try profile.application(
                     for: CalibrationProfile.currentMachine(),
                     contextTokens: maxContext,
                     modelID: identity?.modelID,
-                    family: identity?.family.rawValue,
+                    family: identity?.family,
                     weightBits: identity?.weightBits,
                     explicitPrefillChunkTokens: prefillChunkTokens,
                     explicitExpertCacheSlots: expertCacheSlots)

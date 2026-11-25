@@ -1,5 +1,4 @@
 import Foundation
-import TinyTitan
 import TinyTitanLib
 import TinyTitanCore
 
@@ -70,7 +69,7 @@ package struct DoctorOptions: Equatable, Sendable {
             case "--max-context":
                 let raw = try value("--max-context")
                 guard let parsed = Int(raw),
-                    RuntimeConfiguration.supportedContextTokens.contains(parsed)
+                    RuntimeLimits.supportedContextTokens.contains(parsed)
                 else {
                     throw DoctorCommandError.invalidValue("--max-context", raw)
                 }

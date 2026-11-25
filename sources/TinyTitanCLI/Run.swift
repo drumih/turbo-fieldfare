@@ -8,7 +8,6 @@
 // `Engine` helper that loads only the tokenizer.
 import Foundation
 import Metal
-import TinyTitan
 import TinyTitanLib
 import TinyTitanCPUEngine
 import TinyTitanLegacyEngine
@@ -115,7 +114,7 @@ public func run(
         let prompt = try buildPrompt(args: args)
         // K2-Horizon has no runner graph; the CLI drives the probe runtime
         // instead. Branch before the runner-specific chunk resolution.
-        if (try? ManifestReader.peekFamily(directoryURL: modelURL)) == .k2Horizon {
+        if (try? SSDAIManifestReader.declaredFamily(directoryURL: modelURL)) == "k2_horizon" {
             return await runK2Probe(
                 args: args, modelURL: modelURL, prompt: prompt,
                 options: options, thinkingMode: thinkingMode,

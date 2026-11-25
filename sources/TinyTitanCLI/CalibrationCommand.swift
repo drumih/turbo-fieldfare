@@ -1,7 +1,9 @@
 import Foundation
 import Metal
-import TinyTitan
+import TinyTitanCore
+import TinyTitanLegacyEngine
 import TinyTitanLib
+import TinyTitanVariants
 
 /// `tinytitan calibrate`: write or validate a `CalibrationProfile`.
 ///
@@ -169,13 +171,13 @@ public enum CalibrationCommand {
         modelPath: String, options: CalibrationOptions
     ) async throws -> Int32 {
         let directory = URL(fileURLWithPath: modelPath)
-        let identity = try ManifestReader.peekIdentity(directoryURL: directory)
+        let identity = try EngineFactories.gpuFactory(directoryURL: directory).metadata(directory)
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw CalibrationCommandError.noMetalDevice
         }
         let target = CalibrationProfile.Target(
             modelID: identity.modelID,
-            family: identity.family.rawValue,
+            family: identity.family,
             weightBits: identity.weightBits,
             contextTokens: options.maxContext)
         let measurer = CalibrationMeasurer(
@@ -298,12 +300,12 @@ public enum CalibrationCommand {
             throw CalibrationCommandError.missingModel
         }
         let directory = URL(fileURLWithPath: modelPath)
-        let identity = try ManifestReader.peekIdentity(directoryURL: directory)
+        let identity = try EngineFactories.gpuFactory(directoryURL: directory).metadata(directory)
         let profile = CalibrationProfile(
             machine: CalibrationProfile.currentMachine(),
             target: CalibrationProfile.Target(
                 modelID: identity.modelID,
-                family: identity.family.rawValue,
+                family: identity.family,
                 weightBits: identity.weightBits,
                 contextTokens: options.maxContext),
             source: "unmeasured")
