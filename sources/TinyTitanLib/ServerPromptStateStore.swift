@@ -366,8 +366,11 @@ final class ServerPromptStateStore: @unchecked Sendable {
         }
         do {
             try fileManager.removeItem(at: record.directory)
-        } catch {
+        } catch  where !Self.isFileNotFound(error) {
             return String(describing: error)
+        } catch {
+            // Already absent on disk (external cleanup or concurrent eviction):
+            // drop the ledger entry instead of wedging disk eviction forever.
         }
         state.withLock { state in
             if let current = state.disk.removeValue(forKey: id) {

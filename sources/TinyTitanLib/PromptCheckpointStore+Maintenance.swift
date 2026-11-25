@@ -19,11 +19,13 @@ extension PromptCheckpointStore {
     private func reclaim(_ directory: URL, reason: String) {
         do {
             try fileManager.removeItem(at: directory)
-        } catch {
+        } catch  where !ServerPromptStateStore.isFileNotFound(error) {
             ServerLog.diagnostic(
                 "prompt checkpoints: could not reclaim "
                     + "\(directory.lastPathComponent): \(error)")
             return
+        } catch {
+            // Already absent on disk.
         }
         ServerLog.diagnostic(
             "prompt checkpoints: reclaimed \(directory.lastPathComponent): \(reason)")
@@ -247,7 +249,7 @@ extension PromptCheckpointStore {
             }
             do {
                 try fileManager.removeItem(at: record.directory)
-            } catch {
+            } catch  where !ServerPromptStateStore.isFileNotFound(error) {
                 // Keep the charge: the directory still occupies the disk, and
                 // retrying it in this loop cannot succeed.
                 state.disk[oldest] = record
@@ -255,6 +257,8 @@ extension PromptCheckpointStore {
                     "prompt checkpoints: could not evict "
                         + "\(oldest.contentHash): \(error)")
                 return
+            } catch {
+                // Already absent on disk: release the ledger charge and continue.
             }
             state.diskLRU.removeFirst()
             state.diskBytes -=
@@ -272,13 +276,15 @@ extension PromptCheckpointStore {
         guard let record = state.disk[key] else { return }
         do {
             try fileManager.removeItem(at: record.directory)
-        } catch {
+        } catch  where !ServerPromptStateStore.isFileNotFound(error) {
             // The directory still occupies disk. Dropping the entry would
             // free bytes that are not free and leave nothing to retry.
             ServerLog.diagnostic(
                 "prompt checkpoints: could not delete "
                     + "\(key.contentHash): \(error)")
             return
+        } catch {
+            // Already absent on disk: release the ledger entry.
         }
         state.disk.removeValue(forKey: key)
         state.diskLRU.removeAll { $0 == key }
@@ -294,7 +300,7 @@ extension PromptCheckpointStore {
         for record in state.disk.values {
             do {
                 try fileManager.removeItem(at: record.directory)
-            } catch {
+            } catch  where !ServerPromptStateStore.isFileNotFound(error) {
                 ServerLog.diagnostic(
                     "prompt checkpoints: could not delete "
                         + "\(record.metadata.key.contentHash) during removeAll: "
@@ -304,6 +310,8 @@ extension PromptCheckpointStore {
                     record.metadata.descriptor.payloadBytes
                     + record.auxiliaryBytes
                 survivors.diskLRU.append(record.metadata.key)
+            } catch {
+                // Already absent on disk.
             }
         }
         survivors.diskLRU.sort {

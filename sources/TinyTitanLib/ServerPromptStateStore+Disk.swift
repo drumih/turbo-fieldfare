@@ -159,4 +159,20 @@ extension ServerPromptStateStore {
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// Whether `error` reports that the path is already absent on disk
+    /// (`NSFileNoSuchFileError` / `ENOENT`, including wrapped underlying errors).
+    static func isFileNotFound(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSCocoaErrorDomain, nsError.code == NSFileNoSuchFileError {
+            return true
+        }
+        if nsError.domain == NSPOSIXErrorDomain, nsError.code == Int(ENOENT) {
+            return true
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
+            return isFileNotFound(underlying)
+        }
+        return false
+    }
 }

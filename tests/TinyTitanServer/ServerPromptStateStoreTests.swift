@@ -410,4 +410,36 @@ struct ServerPromptStateStoreTests {
         #expect(saved.memoryBytes <= 10)
         #expect(!store.contains(entry.id))
     }
+
+    /// Regression for GitHub #35: an indexed disk directory that was already
+    /// removed externally (or by a concurrent eviction) must drop cleanly from
+    /// the ledger instead of returning ENOENT forever and wedging disk eviction.
+    @Test func missingDiskEntryDoesNotWedgeEviction() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try ServerPromptStateStore(
+            configuration: ServerPromptCacheStorageConfiguration(
+                memoryLimitBytes: 0, diskDirectory: root, diskLimitBytes: 150))
+        let first = makeEntry(tokens: [1])
+        let second = makeEntry(tokens: [2])
+        let third = makeEntry(tokens: [3])
+        _ = await store.save(
+            entry: first,
+            snapshot: makeSnapshot(position: 1, payload: Data(repeating: 1, count: 100)))
+        // Delete the oldest entry out from under the store.
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent(first.id.uuidString.lowercased()))
+        let secondSave = await store.save(
+            entry: second,
+            snapshot: makeSnapshot(position: 1, payload: Data(repeating: 2, count: 100)))
+        #expect(secondSave.diskError == nil)
+        #expect(!store.contains(first.id))
+        #expect(secondSave.diskBytes == 100)
+        let thirdSave = await store.save(
+            entry: third,
+            snapshot: makeSnapshot(position: 1, payload: Data(repeating: 3, count: 100)))
+        #expect(thirdSave.diskError == nil)
+        #expect(!store.contains(second.id))
+        #expect(thirdSave.diskBytes == 100)
+    }
 }

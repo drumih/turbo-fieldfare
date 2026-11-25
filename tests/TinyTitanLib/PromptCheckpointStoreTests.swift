@@ -1044,4 +1044,21 @@ import TinyTitan
         #expect(FileManager.default.fileExists(atPath: canonical.path))
         #expect(await store.diskBytes == 16)
     }
+
+    /// Regression for GitHub #35: an externally deleted checkpoint directory
+    /// must not wedge LRU eviction or inflate `diskBytes`.
+    @Test func missingDiskCheckpointDoesNotWedgeEviction() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try PromptCheckpointStore(
+            configuration: ServerPromptCacheStorageConfiguration(
+                memoryLimitBytes: 0, diskDirectory: root, diskLimitBytes: 24))
+        let first = metadata(tokens: [1, 2], createdAt: Date(timeIntervalSince1970: 1))
+        let second = metadata(tokens: [3, 4], createdAt: Date(timeIntervalSince1970: 2))
+        try await store.save(first, snapshot: snapshot(for: first))
+        try FileManager.default.removeItem(
+            at: root.appendingPathComponent(first.key.contentHash))
+        try await store.save(second, snapshot: snapshot(for: second))
+        #expect(await store.diskBytes == 16)
+    }
 }
