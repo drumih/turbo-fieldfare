@@ -1,23 +1,51 @@
-# Handover: engine 7 plugins, phase 2 (2026-11-24, updated after slice 2)
+# Handover: engine 7 plugins, phase 2 (2026-11-25, updated after TT-134 slice 4 & TT-126)
 
 **Read this block first; every block below it is older.**
 
 **Paste this into the next session:**
 
 > Continue the TinyTitan work in this checkout
-> (`/Users/andreborchert/Downloads/TinyTitan`, branch `master`, pushes go
+> (`/Users/andreborchert/Downloads/TinyTitan`, branch `main`, pushes go
 > to `main`). Read `AGENTS.md`, then this block of
 > `docs/handover-tinytitan.md`, then `docs/plan-engine-plugins.md` (step 6
 > of "Migration" is the live plan), `docs/plugin-api-v1.md`, and the wiki
 > `Project-Tracker` (clone at `.qwen/wiki`, branch `master`; rows TT-121 to
 > TT-135 and the "Engine 7 status at a glance" table).
 >
-> **Where it stands.** Phase 1 is done: every install on disk runs through
-> its own standalone plugin (TPP/1). Phase 2, TT-134, ports the rest of the
-> 6.x runtime (`sources/TinyTitan`) into 7.x so the only remaining work is a
-> plugin per model not on disk. Slices 1 (`a97145b0`) and 2 (`d15f336e`)
-> are pushed and verified; the working tree is clean. Take slice 3 from
-> "Phase 2 slices after this one" below.
+> **Where it stands (2026-11-25).** Phase 1 is done: every install on disk runs
+> through its own standalone plugin (TPP/1). Completed and pushed on `main`:
+> - **TT-134 slice 3** (`e30fba80`): `SideEngine` moved to `TinyTitanCore`;
+>   `DenseSideEngineModel` + `VariantCPUModelFamily` added in `TinyTitanVariants`;
+>   `SideEngineService`, `ModelCatalog`, and `TinyTitanBench` CPU commands moved
+>   off 6.x.
+> - **TT-051 & TT-119** (`855a4718`): removed deprecated `ModelRouter.reasoningChoice`
+>   and `ServerMemory.isFirstTurn`; fixed `tools/golden-baseline.sh --server` to
+>   select `$catalog_id` from `/v1/models` (verified live: `qwen35-4b-4` 415 B and
+>   `qwen35-4b-8` 397 B both identical to CLI).
+> - **TT-127 & TT-118** (`d2717d63`): retired all three Inkling side routes
+>   (`sources/Engines/Inkling2`, `sources/TinyTitan/Inkling2GGUF`,
+>   `Inkling2ServerBackend`, `Inkling2GGUFServerBackend`, `Inkling2Run`,
+>   `RunInkling2GGUF`, -11,934 lines); relocated `q4kxl-reference.json`,
+>   `InklingChatTemplateTests`, and `GGUFBlockKernelsTests`. Raw folders
+>   `models/inkling-2-mini` (19 GB) and `models/inkling-2-mini-gguf` (16 GB)
+>   are untouched and proposed for owner approval.
+> - **TT-133** (`9e57187c`): exported `TinyTitanCore` in `TinyTitanLib` /
+>   `TinyTitanLibDynamic`; added `examples/plugin/` (`EchoPlugin` + `PluginDemo`)
+>   and `tools/plugin-dependency-check.sh` in CI.
+> - **TT-131** (`42b188ca`): added `PluginConformance` and `TinyTitanCLI plugin-check`
+>   (6/6 built-in plugins and all 4 installed families pass).
+> - **TT-134 slice 4** (`a7f3f85f`): moved `Quantization.swift` and
+>   `TensorOpsPolicy.swift` into `TinyTitanCore`; cleared `import TinyTitan` from
+>   all 5 `TinyTitanValidationSupport` files, `DoctorReport+Build`, and 4
+>   `TinyTitanServerCore` files. External 6.x importers down from 78 -> **35**
+>   (6.x tree: 60,297 lines in 301 files).
+> - **TT-126 (partial, `58c6cc71`)**: `ModelCatalog` + `ModelRouter` now discover
+>   and serve plugin-backed installs (`inkling-2-mini-gguf-q4` and
+>   `inkling-2-mini-nvfp4` appear in `--catalog` / `/v1/models`); added golden
+>   and release targets; added 32K default context cap under `--ram-budget` in
+>   both `InklingQ4LoadPlan` copies. Remaining for TT-126: `registry/registry.json`
+>   rows, `tools/tinytitan_models.sh` + `tools/install_models.sh` + `tools/server_launcher.sh`
+>   rows, and capturing the two Inkling golden baselines.
 >
 > **Owner's standing rules (in force):** at most 16 GB of RAM for any model
 > run (`--ram-budget 16G` max; this is a 24 GB M3 that other projects share);
