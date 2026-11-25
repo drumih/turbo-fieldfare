@@ -2,9 +2,7 @@ import Foundation
 import TinyTitanCore
 
 public struct RuntimeConfiguration: Sendable, Equatable {
-    public static let supportedContextTokens = [
-        4_096, 8_192, 16_384, 32_768, 65_536, 131_072, 262_144,
-    ]
+    public static let supportedContextTokens = RuntimeLimits.supportedContextTokens
     /// The ceiling for a backend that has no model card to ask, so it is what
     /// a request's `max_context` defaults to. Equal to
     /// `supportedContextTokens.last` by declaration, pinned by
@@ -12,7 +10,7 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     /// which is why the sites that want it name this rather than taking
     /// `.max()` of the list and inventing a fallback for a branch that cannot
     /// happen.
-    public static let nativeMaximumContextTokens = 262_144
+    public static let nativeMaximumContextTokens = RuntimeLimits.nativeMaximumContextTokens
     /// The YaRN rungs. `2_097_152` is the LongRoPE-scale window: at the native
     /// 262 144 it is exactly the 8x that arXiv 2402.13753 reports without
     /// fine-tuning, and `YaRNRoPEParameters` derives factor 8 from the two
@@ -20,31 +18,11 @@ public struct RuntimeConfiguration: Sendable, Equatable {
     /// it was built on — the KV cost at 2M (12 KB/token on this family, 24.6 GB
     /// at 8-bit) is the operator's to weigh, and the memory guard refuses rather
     /// than silently clamping. `docs/plan-longrope-2m.md` carries the arithmetic.
-    public static let supportedYaRNContextTokens = (9...14).map { 1 << ($0 + 10) }
-    public static let defaultYaRNContextTokens = 1_048_576
-    public static let maximumContextTokens = 16_777_216
-    // 112 exists because the useful range ends between 96 and 128 on a 24 GiB
-    // machine: 96 measured an 85.4% hit rate, 128 reaches 89.8% but needs
-    // ~17 GB of cache and swaps, costing 68%. Without a value in between
-    // there was no way to ask whether the extra hit rate is reachable.
-    //
-    // 160, 192 and 256 (2026-09-05): the 35B family at 128 slots per layer
-    // still spent a fifth of its 4-bit token in exposed expert reads (87.7%
-    // hit rate); its route traces put the ceiling at 192 (95.5%, the rest
-    // compulsory). 160 at 4-bit is 10 GiB and measured +4% with swap flat;
-    // 192 is 12 GiB, +8%, and pushed 1.5 GB to swap on a 24 GB machine.
-    public static let allowedExpertCacheSlots = [
-        8, 16, 24, 32, 40, 48, 64, 96, 112, 128, 160, 192, 256,
-    ]
-
-    /// The smallest rung `allowedExpertCacheSlots` offers.
-    ///
-    /// The list is a constant, so "no rungs at all" is not a case a caller has
-    /// to answer: the sites that need the floor name this instead of writing
-    /// `.first ?? 8` and putting the 8 in seven places. Pinned by
-    /// `RuntimeConfigurationTests.expertCacheSlotFloorIsTheSmallestRung`, which
-    /// is what catches the two drifting apart.
-    public static let minimumExpertCacheSlots = 8
+    public static let supportedYaRNContextTokens = RuntimeLimits.supportedYaRNContextTokens
+    public static let defaultYaRNContextTokens = RuntimeLimits.defaultYaRNContextTokens
+    public static let maximumContextTokens = RuntimeLimits.maximumContextTokens
+    public static let allowedExpertCacheSlots = RuntimeLimits.allowedExpertCacheSlots
+    public static let minimumExpertCacheSlots = RuntimeLimits.minimumExpertCacheSlots
 
     /// Target bytes for the routed-expert slot cache when no count is given.
     ///

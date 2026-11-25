@@ -7,7 +7,6 @@ import Qwen35Dense4B4Bit
 import Qwen35Dense4B8Bit
 import Qwen35Dense9B4Bit
 import Qwen35Dense9B8Bit
-import TinyTitan
 import TinyTitanCore
 import TinyTitanLegacyEngine
 import TinyTitanLib
@@ -41,17 +40,17 @@ extension EngineFactories {
     /// routes to the shared dense-GPU engine, and everything else stays on
     /// the 6.x engine.
     public static func gpuSelection(
-        family: TinyTitan.ModelFamily,
+        family: String,
         manifestModelID: String,
         routedExpertWeightBits: Int
     ) -> GPUVariantSelection {
-        if family == TinyTitan.ModelFamily.qwen36,
+        if family == "qwen36",
             manifestModelID.hasPrefix("ornith-1.5-35b"),
             routedExpertWeightBits == 4
         {
             return .ornith35B4Bit
         }
-        if family == TinyTitan.ModelFamily.qwen35Dense {
+        if family == "qwen3_5_dense" {
             return .qwen35DenseGPU
         }
         return .legacy
@@ -69,7 +68,7 @@ extension EngineFactories {
     public static func gpuFactory(directoryURL: URL) throws -> EngineFactory {
         let resolved = try pluginRegistry.resolve(directoryURL)
         if resolved.strength == .fallback {
-            _ = try TinyTitan.ManifestReader.peekIdentity(directoryURL: directoryURL)
+            _ = try SSDAIManifestReader.read(directoryURL: directoryURL)
         }
         return resolved.engineFactory()
     }
@@ -113,7 +112,7 @@ extension EngineFactories {
     }
 
     public static func gpuFactory(
-        family: TinyTitan.ModelFamily,
+        family: String,
         manifestModelID: String,
         routedExpertWeightBits: Int
     ) -> EngineFactory {

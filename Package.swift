@@ -277,7 +277,7 @@ let package = Package(
         .target(
             name: "TinyTitanVariants",
             dependencies: [
-                "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
+                "TinyTitanCore", "TinyTitanLib", "TinyTitanLegacyEngine",
                 "Ornith35B4Bit", "DenseGPU", "Inkling2GGUFQ4", "Inkling2NVFP4",
                 "TinyTitanPluginAPI", "TemplatePlugin",
                 "Qwen35Dense2B4Bit", "Qwen35Dense2B8Bit",
@@ -288,13 +288,11 @@ let package = Package(
             swiftSettings: tinytitanLanguageStandard
         ),
         // The CPU dense backend, shared by the server and the library's CPU
-        // facade. It needs the 6.x tokenizer, so it is its own target rather
-        // than a dependency of `TinyTitanLib`; the library reaches it through
-        // an injected backend, never an import.
+        // facade.
         .target(
             name: "TinyTitanCPUEngine",
             dependencies: [
-                "TinyTitanCore", "TinyTitanLib", "TinyTitan",
+                "TinyTitanCore", "TinyTitanLib",
                 "TinyTitanLegacyEngine", "TinyTitanVariants",
             ],
             path: "sources/TinyTitanCPUEngine",

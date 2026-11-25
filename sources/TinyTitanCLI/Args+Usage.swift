@@ -2,25 +2,25 @@
 //
 // Split out of Args.swift (2026-10-27) under the 500-line-per-file rule; the
 // declarations are unchanged.
-import TinyTitan
+import TinyTitanCore
 
 extension Args {
     /// The accepted slot counts, spelled from the validator that enforces them.
     ///
     /// The help text used to list them by hand and had already drifted: it
-    /// stopped at 128 while `RuntimeConfiguration.allowedExpertCacheSlots`
+    /// stopped at 128 while `RuntimeLimits.allowedExpertCacheSlots`
     /// accepts 40, 48, 112, 160, 192 and 256 as well, so a caller reading
     /// `--help` would not know 160 was legal. Spelled from the source of truth
     /// so it cannot drift again.
     static var expertCacheSlotsHelp: String {
-        RuntimeConfiguration.allowedExpertCacheSlots
+        RuntimeLimits.allowedExpertCacheSlots
             .map(String.init).joined(separator: ", ")
     }
 
     /// The accepted YaRN context rungs, spelled from the validator that enforces
     /// them — the help said "524288 or 1048576" until the 2M rung landed.
     static var yarnContextRungsHelp: String {
-        RuntimeConfiguration.supportedYaRNContextTokens
+        RuntimeLimits.supportedYaRNContextTokens
             .map(String.init).joined(separator: ", ")
     }
 

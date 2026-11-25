@@ -1,5 +1,5 @@
 import Foundation
-import TinyTitan
+import TinyTitanCore
 
 // The server's `--help` text.
 //
@@ -139,7 +139,7 @@ extension ServerArguments {
     /// accepts 40, 48, 112, 160, 192 and 256 as well. Spelled from the source
     /// of truth so it cannot drift again.
     static var expertCacheSlotsHelp: String {
-        RuntimeConfiguration.allowedExpertCacheSlots
+        RuntimeLimits.allowedExpertCacheSlots
             .map(String.init).joined(separator: ", ")
     }
 
@@ -147,7 +147,7 @@ extension ServerArguments {
     /// them. `--max-context` takes one of these rungs, not any token count
     /// between the first and the last, and the help used to write it as a range.
     static var supportedContextRungsHelp: String {
-        RuntimeConfiguration.supportedContextTokens
+        RuntimeLimits.supportedContextTokens
             .map(String.init).joined(separator: ", ")
     }
 
@@ -155,7 +155,7 @@ extension ServerArguments {
     /// a literal in the refusal until 2026-10-18, which is how the 2M rung
     /// landed with a message still naming two values.
     static var supportedYaRNContextRungsHelp: String {
-        RuntimeConfiguration.supportedYaRNContextTokens
+        RuntimeLimits.supportedYaRNContextTokens
             .map(String.init).joined(separator: ", ")
     }
 
@@ -163,7 +163,7 @@ extension ServerArguments {
     /// them -- the hand-written list in the help text is how
     /// `expertCacheSlotsHelp` above came to be derived instead of typed.
     static var prefillChunkTokensHelp: String {
-        RuntimeConfiguration.allowedPrefillChunkTokens
+        RuntimeLimits.allowedPrefillChunkTokens
             .map(String.init).joined(separator: ", ")
     }
 

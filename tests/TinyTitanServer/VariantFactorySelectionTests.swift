@@ -18,7 +18,7 @@ import TinyTitanVariants
     func ornith4BitSelectsTheVariant() {
         #expect(
             EngineFactories.gpuSelection(
-                family: .qwen36,
+                family: "qwen36",
                 manifestModelID: "ornith-1.5-35b-a3b",
                 routedExpertWeightBits: 4) == .ornith35B4Bit)
     }
@@ -28,28 +28,28 @@ import TinyTitanVariants
         // The 8-bit ornith variant is not shipped.
         #expect(
             EngineFactories.gpuSelection(
-                family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b",
+                family: "qwen36", manifestModelID: "ornith-1.5-35b-a3b",
                 routedExpertWeightBits: 8) == .legacy)
         // A different qwen36 install is not the ornith variant.
         #expect(
             EngineFactories.gpuSelection(
-                family: .qwen36, manifestModelID: "some-private-checkpoint",
+                family: "qwen36", manifestModelID: "some-private-checkpoint",
                 routedExpertWeightBits: 4) == .legacy)
         // Other families have no shipped GPU variant.
         #expect(
             EngineFactories.gpuSelection(
-                family: .qwen38flash, manifestModelID: "qwen3.8-flash-next",
+                family: "qwen38flash", manifestModelID: "qwen3.8-flash-next",
                 routedExpertWeightBits: 4) == .legacy)
         #expect(
             EngineFactories.gpuSelection(
-                family: .laguna, manifestModelID: "laguna-s-2-1",
+                family: "laguna", manifestModelID: "laguna-s-2-1",
                 routedExpertWeightBits: 4) == .legacy)
     }
 
     @Test("the ornith plugin factory composes its own planner stages")
     func variantFactoryIsComplete() throws {
         let variant = EngineFactories.gpuFactory(
-            family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b-4bit",
+            family: "qwen36", manifestModelID: "ornith-1.5-35b-a3b-4bit",
             routedExpertWeightBits: 4)
         // The planner and architecture stages are the family-generic
         // production ones; the engine stages are the variant's own. A default
@@ -104,14 +104,14 @@ import TinyTitanVariants
         }
 
         let ornith = EngineFactories.gpuFactory(
-            family: .qwen36, manifestModelID: "ornith-1.5-35b-a3b",
+            family: "qwen36", manifestModelID: "ornith-1.5-35b-a3b",
             routedExpertWeightBits: 4)
         #expect(
             engineStageError(ornith).contains("Ornith engine"),
             "the shipped ornith identity must dispatch to the variant factory")
 
         let legacy = EngineFactories.gpuFactory(
-            family: .qwen36, manifestModelID: "some-private-checkpoint",
+            family: "qwen36", manifestModelID: "some-private-checkpoint",
             routedExpertWeightBits: 4)
         #expect(
             engineStageError(legacy).contains("6.x"),
@@ -120,7 +120,7 @@ import TinyTitanVariants
         // The dense family routes to the shared dense-GPU engine, whose
         // engine stage names itself (Task 13's flip).
         let dense = EngineFactories.gpuFactory(
-            family: .qwen35Dense, manifestModelID: "qwen3.5-4b",
+            family: "qwen3_5_dense", manifestModelID: "qwen3.5-4b",
             routedExpertWeightBits: 4)
         #expect(
             engineStageError(dense).contains("dense Qwen 3.5 engine"),
@@ -138,7 +138,7 @@ import TinyTitanVariants
         ] {
             #expect(
                 EngineFactories.gpuSelection(
-                    family: .qwen35Dense, manifestModelID: modelID,
+                    family: "qwen3_5_dense", manifestModelID: modelID,
                     routedExpertWeightBits: bits) == .qwen35DenseGPU,
                 "\(modelID) at \(bits)-bit must select the dense-GPU engine")
         }
@@ -146,7 +146,7 @@ import TinyTitanVariants
         // the selection is by family, not by width.
         #expect(
             EngineFactories.gpuSelection(
-                family: .qwen35Dense, manifestModelID: "qwen3.5-9b",
+                family: "qwen3_5_dense", manifestModelID: "qwen3.5-9b",
                 routedExpertWeightBits: 8) == .qwen35DenseGPU)
     }
 
