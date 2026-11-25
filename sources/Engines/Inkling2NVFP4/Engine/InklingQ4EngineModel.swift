@@ -31,7 +31,8 @@ package final class InklingQ4EngineModel: EngineModel, @unchecked Sendable {
     /// `slots` per layer and its caches sized for `maxContext` positions and
     /// `sequenceSlots` concurrent sequences.
     package func makeDecoder(
-        context: MetalContext, maxContext: Int, maxChunk: Int, sequenceSlots: Int = 1
+        context: MetalContext, maxContext: Int, maxChunk: Int, sequenceSlots: Int = 1,
+        kvCachePrecision: KVCachePrecision = .fp16
     ) throws -> InklingQ4Decoder {
         let enableMTP =
             sequenceSlots == 1
@@ -39,7 +40,8 @@ package final class InklingQ4EngineModel: EngineModel, @unchecked Sendable {
         return try InklingQ4Decoder(
             directory: directory, maxContext: maxContext,
             maxChunk: min(maxChunk, maxContext), slots: sequenceSlots,
-            experts: .slots(slots), enableMTP: enableMTP, context: context)
+            kvCachePrecision: kvCachePrecision, experts: .slots(slots), enableMTP: enableMTP,
+            context: context)
     }
 
     package func routedExpertCacheSlotCount() -> Int? { slots }

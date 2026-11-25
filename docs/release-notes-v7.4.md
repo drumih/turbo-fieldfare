@@ -13,9 +13,9 @@ and cuts external 6.x `import TinyTitan` sites from 78 to 23.
   `Inkling2NVFP4Plugin`), backed by `PluginRegistry`, `TemplatePlugin`, and an
   out-of-tree plugin example (`examples/out-of-tree-plugin`).
 - `PluginParameterGate` checks every declared parameter before load: explicit
-  unsupported flags (such as `--kv-bits 8` on Inkling or `--mtp-model` where
-  unsupported) are refused by name with the plugin's reason, and unsupported
-  defaults are substituted and announced.
+  unsupported flags (such as `--rope-scaling yarn` on Inkling or `--mtp-model`
+  where unsupported) are refused by name with the plugin's reason, and
+  unsupported defaults are substituted and announced.
 - `TinyTitanCLI plugin-check` verifies plugins and installs against the static
   conformance contract.
 - TPP/1.1 adds `ChatDialect` (`ChatMLDialect`, `K2Dialect`, `InklingDialect`)
@@ -30,6 +30,9 @@ and cuts external 6.x `import TinyTitan` sites from 78 to 23.
   verified `.ssdai` installs without staging raw checkpoints, and retire the
   v7.3 side routes.
 - Both plugins support the full server API (`tools/api-feature-check.py` 10/10),
+  **`--kv-bits 4|8|16` affine per-32-channel KV cache quantization** (default
+  8-bit passes both `inkling2-gguf-q4` and `inkling2-nvfp4` golden baselines
+  byte-for-byte identically while freeing 30–48 extra expert slots at 256K),
   multi-slot `--max-concurrent-sequences` batching, 32K default context under
   `--ram-budget` (preserving expert slots), and captured golden baselines
   (`inkling2-gguf-q4`, `inkling2-nvfp4`).
@@ -63,7 +66,9 @@ Measured on Apple M3 MacBook Pro (24 GB, macOS 27.2.1, Xcode 27 / Swift 6.4):
 | Model | Configuration | Decode tok/s |
 | --- | --- | ---: |
 | Ornith 1.5 35B-A3B 4-bit | Default 160 slots (`cache=10.55G`) | **15.69** (14.31 / 15.69 / 15.80) |
-| Inkling 2 Mini UD-Q4_K_XL | `--ram-budget 14G` (93 slots, 32K ctx) | **10.70** |
+| Inkling 2 Mini UD-Q4_K_XL | `--ram-budget 14G` (93 slots, 32K ctx, 16-bit KV) | **10.70** |
+| Inkling 2 Mini UD-Q4_K_XL | `--ram-budget 14G --max-context 262144` (`--kv-bits 16` / `8` / `4`) | **4.75** / **8.57** / **10.69** |
+| Inkling 2 Mini UD-Q4_K_XL | `--ram-budget 12G --max-context 262144` (`--kv-bits 16` / `8` / `4`) | **3.04** / **6.77** / **8.92** |
 | Inkling 2 Mini UD-Q4_K_XL | `--ram-budget 18G --max-context 4096` (128 slots, all-resident) | **17.93** |
 | Inkling 2 Mini (NVFP4/MXFP8) | `--ram-budget 12G` (59 slots, MTP off vs on) | **8.05** vs **3.40** (0.423×) |
 

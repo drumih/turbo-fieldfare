@@ -93,17 +93,27 @@ extension InklingQ4Ops {
         threads(channels, encoder)
     }
 
+    private static func kvKernelSuffix(_ precision: KVCachePrecision) -> String {
+        switch precision {
+        case .fp16: ""
+        case .int8: "_q8"
+        case .int4: "_q4"
+        }
+    }
+
     /// K and V convolutions, the K clip, the V norm and the cache store for
     /// the chunk's tokens, in one dispatch (one threadgroup per K or V head).
     func kvFinish(
         k: Operand, v: Operand, kWeight: InklingQ4Tensor, vWeight: InklingQ4Tensor,
         state: Operand, dynamicK: Operand?, dynamicV: Operand?, kCache: MTLBuffer,
-        vCache: MTLBuffer, step: Operand, args: KVFinishArgs, encoder: MTLComputeCommandEncoder
+        vCache: MTLBuffer, step: Operand, args: KVFinishArgs,
+        precision: KVCachePrecision = .fp16, encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("conv") { return }
         // A chunk: every (head, token) in parallel; the state shift is
         // `kvFinishState`, after the group this joins.
-        try pipeline(args.tokens > 1 ? "kv_finish_chunk" : "kv_finish", encoder)
+        let base = args.tokens > 1 ? "kv_finish_chunk" : "kv_finish"
+        try pipeline(base + Self.kvKernelSuffix(precision), encoder)
         set(k, 0, encoder)
         set(v, 1, encoder)
         set(kWeight.operand, 2, encoder)
@@ -161,12 +171,14 @@ extension InklingQ4Ops {
     func attention(
         q: Operand, kCache: MTLBuffer, vCache: MTLBuffer, r: Operand,
         relativeBias: InklingQ4Tensor, sinks: Operand, gate: Operand, out: Operand,
-        step: Operand, args: AttentionArgs, encoder: MTLComputeCommandEncoder
+        step: Operand, args: AttentionArgs, precision: KVCachePrecision = .fp16,
+        encoder: MTLComputeCommandEncoder
     ) throws {
         if skipped.contains("attention") { return }
         // A chunk runs the tiled kernel (16 queries x 16-key blocks on MMA).
         let tiled = args.tokens > 1 && args.headDim == 128
-        try pipeline(tiled ? "relative_attention_chunk" : "relative_attention_decode", encoder)
+        let base = tiled ? "relative_attention_chunk" : "relative_attention_decode"
+        try pipeline(base + Self.kvKernelSuffix(precision), encoder)
         set(q, 0, encoder)
         encoder.setBuffer(kCache, offset: 0, index: 1)
         encoder.setBuffer(vCache, offset: 0, index: 2)

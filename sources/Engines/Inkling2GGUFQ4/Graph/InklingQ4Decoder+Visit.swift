@@ -182,7 +182,7 @@ extension InklingQ4Decoder {
                 k: scratch(s.k), v: scratch(s.v), kWeight: layer.kConv, vWeight: layer.vConv,
                 state: .init(state), dynamicK: dynamicK, dynamicV: dynamicV,
                 kCache: slotState.kCaches[visit], vCache: slotState.vCaches[visit], step: step,
-                args: kvArgs, encoder: e)
+                args: kvArgs, precision: s.kvCachePrecision, encoder: e)
             try ops.clipHeads(
                 scratch(s.q), heads: heads, headDim: headDim, scale: layer.qClip,
                 threshold: m.qkClip, tau: tau, step: step, tokens: t, encoder: e)
@@ -204,7 +204,7 @@ extension InklingQ4Decoder {
             q: scratch(s.q), kCache: slotState.kCaches[visit], vCache: slotState.vCaches[visit],
             r: scratch(s.r), relativeBias: layer.relBias, sinks: scratch(s.sinks),
             gate: scratch(s.gate), out: scratch(s.attention), step: step, args: attentionArgs,
-            encoder: e)
+            precision: s.kvCachePrecision, encoder: e)
         let projected = try rows(1)
         try ops.gemv(
             layer.attnOutput, x: scratch(s.attention), y: row(projected), tokens: t, encoder: e)

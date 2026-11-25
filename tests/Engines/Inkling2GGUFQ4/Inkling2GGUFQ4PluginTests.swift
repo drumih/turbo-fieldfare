@@ -11,20 +11,28 @@ import TinyTitanPluginAPI
         directory: URL(fileURLWithPath: "/nonexistent/inkling"), manifest: nil,
         declaredFamily: "inkling2")
 
-    @Test func kvBitsStaySixteenWithTheMeasurement() throws {
+    @Test func kvBitsAcceptAllPrecisions() {
         let kv = Inkling2GGUFQ4Plugin.parameters(for: install).kvCachePrecision
         #expect(kv.accepts(.fp16))
-        let refusal = try #require(
+        #expect(kv.accepts(.int8))
+        #expect(kv.accepts(.int4))
+        #expect(
             kv.refusal(
                 for: .int8, flag: "--kv-bits", plugin: Inkling2GGUFQ4Plugin.displayName,
-                spelled: { "\($0.rawValue)" }))
+                spelled: { "\($0.rawValue)" }) == nil)
         #expect(
-            refusal.hasPrefix(
-                "--kv-bits 8 is not supported by Inkling 2 Mini UD-Q4_K_XL (Unsloth)"))
-        #expect(refusal.contains("95/96"))
+            kv.refusal(
+                for: .int4, flag: "--kv-bits", plugin: Inkling2GGUFQ4Plugin.displayName,
+                spelled: { "\($0.rawValue)" }) == nil)
         let defaulted = kv.resolveDefault(.int8, flag: "--kv-bits", plugin: "Inkling")
-        #expect(defaulted.value == .fp16)
-        #expect(defaulted.notice != nil)
+        #expect(defaulted.value == .int8)
+        #expect(defaulted.notice == nil)
+    }
+
+    @Test func kvRowBytesScaleWithPrecision() {
+        #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .fp16) == 1024)
+        #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .int8) == 576)
+        #expect(InklingQ4LoadPlan.kvRowBytes(kvWidth: 512, precision: .int4) == 320)
     }
 
     @Test func declaresItsReasoningLevels() {

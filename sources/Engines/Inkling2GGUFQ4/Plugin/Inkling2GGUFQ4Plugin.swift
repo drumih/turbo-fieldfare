@@ -23,15 +23,9 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
         InklingQ4Install.recognizes(install.directory) ? .exact : nil
     }
 
-    /// K/V stays 16-bit: 8- and 4-bit K/V were built and measured on the
-    /// llama.cpp reference cases (96 tokens) at 95/96 and 91/96 top-1 and
-    /// rejected under the quality rule (TT-123).
     public static func parameters(for install: InstallProbe) -> ParameterSupport {
         ParameterSupport(
-            kvCachePrecision: .only(
-                [.fp16],
-                reason: "its K/V cache stays 16-bit; 8-bit measured 95/96 and 4-bit 91/96 "
-                    + "top-1 agreement with llama.cpp (TT-123)"),
+            kvCachePrecision: .supported,
             ropeScaling: .only(
                 [.none], reason: "Inkling 2 has a 1M native window and no YaRN factor"),
             hostKVWindow: .refused(reason: "it needs a QSA model"),
@@ -65,20 +59,23 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
                     options.context?.device.recommendedMaxWorkingSetSize
                         ?? MTLCreateSystemDefaultDevice()?.recommendedMaxWorkingSetSize ?? 0)
                 let plan = try InklingQ4LoadPlan.make(
-                    geometry: try InklingQ4LoadPlan.Geometry(directory: options.modelDirectory),
+                    geometry: try InklingQ4LoadPlan.Geometry(
+                        directory: options.modelDirectory, kvPrecision: options.kvCachePrecision),
                     requested: options.maxContext, ramBudget: options.expertCacheBudgetBytes,
                     explicitSlots: options.expertCacheSlots, workingSet: workingSet,
-                    maxContextExplicit: options.maxContextExplicit)
+                    maxContextExplicit: options.maxContextExplicit,
+                    kvCachePrecision: options.kvCachePrecision)
                 host.log(
-                    "Inkling 2 Q4: 16-bit K/V, \(plan.slots) expert slots per layer, context "
-                        + "\(plan.context) tokens (asked \(options.maxContext)), planned "
-                        + "\(plan.plannedBytes >> 20) MiB")
+                    "Inkling 2 Q4: \(options.kvCachePrecision.label) K/V, \(plan.slots) expert "
+                        + "slots per layer, context \(plan.context) tokens (asked "
+                        + "\(options.maxContext)), planned \(plan.plannedBytes >> 20) MiB")
                 return EngineLoadPlan(
                     architecture: InklingQ4EngineModel.architecture(manifest.arch),
                     expertCacheSlots: plan.slots,
                     tunedExpertCacheBudgetBytes: InklingQ4LoadPlan.defaultExpertBytes,
                     prefillConfiguration: .defaultChunked, fp16RingEnabled: false,
-                    yarnContextTokens: 0, runtimeIdentity: "inkling2-gguf-q4",
+                    yarnContextTokens: 0,
+                    runtimeIdentity: "inkling2-gguf-q4-kv\(options.kvCachePrecision.rawValue)",
                     engineConfiguration: plan)
             },
             metadata: metadata,
@@ -120,7 +117,8 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
                 let decoder = try model.makeDecoder(
                     context: context, maxContext: plan.context,
                     maxChunk: options.prefillChunkTokens ?? 256,
-                    sequenceSlots: options.slots)
+                    sequenceSlots: options.slots,
+                    kvCachePrecision: plan.kvCachePrecision)
                 return InklingQ4Runner(model: model, decoder: decoder)
             },
             makeScratch: { context, vocabSize, _ in

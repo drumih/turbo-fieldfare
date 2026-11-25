@@ -151,7 +151,7 @@ package final class InklingQ4Runner: EngineRunner, @unchecked Sendable {
     /// one (a sliding visit past its window) holds the whole ring.
     private func segments(at position: Int) -> (kv: [(MTLBuffer, Int)], conv: [(MTLBuffer, Int)]) {
         let state = decoder.state
-        let rowBytes = state.kvWidth * MemoryLayout<Float16>.size
+        let rowBytes = state.kvRowBytes
         var kv: [(MTLBuffer, Int)] = []
         for (visit, capacity) in state.capacities.enumerated() {
             let bytes = min(capacity, position) * rowBytes

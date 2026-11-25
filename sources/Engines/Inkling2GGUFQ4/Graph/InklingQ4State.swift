@@ -24,6 +24,8 @@ package final class InklingQ4State {
     /// Convolution channels per visit: K, V, attention output, FFN output.
     let convChannels: Int
     let kvWidth: Int
+    package let kvCachePrecision: KVCachePrecision
+    package let kvRowBytes: Int
     package let maxContext: Int
     let maxChunk: Int
     package let slots: Int
@@ -74,7 +76,7 @@ package final class InklingQ4State {
 
     init(
         manifest m: InklingQ4Manifest, device: MTLDevice, maxContext: Int, maxChunk: Int,
-        slots: Int = 1
+        slots: Int = 1, kvCachePrecision: KVCachePrecision = .fp16
     ) throws {
         func buffer(_ bytes: Int, _ label: String) throws -> MTLBuffer {
             guard let made = device.makeBuffer(length: max(bytes, 16), options: .storageModeShared)
@@ -88,6 +90,8 @@ package final class InklingQ4State {
         let t = maxChunk
         let slotCount = max(1, slots)
         kvWidth = m.headDimension * layer.kvHeads
+        self.kvCachePrecision = kvCachePrecision
+        kvRowBytes = InklingQ4LoadPlan.kvRowBytes(kvWidth: kvWidth, precision: kvCachePrecision)
         convChannels = 2 * kvWidth + 2 * m.hidden
         self.maxContext = maxContext
         self.maxChunk = maxChunk
@@ -105,8 +109,8 @@ package final class InklingQ4State {
             var convStates: [MTLBuffer] = []
             for visit in 0..<m.unrolledLayers {
                 let capacity = capacities[visit]
-                kCaches.append(try buffer(capacity * kvWidth * 2, "K cache s\(slot) v\(visit)"))
-                vCaches.append(try buffer(capacity * kvWidth * 2, "V cache s\(slot) v\(visit)"))
+                kCaches.append(try buffer(capacity * kvRowBytes, "K cache s\(slot) v\(visit)"))
+                vCaches.append(try buffer(capacity * kvRowBytes, "V cache s\(slot) v\(visit)"))
                 convStates.append(try buffer(convChannels * 3 * 4, "conv s\(slot) v\(visit)"))
             }
             slotStates.append(SlotState(kCaches: kCaches, vCaches: vCaches, convStates: convStates))

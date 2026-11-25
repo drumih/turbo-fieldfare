@@ -27,6 +27,18 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
     package let plannedBytes: Int
     /// Bytes of per-sequence recurrent state (KV caches + conv histories) for one slot.
     package let perSlotBytes: Int
+    /// KV-cache storage precision (`--kv-bits 4|8|16`).
+    package let kvCachePrecision: KVCachePrecision
+
+    /// Bytes for one token row of K or V across `kvWidth` channels.
+    /// Quantized modes pack affine scale + bias (`half2`) alongside each 32-channel group.
+    package static func kvRowBytes(kvWidth: Int, precision: KVCachePrecision) -> Int {
+        switch precision {
+        case .fp16: kvWidth * MemoryLayout<Float16>.size
+        case .int8: (kvWidth / 32) * 36
+        case .int4: (kvWidth / 32) * 20
+        }
+    }
 
     /// Geometry the arithmetic needs, read from the install without loading it.
     package struct Geometry: Equatable, Sendable {
@@ -53,7 +65,7 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
             self.modelContext = modelContext
         }
 
-        package init(directory: URL) throws {
+        package init(directory: URL, kvPrecision: KVCachePrecision = .fp16) throws {
             let install = try InklingQ4Install(directory: directory)
             let manifest = try InklingQ4Manifest(install: install)
             var fullVisits = 0
@@ -66,8 +78,9 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
                 }
             }
             let kvWidth = manifest.headDimension * manifest.layers[0].kvHeads
+            let rowBytes = InklingQ4LoadPlan.kvRowBytes(kvWidth: kvWidth, precision: kvPrecision)
             let convChannels = 2 * kvWidth + 2 * manifest.hidden
-            let slidingRingBytes = slidingVisits * (manifest.slidingWindow + 256) * kvWidth * 4
+            let slidingRingBytes = slidingVisits * (manifest.slidingWindow + 256) * rowBytes * 2
             let convBytes = manifest.unrolledLayers * convChannels * 3 * 4
             let strides = try install.layout.layers.map { layer -> Int in
                 guard layer.experts.count > 1 else {
@@ -79,7 +92,7 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
                 residentBytes: Int(
                     install.manifest.files[InklingQ4Install.residentFile]?.size ?? 0),
                 bytesPerSlot: strides.reduce(0, +),
-                bytesPerPosition: fullVisits * kvWidth * 2 * 2,
+                bytesPerPosition: fullVisits * rowBytes * 2,
                 fixedSlotBytes: slidingRingBytes + convBytes,
                 experts: manifest.expertCount, expertsPerToken: manifest.expertsPerToken,
                 modelContext: manifest.contextLength)
@@ -111,7 +124,8 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
     /// GPU's recommended maximum, which nothing may exceed.
     package static func make(
         geometry g: Geometry, requested: Int, ramBudget: Int?, explicitSlots: Int?,
-        workingSet: Int, maxContextExplicit: Bool = true
+        workingSet: Int, maxContextExplicit: Bool = true,
+        kvCachePrecision: KVCachePrecision = .fp16
     ) throws -> InklingQ4LoadPlan {
         let fixed = g.residentBytes + reserveBytes
         let minimumSlots = g.expertsPerToken
@@ -137,13 +151,18 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
         return InklingQ4LoadPlan(
             context: context, slots: slots,
             plannedBytes: fixed + slots * g.bytesPerSlot + context * g.bytesPerPosition,
-            perSlotBytes: context * g.bytesPerPosition + g.fixedSlotBytes)
+            perSlotBytes: context * g.bytesPerPosition + g.fixedSlotBytes,
+            kvCachePrecision: kvCachePrecision)
     }
 
-    package init(context: Int, slots: Int, plannedBytes: Int, perSlotBytes: Int = 0) {
+    package init(
+        context: Int, slots: Int, plannedBytes: Int, perSlotBytes: Int = 0,
+        kvCachePrecision: KVCachePrecision = .fp16
+    ) {
         self.context = context
         self.slots = slots
         self.plannedBytes = plannedBytes
         self.perSlotBytes = perSlotBytes
+        self.kvCachePrecision = kvCachePrecision
     }
 }

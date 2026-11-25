@@ -71,7 +71,8 @@ package final class InklingQ4Decoder {
 
     package init(
         directory: URL, maxContext: Int = 4_096, maxChunk: Int = 256,
-        slots: Int = 1, experts residency: InklingQ4ExpertResidency = .mapped,
+        slots: Int = 1, kvCachePrecision: KVCachePrecision = .fp16,
+        experts residency: InklingQ4ExpertResidency = .mapped,
         enableMTP: Bool = false, context: MetalContext? = nil
     ) throws {
         let context = try context ?? MetalContext()
@@ -107,7 +108,7 @@ package final class InklingQ4Decoder {
         }
         state = try InklingQ4State(
             manifest: manifest, device: context.device, maxContext: maxContext,
-            maxChunk: maxChunk, slots: slots)
+            maxChunk: maxChunk, slots: slots, kvCachePrecision: kvCachePrecision)
         ops = try InklingQ4Ops(context: context)
         if let expertCache, !expertCache.isIdentity {
             routing = try InklingQ4EventRouting(
