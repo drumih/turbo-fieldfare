@@ -40,6 +40,10 @@ public enum Ornith35B4BitPlugin: EnginePlugin {
         coreControl(ModelFamily.qwen36.reasoningControl)
     }
 
+    public static func chatDialect(for install: InstallProbe) -> (any ChatDialect)? {
+        ChatMLDialect()
+    }
+
     static func coreControl(_ control: ModelReasoningControl) -> ReasoningControl {
         switch control {
         case .binaryThinking:

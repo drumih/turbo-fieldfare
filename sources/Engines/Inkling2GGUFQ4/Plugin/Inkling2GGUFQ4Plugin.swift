@@ -45,6 +45,10 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
         reasoning
     }
 
+    public static func chatDialect(for install: InstallProbe) -> (any ChatDialect)? {
+        InklingDialect()
+    }
+
     /// lint:allow-long one factory literal: every stage is a short closure over
     /// the variant, and splitting them would only move the list elsewhere.
     public static func engineFactory(host: HostServices) -> EngineFactory {

@@ -176,6 +176,7 @@ sources/TinyTitanLib/Session.swift:func:respond
 sources/TinyTitanLib/TinyTitanError.swift:enum:TinyTitanError
 sources/TinyTitanLib/TinyTitanError.swift:var:description
 sources/TinyTitanPluginAPI/EnginePlugin.swift:enum:MatchStrength
+sources/TinyTitanPluginAPI/EnginePlugin.swift:func:chatDialect
 sources/TinyTitanPluginAPI/EnginePlugin.swift:func:func
 sources/TinyTitanPluginAPI/EnginePlugin.swift:func:func
 sources/TinyTitanPluginAPI/EnginePlugin.swift:func:read
@@ -220,6 +221,7 @@ sources/TinyTitanPluginAPI/PluginRegistry.swift:let:probe
 sources/TinyTitanPluginAPI/PluginRegistry.swift:let:shared
 sources/TinyTitanPluginAPI/PluginRegistry.swift:let:strength
 sources/TinyTitanPluginAPI/PluginRegistry.swift:struct:ResolvedPlugin
+sources/TinyTitanPluginAPI/PluginRegistry.swift:var:chatDialect
 sources/TinyTitanPluginAPI/PluginRegistry.swift:var:description
 sources/TinyTitanPluginAPI/PluginRegistry.swift:var:parameters
 sources/TinyTitanPluginAPI/PluginRegistry.swift:var:pluginID

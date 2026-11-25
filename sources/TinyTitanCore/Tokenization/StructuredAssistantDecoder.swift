@@ -106,7 +106,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         promptIDs: [Int32],
         allowedTools: Set<String>?
     ) -> StructuredAssistantDecoder {
-        if tokenizer.dialect == .inkling,
+        if tokenizer.chatDialect.usesStructuredInklingParser,
             let decoder = try? StructuredAssistantDecoder(
                 inklingTokenizer: tokenizer, promptIDs: promptIDs,
                 allowedTools: allowedTools ?? [])
@@ -215,7 +215,9 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             channel = .visible
             return events
         }
-        if channel == .thought, tokenizer.dialect == .k2, !tokenizer.thinkEndMark.isEmpty {
+        if channel == .thought, tokenizer.chatDialect.closesThoughtOnMarkerText,
+            !tokenizer.thinkEndMark.isEmpty
+        {
             return consumeTextThinkEnd(delta)
         }
         return channelEvents(delta)
@@ -318,30 +320,8 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             toolTokens = nil
             let text = tokenizer.decode(tokens, skipSpecialTokens: false)
             do {
-                let call: ParsedToolCall
-                switch tokenizer.dialect {
-                case .chatML:
-                    call = try QwenToolCallParser().parse(
-                        text, allowedTools: allowedTools, id: idGenerator())
-                case .k2:
-                    // The decoder buffers one inner call; the parser wants the
-                    // wrapper the template writes around it. Runtime prompts
-                    // ask for the default xml call body.
-                    let wrapped =
-                        "<ifm|tool_calls><ifm|tool_call>\(text)"
-                        + "</ifm|tool_call></ifm|tool_calls>"
-                    let calls = try K2ToolCallParser.parse(
-                        wrapped, allowedTools: allowedTools, format: .xml,
-                        makeID: idGenerator)
-                    guard calls.count == 1 else {
-                        throw ToolCallParserError.malformed
-                    }
-                    call = calls[0]
-                case .inkling:
-                    // Unreachable: an Inkling stream goes through its own
-                    // parser before the marker-pair path is consulted.
-                    throw ToolCallParserError.malformed
-                }
+                let call = try tokenizer.chatDialect.parseToolCall(
+                    text, allowedTools: allowedTools, makeID: idGenerator)
                 emittedCalls += 1
                 return [.toolCall(call)]
             } catch {

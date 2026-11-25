@@ -70,6 +70,7 @@ public struct ResolvedPlugin: Sendable {
     public var pluginID: String { plugin.pluginID }
     public var parameters: ParameterSupport { plugin.parameters(for: probe) }
     public var reasoningControl: ReasoningControl? { plugin.reasoningControl(for: probe) }
+    public var chatDialect: (any ChatDialect)? { plugin.chatDialect(for: probe) }
 
     public func engineFactory(host: HostServices = .standard) -> EngineFactory {
         plugin.engineFactory(host: host)

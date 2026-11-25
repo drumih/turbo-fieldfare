@@ -107,11 +107,10 @@ These are the 7.0 Core contracts, unchanged:
 
 ## 6. Chat format
 
-A plugin's chat format is a Core tokenizer dialect (`TokenizerDialect`: ChatML,
-K2, Inkling). TPP/1.1 will make it a plugin-owned `ChatDialect` value
-(`docs/plan-engine-plugins.md` §3); until then a new format is added to Core's
-dialect set, with its renderer and parser in their own files
-(`InklingChatTemplate`, `InklingAssistantParser` are the pattern).
+A plugin declares its chat format via `EnginePlugin.chatDialect(for:)` (TPP/1.1,
+TT-132), returning one of Core's reference `ChatDialect` values
+(`ChatMLDialect`, `K2Dialect`, `InklingDialect`) or a plugin-owned conformer.
+The 6.x fallback adapter returns `nil` and defers to tokenizer auto-detection.
 
 ## 7. Conformance: when a plugin is "supported"
 

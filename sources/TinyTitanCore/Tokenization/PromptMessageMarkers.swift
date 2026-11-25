@@ -44,16 +44,8 @@ public struct PromptMessageMarkers: Sendable, Equatable {
 }
 
 extension GFTokenizer {
-    /// This tokenizer's message markers.
+    /// This tokenizer's message markers, delegated to its `ChatDialect`.
     public var promptMessageMarkers: PromptMessageMarkers {
-        guard dialect == .inkling else { return .chatML(imStartID: imStartID) }
-        let ids = [
-            "<|message_user|>", "<|message_system|>", "<|message_model|>", "<|message_tool|>",
-        ]
-        .compactMap { tokenizer.convertTokenToId($0).map(Int32.init) }
-        let header = ["<|message_model|>", "<|content_text|>"]
-            .compactMap { tokenizer.convertTokenToId($0).map(Int32.init) }
-        return PromptMessageMarkers(
-            startIDs: Set(ids), headerSuffix: header.count == 2 ? header : [])
+        chatDialect.promptMessageMarkers(for: self)
     }
 }

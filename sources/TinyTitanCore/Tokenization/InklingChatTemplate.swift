@@ -214,6 +214,6 @@ extension GFTokenizer {
     /// answer is one text message inside the turn, which ends at
     /// `<|end_message|>` (the dialect keeps it in `toolCallEndID`).
     package var documentEndTokenIDs: Set<Int32> {
-        dialect == .inkling ? stopTokenIDs.union([toolCallEndID]) : stopTokenIDs
+        chatDialect.documentEndTokenIDs(for: self)
     }
 }

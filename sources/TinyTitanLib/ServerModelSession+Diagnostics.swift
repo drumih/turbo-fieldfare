@@ -248,16 +248,9 @@ extension ServerModelSession {
         usesToolTemplate: Bool,
         structuredAnswer: Bool = false
     ) throws -> [Int32] {
-        if tokenizer.dialect == .inkling {
-            return tokenizer.encodeInklingPrompt(
-                messages: messages, tools: usesToolTemplate ? tools : [],
-                structuredAnswer: structuredAnswer)
-        }
-        if usesToolTemplate {
-            return try tokenizer.encodeToolChat(messages: messages, tools: tools)
-        }
-        let rendered = try tokenizer.applyChatTemplate(messages)
-        return tokenizer.encode(rendered, addBOS: false)
+        try tokenizer.chatDialect.encodePrompt(
+            messages: messages, tools: tools, usesToolTemplate: usesToolTemplate,
+            structuredAnswer: structuredAnswer, tokenizer: tokenizer)
     }
 
     /// Optional per-request diagnostics: MTP acceptance, the TINYTITAN_RUNNER_STATS

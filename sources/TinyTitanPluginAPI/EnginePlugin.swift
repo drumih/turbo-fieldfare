@@ -36,10 +36,19 @@ public protocol EnginePlugin: Sendable {
     /// whose families still carry their own table; a plugin returns its own.
     static func reasoningControl(for install: InstallProbe) -> ReasoningControl?
 
+    /// The chat dialect this plugin's tokenizer speaks (TPP/1.1, TT-132).
+    /// nil defers to the tokenizer's auto-detected dialect (used by the 6.x
+    /// adapter and TPP/1.0 plugins).
+    static func chatDialect(for install: InstallProbe) -> (any ChatDialect)?
+
     /// The engine: load planning, model, runner, completion loop and the
     /// tokenizer source, as the shared session consumes them (Core
     /// `EngineFactory`). `host` is the plugin's only door back into TinyTitan.
     static func engineFactory(host: HostServices) -> EngineFactory
+}
+
+extension EnginePlugin {
+    public static func chatDialect(for install: InstallProbe) -> (any ChatDialect)? { nil }
 }
 
 /// The protocol version a plugin was built against.
@@ -52,8 +61,8 @@ public struct ProtocolVersion: Sendable, Hashable, Comparable, CustomStringConve
         self.minor = minor
     }
 
-    /// TPP/1.0, the version this host implements.
-    public static let current = ProtocolVersion(major: 1, minor: 0)
+    /// TPP/1.1, the version this host implements (adds `chatDialect(for:)`).
+    public static let current = ProtocolVersion(major: 1, minor: 1)
 
     public var description: String { "\(major).\(minor)" }
 

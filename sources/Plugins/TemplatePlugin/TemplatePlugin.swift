@@ -55,6 +55,10 @@ public enum TemplatePlugin: EnginePlugin {
         .binaryThinking
     }
 
+    public static func chatDialect(for install: InstallProbe) -> (any ChatDialect)? {
+        ChatMLDialect()
+    }
+
     public static func engineFactory(host: HostServices) -> EngineFactory {
         EngineFactory(
             prepareLoad: { options in

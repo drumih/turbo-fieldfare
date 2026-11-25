@@ -67,6 +67,15 @@
 >   at the 160-slot default (`cache=10.55G`, `estimate=12.84G`): median **15.69 tok/s**
 >   (`14.313 / 15.685 / 15.796`, up from old 32-slot `11.55 tok/s`); 96-token
 >   golden exact match; `registry/registry.json` updated.
+> - **TT-132 (TPP/1.1 `ChatDialect`, 2026-11-25)**: added `ChatDialect` protocol
+>   and reference values (`ChatMLDialect`, `K2Dialect`, `InklingDialect`) in
+>   `TinyTitanCore`, bumped `ProtocolVersion.current` to `1.1` with
+>   `EnginePlugin.chatDialect(for:)` and `ResolvedPlugin.chatDialect`, declared
+>   it on all shipped plugins (`Ornith35B4BitPlugin`, `DenseQwen35Plugin`,
+>   `Inkling2GGUFQ4Plugin`, `Inkling2NVFP4Plugin`, `TemplatePlugin`), and moved
+>   `StructuredAssistantDecoder`, `PromptMessageMarkers`, `InklingChatTemplate`,
+>   `ServerModelSession+Diagnostics`, and `ServerPromptCache` off `TokenizerDialect`
+>   switches onto `tokenizer.chatDialect`.
 > - **TT-129 (Done 2026-11-25)**: implemented Inkling 2's bundled DSpark MTP
 >   draft model (`block_size = 8`, 3 dense BF16 layers + 7-step `rnn_hidden`
 >   Markov head over the 54 `mtp.*` tensors already inside `model_weights.bin`)

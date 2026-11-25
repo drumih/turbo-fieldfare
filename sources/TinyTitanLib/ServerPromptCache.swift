@@ -190,7 +190,7 @@ struct ServerPromptCache: Sendable {
         // The bridges below splice ChatML (`<|im_end|>` + "\n" + the rendered
         // tail). Another dialect resumes only through the direct prefix hit
         // above, which compares token ids and holds for any template.
-        guard tokenizer.dialect != .inkling else { return nil }
+        guard tokenizer.chatDialect.supportsChatMLContinuationBridge else { return nil }
 
         if entry.assistantTurn.message.toolCalls.isEmpty {
             return matchTextContinuation(

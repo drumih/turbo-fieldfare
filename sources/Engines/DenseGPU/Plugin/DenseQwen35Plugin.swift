@@ -40,6 +40,10 @@ public enum DenseQwen35Plugin: EnginePlugin {
         coreControl(ModelFamily.qwen35Dense.reasoningControl)
     }
 
+    public static func chatDialect(for install: InstallProbe) -> (any ChatDialect)? {
+        ChatMLDialect()
+    }
+
     static func coreControl(_ control: ModelReasoningControl) -> ReasoningControl {
         switch control {
         case .binaryThinking:
