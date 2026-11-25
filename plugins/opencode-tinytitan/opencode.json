@@ -694,6 +694,78 @@
               "reasoningEffort": "xhigh"
             }
           }
+        },
+        "inkling-2-mini_NVFP4": {
+          "name": "Inkling 2 Mini",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        },
+        "inkling-2-mini_GGUF-Q4": {
+          "name": "Inkling 2 Mini UD-Q4_K_XL (Unsloth)",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": false,
+          "attachment": false,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "limit": {
+            "context": 262144,
+            "output": 32768
+          },
+          "variants": {
+            "off": {
+              "reasoningEffort": "off"
+            },
+            "low": {
+              "reasoningEffort": "low"
+            },
+            "medium": {
+              "reasoningEffort": "medium"
+            },
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "xhigh": {
+              "reasoningEffort": "xhigh"
+            }
+          }
         }
       }
     }
