@@ -319,7 +319,7 @@ let package = Package(
             // drives. `TinyTitan` stays for the few value types `Args` parses.
             dependencies: [
                 "TinyTitanCore", "TinyTitan", "TinyTitanLib", "TinyTitanLegacyEngine",
-                "TinyTitanVariants",
+                "TinyTitanVariants", "TinyTitanPluginAPI",
                 "TinyTitanCPUEngine",
             ],
             path: "sources/TinyTitanCLI",

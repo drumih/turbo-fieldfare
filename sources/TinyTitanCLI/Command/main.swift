@@ -36,6 +36,17 @@ if rawArgv.first == "catalog" {
         exit(2)
     }
 }
+if rawArgv.first == "plugin-check" {
+    do {
+        let options = try PluginCheckOptions.parse(Array(rawArgv.dropFirst()))
+        exit(PluginCheckCommand.run(options))
+    } catch {
+        FileHandle.standardError.write(Data("error: \(error)\n\n".utf8))
+        FileHandle.standardError.write(Data(PluginCheckOptions.usage.utf8))
+        FileHandle.standardError.write(Data("\n".utf8))
+        exit(2)
+    }
+}
 let parsedArgs: Args
 do {
     parsedArgs = try Args.parse(rawArgv)

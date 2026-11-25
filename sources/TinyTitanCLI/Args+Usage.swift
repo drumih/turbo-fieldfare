@@ -32,6 +32,7 @@ extension Args {
                                        | --check <path>)
                TinyTitanCLI doctor [--json] [--models-dir <dir>]
                TinyTitanCLI catalog [--check] [--markdown] [--registry <path>]
+               TinyTitanCLI plugin-check [--install <dir>] [--plugin <id>] [--json]
 
         command:
           calibrate                  Write or validate a per-machine tuning
@@ -40,6 +41,8 @@ extension Args {
           catalog                    Render or check the one model registry
                                     (the catalog command's --help lists its
                                     own flags).
+          plugin-check               Verify TPP/1 engine plugins and installs
+                                    against the conformance contract.
 
         required:
           --model <dir>             Path to a .ssdai model directory.
