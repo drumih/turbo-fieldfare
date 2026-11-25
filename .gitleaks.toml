@@ -28,7 +28,12 @@
 #     `tokenEmbedding` and `tokenNorm` in
 #     `sources/TinyTitan/Inkling2GGUF/Inkling2GGUFWeights.swift`; the property
 #     names start with `token`, which is what the rule keys on.
-# All eight are matched by `generic-api-key` only because they look like long
+# The ninth and tenth were found by the CI scan on 2026-11-25 (commit 351685f2):
+#   * `InklingQ4Tensor`           — the same Swift type name after moving into
+#     the `Inkling2GGUFQ4` and `Inkling2NVFP4` plugins (`InklingQ4Weights.swift`)
+#   * `inkling-q4-k-xl-unsloth`   — the installer/launcher model key in
+#     `tools/tinytitan_models.sh` (`TINYTITAN_MODEL_KEY=inkling-q4-k-xl-unsloth`)
+# All ten are matched by `generic-api-key` only because they look like long
 # opaque tokens. The values are literal, not shape-based, so no future secret
 # that happens to be shaped like a path, a model id or a counter is hidden.
 
@@ -47,4 +52,6 @@ regexes = [
   '''^ornith15-bf16dense$''',
   '''^presence_penalty=0$''',
   '''^Inkling2GGUFTensor$''',
+  '''^InklingQ4Tensor$''',
+  '''^inkling-q4-k-xl-unsloth$''',
 ]
