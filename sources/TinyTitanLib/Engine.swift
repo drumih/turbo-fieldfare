@@ -80,6 +80,7 @@ public actor Engine {
                 modelDirectory: directory,
                 factory: factory,
                 maxContext: configuration.contextWindow,
+                maxContextExplicit: configuration.contextWindowExplicit,
                 slots: configuration.maxConcurrentGenerations,
                 prefillChunkTokens: configuration.prefillChunkTokens,
                 kvCachePrecision: configuration.cachePrecision.engineValue,

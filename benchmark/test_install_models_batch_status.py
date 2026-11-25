@@ -41,11 +41,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "install_models.sh"
 
-# Four-bit rows: 9 since the bf16-dense variant and the two MTP draft heads
-# left the catalogue (2026-11-16); 12 before that, 13 until the Qwen3.8 MTP
-# draft left (2026-11-13, when the qwen3.8 install types became the two
-# hardcoded recipes only).
-WIDTHS = {"4": 9, "8": 9}
+# Four-bit rows: 11 (9 Qwen/Ornith + inkling2-gguf-q4 + inkling2-nvfp4);
+# eight-bit rows: 9.
+WIDTHS = {"4": 11, "8": 9}
 ROWS = re.compile(r'^\s*"([a-z0-9-]+)\|[^|]*\|([48])\|', re.M).findall(SCRIPT.read_text())
 CATALOGUE_WIDTHS = {name: width for name, width in ROWS}
 

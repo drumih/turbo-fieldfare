@@ -37,9 +37,9 @@ struct RegistryInventoryTests {
         let registry = try Self.loadRegistry()
         #expect(registry["version"] as? Int == 1)
         let models = try #require(registry["models"] as? [[String: Any]])
-        // 9 shipped models as of 2026-11-14: the dense trio, the four 35B-A3B
-        // MoE fine-tunes, Qwen3.8-Flash-Next and Ornith 1.5 122B.
-        #expect(models.count == 9)
+        // 10 models: the dense trio, the four 35B-A3B MoE fine-tunes,
+        // Qwen3.8-Flash-Next, Ornith 1.5 122B, and Inkling 2 Mini.
+        #expect(models.count == 10)
         for model in models {
             let variants = try #require(model["variants"] as? [[String: Any]])
             #expect(!variants.isEmpty)
@@ -86,10 +86,9 @@ struct RegistryInventoryTests {
                 #expect(seen.insert(id).inserted)
             }
         }
-        // 24 pairs: the 18 shipped pairs (bf16dense removed 2026-11-16) plus
-        // the six dense-GPU rows Task 12 added — same dense pairs, second
-        // engine, target DenseGPU, unshipped until Task 13 qualifies them.
-        #expect(seen.count == 24)
+        // 26 pairs: the 18 Qwen/Ornith pairs plus the six dense-GPU rows plus
+        // the two Inkling 2 Mini variants (GGUF Q4 and NVFP4).
+        #expect(seen.count == 26)
     }
 
     @Test func everyShippedPairMatchesTheInstallerTable() throws {
@@ -108,6 +107,6 @@ struct RegistryInventoryTests {
         let rows = script[tableStart.upperBound..<tableEnd.lowerBound]
             .split(separator: "\n")
             .filter { $0.contains("|") }
-        #expect(rows.count == 18)
+        #expect(rows.count == 20)
     }
 }

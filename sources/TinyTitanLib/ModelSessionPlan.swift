@@ -36,6 +36,7 @@ package struct ModelSessionFacts: Sendable, Equatable {
 package struct ModelSessionPlan: Sendable {
     package let modelDirectory: URL
     package let maxContext: Int
+    package let maxContextExplicit: Bool
     /// How many sequences the session's runner and per-slot scratch support.
     /// One is the historical single-generation server; the coordinator's width
     /// is kept equal to it.
@@ -62,6 +63,7 @@ package struct ModelSessionPlan: Sendable {
     package init(
         modelDirectory: URL,
         maxContext: Int,
+        maxContextExplicit: Bool = true,
         slots: Int = 1,
         promptCacheMode: ServerPromptCacheMode,
         promptCacheMaximumEntries: Int,
@@ -81,6 +83,7 @@ package struct ModelSessionPlan: Sendable {
     ) {
         self.modelDirectory = modelDirectory
         self.maxContext = maxContext
+        self.maxContextExplicit = maxContextExplicit
         self.slots = slots
         self.promptCacheMode = promptCacheMode
         self.promptCacheMaximumEntries = promptCacheMaximumEntries
@@ -107,6 +110,7 @@ package struct ModelSessionPlan: Sendable {
             modelDirectory: modelDirectory,
             factory: factory,
             maxContext: maxContext,
+            maxContextExplicit: maxContextExplicit,
             slots: slots,
             promptCacheMode: promptCacheMode,
             promptCacheMaximumEntries: promptCacheMaximumEntries,

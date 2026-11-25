@@ -131,9 +131,9 @@ class MenuRowPaddingTests(unittest.TestCase):
                 self.assertNotIn("value too great for base", output)
 
     def test_a_padded_row_outside_the_list_still_refuses(self) -> None:
-        # Forcing the base is not a pass: 20 and 21 are still not rows (the
-        # catalogue has 18), and 0 is still not a row, padded or not.
-        for reply in ("00", "020", "021"):
+        # Forcing the base is not a pass: 21 and 22 are still not rows (the
+        # catalogue has 20), and 0 is still not a row, padded or not.
+        for reply in ("00", "021", "022"):
             with self.subTest(reply=reply):
                 got, output = self.installed(reply + "\n")
                 self.assertEqual(got, "", output)

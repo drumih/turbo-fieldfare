@@ -12,6 +12,8 @@ public struct ServerArguments: Equatable, Sendable {
     /// manifest (for example qwen3.6-35b-a3b or ornith-1.5-35b-a3b).
     public let modelIDOverride: String?
     public let maxContext: Int
+    /// Whether `--max-context` was explicitly passed on the command line.
+    public var maxContextExplicit = false
     public let queueLimit: Int
     /// Generations that may run at once through the batched engine. One is the
     /// historical single-generation server and the default; the excess still
@@ -440,6 +442,7 @@ public struct ServerArguments: Equatable, Sendable {
             port: port,
             modelIDOverride: modelIDOverride,
             maxContext: maxContext,
+            maxContextExplicit: maxContextWasSet,
             queueLimit: queueLimit,
             maxConcurrentSequences: maxConcurrentSequences,
             promptCacheMode: promptCacheMode,

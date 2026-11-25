@@ -458,6 +458,39 @@
           "qualification": null
         }
       ]
+    },
+    {
+      "modelID": "inkling-2-mini",
+      "displayName": "Inkling 2 Mini",
+      "family": "inkling2",
+      "source": {
+        "repo": "thinkingmachines/Inkling-2-Mini",
+        "sha": "ed40e7da625f594fc9c4990f5f66be24873c22d7"
+      },
+      "variants": [
+        {
+          "id": "inkling-2-mini-gguf-4bit",
+          "target": "Inkling2GGUFQ4",
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 17664255634,
+          "sourceSizeBytes": 17629759456,
+          "qualification": null,
+          "recipeNote": "unsloth/Inkling-2-Mini-GGUF (45fd08764f2b0bf16b03a5483a80e5c7aaec8772) Q4_K_XL streamed as .ssdai"
+        },
+        {
+          "id": "inkling-2-mini-nvfp4-4bit",
+          "target": "Inkling2NVFP4",
+          "bits": 4,
+          "engine": "gpu",
+          "shipped": false,
+          "installedSizeBytes": 19592286535,
+          "sourceSizeBytes": 19555000000,
+          "qualification": null,
+          "recipeNote": "original ModelOpt NVFP4/MXFP8 checkpoint streamed as .ssdai (text only)"
+        }
+      ]
     }
   ]
 }

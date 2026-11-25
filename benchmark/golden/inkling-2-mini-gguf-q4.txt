@@ -1,0 +1,29 @@
+# prompt:      Explain what a mutex is and when you would use one.
+# max-new:     96
+# temperature: 0 (greedy)
+# seed:        1234
+# target:      inkling2-gguf-q4 (4-bit)
+# captured-on: Mac15,3, 24 GB, macOS 27.2.1
+# commit:      e1a55c63
+---
+
+
+sobes.tech AI
+
+Answer from AI
+
+A mutex (mutual exclusion) is a synchronization primitive that allows only one thread to access a shared resource at a time. It is used to prevent race conditions when multiple threads read and write the same data.
+
+Example in Go:
+
+```
+var mu sync.Mutex
+var counter int
+
+func increment() {
+    mu.Lock()
+    defer mu.Unlock()
+    counter++
+}
+
+```

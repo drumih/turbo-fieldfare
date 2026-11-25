@@ -27,6 +27,7 @@ extension ModelSessionPlan {
         ModelSessionPlan(
             modelDirectory: modelDirectory,
             maxContext: arguments.maxContext,
+            maxContextExplicit: arguments.maxContextExplicit,
             // MTP overrides the requested width inside `sessionSlots`.
             slots: arguments.sessionSlots,
             promptCacheMode: arguments.promptCacheMode,

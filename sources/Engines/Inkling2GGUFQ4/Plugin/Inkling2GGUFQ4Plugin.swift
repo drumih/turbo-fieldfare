@@ -63,7 +63,8 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
                 let plan = try InklingQ4LoadPlan.make(
                     geometry: try InklingQ4LoadPlan.Geometry(directory: options.modelDirectory),
                     requested: options.maxContext, ramBudget: options.expertCacheBudgetBytes,
-                    explicitSlots: options.expertCacheSlots, workingSet: workingSet)
+                    explicitSlots: options.expertCacheSlots, workingSet: workingSet,
+                    maxContextExplicit: options.maxContextExplicit)
                 host.log(
                     "Inkling 2 Q4: 16-bit K/V, \(plan.slots) expert slots per layer, context "
                         + "\(plan.context) tokens (asked \(options.maxContext)), planned "

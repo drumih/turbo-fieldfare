@@ -24,6 +24,11 @@ public struct SessionBuildOptions: Sendable {
     public let modelDirectory: URL
     public let context: MetalContext?
     public let maxContext: Int
+    /// Whether the caller explicitly set `maxContext` (e.g. `--max-context`).
+    /// Engines that size their window from a RAM budget (Inkling 2) use this
+    /// to cap the default at their budgeted window while honoring an explicit
+    /// user choice.
+    public let maxContextExplicit: Bool
     public let slots: Int
     public let promptCacheMaximumEntries: Int
     public let promptCacheMemoryLimitBytes: Int
@@ -49,6 +54,7 @@ public struct SessionBuildOptions: Sendable {
         modelDirectory: URL = URL(fileURLWithPath: ""),
         context: MetalContext?,
         maxContext: Int,
+        maxContextExplicit: Bool = true,
         slots: Int,
         promptCacheMaximumEntries: Int,
         promptCacheMemoryLimitBytes: Int,
@@ -72,6 +78,7 @@ public struct SessionBuildOptions: Sendable {
         self.modelDirectory = modelDirectory
         self.context = context
         self.maxContext = maxContext
+        self.maxContextExplicit = maxContextExplicit
         self.slots = slots
         self.promptCacheMaximumEntries = promptCacheMaximumEntries
         self.promptCacheMemoryLimitBytes = promptCacheMemoryLimitBytes

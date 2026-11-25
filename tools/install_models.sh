@@ -353,6 +353,10 @@ CATALOGUE=(
   "qwen35-4b-8bit|qwen3.5_4B_8Bit|8|convert_qwen35"
   "qwen35-9b|qwen3.5_9B_4Bit|4|convert_qwen35"
   "qwen35-9b-8bit|qwen3.5_9B_8Bit|8|convert_qwen35"
+  # Inkling 2 Mini: streamed directly from Hugging Face into .ssdai by
+  # TinyTitanRepack without a Python converter or intermediate staging.
+  "inkling2-gguf-q4|inkling-2-mini_GGUF-Q4|4|repack"
+  "inkling2-nvfp4|inkling-2-mini_NVFP4|4|repack"
 )
 
 usage() {
@@ -411,6 +415,7 @@ Coverage
   Qwen-AgentWorld 35B-A3B   4-bit, 8-bit
   KAT-Coder-V2.5-Dev 35B-A3B 4-bit, 8-bit
   Qwen 3.5 2B / 4B / 9B     4-bit, 8-bit (CPU models)
+  Inkling 2 Mini Q4 / NVFP4 4-bit (streams directly via TinyTitanRepack)
 
 Sources
 
@@ -504,7 +509,7 @@ status() {
 # `TinyTitanRepack --help` accepts.
 tinytitan_repack_streams() {
   case "$1" in
-    qwen36|qwen36-8bit|ornith15|ornith15-8bit) return 0 ;;
+    qwen36|qwen36-8bit|ornith15|ornith15-8bit|inkling2-gguf-q4|inkling2-nvfp4) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -545,9 +550,9 @@ install_one() {
     return 2
   fi
   # Every conversion path runs a Python converter, so resolve the interpreter
-  # once, here, rather than emitting a raw "command not found" per call.
-  local python
-  python="$(tinytitan_resolve_python)" || { tinytitan_no_python_fallback "$want"; return 1; }
+  # once when the selected row needs one. Direct `repack` rows stream in Swift
+  # without Python.
+  local python=""
   for row in "${CATALOGUE[@]+"${CATALOGUE[@]}"}"; do
     # Up to six fields on the MoE rows, four elsewhere. The preset is read here
     # because the MoE branches address staging by it (`$WORK/<preset>-affine-*`);
@@ -556,6 +561,9 @@ install_one() {
     IFS='|' read -r name dir width source preset_field _ <<<"$row"
     [[ "$name" == "$want" ]] || continue
     found=1
+    if [[ "$source" != repack ]]; then
+      python="$(tinytitan_resolve_python)" || { tinytitan_no_python_fallback "$want"; return 1; }
+    fi
     if [[ -d "$MODELS/$dir" ]]; then
       # A dense install from before this project repacked them is an affine
       # snapshot: the directory exists but carries no manifest and no receipt.
@@ -593,7 +601,10 @@ install_one() {
           [[ -n "$probe" && -e "$probe" ]] && snap_exists=1
         done < <(row_staging_dirs "$name")
         [[ -d "$MODELS/$dir" ]] && install_exists=1
-        if [[ "$source" == convert_qwen35moe_solo ]]; then
+        if [[ "$source" == repack ]]; then
+          # Direct repack streams straight into $MODELS/$dir without staging.
+          stage_need=""
+        elif [[ "$source" == convert_qwen35moe_solo ]]; then
           # The solo path consumes its source shards as the install is written
           # (--consume-snapshot), so the peak is the snapshot plus the
           # bytes written before the first unlink -- not the snapshot plus the

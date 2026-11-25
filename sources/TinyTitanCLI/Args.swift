@@ -15,6 +15,8 @@ public struct Args: Equatable, Sendable {
     public var messagesFile: String?
     public var maxNew: Int
     public var maxContext: Int
+    /// Whether `--max-context` was explicitly passed on the command line.
+    public var maxContextWasSet: Bool = false
     public var temperature: Float
     public var topK: Int?
     public var topP: Float?
@@ -63,6 +65,7 @@ public struct Args: Equatable, Sendable {
         messagesFile: String? = nil,
         maxNew: Int = 1_024,
         maxContext: Int = 4096,
+        maxContextWasSet: Bool = false,
         temperature: Float = SamplingProfile.house.temperature,
         topK: Int? = SamplingProfile.house.topK,
         topP: Float? = SamplingProfile.house.topP,
@@ -93,6 +96,7 @@ public struct Args: Equatable, Sendable {
         self.messagesFile = messagesFile
         self.maxNew = maxNew
         self.maxContext = maxContext
+        self.maxContextWasSet = maxContextWasSet
         self.temperature = temperature
         self.topK = topK
         self.topP = topP
@@ -408,6 +412,7 @@ extension Args {
             messagesFile: messagesFile,
             maxNew: maxNew,
             maxContext: maxContext,
+            maxContextWasSet: maxContextWasSet,
             temperature: temperature,
             topK: topK,
             topP: topP,

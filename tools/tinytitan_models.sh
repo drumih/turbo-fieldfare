@@ -77,6 +77,8 @@ TINYTITAN_MODEL_CHOICES=(
   "ornith122|Ornith 1.5 122B|4|66.0|The 122B at 4-bit: half the disk, and about twice the decode of 8-bit."
   "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|163.0|Routed experts 4-bit, every resident tensor 8-bit (the 4/8/16 recipe). The largest model, and the most disk."
   "qwen38flash-8bit|Qwen3.8-Flash-Next 125B-A6B|8|220.0|The largest model at 8-bit."
+  "inkling2-gguf-q4|Inkling 2 Mini Q4|4|16.5|Inkling 2 Mini (GGUF Q4_K_XL). Streams directly via TinyTitanRepack."
+  "inkling2-nvfp4|Inkling 2 Mini NVFP4|4|18.2|Inkling 2 Mini (original NVFP4/MXFP8). Streams directly via TinyTitanRepack."
 )
 
 # tinytitan_client_ids -> one client id per line, in menu order.
@@ -202,8 +204,23 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_FAMILY=qwen3_5_dense
       TINYTITAN_MODEL_ENGINES="gpu,cpu"
       TINYTITAN_MODEL_THINKING="off,on" ;;
+    inkling2-gguf-q4|inkling2-q4|inkling-2-mini-gguf-q4)
+      TINYTITAN_MODEL_KEY=inkling2-gguf-q4
+      TINYTITAN_MODEL_STEM="inkling-2-mini_GGUF-Q4"
+      TINYTITAN_MODEL_LABEL="Inkling 2 Mini Q4"
+      TINYTITAN_MODEL_FAMILY=inkling2
+      TINYTITAN_MODEL_ENGINES=gpu
+      TINYTITAN_MODEL_THINKING="off,low,medium,high,xhigh" ;;
+    inkling2-nvfp4|inkling-2-mini-nvfp4)
+      # shellcheck disable=SC2034  # read by callers of tinytitan_resolve_model
+      TINYTITAN_MODEL_KEY=inkling2-nvfp4
+      TINYTITAN_MODEL_STEM="inkling-2-mini_NVFP4"
+      TINYTITAN_MODEL_LABEL="Inkling 2 Mini NVFP4"
+      TINYTITAN_MODEL_FAMILY=inkling2
+      TINYTITAN_MODEL_ENGINES=gpu
+      TINYTITAN_MODEL_THINKING="off,low,medium,high,xhigh" ;;
     *)
-      echo "unknown AI model: ${1:-} (ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b)" >&2
+      echo "unknown AI model: ${1:-} (ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|inkling2-gguf-q4|inkling2-nvfp4)" >&2
       return 2 ;;
   esac
 }
@@ -225,7 +242,12 @@ tinytitan_resolve_quant() {
 # the installer's CATALOGUE cannot disagree: every install is `<stem>_<4Bit|8Bit>`,
 # whatever quant recipe the manifest inside carries.
 tinytitan_install_dirname() {
-  printf '%s_%s' "${TINYTITAN_MODEL_STEM:-}" "${TINYTITAN_QUANT_DIR:-}"
+  case "${TINYTITAN_MODEL_STEM:-}" in
+    inkling-2-mini_GGUF-Q4|inkling-2-mini_NVFP4)
+      printf '%s' "$TINYTITAN_MODEL_STEM" ;;
+    *)
+      printf '%s_%s' "${TINYTITAN_MODEL_STEM:-}" "${TINYTITAN_QUANT_DIR:-}" ;;
+  esac
 }
 
 # tinytitan_install_key <stem> <4|8> -> the install_models.sh target for it.
@@ -248,6 +270,14 @@ tinytitan_install_key() {
     qwen3.5_2B)                    key=qwen35-2b ;;
     qwen3.5_4B)                    key=qwen35-4b ;;
     qwen3.5_9B)                    key=qwen35-9b ;;
+    inkling-2-mini_GGUF-Q4)
+      [[ "${2:-4}" == "4" ]] || return 1
+      printf '%s\n' "inkling2-gguf-q4"
+      return 0 ;;
+    inkling-2-mini_NVFP4)
+      [[ "${2:-4}" == "4" ]] || return 1
+      printf '%s\n' "inkling2-nvfp4"
+      return 0 ;;
     *) return 1 ;;
   esac
   [[ "${2:-4}" == "8" ]] && key="$key-8bit"
@@ -317,10 +347,11 @@ tinytitan_missing_offers() {
     engines="$TINYTITAN_MODEL_ENGINES"
     thinking="$TINYTITAN_MODEL_THINKING"
     for quant in 4Bit 8Bit; do
-      [[ -e "$models_dir/${stem}_${quant}" ]] && continue
       bits=4
       [[ "$quant" == "8Bit" ]] && bits=8
       key="$(tinytitan_install_key "$stem" "$bits")" || continue
+      tinytitan_resolve_quant "$bits"
+      [[ -e "$models_dir/$(tinytitan_install_dirname)" ]] && continue
       size="$(tinytitan_install_size_gb "$key" || true)"
       printf '%s|%s|%s|%s|%s|%s|%s\n' \
         "$name" "$bits" "$key" "$label" "$size" "$engines" "$thinking"
@@ -337,7 +368,7 @@ tinytitan_model_port() {
 # Every model this checkout knows about, for help text and for the fallback
 # list when the server cannot report its catalog. One list: the catalog is
 # still the source of what is installed.
-TINYTITAN_ALL_MODELS=(ornith ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b)
+TINYTITAN_ALL_MODELS=(ornith ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b inkling2-gguf-q4 inkling2-nvfp4)
 
 # --- Installed models, from the server's catalog -----------------------
 #
@@ -485,6 +516,7 @@ tinytitan_static_catalog() {
     tinytitan_resolve_model "$key"
     added=0
     for bits in 8 4; do
+      tinytitan_install_key "$TINYTITAN_MODEL_STEM" "$bits" >/dev/null 2>&1 || continue
       tinytitan_resolve_quant "$bits"
       dir="$models_dir/$(tinytitan_install_dirname)"
       [[ -e "$dir" ]] || continue

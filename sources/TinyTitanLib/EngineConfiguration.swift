@@ -17,6 +17,9 @@ import Foundation
 public struct EngineConfiguration: Sendable {
     /// The context window the session is loaded at.
     public var contextWindow: Int
+    /// Whether the caller explicitly named `contextWindow` (vs. inheriting the
+    /// default). Used by engines that size their window from a RAM budget.
+    package var contextWindowExplicit: Bool = true
     /// Bytes the routed-expert cache may use (`nil` = the install's own
     /// profile, which the loader derives from the manifest).
     public var expertCacheBudgetBytes: Int?

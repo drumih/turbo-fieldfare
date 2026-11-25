@@ -146,7 +146,7 @@ public func run(
         } else {
             logSink = nil
         }
-        let configuration = EngineConfiguration(
+        var configuration = EngineConfiguration(
             contextWindow: args.maxContext,
             expertCacheBudgetBytes: args.ramBudgetBytes,
             cachePrecision: cachePrecision(args.kvCachePrecision),
@@ -158,6 +158,7 @@ public func run(
             readAhead: readAheadAdvice(args.rdadvise),
             forceLogitsHead: !isPureGreedy,
             logSink: logSink)
+        configuration.contextWindowExplicit = args.maxContextWasSet
         let cpuThinkingMode: ModelThinkingMode = thinkingMode == .on ? .on : .off
         let engine: any EngineFacade
         if args.engine == .cpu {

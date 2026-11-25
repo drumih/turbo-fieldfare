@@ -80,6 +80,12 @@ CANONICAL = {
     "qwen35-9b": ("Qwen 3.5 9B", "qwen35-9b"),
 }
 
+# Single-width (4-bit only) models: their directory is their stem directly.
+SINGLE_WIDTH_MODELS = {
+    "inkling2-gguf-q4": ("Inkling 2 Mini Q4", "inkling-2-mini_GGUF-Q4", "inkling2-gguf-q4"),
+    "inkling2-nvfp4": ("Inkling 2 Mini NVFP4", "inkling-2-mini_NVFP4", "inkling2-nvfp4"),
+}
+
 # Removed from the catalogue 2026-11-16: a quant variant and two draft-head
 # sidecars. Neither script may resolve, offer or install them again.
 REMOVED_KEYS = ("ornith15-bf16dense", "ornith15-mtp", "qwen36-mtp")
@@ -283,10 +289,8 @@ class MissingOffersTests(unittest.TestCase):
         self.assertIn("ornith", names)
         self.assertIn("katcoder", names)
         self.assertIn("qwen38", names)
-        # Nine models in two widths. The count is asserted so a new row is a
-        # deliberate edit here: a width that cannot be fetched must not appear
-        # as a row.
-        self.assertEqual(len(rows), 18, "nine models, two widths each")
+        # Nine two-width models (18) plus two single-width Inkling 2 models (2) = 20.
+        self.assertEqual(len(rows), 20, "nine two-width models + two single-width Inkling 2 models")
         for row in rows:
             self.assertIn(row[1], ("4", "8"))
             self.assertTrue(row[3], f"offer row has no label: {row}")
@@ -332,6 +336,8 @@ class MissingOffersTests(unittest.TestCase):
             ):
                 for bits in ("4Bit", "8Bit"):
                     (root / f"{stem}_{bits}").mkdir()
+            for _label, stem, _key in SINGLE_WIDTH_MODELS.values():
+                (root / stem).mkdir()
             rows = self.offers(root)
         self.assertEqual(rows, [])
 
@@ -582,8 +588,8 @@ class MenuRowPaddingTests(unittest.TestCase):
     def test_a_padded_reply_past_the_end_still_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as empty:
             models = pathlib.Path(empty)
-            # The catalogue has 18 rows; 20 and 21 are past its end.
-            for padded in ("020", "021"):
+            # The catalogue has 20 rows; 21 and 22 are past its end.
+            for padded in ("021", "022"):
                 with self.subTest(reply=padded):
                     pad = self.pick(padded, models)
                     combined = pad.stdout + pad.stderr
@@ -713,6 +719,8 @@ class CatalogueSyncTests(unittest.TestCase):
         for _label, key in CANONICAL.values():
             expected.add(key)
             expected.add(f"{key}-8bit")
+        for _label, _stem, key in SINGLE_WIDTH_MODELS.values():
+            expected.add(key)
         self.assertEqual(set(choices()), expected, "menu keys drifted from the canonical list")
         self.assertEqual(
             set(catalogue()), expected, "installer keys drifted from the canonical list"
@@ -733,6 +741,14 @@ class CatalogueSyncTests(unittest.TestCase):
                         label,
                         f"menu label for {width_key} differs from the launcher's",
                     )
+        for name, (label, _stem, key) in SINGLE_WIDTH_MODELS.items():
+            with self.subTest(model=name):
+                resolved = shell_snippet(
+                    f'tinytitan_resolve_model "{name}" && printf "%s" "$TINYTITAN_MODEL_LABEL"'
+                )
+                self.assertEqual(resolved.returncode, 0, resolved.stderr)
+                self.assertEqual(resolved.stdout, label)
+                self.assertEqual(menu[key][0], label)
 
     def test_install_target_accepts_both_spellings_of_every_model(self) -> None:
         for name, (_label, key) in CANONICAL.items():
