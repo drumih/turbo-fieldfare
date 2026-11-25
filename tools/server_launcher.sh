@@ -717,7 +717,7 @@ else
       MODEL_ARG="${MODEL_ARG%-*bit}"
     fi
     if ! tinytitan_resolve_model "$MODEL_ARG" 2>/dev/null; then
-      echo "unknown model: $MODEL_ARG (a model id, or ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|inkling2-gguf-q4|inkling2-nvfp4)" >&2
+      echo "unknown model: $MODEL_ARG (a model id, or ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|inkling-q4-k-xl-unsloth|inkling2mini)" >&2
       if (( dynamic )); then echo "installed: ${TINYTITAN_CAT_ID[*]+"${TINYTITAN_CAT_ID[*]}"}" >&2; fi
       exit 2
     fi

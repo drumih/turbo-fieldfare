@@ -18,7 +18,9 @@ import TinyTitanPluginAPI
             kv.refusal(
                 for: .int8, flag: "--kv-bits", plugin: Inkling2GGUFQ4Plugin.displayName,
                 spelled: { "\($0.rawValue)" }))
-        #expect(refusal.hasPrefix("--kv-bits 8 is not supported by Inkling 2 Mini Q4"))
+        #expect(
+            refusal.hasPrefix(
+                "--kv-bits 8 is not supported by Inkling 2 Mini UD-Q4_K_XL (Unsloth)"))
         #expect(refusal.contains("95/96"))
         let defaulted = kv.resolveDefault(.int8, flag: "--kv-bits", plugin: "Inkling")
         #expect(defaulted.value == .fp16)

@@ -82,8 +82,12 @@ CANONICAL = {
 
 # Single-width (4-bit only) models: their directory is their stem directly.
 SINGLE_WIDTH_MODELS = {
-    "inkling2-gguf-q4": ("Inkling 2 Mini Q4", "inkling-2-mini_GGUF-Q4", "inkling2-gguf-q4"),
-    "inkling2-nvfp4": ("Inkling 2 Mini NVFP4", "inkling-2-mini_NVFP4", "inkling2-nvfp4"),
+    "inkling-q4-k-xl-unsloth": (
+        "Inkling 2 Mini UD-Q4_K_XL (Unsloth)",
+        "inkling-2-mini_GGUF-Q4",
+        "inkling-q4-k-xl-unsloth",
+    ),
+    "inkling2mini": ("Inkling 2 Mini", "inkling-2-mini_NVFP4", "inkling2mini"),
 }
 
 # Removed from the catalogue 2026-11-16: a quant variant and two draft-head

@@ -15,7 +15,7 @@ import TinyTitanPluginAPI
 public enum Inkling2NVFP4Plugin: EnginePlugin {
     public static let pluginID = "ai.tinytitan.inkling2-nvfp4"
     public static let protocolVersion = ProtocolVersion.current
-    public static let displayName = "Inkling 2 Mini NVFP4"
+    public static let displayName = "Inkling 2 Mini"
 
     /// Thinking off, or one of the template's effort levels (`high`, 0.9, is
     /// its own default).

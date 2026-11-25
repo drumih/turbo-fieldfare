@@ -28,7 +28,7 @@
 >   `RunInkling2GGUF`, -11,934 lines); relocated `q4kxl-reference.json`,
 >   `InklingChatTemplateTests`, and `GGUFBlockKernelsTests`. Raw folders
 >   `models/inkling-2-mini` (19 GB) and `models/inkling-2-mini-gguf` (16 GB)
->   are untouched and proposed for owner approval.
+>   were removed with owner approval on 2026-11-25 (35 GiB freed).
 > - **TT-133** (`9e57187c`): exported `TinyTitanCore` in `TinyTitanLib` /
 >   `TinyTitanLibDynamic`; added `examples/plugin/` (`EchoPlugin` + `PluginDemo`)
 >   and `tools/plugin-dependency-check.sh` in CI.

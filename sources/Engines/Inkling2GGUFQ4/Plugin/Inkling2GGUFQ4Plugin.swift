@@ -12,7 +12,7 @@ import TinyTitanPluginAPI
 public enum Inkling2GGUFQ4Plugin: EnginePlugin {
     public static let pluginID = "ai.tinytitan.inkling2-gguf-q4"
     public static let protocolVersion = ProtocolVersion.current
-    public static let displayName = "Inkling 2 Mini Q4"
+    public static let displayName = "Inkling 2 Mini UD-Q4_K_XL (Unsloth)"
 
     /// Thinking off, or one of the template's effort levels (`high`, 0.9, is
     /// its own default).

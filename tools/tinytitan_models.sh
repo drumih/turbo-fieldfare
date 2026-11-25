@@ -77,8 +77,8 @@ TINYTITAN_MODEL_CHOICES=(
   "ornith122|Ornith 1.5 122B|4|66.0|The 122B at 4-bit: half the disk, and about twice the decode of 8-bit."
   "qwen38flash|Qwen3.8-Flash-Next 125B-A6B|4|163.0|Routed experts 4-bit, every resident tensor 8-bit (the 4/8/16 recipe). The largest model, and the most disk."
   "qwen38flash-8bit|Qwen3.8-Flash-Next 125B-A6B|8|220.0|The largest model at 8-bit."
-  "inkling2-gguf-q4|Inkling 2 Mini Q4|4|16.5|Inkling 2 Mini (GGUF Q4_K_XL). Streams directly via TinyTitanRepack."
-  "inkling2-nvfp4|Inkling 2 Mini NVFP4|4|18.2|Inkling 2 Mini (original NVFP4/MXFP8). Streams directly via TinyTitanRepack."
+  "inkling-q4-k-xl-unsloth|Inkling 2 Mini UD-Q4_K_XL (Unsloth)|4|16.5|Unsloth UD-Q4_K_XL (Q8 resident, faster). Streams directly via TinyTitanRepack."
+  "inkling2mini|Inkling 2 Mini|4|18.2|Original Hugging Face checkpoint (BF16 resident). Streams directly via TinyTitanRepack."
 )
 
 # tinytitan_client_ids -> one client id per line, in menu order.
@@ -204,23 +204,23 @@ tinytitan_resolve_model() {
       TINYTITAN_MODEL_FAMILY=qwen3_5_dense
       TINYTITAN_MODEL_ENGINES="gpu,cpu"
       TINYTITAN_MODEL_THINKING="off,on" ;;
-    inkling2-gguf-q4|inkling2-q4|inkling-2-mini-gguf-q4)
-      TINYTITAN_MODEL_KEY=inkling2-gguf-q4
+    inkling-q4-k-xl-unsloth|inkling_Q4_K_XL_Unsloth|inkling_q4_k_xl_unsloth|inkling2-ud-q4-k-xl-unsloth|inkling2-gguf-q4|inkling2-q4|inkling-2-mini-gguf-q4)
+      TINYTITAN_MODEL_KEY=inkling-q4-k-xl-unsloth
       TINYTITAN_MODEL_STEM="inkling-2-mini_GGUF-Q4"
-      TINYTITAN_MODEL_LABEL="Inkling 2 Mini Q4"
+      TINYTITAN_MODEL_LABEL="Inkling 2 Mini UD-Q4_K_XL (Unsloth)"
       TINYTITAN_MODEL_FAMILY=inkling2
       TINYTITAN_MODEL_ENGINES=gpu
       TINYTITAN_MODEL_THINKING="off,low,medium,high,xhigh" ;;
-    inkling2-nvfp4|inkling-2-mini-nvfp4)
+    inkling2mini|inkling2-nvfp4|inkling-2-mini-nvfp4)
       # shellcheck disable=SC2034  # read by callers of tinytitan_resolve_model
-      TINYTITAN_MODEL_KEY=inkling2-nvfp4
+      TINYTITAN_MODEL_KEY=inkling2mini
       TINYTITAN_MODEL_STEM="inkling-2-mini_NVFP4"
-      TINYTITAN_MODEL_LABEL="Inkling 2 Mini NVFP4"
+      TINYTITAN_MODEL_LABEL="Inkling 2 Mini"
       TINYTITAN_MODEL_FAMILY=inkling2
       TINYTITAN_MODEL_ENGINES=gpu
       TINYTITAN_MODEL_THINKING="off,low,medium,high,xhigh" ;;
     *)
-      echo "unknown AI model: ${1:-} (ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|inkling2-gguf-q4|inkling2-nvfp4)" >&2
+      echo "unknown AI model: ${1:-} (ornith|ornith122|qwen36|agentworld|katcoder|qwen38|qwen35-2b|qwen35-4b|qwen35-9b|inkling-q4-k-xl-unsloth|inkling2mini)" >&2
       return 2 ;;
   esac
 }
@@ -272,11 +272,11 @@ tinytitan_install_key() {
     qwen3.5_9B)                    key=qwen35-9b ;;
     inkling-2-mini_GGUF-Q4)
       [[ "${2:-4}" == "4" ]] || return 1
-      printf '%s\n' "inkling2-gguf-q4"
+      printf '%s\n' "inkling-q4-k-xl-unsloth"
       return 0 ;;
     inkling-2-mini_NVFP4)
       [[ "${2:-4}" == "4" ]] || return 1
-      printf '%s\n' "inkling2-nvfp4"
+      printf '%s\n' "inkling2mini"
       return 0 ;;
     *) return 1 ;;
   esac
@@ -368,7 +368,7 @@ tinytitan_model_port() {
 # Every model this checkout knows about, for help text and for the fallback
 # list when the server cannot report its catalog. One list: the catalog is
 # still the source of what is installed.
-TINYTITAN_ALL_MODELS=(ornith ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b inkling2-gguf-q4 inkling2-nvfp4)
+TINYTITAN_ALL_MODELS=(ornith ornith122 qwen36 agentworld katcoder qwen38 qwen35-2b qwen35-4b qwen35-9b inkling-q4-k-xl-unsloth inkling2mini)
 
 # --- Installed models, from the server's catalog -----------------------
 #

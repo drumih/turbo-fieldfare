@@ -166,8 +166,8 @@ public struct SupportedModelSource: Sendable, Equatable {
     /// encoding and offset. Converted, not yet served: the variant that serves
     /// it is TT-121 phase 2.
     public static let inkling2GGUFQ4 = SupportedModelSource(
-        name: "inkling2-gguf-q4",
-        displayName: "Inkling 2 Mini Q4_K_XL GGUF (text)",
+        name: "inkling-q4-k-xl-unsloth",
+        displayName: "Inkling 2 Mini UD-Q4_K_XL (Unsloth)",
         repoID: "unsloth/Inkling-2-Mini-GGUF",
         revision: "45fd08764f2b0bf16b03a5483a80e5c7aaec8772",
         sourceIndexSHA256:
@@ -184,8 +184,8 @@ public struct SupportedModelSource: Sendable, Equatable {
     /// SHA-256 of `config.json` and both safetensors headers. Converted, not
     /// yet served: the variant that serves it is TT-121 phase 3.
     public static let inkling2NVFP4 = SupportedModelSource(
-        name: "inkling2-nvfp4",
-        displayName: "Inkling 2 Mini NVFP4 (text)",
+        name: "inkling2mini",
+        displayName: "Inkling 2 Mini",
         repoID: "thinkingmachines/Inkling-2-Mini",
         revision: "ed40e7da625f594fc9c4990f5f66be24873c22d7",
         sourceIndexSHA256:
@@ -205,6 +205,14 @@ public struct SupportedModelSource: Sendable, Equatable {
     ]
 
     public static func named(_ name: String) -> SupportedModelSource? {
-        all.first { $0.name == name }
+        if let direct = all.first(where: { $0.name == name }) { return direct }
+        switch name.lowercased() {
+        case "inkling2-gguf-q4", "inkling_q4_k_xl_unsloth", "inkling2-ud-q4-k-xl-unsloth":
+            return inkling2GGUFQ4
+        case "inkling2-nvfp4":
+            return inkling2NVFP4
+        default:
+            return nil
+        }
     }
 }
