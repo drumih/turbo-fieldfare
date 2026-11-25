@@ -22,6 +22,8 @@ package final class InklingQ4Decoder {
     let ops: InklingQ4Ops
     /// Tokens of the chunk being encoded.
     private(set) var tokens = 1
+    /// Sequence slot whose KV and convolution caches are active for this chunk.
+    private(set) var activeSlot = 0
     /// CPU time spent encoding, and GPU time of, the last chunk's command buffer.
     private(set) var lastEncodeSeconds: Double = 0
     private(set) var lastGPUSeconds: Double = 0
@@ -64,7 +66,8 @@ package final class InklingQ4Decoder {
 
     package init(
         directory: URL, maxContext: Int = 4_096, maxChunk: Int = 256,
-        experts residency: InklingQ4ExpertResidency = .mapped, context: MetalContext? = nil
+        slots: Int = 1, experts residency: InklingQ4ExpertResidency = .mapped,
+        context: MetalContext? = nil
     ) throws {
         let context = try context ?? MetalContext()
         self.context = context
@@ -99,7 +102,7 @@ package final class InklingQ4Decoder {
         }
         state = try InklingQ4State(
             manifest: manifest, device: context.device, maxContext: maxContext,
-            maxChunk: maxChunk)
+            maxChunk: maxChunk, slots: slots)
         ops = try InklingQ4Ops(context: context)
         if let expertCache, !expertCache.isIdentity {
             routing = try InklingQ4EventRouting(
@@ -110,30 +113,35 @@ package final class InklingQ4Decoder {
         }
     }
 
-    /// Feeds `token` at `position` and returns the greedy next token. With
-    /// `returnLogits`, also returns the softcapped logits of the unpadded vocabulary.
-    package func step(token: Int, position: Int, returnLogits: Bool = false) throws
-        -> (next: Int, logits: [Float]?)
-    {
-        try prefill([token], position: position, returnLogits: returnLogits)
+    /// Feeds `token` at `position` into `slot` and returns the greedy next
+    /// token. With `returnLogits`, also returns the softcapped logits of the
+    /// unpadded vocabulary.
+    package func step(
+        token: Int, position: Int, slot: Int = 0, returnLogits: Bool = false
+    ) throws -> (next: Int, logits: [Float]?) {
+        try prefill([token], position: position, slot: slot, returnLogits: returnLogits)
     }
 
-    /// Feeds `prompt` at positions `position ..<`, in chunks of up to
-    /// `maxChunk` tokens, and returns the greedy token after its last one
+    /// Feeds `prompt` at positions `position ..<` into `slot`, in chunks of up
+    /// to `maxChunk` tokens, and returns the greedy token after its last one
     /// (with its softcapped logits when asked).
-    package func prefill(_ prompt: [Int], position: Int, returnLogits: Bool = false) throws
-        -> (next: Int, logits: [Float]?)
-    {
+    package func prefill(
+        _ prompt: [Int], position: Int, slot: Int = 0, returnLogits: Bool = false
+    ) throws -> (next: Int, logits: [Float]?) {
         guard !prompt.isEmpty, position + prompt.count <= state.maxContext else {
             throw MetalError.invalidState(
                 "\(prompt.count) tokens at \(position) for context \(state.maxContext)")
+        }
+        guard slot >= 0, slot < state.slots else {
+            throw MetalError.invalidState("slot \(slot) out of range 0..<\(state.slots)")
         }
         var result: (next: Int, logits: [Float]?) = (0, nil)
         var offset = 0
         while offset < prompt.count {
             let chunk = Array(prompt[offset..<min(prompt.count, offset + state.maxChunk)])
             let last = offset + chunk.count == prompt.count
-            result = try run(chunk, position: position + offset, returnLogits: returnLogits && last)
+            result = try run(
+                chunk, position: position + offset, slot: slot, returnLogits: returnLogits && last)
             offset += chunk.count
         }
         return result
@@ -153,9 +161,10 @@ package final class InklingQ4Decoder {
         return produced
     }
 
-    private func run(_ chunk: [Int], position: Int, returnLogits: Bool) throws
+    private func run(_ chunk: [Int], position: Int, slot: Int, returnLogits: Bool) throws
         -> (next: Int, logits: [Float]?)
     {
+        activeSlot = slot
         tokens = chunk.count
         let tokenSlots = state.tokens.contents().bindMemory(to: Int32.self, capacity: chunk.count)
         for (index, token) in chunk.enumerated() { tokenSlots[index] = Int32(token) }

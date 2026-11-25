@@ -28,13 +28,15 @@ package final class InklingQ4EngineModel: EngineModel, @unchecked Sendable {
     }
 
     /// The decoder over this install, with its experts streamed into
-    /// `slots` per layer and its caches sized for `maxContext` positions.
+    /// `slots` per layer and its caches sized for `maxContext` positions and
+    /// `sequenceSlots` concurrent sequences.
     package func makeDecoder(
-        context: MetalContext, maxContext: Int, maxChunk: Int
+        context: MetalContext, maxContext: Int, maxChunk: Int, sequenceSlots: Int = 1
     ) throws -> InklingQ4Decoder {
         try InklingQ4Decoder(
             directory: directory, maxContext: maxContext,
-            maxChunk: min(maxChunk, maxContext), experts: .slots(slots), context: context)
+            maxChunk: min(maxChunk, maxContext), slots: sequenceSlots,
+            experts: .slots(slots), context: context)
     }
 
     package func routedExpertCacheSlotCount() -> Int? { slots }

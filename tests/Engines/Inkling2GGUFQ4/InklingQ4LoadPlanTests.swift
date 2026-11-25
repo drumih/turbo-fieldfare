@@ -67,4 +67,15 @@ struct InklingQ4LoadPlanTests {
         #expect(plan.context == InklingQ4LoadPlan.defaultBudgetedContext)
         #expect(plan.slots > 60)
     }
+
+    @Test func perSlotBytesReflectsWindowKVAndFixedState() throws {
+        let geometry = InklingQ4LoadPlan.Geometry(
+            residentBytes: Self.geometry.residentBytes, bytesPerSlot: Self.geometry.bytesPerSlot,
+            bytesPerPosition: 32_768, fixedSlotBytes: 120_000_000,
+            experts: 128, expertsPerToken: 8, modelContext: 1_048_576)
+        let plan = try InklingQ4LoadPlan.make(
+            geometry: geometry, requested: 32_768, ramBudget: 12 * Self.gib,
+            explicitSlots: nil, workingSet: Self.workingSet)
+        #expect(plan.perSlotBytes == 32_768 * 32_768 + 120_000_000)
+    }
 }

@@ -399,7 +399,7 @@ for t in "${targets[@]+"${targets[@]}"}"; do
     # K2-Horizon installs, driven by the probe: `TinyTitanBench k2gpu`.
     k2-4) dir="k2-horizon-4bit.ssdai"; file="k2-horizon-4bit.txt"; q=4; kind=k2 ;;
     k2-8) dir="k2-horizon-8bit.ssdai"; file="k2-horizon-8bit.txt"; q=8; kind=k2 ;;
-    *) echo "unknown target: $t (ornith-4, ornith-8, ornith122-4, ornith122-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, k2-4, k2-8)" >&2
+    *) echo "unknown target: $t (ornith-4, ornith-8, ornith122-4, ornith122-8, qwen36-4, qwen36-8, qwen38-4, qwen38-8, agentworld-4, agentworld-8, katcoder-4, katcoder-8, qwen35-2b-4, qwen35-2b-8, qwen35-4b-4, qwen35-4b-8, qwen35-9b-4, qwen35-9b-8, inkling2-gguf-q4, inkling2-nvfp4, k2-4, k2-8)" >&2
        status=1; continue ;;
   esac
   model="$ROOT/models/$dir"

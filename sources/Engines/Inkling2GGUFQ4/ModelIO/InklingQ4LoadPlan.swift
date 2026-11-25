@@ -25,6 +25,8 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
     package let slots: Int
     /// Bytes the plan expects the process to hold (weights, slots, KV, reserve).
     package let plannedBytes: Int
+    /// Bytes of per-sequence recurrent state (KV caches + conv histories) for one slot.
+    package let perSlotBytes: Int
 
     /// Geometry the arithmetic needs, read from the install without loading it.
     package struct Geometry: Equatable, Sendable {
@@ -32,17 +34,20 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
         /// One slot in every layer: the sum of the layers' expert strides.
         package let bytesPerSlot: Int
         package let bytesPerPosition: Int
+        /// Per-slot fixed state (sliding KV rings + short-conv histories).
+        package let fixedSlotBytes: Int
         package let experts: Int
         package let expertsPerToken: Int
         package let modelContext: Int
 
         package init(
-            residentBytes: Int, bytesPerSlot: Int, bytesPerPosition: Int, experts: Int,
-            expertsPerToken: Int, modelContext: Int
+            residentBytes: Int, bytesPerSlot: Int, bytesPerPosition: Int,
+            fixedSlotBytes: Int = 0, experts: Int, expertsPerToken: Int, modelContext: Int
         ) {
             self.residentBytes = residentBytes
             self.bytesPerSlot = bytesPerSlot
             self.bytesPerPosition = bytesPerPosition
+            self.fixedSlotBytes = fixedSlotBytes
             self.experts = experts
             self.expertsPerToken = expertsPerToken
             self.modelContext = modelContext
@@ -52,11 +57,18 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
             let install = try InklingQ4Install(directory: directory)
             let manifest = try InklingQ4Manifest(install: install)
             var fullVisits = 0
-            for visit in 0..<manifest.unrolledLayers
-            where !manifest.layers[manifest.storedLayer(forUnrolled: visit)].isSliding {
-                fullVisits += 1
+            var slidingVisits = 0
+            for visit in 0..<manifest.unrolledLayers {
+                if manifest.layers[manifest.storedLayer(forUnrolled: visit)].isSliding {
+                    slidingVisits += 1
+                } else {
+                    fullVisits += 1
+                }
             }
             let kvWidth = manifest.headDimension * manifest.layers[0].kvHeads
+            let convChannels = 2 * kvWidth + 2 * manifest.hidden
+            let slidingRingBytes = slidingVisits * (manifest.slidingWindow + 256) * kvWidth * 4
+            let convBytes = manifest.unrolledLayers * convChannels * 3 * 4
             let strides = try install.layout.layers.map { layer -> Int in
                 guard layer.experts.count > 1 else {
                     throw InklingQ4Install.Error.layout("layer \(layer.layer) has one expert")
@@ -68,6 +80,7 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
                     install.manifest.files[InklingQ4Install.residentFile]?.size ?? 0),
                 bytesPerSlot: strides.reduce(0, +),
                 bytesPerPosition: fullVisits * kvWidth * 2 * 2,
+                fixedSlotBytes: slidingRingBytes + convBytes,
                 experts: manifest.expertCount, expertsPerToken: manifest.expertsPerToken,
                 modelContext: manifest.contextLength)
         }
@@ -123,12 +136,14 @@ package struct InklingQ4LoadPlan: Equatable, Sendable {
         slots = max(minimumSlots, min(slots, g.experts))
         return InklingQ4LoadPlan(
             context: context, slots: slots,
-            plannedBytes: fixed + slots * g.bytesPerSlot + context * g.bytesPerPosition)
+            plannedBytes: fixed + slots * g.bytesPerSlot + context * g.bytesPerPosition,
+            perSlotBytes: context * g.bytesPerPosition + g.fixedSlotBytes)
     }
 
-    package init(context: Int, slots: Int, plannedBytes: Int) {
+    package init(context: Int, slots: Int, plannedBytes: Int, perSlotBytes: Int = 0) {
         self.context = context
         self.slots = slots
         self.plannedBytes = plannedBytes
+        self.perSlotBytes = perSlotBytes
     }
 }

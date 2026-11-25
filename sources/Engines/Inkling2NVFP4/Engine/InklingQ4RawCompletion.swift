@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import TinyTitanCore
 
 /// The Inkling 2 Q4 generation loop behind the shared session (TT-122): the
@@ -21,13 +22,9 @@ package func runInklingQ4Completion(_ request: RawCompletionRequest) async throw
     -> RawDecodeResult
 {
     guard let runner = request.producer as? InklingQ4Runner else {
-        throw GeneratorError.invalidGenerationConfig(
-            "the Inkling 2 Q4 loop requires its own runner")
+        return try await runInklingQ4BatchedCompletion(request)
     }
-    guard request.slot == 0 else {
-        throw GeneratorError.invalidGenerationConfig(
-            "Inkling 2 runs one sequence; slot \(request.slot) is not supported")
-    }
+    let slot = request.slot
     let config = request.configuration
     try config.validate()
     let prompt = request.promptIDs
@@ -36,14 +33,14 @@ package func runInklingQ4Completion(_ request: RawCompletionRequest) async throw
     switch request.start {
     case .reset:
         cached = 0
-        runner.reset()
+        runner.reset(slot: slot)
     case .resume(let count):
         guard count > 0, count < prompt.count else {
             throw GeneratorError.invalidContinuation(
                 "cached prompt token count must be greater than zero and less than the effective prompt"
             )
         }
-        try runner.prepareForContinuation(expectedPosition: count)
+        try runner.prepareForContinuation(expectedPosition: count, slot: slot)
         cached = count
     }
     guard prompt.count - cached + config.maxNewTokens <= runner.maxContext - cached else {
@@ -71,14 +68,14 @@ package func runInklingQ4Completion(_ request: RawCompletionRequest) async throw
     var segmentStart = cached
     for point in request.checkpointPositions.sorted() where point > cached && point < prompt.count {
         _ = try runner.feed(
-            prompt[segmentStart..<point].map(Int.init), at: segmentStart, logits: false)
+            prompt[segmentStart..<point].map(Int.init), at: segmentStart, slot: slot, logits: false)
         history.append(contentsOf: prompt[segmentStart..<point])
         request.onProgress(.prefill(done: point, total: prompt.count))
         segmentStart = point
         request.onPrefillCheckpoint?(point)
     }
     var step = try runner.feed(
-        prompt[segmentStart...].map(Int.init), at: segmentStart, logits: !greedy)
+        prompt[segmentStart...].map(Int.init), at: segmentStart, slot: slot, logits: !greedy)
     history.append(contentsOf: prompt[segmentStart...])
     request.onProgress(.prefill(done: prompt.count, total: prompt.count))
     let prefillSeconds = Date().timeIntervalSince(prefillStart)
@@ -129,15 +126,144 @@ package func runInklingQ4Completion(_ request: RawCompletionRequest) async throw
             break
         }
         history.append(token)
-        step = try runner.feed([Int(token)], at: runner.continuationPosition, logits: !greedy)
+        step = try runner.feed(
+            [Int(token)], at: runner.position(forSlot: slot), slot: slot, logits: !greedy)
         boundary = []
     }
     return RawDecodeResult(
         prefillTokens: prompt.count, cachedPromptTokens: cached,
         computedPrefillTokens: prompt.count - cached, prefillSeconds: prefillSeconds,
         newTokens: generated, decodeSeconds: Date().timeIntervalSince(decodeStart),
-        reason: reason, kvPosition: runner.continuationPosition, kvBackedTokenIDs: history,
+        reason: reason, kvPosition: runner.position(forSlot: slot), kvBackedTokenIDs: history,
         uncommittedBoundaryTokenIDs: boundary)
+}
+
+/// Multi-slot completion loop for `BatchedLogitProducer` (TT-124): drives
+/// `resetSequence(slot:)`, `prefillChunked(..., slot:)`, and `produce(..., slot:)`
+/// through the slot-aware producer protocol so concurrent requests share one
+/// model and interleave safely across slots.
+/// Per-slot FP16 logits scratch allocated once per slot at session load for
+/// multi-slot batched completions (TT-124).
+///
+/// unchecked-invariant: owned by one slot in `ServerModelSession.scratches` and
+/// only written/read by the single request currently holding that slot.
+package final class InklingQ4LogitsScratch: @unchecked Sendable {
+    let buffer: MTLBuffer
+    let vocabSize: Int
+
+    package init(context: MetalContext, vocabSize: Int) throws {
+        let bytes = max(vocabSize, 1) * MemoryLayout<Float16>.size
+        guard let buffer = context.device.makeBuffer(length: bytes, options: .storageModeShared)
+        else {
+            throw MetalError.bufferAllocationFailed("Inkling2 slot logits scratch")
+        }
+        self.buffer = buffer
+        self.vocabSize = vocabSize
+    }
+}
+
+private func runInklingQ4BatchedCompletion(_ request: RawCompletionRequest) async throws
+    -> RawDecodeResult
+{
+    let config = request.configuration
+    try config.validate()
+    let prompt = request.promptIDs
+    guard !prompt.isEmpty else { throw GeneratorError.emptyPrompt }
+    let slot = request.slot
+    let producer = request.producer
+    let maxContext = (producer as? any ContextWindowReporting)?.maxContext ?? Int.max
+    guard prompt.count + config.maxNewTokens <= maxContext else {
+        throw GeneratorError.contextOverflow(
+            prompt: prompt.count, maxNew: config.maxNewTokens, maxContext: maxContext)
+    }
+    await producer.resetSequence(slot: slot)
+    let tokenizer = request.tokenizer
+    let sampler = InklingQ4Sampler(
+        temperature: config.temperature, topP: config.topP ?? 1, topK: config.topK ?? 0,
+        presencePenalty: config.presencePenalty, repetitionPenalty: config.repetitionPenalty,
+        seed: config.seed)
+    let generator = sampler.makeGenerator()
+    let constraint = config.constraint
+    var stops = tokenizer.stopTokenIDs.union(config.extraStopTokens)
+    if constraint != nil { stops.formUnion(tokenizer.documentEndTokenIDs) }
+
+    guard let scratch = request.scratch.payload as? InklingQ4LogitsScratch else {
+        throw MetalError.invalidState("Inkling 2 batched completion requires its logits scratch")
+    }
+    let logitsBuffer = scratch.buffer
+    let vocabSize = scratch.vocabSize
+    let prefillStart = Date()
+    var position = 0
+    if let chunked = producer as? any ChunkedPrefillRunner {
+        let result = try await chunked.prefillChunked(
+            tokens: prompt[...], startPosition: 0, slot: slot, outputMode: .logits,
+            config: request.prefillConfiguration, into: logitsBuffer, onProgress: { _ in })
+        position = result.newPosition
+    } else {
+        for (index, token) in prompt.enumerated() {
+            try await producer.produce(
+                token: token, position: index, slot: slot, into: logitsBuffer)
+        }
+        position = prompt.count
+    }
+    var history = prompt
+    request.onProgress(.prefill(done: prompt.count, total: prompt.count))
+    let prefillSeconds = Date().timeIntervalSince(prefillStart)
+
+    let decodeStart = Date()
+    var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
+    var text = InklingQ4TextStream(tokenizer: tokenizer)
+    var generated = 0
+    var reason: StopReason = .maxTokens
+    var boundary: [Int32] = []
+    while true {
+        try Task.checkCancellation()
+        var logits = readFP16Logits(logitsBuffer, count: vocabSize)
+        if let constraint {
+            let mask = constraint.allowedMask()
+            guard !mask.isEmpty else { throw GeneratorError.constrainedDecodeStalled }
+            mask.apply(toLogits: &logits)
+        }
+        let token = Int32(sampler.pick(logits, history: history, using: generator))
+        generated += 1
+        boundary = [token]
+        if stops.contains(token) {
+            reason = token == tokenizer.endOfTurnID || constraint != nil ? .endOfTurn : .eos
+            let tail = stopMatcher.push(text.flush()) + stopMatcher.finish()
+            request.onProgress(.tail(tail))
+            break
+        }
+        if let constraint, !constraint.observe(token) {
+            throw GeneratorError.constrainedDecodeViolation(id: token)
+        }
+        let visible = stopMatcher.push(text.push(token))
+        request.onProgress(.token(index: generated - 1, id: token, delta: visible))
+        if stopMatcher.isStopped || request.shouldStop() || generated >= config.maxNewTokens {
+            let tail = stopMatcher.push(text.flush()) + stopMatcher.finish()
+            request.onProgress(.tail(tail))
+            reason =
+                stopMatcher.isStopped
+                ? .stopString
+                : (generated >= config.maxNewTokens ? .maxTokens : .external)
+            break
+        }
+        history.append(token)
+        try await producer.produce(token: token, position: position, slot: slot, into: logitsBuffer)
+        position += 1
+        boundary = []
+    }
+    return RawDecodeResult(
+        prefillTokens: prompt.count, cachedPromptTokens: 0,
+        computedPrefillTokens: prompt.count, prefillSeconds: prefillSeconds,
+        newTokens: generated, decodeSeconds: Date().timeIntervalSince(decodeStart),
+        reason: reason, kvPosition: position, kvBackedTokenIDs: history,
+        uncommittedBoundaryTokenIDs: boundary)
+}
+
+private func readFP16Logits(_ buffer: MTLBuffer, count: Int) -> [Float] {
+    let n = min(count, buffer.length / MemoryLayout<Float16>.size)
+    let ptr = buffer.contents().bindMemory(to: Float16.self, capacity: n)
+    return (0..<n).map { Float(ptr[$0]) }
 }
 
 /// The visible text of a growing answer as deltas: the decode of every token

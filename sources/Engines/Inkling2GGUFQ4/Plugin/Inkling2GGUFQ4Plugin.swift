@@ -35,7 +35,7 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
             ropeScaling: .only(
                 [.none], reason: "Inkling 2 has a 1M native window and no YaRN factor"),
             hostKVWindow: .refused(reason: "it needs a QSA model"),
-            concurrentSequences: .only([1], reason: "one sequence until TT-124"),
+            concurrentSequences: .supported,
             multiTokenPrediction: .refused(
                 reason: "the Q4 install has no MTP head (the NVFP4 install's is TT-129)"),
             expertStreaming: .supported)
@@ -115,13 +115,18 @@ public enum Inkling2GGUFQ4Plugin: EnginePlugin {
                 }
                 let decoder = try model.makeDecoder(
                     context: context, maxContext: plan.context,
-                    maxChunk: options.prefillChunkTokens ?? 256)
+                    maxChunk: options.prefillChunkTokens ?? 256,
+                    sequenceSlots: options.slots)
                 return InklingQ4Runner(model: model, decoder: decoder)
             },
+            makeScratch: { context, vocabSize, _ in
+                RawCompletionScratch(
+                    payload: try InklingQ4LogitsScratch(context: context, vocabSize: vocabSize))
+            },
             runRawCompletion: { request in try await runInklingQ4Completion(request) },
-            // One sequence until per-slot state exists (TT-124): a cost no
-            // budget can meet keeps the session's width at 1.
-            perSlotBytes: { _, options, _ in options.slots > 1 ? Int.max / 2 : 0 },
+            perSlotBytes: { _, _, loadPlan in
+                (loadPlan.engineConfiguration as? InklingQ4LoadPlan)?.perSlotBytes ?? 0
+            },
             tokenizerFolder: { directory in try tokenizerFolder(directory, host: host) })
     }
 

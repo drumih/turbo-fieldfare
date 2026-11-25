@@ -31,6 +31,13 @@ import TinyTitanPluginAPI
         #expect(control?.levelWhenOn == .high)
     }
 
+    @Test func supportsConcurrentSequences() {
+        let params = Inkling2GGUFQ4Plugin.parameters(for: install)
+        #expect(params.concurrentSequences.accepts(1))
+        #expect(params.concurrentSequences.accepts(2))
+        #expect(params.concurrentSequences.accepts(4))
+    }
+
     @Test func aDirectoryWithoutTheInstallIsNotClaimed() {
         #expect(Inkling2GGUFQ4Plugin.probe(install) == nil)
     }

@@ -13,15 +13,25 @@ import TinyTitanCore
 /// the extra `maxChunk` slots keep a chunk's later tokens from overwriting keys
 /// its earlier tokens still attend to; full-attention visits keep `maxContext`.
 package final class InklingQ4State {
+    /// Per-sequence recurrent state: KV caches and short-convolution histories
+    /// for all 48 unrolled layer visits.
+    package struct SlotState {
+        let kCaches: [MTLBuffer]
+        let vCaches: [MTLBuffer]
+        let convStates: [MTLBuffer]
+    }
+
     /// Convolution channels per visit: K, V, attention output, FFN output.
     let convChannels: Int
     let kvWidth: Int
     package let maxContext: Int
     let maxChunk: Int
-    let kCaches: [MTLBuffer]
-    let vCaches: [MTLBuffer]
+    package let slots: Int
+    package let slotStates: [SlotState]
+    var kCaches: [MTLBuffer] { slotStates[0].kCaches }
+    var vCaches: [MTLBuffer] { slotStates[0].vCaches }
     let capacities: [Int]
-    let convStates: [MTLBuffer]
+    var convStates: [MTLBuffer] { slotStates[0].convStates }
     /// Hidden vectors of a chunk, in slabs of `maxChunk * hidden` floats:
     /// slabs `0 ..< persistentSlabs` hold values that outlive a layer visit,
     /// the rest a visit's temporaries.
@@ -63,7 +73,8 @@ package final class InklingQ4State {
     static let argmaxGroups = 256
 
     init(
-        manifest m: InklingQ4Manifest, device: MTLDevice, maxContext: Int, maxChunk: Int
+        manifest m: InklingQ4Manifest, device: MTLDevice, maxContext: Int, maxChunk: Int,
+        slots: Int = 1
     ) throws {
         func buffer(_ bytes: Int, _ label: String) throws -> MTLBuffer {
             guard let made = device.makeBuffer(length: max(bytes, 16), options: .storageModeShared)
@@ -75,26 +86,33 @@ package final class InklingQ4State {
         let heads = layer.heads
         let attentionWidth = m.headDimension * heads
         let t = maxChunk
+        let slotCount = max(1, slots)
         kvWidth = m.headDimension * layer.kvHeads
         convChannels = 2 * kvWidth + 2 * m.hidden
         self.maxContext = maxContext
         self.maxChunk = maxChunk
-        var kCaches: [MTLBuffer] = []
-        var vCaches: [MTLBuffer] = []
+        self.slots = slotCount
         var capacities: [Int] = []
-        var convStates: [MTLBuffer] = []
         for visit in 0..<m.unrolledLayers {
             let sliding = m.layers[m.storedLayer(forUnrolled: visit)].isSliding
-            let capacity = sliding ? min(m.slidingWindow + maxChunk, maxContext) : maxContext
-            capacities.append(capacity)
-            kCaches.append(try buffer(capacity * kvWidth * 2, "K cache \(visit)"))
-            vCaches.append(try buffer(capacity * kvWidth * 2, "V cache \(visit)"))
-            convStates.append(try buffer(convChannels * 3 * 4, "conv state \(visit)"))
+            capacities.append(sliding ? min(m.slidingWindow + maxChunk, maxContext) : maxContext)
         }
-        self.kCaches = kCaches
-        self.vCaches = vCaches
+        var slotStates: [SlotState] = []
+        slotStates.reserveCapacity(slotCount)
+        for slot in 0..<slotCount {
+            var kCaches: [MTLBuffer] = []
+            var vCaches: [MTLBuffer] = []
+            var convStates: [MTLBuffer] = []
+            for visit in 0..<m.unrolledLayers {
+                let capacity = capacities[visit]
+                kCaches.append(try buffer(capacity * kvWidth * 2, "K cache s\(slot) v\(visit)"))
+                vCaches.append(try buffer(capacity * kvWidth * 2, "V cache s\(slot) v\(visit)"))
+                convStates.append(try buffer(convChannels * 3 * 4, "conv s\(slot) v\(visit)"))
+            }
+            slotStates.append(SlotState(kCaches: kCaches, vCaches: vCaches, convStates: convStates))
+        }
+        self.slotStates = slotStates
         self.capacities = capacities
-        self.convStates = convStates
         slabFloats = t * m.hidden
         pool = try buffer((persistentSlabs + transientSlabs) * slabFloats * 4, "hidden pool")
         step = try buffer(16, "step")
@@ -131,16 +149,29 @@ package final class InklingQ4State {
         argmaxPartials = try buffer(Self.argmaxGroups * 8, "argmax partials")
     }
 
-    /// Clears every cache and convolution history for a new sequence.
-    package func reset() {
-        for buffer in kCaches + vCaches + convStates {
+    /// Clears every cache and convolution history for one sequence slot.
+    package func reset(slot: Int) {
+        guard slot >= 0, slot < slotStates.count else { return }
+        let s = slotStates[slot]
+        for buffer in s.kCaches + s.vCaches + s.convStates {
             memset(buffer.contents(), 0, buffer.length)
         }
     }
 
+    /// Clears every cache and convolution history for all slots.
+    package func reset() {
+        for slot in 0..<slotStates.count { reset(slot: slot) }
+    }
+
+    /// Bytes of recurrent state held for one sequence slot.
+    package var perSlotBytes: Int {
+        guard let first = slotStates.first else { return 0 }
+        return (first.kCaches + first.vCaches + first.convStates).reduce(0) { $0 + $1.length }
+    }
+
     /// Bytes of recurrent state and scratch held by this session.
     package var allocatedBytes: Int {
-        (kCaches + vCaches + convStates).reduce(0) { $0 + $1.length } + pool.length
+        perSlotBytes * slotStates.count + pool.length
             + gateUp.length + down.length + activation.length + logits.length
     }
 }

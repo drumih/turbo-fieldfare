@@ -162,7 +162,8 @@ extension InklingQ4Decoder {
         let headDim = m.headDimension
         let kvWidth = kvHeads * headDim
         let t = tokens
-        let state = s.convStates[visit]
+        let slotState = s.slotStates[activeSlot]
+        let state = slotState.convStates[visit]
         try encodeProjections(layer: layer, inputs: inputs, e)
         let dynamicK: Operand? = layer.kConvProj == nil ? nil : scratch(s.dynamicK)
         let dynamicV: Operand? = layer.vConvProj == nil ? nil : scratch(s.dynamicV)
@@ -180,8 +181,8 @@ extension InklingQ4Decoder {
             try ops.kvFinish(
                 k: scratch(s.k), v: scratch(s.v), kWeight: layer.kConv, vWeight: layer.vConv,
                 state: .init(state), dynamicK: dynamicK, dynamicV: dynamicV,
-                kCache: s.kCaches[visit], vCache: s.vCaches[visit], step: step, args: kvArgs,
-                encoder: e)
+                kCache: slotState.kCaches[visit], vCache: slotState.vCaches[visit], step: step,
+                args: kvArgs, encoder: e)
             try ops.clipHeads(
                 scratch(s.q), heads: heads, headDim: headDim, scale: layer.qClip,
                 threshold: m.qkClip, tau: tau, step: step, tokens: t, encoder: e)
@@ -200,9 +201,10 @@ extension InklingQ4Decoder {
             scale: 1 / Float(headDim).squareRoot(),
             window: sliding ? UInt32(m.slidingWindow) : UInt32.max, tokens: UInt32(t))
         try ops.attention(
-            q: scratch(s.q), kCache: s.kCaches[visit], vCache: s.vCaches[visit], r: scratch(s.r),
-            relativeBias: layer.relBias, sinks: scratch(s.sinks), gate: scratch(s.gate),
-            out: scratch(s.attention), step: step, args: attentionArgs, encoder: e)
+            q: scratch(s.q), kCache: slotState.kCaches[visit], vCache: slotState.vCaches[visit],
+            r: scratch(s.r), relativeBias: layer.relBias, sinks: scratch(s.sinks),
+            gate: scratch(s.gate), out: scratch(s.attention), step: step, args: attentionArgs,
+            encoder: e)
         let projected = try rows(1)
         try ops.gemv(
             layer.attnOutput, x: scratch(s.attention), y: row(projected), tokens: t, encoder: e)
@@ -247,7 +249,8 @@ extension InklingQ4Decoder {
         let out = try persistentSlab()
         try ops.shortConv(
             x: scratch(s.down), weight: layer.ffnPostConv,
-            state: .init(s.convStates[visit], offset: (2 * kvWidth + hidden) * 12),
+            state: .init(
+                s.slotStates[activeSlot].convStates[visit], offset: (2 * kvWidth + hidden) * 12),
             out: row(out), routeWeights: scratch(s.routeWeights), slots: m.expertsPerToken,
             residual: row(ffnInput), channels: hidden, tokens: tokens, encoder: e)
         return out
