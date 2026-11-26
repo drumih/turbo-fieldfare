@@ -46,11 +46,9 @@ def default_model() -> str:
     return source()["model"].split("/", 1)[1]
 
 
-# Models a server serves from a file the installer does not produce: run as
-# `TinyTitanServer --model <file.gguf>`, so they are not launcher-menu rows. Each
-# declares the same window as every other entry: the server asks for its default
-# 256K and the session allocates what the device affords (TT-120).
-GGUF_ROUTES = {"inkling-2-mini": {"context": 262144, "output": 32768}}
+# Models a server serves outside the installer menu. All Inkling 2 Mini
+# editions now install as `.ssdai` directories through `install_models.sh`.
+GGUF_ROUTES: dict[str, dict[str, int]] = {}
 
 
 def installer_menu_rows() -> int:
