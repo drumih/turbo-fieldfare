@@ -631,7 +631,13 @@ def watch_size(dest: Path, progress: Progress, base: float, stop: threading.Even
             continue
 
 
-def download(shard: str, work: Path, progress: Progress | None = None, base: float = 0.0) -> Path:
+def download(
+    shard: str,
+    work: Path,
+    progress: Progress | None = None,
+    base: float = 0.0,
+    expected_size: int | None = None,
+) -> Path:
     """Fetch one shard, resuming a partial file rather than restarting it.
 
     A resume that the endpoint will not serve is not retried as a resume: curl
@@ -646,6 +652,12 @@ def download(shard: str, work: Path, progress: Progress | None = None, base: flo
     the shards before this one already landed: together they turn a 2 GB shard
     from one silent hour into a percentage and an ETA. With no line the watcher
     is not started and the call is exactly what it always was.
+
+    `expected_size` is the shard's size from the server's own Content-Length. A
+    file already that long is what a killed run leaves behind before its output
+    flushes, and it is returned without a request at all -- the resume that
+    matters on a 360 GB fetch must not ask the network to confirm a file it
+    already has.
     """
 
     def tell(text: str) -> None:
@@ -656,6 +668,10 @@ def download(shard: str, work: Path, progress: Progress | None = None, base: flo
 
     dest = work / shard
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if expected_size is not None and dest.is_file() and dest.stat().st_size == expected_size:
+        if progress is not None:
+            progress.set(base + expected_size)
+        return dest
     delay = 5
     for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
         url = f"{BASE}/{shard}"
@@ -1397,11 +1413,31 @@ def main() -> int:
         }
         if converted:
             shards = [s for s in shards if s not in converted]
+            # A source kept until its output flushed (see the loop below) can
+            # still be here after the flush that made it adoptable. Its tensors
+            # are in the adopted output, so it has no reader left.
+            for stale in converted:
+                (work / stale).unlink(missing_ok=True)
             print(
                 f"  {len(converted)} checkpoint shards already converted; "
                 f"{len(shards)} left to fetch and convert",
                 flush=True,
             )
+
+    # Say what the resume can reuse *before* the first byte moves: a run that
+    # was killed leaves its in-flight sources in `--work`, and those are the
+    # difference between continuing and starting over on a 360 GB fetch. A
+    # complete one is re-read from disk; a partial one continues from its last
+    # byte (`curl -C -` in `download`).
+    resumable = [s for s in shards if (work / s).is_file()]
+    if resumable:
+        resumable_bytes = sum((work / s).stat().st_size for s in resumable)
+        print(
+            f"  resuming: {len(resumable)} checkpoint shard(s) already in {work} "
+            f"({resumable_bytes / 1e9:.2f} GB); a complete one is not downloaded "
+            "again, a partial one continues from its last byte",
+            flush=True,
+        )
 
     # Fetch shard N+1 while shard N converts.
     #
@@ -1418,16 +1454,17 @@ def main() -> int:
     # Bounds the shards on disk that are fetched but not yet converted, so a
     # link faster than the converter cannot fill --work.
     on_disk = threading.Semaphore(2 * workers)
+    size_of = dict(zip(shards, sizes, strict=True))
 
     def fetch_bounded(shard: str) -> Path:
         on_disk.acquire()
-        return download(shard, work, None, 0.0)
+        return download(shard, work, None, 0.0, size_of.get(shard))
 
     def fetcher() -> None:
         base = 0.0
         for shard, size in zip(shards, sizes, strict=True):
             try:
-                queue.put(download(shard, work, progress, base))
+                queue.put(download(shard, work, progress, base, size))
             except Exception as exc:  # noqa: BLE001
                 queue.put(exc)
                 return
@@ -1451,6 +1488,24 @@ def main() -> int:
 
     threading.Thread(target=fetcher if workers == 1 else parallel_fetcher, daemon=True).start()
     done = 0
+    # A checkpoint shard may leave `--work` only once every tensor converted
+    # from it has reached a *finished* output shard. `convert_shard` returns
+    # after calling `writer.add`, and `add` flushes in the middle of a shard, so
+    # "converted" is not "persisted": the block it filled may still be in
+    # memory. `item.unlink()` here used to drop the source anyway, and a kill
+    # before the next flush then re-downloaded it from zero on resume -- the
+    # one case a 360 GB fetch must not lose. `writer.bytes == 0` is the durable
+    # point; until then the sources stay, and a killed run resumes by re-reading
+    # them from disk instead of fetching them again.
+    pending: list[Path] = []
+
+    def release_flushed_sources() -> None:
+        if writer.bytes:
+            return
+        for source in pending:
+            source.unlink(missing_ok=True)
+        pending.clear()
+
     while True:
         item = queue.get()
         if item is None:
@@ -1461,12 +1516,14 @@ def main() -> int:
         done += 1
         progress.show(f"{done}/{len(shards)} shards  {progress.amount}")
         convert_shard(item, writer, ngram, args.bits)
-        item.unlink()
+        pending.append(item)
+        release_flushed_sources()
         if workers > 1:
             on_disk.release()
     progress.finish(f"  fetched and converted {done} of {len(shards)} shards")
 
     writer.finish()
+    release_flushed_sources()
     ngram.finish()
     # Written last: the quantization block lists every tensor whose width
     # differs from the base, which is only known once they have all been seen.

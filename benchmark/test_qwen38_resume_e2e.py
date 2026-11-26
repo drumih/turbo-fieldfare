@@ -301,6 +301,25 @@ class _MirrorHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_args) -> None:  # keep the test output readable
         pass
 
+    def do_HEAD(self) -> None:  # noqa: N802 - http.server's spelling
+        # `remote_size` probes each shard with a HEAD before the fetch, so a
+        # size-aware resume (a complete source is not requested again) can be
+        # exercised here. HEAD does not touch `faults`: a fault belongs to the
+        # body fetch, not to the size probe.
+        path = urllib.parse.urlparse(self.path).path
+        if "/main/" not in path:
+            self.send_error(404)
+            return
+        name = path.split("/main/", 1)[1]
+        data = self.server.files.get(name)
+        if data is None:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802 - http.server's spelling
         path = urllib.parse.urlparse(self.path).path
         if "/main/" not in path:
@@ -1162,6 +1181,83 @@ class KilledProcessTests(unittest.TestCase):
         self.assertEqual(code, 0, log)
         self.assertIn("resuming from", log)
         self.assertFalse(list(self.out.glob("*.partial")), log)
+        self.assertEqual(fingerprint(self.out), baseline_fingerprint())
+
+    def test_a_kill_before_the_first_flush_keeps_its_sources(self) -> None:
+        # The kill that matters on a 360 GB fetch: the output block has not
+        # reached its flush size yet, so nothing is adoptable and the only
+        # resume material is the source shards in `--work`. They used to be
+        # unlinked as each one converted, so this resume re-downloaded all of
+        # them. `OUTPUT_SHARD_BYTES` is set past the whole fixture so no flush
+        # can make a source safely droppable before the kill.
+        driver = self.root / "driver.py"
+        driver.write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(ROOT / 'tools')!r})\n"
+            "import prepare_qwen38 as prepare\n"
+            "prepare.OUTPUT_SHARD_BYTES = 10 << 30\n"
+            "raise SystemExit(prepare.main())\n"
+        )
+        first, second = (
+            "model-00001-of-00005.safetensors",
+            "model-00002-of-00005.safetensors",
+        )
+        log_path = self.root / "killed.log"
+        with log_path.open("w") as log_handle:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(driver),
+                    "--output",
+                    str(self.out),
+                    "--work",
+                    str(self.work),
+                    "--endpoint",
+                    self.server.base,
+                ],
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+            )
+            # A GET for the third shard proves the first was converted (the
+            # fetcher only moves on once the converter took it) and the second
+            # is on disk. No flush has happened, so nothing is adoptable.
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                if self.server.requests_for("model-00003-of-00005.safetensors"):
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.005)
+            still_running = process.poll() is None
+            if still_running:
+                process.send_signal(signal.SIGKILL)
+            process.wait(timeout=15)
+        killed_log = log_path.read_text()
+        self.assertTrue(
+            still_running, f"the conversion finished before it could be killed:\n{killed_log}"
+        )
+        self.assertFalse(
+            list(self.out.glob("model-[0-9][0-9][0-9][0-9][0-9].safetensors")),
+            f"a flush happened before the kill, so this is not the case under test:\n{killed_log}",
+        )
+        for shard in (first, second):
+            self.assertTrue(
+                (self.work / shard).is_file(),
+                f"{shard} was dropped before its output reached disk:\n{killed_log}",
+            )
+
+        mark = len(self.server.requests)
+        code, log = run_converter(
+            self.out, self.work, self.server.base, patches={"OUTPUT_SHARD_BYTES": 10 << 30}
+        )
+        self.assertEqual(code, 0, log)
+        self.assertIn("resuming:", log)
+        refetched = {
+            request["file"]
+            for request in self.server.requests[mark:]
+            if request["file"] in (first, second)
+        }
+        self.assertFalse(refetched, f"the resume fetched {sorted(refetched)} again:\n{log}")
         self.assertEqual(fingerprint(self.out), baseline_fingerprint())
 
 

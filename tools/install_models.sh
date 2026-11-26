@@ -674,8 +674,10 @@ install_one() {
         if [[ -n "${HF_ENDPOINT:-}" ]]; then endpoint_arg="--endpoint=${HF_ENDPOINT}"; fi
         if [[ ! -f "$WORK/qwen38-affine-${width}bit/model.safetensors.index.json" ]]; then
           echo "downloading and converting $name (360 GB fetch) -> $WORK/qwen38-affine-${width}bit"
-          # A run killed mid-conversion resumes: finished output shards are kept
-          # and the checkpoint shards they came from are not fetched again.
+          # A run killed mid-conversion resumes: finished output shards are
+          # adopted, and the checkpoint shards whose output has not flushed yet
+          # are still in the work dir, so they are re-read from disk rather
+          # than fetched again.
           "$python" "$ROOT/tools/prepare_qwen38.py" --bits "$width" ${rest8_arg:+"$rest8_arg"} \
               --output "$WORK/qwen38-affine-${width}bit" \
               --work "$WORK/qwen38-shards" ${endpoint_arg:+"$endpoint_arg"} || return 1
