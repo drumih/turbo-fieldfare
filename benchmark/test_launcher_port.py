@@ -41,6 +41,10 @@ QUIET_ANSWERS = (
     "9",
     "--engine",
     "gpu",
+    "--context",
+    "262144",
+    "--kv",
+    "8",
     "--concurrency",
     "1",
 )

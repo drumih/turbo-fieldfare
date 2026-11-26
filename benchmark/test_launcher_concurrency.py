@@ -54,6 +54,10 @@ QUIET_ANSWERS = (
     "4",
     "--engine",
     "gpu",
+    "--context",
+    "262144",
+    "--kv",
+    "8",
     "--port",
     "9123",
 )

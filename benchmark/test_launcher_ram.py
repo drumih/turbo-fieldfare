@@ -98,6 +98,10 @@ def answer_ram(
             "default",
             "--engine",
             "gpu",
+            "--context",
+            "262144",
+            "--kv",
+            "8",
             "--concurrency",
             "1",
             "--port",
@@ -435,6 +439,80 @@ class ThePromptCacheTierIsLeftToTheServer(unittest.TestCase):
         )
         self.assertEqual(run.returncode, 2, run.stdout)
         self.assertIn("unknown --prompt-cache", run.stderr)
+
+
+class ContextAndKVInteractiveTests(unittest.TestCase):
+    """Interactive context-window (presets + custom) and KV-cache precision prompts."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        launcher_fixture.install_fixture(cls)
+
+    def setUp(self) -> None:
+        self.model = self.installs.first_gpu()
+
+    def _ask(self, stdin: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        env = self.installs.env(
+            TINYTITAN_PHYSICAL_RAM_BYTES=str(24 * 2**30),
+            TINYTITAN_LAUNCHER_DRY_RUN="1",
+            TINYTITAN_LAUNCHER_ASSUME_TTY="1",
+        )
+        return subprocess.run(
+            [
+                "bash",
+                str(LAUNCHER),
+                "--client",
+                "server",
+                "--dry-run",
+                "--model",
+                self.model,
+                "--thinking",
+                "off",
+                "--answers",
+                "default",
+                "--engine",
+                "gpu",
+                "--ram",
+                "12",
+                "--concurrency",
+                "1",
+                "--port",
+                "8080",
+                *extra,
+            ],
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=120,
+        )
+
+    def test_preset_context_and_kv_choices(self) -> None:
+        run = self._ask("4\n2\n")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("--max-context 131072", run.stdout)
+        self.assertIn("--kv-bits 4", run.stdout)
+
+    def test_custom_context_shorthand_and_fp16_kv(self) -> None:
+        run = self._ask("9\n64k\n3\n")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("--max-context 65536", run.stdout)
+        self.assertIn("--kv-bits 16", run.stdout)
+
+    def test_long_context_presets_enable_yarn(self) -> None:
+        for choice, expected in (("6", "524288"), ("7", "1048576"), ("8", "2097152")):
+            with self.subTest(choice=choice):
+                run = self._ask(f"{choice}\n1\n")
+                self.assertEqual(run.returncode, 0, run.stderr)
+                self.assertIn(f"--max-context {expected}", run.stdout)
+                self.assertIn("--rope-scaling yarn", run.stdout)
+
+    def test_defaults_on_empty_enter(self) -> None:
+        run = self._ask("\n\n")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("--max-context 262144", run.stdout)
+        self.assertIn("--kv-bits 8", run.stdout)
 
 
 if __name__ == "__main__":

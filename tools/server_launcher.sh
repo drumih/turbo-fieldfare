@@ -1179,10 +1179,35 @@ fi
 # 7) Advanced server features
 # ============================================================
 
-# Context and KV are only offered interactively when the caller asked for the
-# detailed choices; the defaults are what almost everyone wants.
-kv_bits="${KV_ARG:-8}"
-case "$kv_bits" in 4|8|16) : ;; *) echo "unknown --kv: $kv_bits (4|8|16)" >&2; exit 2 ;; esac
+# Context and KV: accept presets, shorthand (16k/32k/64k/128k/256k), or exact
+# native rungs on the CLI, and offer interactive presets + custom input on GPU.
+parse_context_value() {
+  local raw="$1"
+  local lower
+  lower="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    native|max) printf '262144\n' ;;
+    4k|4096)    printf '4096\n' ;;
+    8k|8192)    printf '8192\n' ;;
+    16k|16384)  printf '16384\n' ;;
+    32k|32768)  printf '32768\n' ;;
+    64k|65536)  printf '65536\n' ;;
+    128k|131072) printf '131072\n' ;;
+    256k|262144) printf '262144\n' ;;
+    512k|524288) printf '524288\n' ;;
+    1m|1024k|1048576) printf '1048576\n' ;;
+    2m|2048k|2097152) printf '2097152\n' ;;
+    *[!0-9]*|'') return 1 ;;
+    *) printf '%s\n' "$lower" ;;
+  esac
+}
+
+default_context=262144
+default_context_label="256K"
+if [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]]; then
+  default_context=131072
+  default_context_label="128K"
+fi
 
 max_context=""
 rope_scaling="none"
@@ -1190,14 +1215,67 @@ if (( YARN )); then
   rope_scaling="yarn"
   max_context="${CONTEXT_ARG:-1048576}"
 elif [[ -n "$CONTEXT_ARG" ]]; then
-  case "$CONTEXT_ARG" in
-    native|max) max_context=262144 ;;
-    *[!0-9]*) echo "unknown --context: $CONTEXT_ARG (a native rung, native, or max)" >&2; exit 2 ;;
-    *) max_context="$CONTEXT_ARG" ;;
+  if ! max_context="$(parse_context_value "$CONTEXT_ARG")"; then
+    echo "unknown --context: $CONTEXT_ARG (a rung 4k..2m, native, or max)" >&2
+    exit 2
+  fi
+elif [[ "$ENGINE" != "cpu" ]] && (( INTERACTIVE )); then
+  echo ""
+  echo "Context window?"
+  echo "  1) 16K (16384)       2) 32K (32768)       3) 64K (65536)"
+  echo "  4) 128K (131072)     5) 256K (262144)     6) 512K (524288)"
+  echo "  7) 1M (1048576)      8) 2M (2097152)      9) Custom (4k..2m)"
+  echo " 10) Model default (${default_context_label})"
+  printf "Choice [1-10] (default 10): "
+  read -r context_choice || exit 1
+  case "${context_choice:-10}" in
+    1) max_context=16384 ;;
+    2) max_context=32768 ;;
+    3) max_context=65536 ;;
+    4) max_context=131072 ;;
+    5) max_context=262144 ;;
+    6) max_context=524288 ;;
+    7) max_context=1048576 ;;
+    8) max_context=2097152 ;;
+    9)
+      printf "Context tokens (4k/8k/16k/32k/64k/128k/256k/512k/1m/2m or rung) [default %s]: " "$default_context"
+      read -r custom_ctx || exit 1
+      custom_ctx="${custom_ctx:-$default_context}"
+      if ! max_context="$(parse_context_value "$custom_ctx")"; then
+        echo "invalid choice: $custom_ctx (4k..2m or exact rung)" >&2
+        exit 2
+      fi
+      ;;
+    10) max_context="$default_context" ;;
+    *) echo "invalid choice: $context_choice" >&2; exit 2 ;;
   esac
 elif [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]]; then
   max_context=131072
 fi
+if [[ -n "$max_context" ]] && (( max_context > 262144 )) && [[ "$rope_scaling" == "none" ]]; then
+  rope_scaling="yarn"
+fi
+
+if [[ -n "$KV_ARG" ]]; then
+  kv_bits="$KV_ARG"
+elif [[ "$ENGINE" != "cpu" ]] && (( INTERACTIVE )); then
+  echo ""
+  echo "KV-cache precision?"
+  echo "  1) 8-bit (default — best balance of RAM, speed and quality)"
+  echo "  2) 4-bit (smallest KV cache, more expert slots at long context)"
+  echo "  3) 16-bit (unquantized fp16, largest KV cache)"
+  printf "Choice [1-3] (default 1): "
+  read -r kv_choice || exit 1
+  case "${kv_choice:-1}" in
+    1) kv_bits=8 ;;
+    2) kv_bits=4 ;;
+    3) kv_bits=16 ;;
+    *) echo "invalid choice: $kv_choice" >&2; exit 2 ;;
+  esac
+else
+  kv_bits=8
+fi
+case "$kv_bits" in 4|8|16) : ;; *) echo "unknown --kv: $kv_bits (4|8|16)" >&2; exit 2 ;; esac
 
 # Concurrency: how many generations one server serves at once. It is opt-in --
 # the server's own default is one -- because it is the one setting that changes
