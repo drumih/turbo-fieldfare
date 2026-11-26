@@ -90,7 +90,11 @@ class SourceOfTruthTests(unittest.TestCase):
         self.assertIs(block["options"]["timeout"], False)
         self.assertEqual(len(block["models"]), installer_menu_rows() + len(GGUF_ROUTES))
         self.assertIn(default_model(), block["models"])
-        model_limit_overrides = {"inkling-2-mini_GGUF-Q4": {"context": 131072, "output": 32768}}
+        self.assertIn("inkling-2-mini-gguf-q4", block["models"])
+        self.assertIn("inkling-2-mini-nvfp4", block["models"])
+        self.assertNotIn("inkling-2-mini_GGUF-Q4", block["models"])
+        self.assertNotIn("inkling-2-mini_NVFP4", block["models"])
+        model_limit_overrides = {"inkling-2-mini-gguf-q4": {"context": 131072, "output": 32768}}
         for model_id, model in block["models"].items():
             with self.subTest(model=model_id):
                 expected = model_limit_overrides.get(

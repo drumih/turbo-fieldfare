@@ -659,7 +659,7 @@
             }
           }
         },
-        "inkling-2-mini_NVFP4": {
+        "inkling-2-mini-nvfp4": {
           "name": "Inkling 2 Mini",
           "tool_call": true,
           "reasoning": true,
@@ -695,7 +695,7 @@
             }
           }
         },
-        "inkling-2-mini_GGUF-Q4": {
+        "inkling-2-mini-gguf-q4": {
           "name": "Inkling 2 Mini UD-Q4_K_XL (Unsloth)",
           "tool_call": true,
           "reasoning": true,
