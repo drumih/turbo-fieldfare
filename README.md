@@ -4,9 +4,9 @@
 
 # TinyTitan
 
-[![Stars](https://img.shields.io/github/stars/Pummelchen/TinyTitan?style=flat-square&logo=github&label=Stars&color=e3b341)](https://github.com/Pummelchen/TinyTitan/stargazers)
-[![Views (14d)](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Pummelchen/TinyTitan/main/.github/traffic.json)](https://github.com/Pummelchen/TinyTitan)
-[![Last Commit](https://img.shields.io/github/last-commit/Pummelchen/TinyTitan?style=flat-square&logo=git&label=Last%20Commit&color=2ea44f)](https://github.com/Pummelchen/TinyTitan/commits/main)
+[![Stars](.github/badges/stars.svg)](https://github.com/Pummelchen/TinyTitan/stargazers)
+[![Views (14d)](.github/badges/views.svg)](https://github.com/Pummelchen/TinyTitan)
+[![Last Commit](.github/badges/last-commit.svg)](https://github.com/Pummelchen/TinyTitan/commits/main)
 
 **TinyTitan runs a wide range of open-weight LLMs, mixture-of-experts and
 dense, locally on Apple Silicon, streaming the routed experts from SSD so a

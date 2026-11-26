@@ -1,0 +1,32 @@
+name: Refresh README Badges
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/traffic.json"
+
+permissions:
+  contents: write
+
+jobs:
+  badges:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Render self-hosted SVG badges
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/render_badges.py --token "$GH_TOKEN"
+      - name: Commit updated badges
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/badges/*.svg
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: refresh README SVG badges"
+            git push
+          fi
