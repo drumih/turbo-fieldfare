@@ -20,6 +20,26 @@ public enum RuntimeLimits {
     public static let allowedMTPMemoryMiB = 256...512
     public static let allowedPrefillChunkTokens = PrefillRuntimeConfig.allowedProductionChunkTokens
 
+    /// Native context limit declared by an install's manifest, or
+    /// `nativeMaximumContextTokens` when the manifest omits a larger window.
+    package static func nativeContextCeiling(forModelDirectory path: String?) -> Int {
+        guard let path, !path.isEmpty else { return nativeMaximumContextTokens }
+        guard
+            let manifest = try? SSDAIManifestReader.read(
+                directoryURL: URL(fileURLWithPath: path)),
+            let declared = manifest.arch.variantGeometry?.scalars["contextLength"],
+            declared.isFinite, declared > Double(nativeMaximumContextTokens)
+        else {
+            return nativeMaximumContextTokens
+        }
+        return Int(declared)
+    }
+
+    /// Context rungs supported without YaRN up to `ceiling`.
+    package static func supportedNativeContextTokens(ceiling: Int) -> [Int] {
+        supportedContextTokens + supportedYaRNContextTokens.filter { $0 <= ceiling }
+    }
+
     public static func parseBudgetBytes(_ text: String) -> Int? {
         let raw = text.trimmingCharacters(in: .whitespaces).uppercased()
         guard !raw.isEmpty else { return nil }

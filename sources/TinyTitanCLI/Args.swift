@@ -361,7 +361,7 @@ extension Args {
             guard RuntimeLimits.supportedYaRNContextTokens.contains(maxContext) else {
                 throw ArgsError.invalidValue(flag: "--max-context", value: String(maxContext))
             }
-        } else if maxContext > RuntimeLimits.nativeMaximumContextTokens {
+        } else if maxContext > RuntimeLimits.nativeContextCeiling(forModelDirectory: model) {
             throw ArgsError.invalidValue(flag: "--max-context", value: String(maxContext))
         }
         // Family support is checked in Run against the installed manifest;

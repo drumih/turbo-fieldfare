@@ -1204,10 +1204,17 @@ parse_context_value() {
 
 default_context=262144
 default_context_label="256K"
-if [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]]; then
-  default_context=131072
-  default_context_label="128K"
-fi
+native_max_context=262144
+case "$(basename "$MODEL_DIR")" in
+  inkling-2-mini_GGUF-Q4)
+    default_context=131072
+    default_context_label="128K"
+    native_max_context=1048576
+    ;;
+  inkling-2-mini_NVFP4)
+    native_max_context=1048576
+    ;;
+esac
 
 max_context=""
 rope_scaling="none"
@@ -1252,7 +1259,7 @@ elif [[ "$ENGINE" != "cpu" ]] && (( INTERACTIVE )); then
 elif [[ "$(basename "$MODEL_DIR")" == "inkling-2-mini_GGUF-Q4" ]]; then
   max_context=131072
 fi
-if [[ -n "$max_context" ]] && (( max_context > 262144 )) && [[ "$rope_scaling" == "none" ]]; then
+if [[ -n "$max_context" ]] && (( max_context > native_max_context )) && [[ "$rope_scaling" == "none" ]]; then
   rope_scaling="yarn"
 fi
 

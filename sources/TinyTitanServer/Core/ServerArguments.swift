@@ -388,7 +388,9 @@ public struct ServerArguments: Equatable, Sendable {
                     "YaRN --max-context must be one of \(Self.supportedYaRNContextRungsHelp)")
             }
         } else {
-            guard RuntimeLimits.supportedContextTokens.contains(maxContext) else {
+            let nativeCeiling = RuntimeLimits.nativeContextCeiling(forModelDirectory: model)
+            let allowedNative = RuntimeLimits.supportedNativeContextTokens(ceiling: nativeCeiling)
+            guard allowedNative.contains(maxContext) else {
                 throw ServerArgumentError.invalid(
                     "--max-context must be one of \(Self.supportedContextRungsHelp)")
             }

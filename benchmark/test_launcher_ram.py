@@ -21,6 +21,7 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
+import tempfile
 import unittest
 
 import launcher_fixture
@@ -513,6 +514,63 @@ class ContextAndKVInteractiveTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertIn("--max-context 262144", run.stdout)
         self.assertIn("--kv-bits 8", run.stdout)
+
+    def test_inkling_native_1m_context_stays_off_yarn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            models_dir = pathlib.Path(tmp) / "models"
+            install = models_dir / "inkling-2-mini_GGUF-Q4"
+            install.mkdir(parents=True, exist_ok=True)
+            (install / "manifest.json").write_text(
+                '{"modelID":"inkling-2-mini-gguf-q4","quant":{"routedExpert":{"weightBits":4}}}\n'
+            )
+            catalog_path = pathlib.Path(tmp) / "catalog.json"
+            catalog_path.write_text(
+                '{"models":[{"id":"inkling-2-mini-gguf-q4","family":"inkling2","quant":4,'
+                f'"path":"{install}","engines":["gpu"],'
+                '"reasoning":{"default":"off","levels":["off","low","medium","high","xhigh"]}}]}\n'
+            )
+            env = self.installs.env(
+                TINYTITAN_PHYSICAL_RAM_BYTES=str(24 * 2**30),
+                TINYTITAN_LAUNCHER_DRY_RUN="1",
+                TINYTITAN_MODELS_DIR=str(models_dir),
+                TINYTITAN_CATALOG_JSON=str(catalog_path),
+            )
+            for ctx_arg, expected in (("512k", "524288"), ("1m", "1048576")):
+                with self.subTest(context=ctx_arg):
+                    run = subprocess.run(
+                        [
+                            "bash",
+                            str(LAUNCHER),
+                            "--dry-run",
+                            "--client",
+                            "server",
+                            "--model",
+                            "inkling-q4-k-xl-unsloth",
+                            "--ram",
+                            "14",
+                            "--context",
+                            ctx_arg,
+                            "--kv",
+                            "8",
+                            "--answers",
+                            "default",
+                            "--thinking",
+                            "off",
+                            "--concurrency",
+                            "1",
+                            "--port",
+                            "8080",
+                        ],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        env=env,
+                        timeout=120,
+                    )
+                    self.assertEqual(run.returncode, 0, run.stderr)
+                    self.assertIn(f"--max-context {expected}", run.stdout)
+                    self.assertIn("--rope-scaling none", run.stdout)
+                    self.assertNotIn("--rope-scaling yarn", run.stdout)
 
 
 if __name__ == "__main__":
