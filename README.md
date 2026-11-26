@@ -41,16 +41,16 @@ Peak decode on a base 8-core M3 MacBook Pro with 24 GB, after a warm-up pass.
 | Ornith 1.5 122B | 8-bit | **1.2 tok/s** | NA | 81% (2.1) | NA |
 | Inkling 2 Mini 26B-A5B | UD-Q4_K_XL (Unsloth) | **17.9 tok/s** | NA | 72% (2.1) | 5.6% |
 | Inkling 2 Mini 26B-A5B | Original (NVFP4/MXFP8) | **8.1 tok/s** | NA | 72% (2.1) | 5.6% |
-| Laguna-S-2.1 118B-A8B | 4-bit | **1.5 tok/s** | NA | 70% (2.1) | NA |
-| Laguna-S-2.1 118B-A8B | 8-bit | **0.7 tok/s** | NA | 70% (2.1) | NA |
+| Laguna-S-2.1 118B-A8B *(decode probe)* | 4-bit | **1.5 tok/s** | NA | 70% (2.1) | NA |
+| Laguna-S-2.1 118B-A8B *(decode probe)* | 8-bit | **0.7 tok/s** | NA | 70% (2.1) | NA |
 | Ornith 1.5 35B-A3B | 4-bit | **21.7 tok/s** | NA | 68% (2.1) | NA |
 | Ornith 1.5 35B-A3B | 8-bit | **11.9 tok/s** | NA | 68% (2.1) | NA |
-| K2-Horizon-MoVA-36B-A4B | 4-bit | **12.4 tok/s** | NA | 59% (2.1) | NA |
-| K2-Horizon-MoVA-36B-A4B | 8-bit | **2.0 tok/s** | NA | 59% (2.1) | NA |
+| K2-Horizon-MoVA-36B-A4B *(probe backend)* | 4-bit | **12.4 tok/s** | NA | 59% (2.1) | NA |
+| K2-Horizon-MoVA-36B-A4B *(probe backend)* | 8-bit | **2.0 tok/s** | NA | 59% (2.1) | NA |
 | Qwen 3.6 35B-A3B | 4-bit | **21.4 tok/s** | NA | 53% (2.1) | NA |
 | Qwen 3.6 35B-A3B | 8-bit | **12.4 tok/s** | NA | 53% (2.1) | NA |
-| NVIDIA Nemotron 3.5 Bolt 74B-A9B | 4-bit | **6.7 tok/s** | **3.6 tok/s** | 51% (2.1) | NA |
-| NVIDIA Nemotron 3.5 Bolt 74B-A9B | 8-bit | **0.6 tok/s** | **0.9 tok/s** | 51% (2.1) | NA |
+| NVIDIA Nemotron 3.5 Bolt 74B-A9B *(CLI only)* | 4-bit | **6.7 tok/s** | **3.6 tok/s** | 51% (2.1) | NA |
+| NVIDIA Nemotron 3.5 Bolt 74B-A9B *(CLI only)* | 8-bit | **0.6 tok/s** | **0.9 tok/s** | 51% (2.1) | NA |
 | Qwen-AgentWorld 35B-A3B | 4-bit | **21.7 tok/s** | NA | 40% (2.0) | NA |
 | Qwen-AgentWorld 35B-A3B | 8-bit | **12.3 tok/s** | NA | 40% (2.0) | NA |
 | KAT-Coder-V2.5-Dev 35B-A3B | 4-bit | **17.9 tok/s** | NA | 33% (2.1) | NA |
@@ -61,6 +61,8 @@ Peak decode on a base 8-core M3 MacBook Pro with 24 GB, after a warm-up pass.
 | Qwen 3.5 9B (dense) | 8-bit | **7.8 tok/s** | **4.4 tok/s** | 9% (2.0) | NA |
 | Qwen 3.5 2B (dense) | 4-bit | **44.4 tok/s** | **17.4 tok/s** | 3% (2.1) | NA |
 | Qwen 3.5 2B (dense) | 8-bit | **29.6 tok/s** | **18.1 tok/s** | 3% (2.1) | NA |
+
+*Models tagged *(decode probe)*, *(probe backend)*, or *(CLI only)* are partial ports without full catalogue installer/server parity; see [Model Support](https://github.com/Pummelchen/TinyTitan/wiki/Model-Support) for details.*
 
 ## Quick start
 
@@ -84,12 +86,14 @@ about 2.3 GB), then run a prompt:
   --prompt "What is the capital of Paris ?" --max-new 96
 ```
 
-Start the server with `tools/server_launcher.sh`; it prints the base URL and
-writes the client configuration. The server runs the shipped 7.0 variant engines
-for Ornith 1.5 35B-A3B 4-bit and dense Qwen 3.5 on CPU and GPU; other supported
-installs retain their qualified 6.x path. For a dense install, `--engine cpu` or
-`--engine gpu` selects the launch path, and catalogue requests can use
-`<model-id>@cpu` or `<model-id>@gpu`. The full walkthrough is
+Start the server with `tools/server_launcher.sh`; it prompts for model, RAM
+budget, context window (`16K`–`2M`), and KV-cache precision (`8`/`4`/`16`),
+prints the base URL, and writes the client configuration. The server runs
+standalone TPP/1.1 engine plugins for Inkling 2 Mini (UD-Q4_K_XL and Original
+NVFP4/MXFP8), Ornith 1.5 35B-A3B 4-bit, and dense Qwen 3.5 on CPU and GPU;
+other supported installs retain their qualified 6.x path. For a dense install,
+`--engine cpu` or `--engine gpu` selects the launch path, and catalogue requests
+can use `<model-id>@cpu` or `<model-id>@gpu`. The full walkthrough is
 [Getting Started](https://github.com/Pummelchen/TinyTitan/wiki/Getting-Started).
 
 ## What this repository delivers

@@ -126,60 +126,7 @@ extension RealForwardRunner {
                 || decodeExpertExecution == .gpuResidency
         {
             if decodeExpertExecution == .gpuResidency {
-                let hitCount = min(
-                    Int(residencyHitCount.contents().load(as: UInt32.self)),
-                    cfg.topKExperts)
-                let missCount = min(
-                    Int(residencyMissCount.contents().load(as: UInt32.self)),
-                    cfg.topKExperts)
-                let hitPointer = residencyHitPositions.contents()
-                    .bindMemory(to: UInt32.self, capacity: cfg.topKExperts)
-                let missPointer = residencyMissPositions.contents()
-                    .bindMemory(to: UInt32.self, capacity: cfg.topKExperts)
-                for index in 0..<hitCount {
-                    decodeHitSlotsScratch.append(hitPointer[index])
-                }
-                for index in 0..<missCount {
-                    decodeMissSlotsScratch.append(missPointer[index])
-                }
-                // The GPU appends through an atomic counter, so its ordering
-                // is the order threads finished -- not the ascending order
-                // `DecodeExpertPartition.populate` produces on the CPU. Sort
-                // before both the comparison and the use: the encoders below
-                // consume these in the CPU path's order, so an unsorted GPU
-                // partition would execute a different assignment even when it
-                // classified every expert correctly.
-                decodeHitSlotsScratch.sort()
-                decodeMissSlotsScratch.sort()
-                // The GPU classifies against the residency table as it stood
-                // when the kernel ran, which is *before* the cache plan adopts
-                // prefetched experts. Adoption memcpys a prefetched expert into
-                // its slot and drops it from `plan.misses`, so the GPU's list is
-                // legitimately the CPU's plus the adoptions -- one per layer at
-                // the shipped prefetch depth of 1. Requiring equality made the
-                // mode unusable on any build with prefetch enabled.
-                //
-                // A miss the CPU sees and the GPU does not is the real error:
-                // that direction means the table claimed residency for
-                // something the eviction authority had already reclaimed.
-                let gpuMisses = decodeMissSlotsScratch.map(Int.init)
-                let planMisses = plan.misses.sorted()
-                guard Set(gpuMisses).isSuperset(of: planMisses) else {
-                    throw ModelError.internalInconsistency(
-                        detail: "GPU residency classification disagrees with cache "
-                            + "plan: gpu=\(gpuMisses) plan=\(planMisses)")
-                }
-                totalGPUClassifiedHits &+= UInt64(hitCount)
-                totalGPUClassifiedMisses &+= UInt64(missCount)
-                if missCount == 0 { totalGPUResidencyAllHitLayers &+= 1 }
-                // Execute the CPU partition regardless. It is the authority,
-                // and it is the only one that reflects adoption; running the
-                // GPU's partition would re-fetch an expert already resident.
-                DecodeExpertPartition.populate(
-                    topK: cfg.topKExperts,
-                    missIndices: plan.misses,
-                    hits: &decodeHitSlotsScratch,
-                    misses: &decodeMissSlotsScratch)
+                try classifyGPUResidencyForDecode(plan: plan)
             } else {
                 DecodeExpertPartition.populate(
                     topK: cfg.topKExperts,
@@ -214,29 +161,9 @@ extension RealForwardRunner {
         let completionClock = missCount > 0 ? overlapCompletionClock : nil
         let expectedOverlapCompletions = phase1HitCB == nil ? 1 : 2
         if plannedLoad == nil && rdadviseEnabled && rdadvisePolicyMode != .off {
-            let requestedMisses = missCount
-            let estimatedAdviceBytes = try model.routedExpertAdviceByteEstimate(
-                layer: L,
-                missCount: requestedMisses)
-            if let skipped = shouldSkipRDAdvice(
-                position: position,
-                requestedMisses: requestedMisses,
-                estimatedBytes: estimatedAdviceBytes,
-                canOverlapUsefulGPUWork: true)
-            {
-                recordRDAdvice(skipped, wallNanos: 0)
-            } else {
-                let tAdvice = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-                let result: ExpertIOAdviceResult
-                if let plannedFetch {
-                    result = try model.adviseRoutedExperts(plan: plannedFetch)
-                } else {
-                    result = try model.adviseRoutedExperts(layer: L, experts: experts)
-                }
-                let wallNanos = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tAdvice
-                recordRDAdvice(result, wallNanos: wallNanos)
-                updateRDAdvicePolicy(after: result, position: position)
-            }
+            try issueDecodeRDAdvice(
+                layer: L, position: position, plannedFetch: plannedFetch,
+                missCount: missCount, experts: experts)
         }
 
         // The ring is issued here, before the demand fetch awaits, rather than

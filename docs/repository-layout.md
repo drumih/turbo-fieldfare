@@ -681,6 +681,16 @@ took `ServerArguments.swift` to 504): the three derived properties
 to `TinyTitanServer/Core/ServerArguments+Derived.swift` (31 lines) as an
 extension, without widening; `ServerArguments.swift` 504 → 481.
 
+Preemptive 496–500-line ceiling relief (2026-11-26): thirteen files sitting at
+496–500 lines were split along cohesive seams as pure code motion:
+`RuntimeConfiguration.swift` (`Ornith35B4Bit`, `DenseGPU`) → `+Budget.swift`;
+`QSAIndexer.swift` (`TinyTitan`, `Ornith35B4Bit`, `DenseGPU`) → `+Prefill.swift`;
+`InklingMTPDraft.swift` (`Inkling2NVFP4`) → `+Markov.swift`;
+`ContinuityStore.swift` (`TinyTitanMemory`) → `+Guarded.swift`;
+`PreadExpertStreamer+Load.swift` (`TinyTitan`, `Ornith35B4Bit`, `DenseGPU`) →
+`+CompressedLoad.swift`; and `RealForwardRunner+DecodeMoE.swift` (`TinyTitan`,
+`Ornith35B4Bit`, `DenseGPU`) → `+DecodeMoEHelpers.swift`.
+
 ## Generated and local files
 `models/`, `.build/`, `.swiftpm/`, `benchmark/mock/`,
 `benchmark/benchmark-results/`, `.qwen/` (the wiki clone), `.claude/` and
