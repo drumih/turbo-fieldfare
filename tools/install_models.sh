@@ -922,12 +922,11 @@ install_width() {
 # exist or quote a size no one re-measured.
 choose_model() {
   local count=${#TINYTITAN_MODEL_CHOICES[@]}
-  local index key label bits gb note reply default_label
+  local index key label bits gb note reply
   if (( count == 0 )); then
     echo "no models are listed in TINYTITAN_MODEL_CHOICES" >&2
     return 2
   fi
-  IFS='|' read -r _ default_label _ _ _ <<<"${TINYTITAN_MODEL_CHOICES[0]}"
 
   echo
   echo "Which model? This is the only choice; the rest is automatic."
@@ -942,7 +941,7 @@ choose_model() {
   echo "  Sizes are installed sizes: installing also downloads the model's bf16"
   echo "  release first and stages it separately — --help has the numbers."
   echo
-  printf 'Choice [1-%d] (Enter for %s): ' "$count" "$default_label"
+  printf 'Choice [1-%d]: ' "$count"
   # An EOF is not an answer. Treating it as "Enter" started the recommended
   # 36.9 GB download for a caller that never chose anything (found 2026-09-24 by
   # closing stdin on `--choose`); only a real empty line takes the default.
