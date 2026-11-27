@@ -8,32 +8,32 @@
 [![Views (14d)](.github/badges/views.svg)](https://github.com/Pummelchen/TinyTitan)
 [![Last Commit](.github/badges/last-commit.svg)](https://github.com/Pummelchen/TinyTitan/commits/main)
 
-**TinyTitan runs a wide range of open-weight LLMs, mixture-of-experts and
-dense, locally on Apple Silicon, streaming the routed experts from SSD so a
-model larger than your RAM still runs.** Decode is native Swift over hand-written Metal kernels; the prompt runs
-on the GPU or, optionally, the Apple Neural Engine. It ships a CLI, an
-installer/repacker, and a loopback OpenAI-compatible server with no MLX and no
-GGUF dependency.
+# TinyTitan — Project Update & End of Development
 
-**Who it is for.** Every M-series Mac, not only the small ones. With RAM to
-spare, TinyTitan keeps more of the model resident and runs as a fast local
-engine built to match or beat the established Apple Silicon engines on the
-models it supports. Measured head to head against llama.cpp's Metal build, it
-is **1.26–1.40× faster** on decode and prefill (Inkling 2 Mini, 24 GB M3, both
-GGUF quantizations). On a Mac with less RAM, the same engine runs a 35B — or a
-122B/125B — model that the machine could never hold in memory. It also serves
-developers who want a loopback OpenAI- or Anthropic-compatible endpoint for
-Codex, Claude Code, Qwen Code, OpenCode, Zed or the official SDKs. It is a
-terminal-first tool: the engine and its server are the product, and the
-DeepSeek Harness plugins are an optional client of that server. It is **not** a
-fine-tuning toolkit, a vision model, a GUI app, or a way to expose a model to
-your network — the server is `127.0.0.1`-only and has no authentication.
+For several months, **TinyTitan** has consistently outperformed
+established LLM inference engines such as `llama.cpp` by **20–25%**
+on Apple Silicon.
 
-**Where effort goes next.** Release 7.5 narrows the matrix to Ornith 1.5
-35B-A3B 4-bit and the two Inkling 2 Mini installs. The one planned addition
-outside that set is Qwen 4 Flash, run once it ships — no date is promised.
-Beyond that, future resources go into **TinyTitan Datacenter** and the main
-project **XAIOS**.
+Due to the significant resources required to maintain this performance
+advantage, TinyTitan will narrow its focus to three LLMs for its
+remaining development:
+
+- **Inkling 2 Mini** — Original and Unsloth weights
+- **Ornith 1.5 35B A3B**
+- **Qwen 4 Flash**
+
+## Future Development
+
+Future development resources will be redirected toward:
+
+- **TinyTitan Datacenter**
+- **XAIOS** — Our flagship project
+
+## End of Development
+
+> [!IMPORTANT]
+> **TinyTitan v7.5** will mark the final release and the official
+> end of the TinyTitan project.
 
 ## Benchmarks
 
@@ -68,66 +68,6 @@ Peak decode on a base 8-core M3 MacBook Pro with 24 GB, after a warm-up pass.
 | Qwen 3.5 2B (dense) | 4-bit | **44.4 tok/s** | **17.4 tok/s** | 3% (2.1) | NA |
 | Qwen 3.5 2B (dense) | 8-bit | **29.6 tok/s** | **18.1 tok/s** | 3% (2.1) | NA |
 
-*Models tagged *(decode probe)*, *(probe backend)*, or *(CLI only)* are partial ports without full catalogue installer/server parity; see [Model Support](https://github.com/Pummelchen/TinyTitan/wiki/Model-Support) for details.*
-
-## Quick start
-
-Requires macOS 26+, Xcode 27 (Swift 6.4) and Apple Silicon.
-
-Last verified: 2026-11-14 — the three commands below were run in a fresh
-clone of this commit (`swift build` 940 targets, ~140 s; `--help` exit 0).
-
-```bash
-git clone https://github.com/Pummelchen/TinyTitan.git
-cd TinyTitan
-swift build -c release
-.build/release/TinyTitanCLI --help
-```
-
-Install a model with `tools/install_models.sh --choose` (the dense 2B row is
-about 2.3 GB), then run a prompt:
-
-```bash
-.build/release/TinyTitanCLI --model models/qwen3.5_2B_4Bit \
-  --prompt "What is the capital of Paris ?" --max-new 96
-```
-
-Start the server with `tools/server_launcher.sh`; it prompts for model, RAM
-budget, context window (`16K`–`2M`), and KV-cache precision (`8`/`4`/`16`),
-prints the base URL, and writes the client configuration. The server runs
-standalone TPP/1.1 engine plugins for Inkling 2 Mini (UD-Q4_K_XL and Original
-NVFP4/MXFP8), Ornith 1.5 35B-A3B 4-bit, and dense Qwen 3.5 on CPU and GPU;
-other supported installs retain their qualified 6.x path. For a dense install,
-`--engine cpu` or `--engine gpu` selects the launch path, and catalogue requests
-can use `<model-id>@cpu` or `<model-id>@gpu`. The full walkthrough is
-[Getting Started](https://github.com/Pummelchen/TinyTitan/wiki/Getting-Started).
-
-## What this repository delivers
-
-1. **The LLM engine as a library — [`TinyTitanLib`](sources/TinyTitanLib).** Embed
-   the engine in your own Swift program: an `Engine` and a `Session`, streaming
-   tokens through a callback. Same kernels, format reader and sampler as the
-   engine, in your process — no subprocess, no HTTP, no model reimplementation.
-2. **The complete local LLM engine — `TinyTitanCLI` + `TinyTitanServer`.** Run a
-   35B, 122B or 125B model from the terminal and serve it on a loopback
-   OpenAI-/Anthropic-compatible endpoint for Codex, Claude Code, Qwen Code,
-   OpenCode, Zed or the official SDKs. Native Swift and Metal: no MLX, no GGUF
-   library. Experimental: the Unsloth Qwen3.8-Flash-Next UD-IQ3_XXS GGUF
-   shards also run as-is through `--model` (CLI only, same top-1/top-5 as
-   llama.cpp, decode at the converted model's speed — no conversion needed,
-   no speed gain).
-3. **The DeepSeek Harness plugin — [`plugins/dsh-tinytitan`](plugins/dsh-tinytitan).**
-   The harness finds the models you have installed and keeps its route current,
-   with a quiet compaction backend.
-4. **The `.ssdai` model format and its converter — `TinyTitanRepack` +
-   [`tools/`](tools).** Stream a checkpoint into a hash-verified install that
-   keeps the routed experts on SSD, so a model larger than your RAM still runs —
-   and a truncated, swapped or edited install is refused rather than served.
-
-Those four ship from one branch (`main`) and one release tag. The first two are
-the **products** — a library and an engine — and the rest are the plugin and
-tooling that ship beside them; the split is spelled out under
-[Library and engine](https://github.com/Pummelchen/TinyTitan/wiki/Library-and-Engine).
 
 ## Documentation & Credits
 
