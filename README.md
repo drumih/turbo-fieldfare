@@ -29,6 +29,12 @@ DeepSeek Harness plugins are an optional client of that server. It is **not** a
 fine-tuning toolkit, a vision model, a GUI app, or a way to expose a model to
 your network — the server is `127.0.0.1`-only and has no authentication.
 
+**Where effort goes next.** Release 7.5 narrows the matrix to Ornith 1.5
+35B-A3B 4-bit and the two Inkling 2 Mini installs. The one planned addition
+outside that set is Qwen 4 Flash, run once it ships — no date is promised.
+Beyond that, future resources go into **TinyTitan Datacenter** and the main
+project **XAIOS**.
+
 ## Benchmarks
 
 Peak decode on a base 8-core M3 MacBook Pro with 24 GB, after a warm-up pass.
