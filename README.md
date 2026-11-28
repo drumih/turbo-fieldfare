@@ -24,7 +24,7 @@ remaining development:
 
 ## Future Development
 
-Future development resources will be redirected toward:
+Future development resources will be redirected towards:
 
 - **TinyTitan Datacenter**
 - **XAIOS** — Our flagship project
